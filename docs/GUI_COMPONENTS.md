@@ -1,0 +1,30 @@
+# GUI component inventory (initial, unverified)
+
+Classify each item as built-in, styled built-in, or custom only after a Slint prototype and API review.
+
+| Component | Expected approach | Key concerns |
+| --- | --- | --- |
+| Transport play/pause/cue/sync buttons | styled/custom control | keyboard, MIDI state, active/disabled feedback |
+| Deck status and track metadata | styled controls | responsive layout, truncation |
+| Multicolor scrolling waveform | custom renderer | smooth rendering, zoom, beat grid, cue markers, low CPU/GPU usage |
+| Overview waveform | custom renderer | seek, progress and markers |
+| Jog wheel / platter | custom control | touch/mouse drag, angular feedback, latency |
+| Pitch fader | custom/styled control | precise mapping, fine adjustments |
+| Volume fader and crossfader | custom/styled control | accurate input and visual state |
+| EQ/filter/gain knobs | custom control | rotary input, value scales, reset gestures |
+| Level/VU meters | custom control | animation, clipping indication |
+| Hot cue pads | custom/styled control | color/state mapping, controller feedback |
+| Loop controls | styled/custom control | loop length and active state |
+| Mixer channel strips | composite control | reuse, layout and signal indicators |
+| Browser, crates and track table | built-in/styled with custom behavior | virtualization, sorting, keyboard navigation |
+| Audio device and settings panels | mostly built-in/styled | accessibility and validation |
+| Notifications, tooltips and dialogs | mostly built-in/styled | consistency and focus management |
+
+## Definition of done per control
+- State model and input events specified
+- Mouse, keyboard and controller behavior defined
+- Theme and visual reference approved
+- Performance tested where animated
+- Automated tests and visual review completed
+
+Reference visuals must be used for design comparison, not copied proprietary assets.
