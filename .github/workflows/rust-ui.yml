@@ -41,6 +41,8 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
       - name: Run tests
+        env:
+          SLINT_EMIT_DEBUG_INFO: '1'
         run: cargo test --target ${{ matrix.target }}
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
