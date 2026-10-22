@@ -1,0 +1,177 @@
+import { Button, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "DrDJ Pro — Rust UI Spike";
+    width: 1200px;
+    height: 740px;
+    min-width: 850px;
+    min-height: 580px;
+    background: #0b111c;
+
+    in property <[float]> waveform;
+    in-out property <bool> left-playing: false;
+    in-out property <bool> right-playing: false;
+    in-out property <float> left-position: 0;
+    in-out property <float> right-position: 0;
+    callback toggle-left();
+    callback toggle-right();
+    callback reset-left();
+    callback reset-right();
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 16px;
+        Text {
+            text: "DrDJ Pro    /    RUST UI PROTOTYPE";
+            color: #f1f5fb;
+            font-size: 23px;
+            font-weight: 700;
+            vertical-alignment: center;
+            height: 48px;
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            DeckPanel {
+                deck-label: "DECK A";
+                accent: #36c9ef;
+                playing <=> root.left-playing;
+                position <=> root.left-position;
+                waveform: root.waveform;
+                play-clicked => { root.toggle-left(); }
+                cue-clicked => { root.reset-left(); }
+            }
+            Rectangle {
+                width: 220px;
+                background: #151e2d;
+                border-radius: 10px;
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 14px;
+                    Text {
+                        text: "MIXER";
+                        color: #f0f4ff;
+                        font-size: 19px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                    Text { text: "CHANNEL A"; color: #36c9ef; font-size: 12px; }
+                    Slider { minimum: 0; maximum: 100; value: 78; }
+                    Text { text: "CHANNEL B"; color: #ffae58; font-size: 12px; }
+                    Slider { minimum: 0; maximum: 100; value: 78; }
+                    Text { text: "CROSSFADER"; color: #d7e1ef; font-size: 12px; }
+                    Slider { minimum: 0; maximum: 100; value: 50; }
+                    Rectangle { background: transparent; vertical-stretch: 1; }
+                    Text {
+                        text: "UI DEMO ONLY";
+                        color: #8b9ab2;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+            DeckPanel {
+                deck-label: "DECK B";
+                accent: #ffae58;
+                playing <=> root.right-playing;
+                position <=> root.right-position;
+                waveform: root.waveform;
+                play-clicked => { root.toggle-right(); }
+                cue-clicked => { root.reset-right(); }
+            }
+        }
+        Rectangle {
+            height: 66px;
+            background: #151e2d;
+            border-radius: 10px;
+            HorizontalLayout {
+                padding: 15px;
+                spacing: 20px;
+                Text {
+                    text: "LIBRARY";
+                    color: #f1f5fb;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "Drop-in browser / track table planned for the next slice";
+                    color: #92a2b9;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+component DeckPanel inherits Rectangle {
+    in property <string> deck-label;
+    in property <brush> accent;
+    in property <[float]> waveform;
+    in-out property <bool> playing;
+    in-out property <float> position;
+    callback play-clicked();
+    callback cue-clicked();
+
+    background: #151e2d;
+    border-radius: 10px;
+    horizontal-stretch: 1;
+    VerticalLayout {
+        padding: 16px;
+        spacing: 14px;
+        Text {
+            text: deck-label;
+            color: accent;
+            font-size: 21px;
+            font-weight: 700;
+        }
+        Text {
+            text: "DEMO TRACK  /  124 BPM  /  8A";
+            color: #c4d0df;
+            font-size: 13px;
+        }
+        Rectangle {
+            height: 155px;
+            background: #0a1220;
+            clip: true;
+            for value[i] in waveform : Rectangle {
+                x: (i * 7 - position * 7) * 1px;
+                y: (155 - value * 126) / 2 * 1px;
+                width: 4px;
+                height: value * 126 * 1px;
+                background: i % 4 == 0 ? accent : #406a8d;
+                border-radius: 2px;
+            }
+            Rectangle {
+                x: parent.width / 2;
+                width: 2px;
+                background: #f9fafc;
+            }
+        }
+        Text {
+            text: "POSITION  " + round(position) + "%";
+            color: #9bacbf;
+            font-size: 12px;
+        }
+        Slider {
+            minimum: 0;
+            maximum: 100;
+            value <=> position;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Button {
+                text: playing ? "PAUSE" : "PLAY";
+                clicked => { play-clicked(); }
+            }
+            Button {
+                text: "CUE";
+                clicked => { cue-clicked(); }
+            }
+        }
+        Rectangle { background: transparent; vertical-stretch: 1; }
+        Text {
+            text: "SIMULATED PLAYBACK • NO AUDIO OUTPUT";
+            color: #788ba2;
+            font-size: 11px;
+        }
+    }
+}
