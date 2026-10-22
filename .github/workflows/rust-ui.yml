@@ -40,10 +40,24 @@ jobs:
         run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
+      - name: Fetch freely licensed music sample for integration tests
+        shell: bash
+        run: |
+          mkdir -p tests/fixtures
+          curl --fail --location --retry 3 --max-time 45 \
+            https://samplelib.com/mp3/sample-9s.mp3 \
+            --output tests/fixtures/sample-9s.mp3
+          test "$(wc -c < tests/fixtures/sample-9s.mp3)" -gt 10000
       - name: Run tests
         env:
           SLINT_EMIT_DEBUG_INFO: '1'
+          DRDJ_AUDIO_TEST_FILE: tests/fixtures/sample-9s.mp3
         run: cargo test --target ${{ matrix.target }}
+      - name: Verify release decoder on real MP3
+        run: cargo run --release --target ${{ matrix.target }} -- --analyze tests/fixtures/sample-9s.mp3
+      - name: Archive audio fixture source
+        shell: bash
+        run: echo "Music fixture: https://samplelib.com/mp3/sample-9s.mp3 (Samplelib license https://samplelib.com/license.html)" > tests/fixtures/SOURCE.txt
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
