@@ -2,6 +2,7 @@ use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
 mod audio;
+mod playback;
 mod transport;
 
 slint::include_modules!();
@@ -30,6 +31,17 @@ fn main() -> Result<(), slint::PlatformError> {
                 std::process::exit(1);
             }
         }
+    }
+    if std::env::args().nth(1).as_deref() == Some("--play") {
+        let Some(path) = std::env::args().nth(2) else {
+            eprintln!("Usage: drdjpro-ui-spike --play <music.mp3|music.wav>");
+            std::process::exit(2);
+        };
+        if let Err(err) = playback::play_file(std::path::Path::new(&path)) {
+            eprintln!("Audio playback failed: {err}");
+            std::process::exit(1);
+        }
+        return Ok(());
     }
     let ui = AppWindow::new()?;
 
