@@ -4,13 +4,8 @@ use std::{error::Error, fs::File, path::Path};
 
 use symphonia::{
     core::{
-        audio::SampleBuffer,
-        codecs::DecoderOptions,
-        errors::Error as SymphoniaError,
-        formats::FormatOptions,
-        io::MediaSourceStream,
-        meta::MetadataOptions,
-        probe::Hint,
+        audio::SampleBuffer, codecs::DecoderOptions, errors::Error as SymphoniaError,
+        formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
     },
     default::{get_codecs, get_probe},
 };
@@ -45,9 +40,7 @@ pub fn analyze_file(path: &Path) -> Result<AudioAnalysis, Box<dyn Error>> {
         &MetadataOptions::default(),
     )?;
     let mut format = probed.format;
-    let track = format
-        .default_track()
-        .ok_or("no default audio track")?;
+    let track = format.default_track().ok_or("no default audio track")?;
     let track_id = track.id;
     let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
 
@@ -119,7 +112,10 @@ pub fn analyze_file(path: &Path) -> Result<AudioAnalysis, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     // Minimal deterministic PCM test file, generated without downloads.
     fn pcm_wav(sample_rate: u32, channels: u16, samples: &[i16]) -> Vec<u8> {
@@ -144,8 +140,12 @@ mod tests {
     }
 
     fn temporary_file(ext: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("drdj-audio-{}-{stamp}.{ext}", std::process::id()));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("drdj-audio-{}-{stamp}.{ext}", std::process::id()));
         fs::write(&path, bytes).unwrap();
         path
     }
