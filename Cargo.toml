@@ -1,0 +1,11 @@
+[package]
+name = "drdjpro-ui-spike"
+version = "0.1.0"
+edition = "2021"
+description = "DrDJ Pro Rust: two-deck Slint UI prototype"
+
+[dependencies]
+slint = "1.13"
+
+[build-dependencies]
+slint-build = "1.13"
