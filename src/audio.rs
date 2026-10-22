@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn decodes_stereo_pcm_and_computes_basic_metrics() {
-        let samples = vec![16384_i16, -16384_i16].repeat(480);
+        let samples = [16384_i16, -16384_i16].repeat(480);
         let path = temporary_file("wav", &pcm_wav(48_000, 2, &samples));
         let result = analyze_file(&path);
         fs::remove_file(&path).unwrap();
