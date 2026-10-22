@@ -78,7 +78,11 @@ mod ui_smoke_tests {
 
         fn activate(ui: &AppWindow, label: &str) {
             let controls: Vec<_> = ElementHandle::find_by_accessible_label(ui, label).collect();
-            assert_eq!(controls.len(), 1, "expected one accessible control: {label}");
+            assert_eq!(
+                controls.len(),
+                1,
+                "expected one accessible control: {label}"
+            );
             controls[0].invoke_accessible_default_action();
         }
 
