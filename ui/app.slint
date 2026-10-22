@@ -1,6 +1,6 @@
 import { Button, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
-export component DeckPanel inherits Rectangle {
+component DeckPanel inherits Rectangle {
     in property <string> deck-label;
     in property <brush> accent;
     in property <[float]> waveform;
@@ -76,8 +76,8 @@ export component DeckPanel inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "DrDJ Pro — Rust UI Spike";
-    width: 1200px;
-    height: 740px;
+    preferred-width: 1200px;
+    preferred-height: 740px;
     min-width: 850px;
     min-height: 580px;
     background: #0b111c;
