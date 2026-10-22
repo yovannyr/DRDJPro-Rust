@@ -57,7 +57,8 @@ jobs:
         run: cargo run --release --target ${{ matrix.target }} -- --analyze tests/fixtures/sample-9s.mp3
       - name: Archive audio fixture source
         shell: bash
-        run: echo "Music fixture: https://samplelib.com/mp3/sample-9s.mp3 (Samplelib license https://samplelib.com/license.html)" > tests/fixtures/SOURCE.txt
+        run: |
+          echo "Music fixture: https://samplelib.com/mp3/sample-9s.mp3 (Samplelib license https://samplelib.com/license.html)" > tests/fixtures/SOURCE.txt
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
