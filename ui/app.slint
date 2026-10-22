@@ -137,7 +137,7 @@ component DeckPanel inherits Rectangle {
                 y: (155 - value * 126) / 2 * 1px;
                 width: 4px;
                 height: value * 126 * 1px;
-                background: i % 4 == 0 ? accent : #406a8d;
+                background: Math.mod(i, 4) == 0 ? accent : #406a8d;
                 border-radius: 2px;
             }
             Rectangle {
