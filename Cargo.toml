@@ -7,6 +7,7 @@ description = "DrDJ Pro Rust: two-deck Slint UI prototype"
 
 [dependencies]
 slint = "=1.18.1"
+rodio = { version = "=0.21.1", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-wav", "symphonia-pcm"] }
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "pcm"] }
 
 [build-dependencies]
