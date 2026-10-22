@@ -7,6 +7,30 @@ mod transport;
 slint::include_modules!();
 
 fn main() -> Result<(), slint::PlatformError> {
+    if std::env::args().nth(1).as_deref() == Some("--analyze") {
+        let Some(path) = std::env::args().nth(2) else {
+            eprintln!("Usage: drdjpro-ui-spike --analyze <music.mp3|music.wav>");
+            std::process::exit(2);
+        };
+        match audio::analyze_file(std::path::Path::new(&path)) {
+            Ok(info) => {
+                println!(
+                    "rate={} Hz, channels={}, frames={}, duration={:.3}s, peak={:.4}, rms={:.4}",
+                    info.sample_rate,
+                    info.channels,
+                    info.frames,
+                    info.duration_seconds(),
+                    info.peak,
+                    info.rms
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                eprintln!("Could not decode {path}: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
     let ui = AppWindow::new()?;
 
     let waveform: Vec<f32> = (0..240)
