@@ -1,6 +1,7 @@
 use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
+mod audio;
 mod transport;
 
 slint::include_modules!();
