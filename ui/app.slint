@@ -58,10 +58,12 @@ component DeckPanel inherits Rectangle {
             spacing: 8px;
             Button {
                 text: playing ? "PAUSE" : "PLAY";
+                accessible-label: deck-label + " play/pause";
                 clicked => { play-clicked(); }
             }
             Button {
                 text: "CUE";
+                accessible-label: deck-label + " cue";
                 clicked => { cue-clicked(); }
             }
         }
