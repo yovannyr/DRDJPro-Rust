@@ -63,7 +63,6 @@ fn wire_decks(ui: &AppWindow) {
             ui.set_right_position(transport::cue_position());
         }
     });
-
 }
 
 #[cfg(test)]
