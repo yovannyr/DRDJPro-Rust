@@ -30,11 +30,15 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     let weak = ui.as_weak();
     ui.on_reset_left(move || {
-        if let Some(ui) = weak.upgrade() { ui.set_left_position(0.0); }
+        if let Some(ui) = weak.upgrade() {
+            ui.set_left_position(0.0);
+        }
     });
     let weak = ui.as_weak();
     ui.on_reset_right(move || {
-        if let Some(ui) = weak.upgrade() { ui.set_right_position(0.0); }
+        if let Some(ui) = weak.upgrade() {
+            ui.set_right_position(0.0);
+        }
     });
 
     let tick = Rc::new(Cell::new(0_u32));
