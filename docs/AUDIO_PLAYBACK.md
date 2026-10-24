@@ -17,7 +17,15 @@ The default application and `--gui` open the OS default Rodio/CPAL audio output 
 
 The grid is off until explicitly set by the user. GRID HERE validates the requested BPM (40–240), anchors a 4/4 downbeat at the current source position and changes only deck metadata. The GUI accepts whole BPM values; the domain timing supports fractional BPM. Visible detail lines are calculated from absolute beat indices rather than repeatedly adding rounded durations. The UI range of at most 32 seconds/240 BPM yields at most 129 lines. Negative beat indices extend the grid backward before an anchor, within the track viewport.
 
-Play/Pause, seek, Cue and EOF/restart preserve the grid; successful reload resets that deck, while failed loading leaves it intact. GRID OFF clears it. No persistence, automatic BPM/beat detection, variable-tempo tracking, meter detection, audio time stretching or synchronization is provided. The existing source-clock/device-latency limitations apply to the anchor.
+Play/Pause, seek, Cue and EOF/restart preserve the grid; successful reload resets that deck, while failed loading leaves it intact. GRID OFF clears it. No persistence, automatic beat/downbeat alignment, variable-tempo tracking, meter detection, audio time stretching or synchronization is provided. A separate experimental BPM suggestion is available as described below. The existing source-clock/device-latency limitations apply to the anchor.
+
+## Experimental BPM suggestion
+
+Track preparation now analyzes at most the first 60 seconds at sample rates of at least 8 kHz; at least 8 seconds of audio is required. Approximately 200 Hz power frames average squared channel samples without stereo cancellation. A 10-frame smoothing window and positive deviation from recent smoothed history form a novelty envelope. Weak novelty is rejected; normalized lag correlation searches 40–240 BPM, prefers the first near-best local maximum and interpolates its lag. The fixed thresholds are heuristics, not calibrated confidence or musical accuracy guarantees.
+
+The estimate is immutable track data and is computed on the loader, not an audio callback or the GUI timer. USE ~ is disabled without a candidate. Clicking it only copies rounded whole BPM into the pending field; it neither applies a grid nor changes playback. Existing manual grids remain intact until explicitly replaced/cleared. Error/cancel preserve the old track's suggestion, while successful reload replaces/removes it independently per deck. The domain retains a fractional estimate; the current manual GUI field is integer-only.
+
+Synthetic pulse, silence/tone/noise, stereo and duration-cap tests validate the algorithm's defined regression cases. A real-music benchmark corpus has not been evaluated. Sparse intros, tempo changes, subdivisions and half/double-tempo ambiguity can yield no suggestion or an incorrect one. Manual review and anchor placement remain necessary; automatic grid/downbeat analysis is still open.
 
 ## Automated evidence
 
@@ -31,4 +39,4 @@ Offline render timings are diagnostic measurements of CPU rendering, not device 
 
 `--analyze <file>` decodes and reports metrics without audio hardware. `--play <file>` and `--mix <a> <b>` use the same prepared tracks and default physical output, blocking until playback ends. These CLI paths preload synchronously before showing any GUI.
 
-Next scope requires review: automatic beat/BPM/key analysis, click-free/sample-accurate seeking, streaming decoding/memory policy, device loss, headphone routing, EQ/limiting and real hardware performance are not part of this change.
+Next scope requires review: real-music BPM validation, automatic beat/downbeat/key analysis, click-free/sample-accurate seeking, streaming decoding/memory policy, device loss, headphone routing, EQ/limiting and real hardware performance are not part of this change.

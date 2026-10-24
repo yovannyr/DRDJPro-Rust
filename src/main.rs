@@ -5,6 +5,7 @@ mod audio;
 mod beatgrid;
 mod controller;
 mod playback;
+mod tempo;
 #[cfg(test)]
 mod test_support;
 mod transport;

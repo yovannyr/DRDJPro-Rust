@@ -87,3 +87,11 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | R-GRID-01 | Validated constant-BPM 4/4 grid anchored at current source position (`beatgrid.rs`, `playback.rs`) | Invalid/fractional BPM, anchored positive/negative indices, spacing/downbeats, bounded 32s view | Manually defined; no automatic musical correctness, variable tempo or meter detection |
 | R-GRID-02 | Per-deck BPM/apply/clear and detail overlay (`controller.rs`, `app.slint`) | Actual accessible BPM/button actions, line count and geometry at two widths, zoom and independent grid state | Headless event/geometry checks only; visual approval open |
 | R-GRID-03 | Track-owned grid lifetime | Engine/GUI tests preserve through seek/Cue/EOF restart and invalid/failed load; reload resets only its track | No persistence or audio tempo/sync change |
+
+## Experimental tempo suggestion follow-up (2026-10-24)
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-TEMPO-01 | Bounded offline 40–240 BPM suggestion (`tempo.rs`, `playback.rs`) | 21 synthetic pulse fixtures at 8/44.1/48 kHz including fractional BPM; rejection of silence, steady tones/MP3, noise, short/invalid input; opposite-phase stereo and exact first-60s cap | Heuristic candidate, not confidence or real-music accuracy; octave/tempo-change ambiguity remains |
+| R-TEMPO-02 | Optional explicit adoption into pending per-deck BPM field | Actual worker WAV decode/estimate and accessible load/use/apply actions; grid/playback unchanged until explicit manual action | Whole-BPM GUI rounding; no auto-anchor, downbeat or audio sync |
+| R-TEMPO-03 | Suggestions follow track lifetime | Headless cancel/error retention and successful reload removal, other-deck isolation | No persistence or corpus qualification |

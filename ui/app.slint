@@ -13,6 +13,7 @@ component DeckPanel inherits Rectangle {
     in property <bool> grid-active;
     in property <string> grid-caption: "GRID OFF";
     in-out property <int> grid-bpm: 120;
+    in property <int> suggested-bpm: 0;
     in property <float> detail-start;
     in property <float> detail-end: 100;
     in property <float> detail-marker;
@@ -121,7 +122,13 @@ component DeckPanel inherits Rectangle {
         }
         HorizontalLayout {
             spacing: 6px;
-            Text { text: "BPM"; color: #9bacbf; vertical-alignment: center; }
+            Button {
+                text: suggested-bpm > 0 ? "USE ~" + suggested-bpm : "NO EST.";
+                accessible-label: deck-label + " use BPM suggestion";
+                accessible-description: "Copy experimental tempo estimate to BPM field; grid and playback remain unchanged";
+                enabled: audio-enabled && loaded && suggested-bpm > 0;
+                clicked => { grid-bpm = suggested-bpm; }
+            }
             SpinBox {
                 accessible-label: deck-label + " manual BPM";
                 enabled: audio-enabled && loaded;
@@ -254,6 +261,8 @@ export component AppWindow inherits Window {
     in property <string> right-grid-caption: "GRID OFF";
     in-out property <int> left-grid-bpm: 120;
     in-out property <int> right-grid-bpm: 120;
+    in property <int> left-suggested-bpm: 0;
+    in property <int> right-suggested-bpm: 0;
     in property <float> left-detail-start;
     in property <float> left-detail-end: 100;
     in property <float> left-detail-marker;
@@ -319,6 +328,7 @@ export component AppWindow inherits Window {
                 grid-active: root.left-grid-active;
                 grid-caption: root.left-grid-caption;
                 grid-bpm <=> root.left-grid-bpm;
+                suggested-bpm: root.left-suggested-bpm;
                 grid-clicked => { root.grid-left(); }
                 clear-grid-clicked => { root.clear-grid-left(); }
                 detail: root.left-detail;
@@ -378,6 +388,7 @@ export component AppWindow inherits Window {
                 grid-active: root.right-grid-active;
                 grid-caption: root.right-grid-caption;
                 grid-bpm <=> root.right-grid-bpm;
+                suggested-bpm: root.right-suggested-bpm;
                 grid-clicked => { root.grid-right(); }
                 clear-grid-clicked => { root.clear-grid-right(); }
                 detail: root.right-detail;

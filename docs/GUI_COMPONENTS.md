@@ -44,3 +44,7 @@ Overview/detail bars now receive colors from prepared low/mid/high band-energy d
 ## Manual-grid checkpoint (2026-10-24)
 
 The detail view now supports an explicitly applied manual 40–240 BPM grid and clear action per deck. Strong lines mark a user-anchored 4/4 downbeat; all lines are limited to the visible range. Headless tests cover accessible controls, geometry at two widths, zoom and track lifetime. Automatic BPM/meter detection and visual/framework acceptance remain open.
+
+## Tempo-suggestion checkpoint (2026-10-24)
+
+The BPM row now optionally offers USE ~ to copy an experimental loading-time tempo candidate. With no candidate it is disabled. It does not silently set a grid, start playback or alter tempo. Actual headless load/use/apply, error/cancel and reload tests cover the flow. Visual/design approval and reliable automatic musical analysis remain open.

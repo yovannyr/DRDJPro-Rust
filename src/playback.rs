@@ -61,6 +61,7 @@ pub struct PreparedTrack {
     samples: SamplesBuffer,
     overview: Arc<[f32]>,
     detail: Arc<crate::waveform::DetailPeaks>,
+    tempo: Option<crate::tempo::TempoEstimate>,
 }
 impl PreparedTrack {
     /// Decode on a worker, never inside an audio callback. Limit retained PCM to 256 MiB/track.
@@ -97,6 +98,7 @@ impl PreparedTrack {
         }
         let overview = crate::waveform::peak_overview(&samples, channels).into();
         let detail = Arc::new(crate::waveform::DetailPeaks::new(&samples, channels, rate));
+        let tempo = crate::tempo::estimate(&samples, channels, rate);
         Ok(Self {
             title: path
                 .file_name()
@@ -106,6 +108,7 @@ impl PreparedTrack {
             samples: SamplesBuffer::new(channels, rate, samples),
             overview,
             detail,
+            tempo,
         })
     }
     pub fn duration(&self) -> Duration {
@@ -156,6 +159,7 @@ pub struct DeckSnapshot {
     pub overview: Option<Arc<[f32]>>,
     pub detail: Option<Arc<crate::waveform::DetailPeaks>>,
     pub grid: Option<crate::beatgrid::BeatGrid>,
+    pub tempo: Option<crate::tempo::TempoEstimate>,
 }
 impl DeckSnapshot {
     pub fn percent(&self) -> f32 {
@@ -340,6 +344,7 @@ impl DualDeckEngine {
             overview: deck.track.as_ref().map(|t| Arc::clone(&t.overview)),
             detail: deck.track.as_ref().map(|t| Arc::clone(&t.detail)),
             grid: deck.grid,
+            tempo: deck.track.as_ref().and_then(|track| track.tempo),
         }
     }
     pub fn set_levels(&self, levels: MixerLevels) {
@@ -478,6 +483,7 @@ mod tests {
                 title: "stereo step".into(),
                 overview: crate::waveform::peak_overview(&samples, 2).into(),
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48_000)),
+                tempo: None,
                 samples: SamplesBuffer::new(2, 48_000, samples),
             },
         );
@@ -561,6 +567,10 @@ mod tests {
         assert_eq!(track.duration(), Duration::from_millis(100));
         assert_eq!(&*track.overview, &[0.25; crate::waveform::OVERVIEW_BINS]);
         let mp3 = PreparedTrack::open(&fixture()).unwrap();
+        assert!(
+            mp3.tempo.is_none(),
+            "steady MP3 tone must not invent a tempo"
+        );
         assert!((8.9..9.2).contains(&mp3.duration().as_secs_f64()));
         assert_eq!(mp3.overview.len(), crate::waveform::OVERVIEW_BINS);
         assert!(mp3

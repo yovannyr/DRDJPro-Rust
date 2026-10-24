@@ -29,22 +29,25 @@ pub fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone-9s.mp3")
 }
 pub fn wav_file(value: i16, frames: u32) -> TempFile {
-    let len = frames * 2;
+    wav_samples(&vec![value; frames as usize], 48_000, 1)
+}
+pub fn wav_samples(samples: &[i16], rate: u32, channels: u16) -> TempFile {
+    let len = (samples.len() * 2) as u32;
     let mut wav = Vec::new();
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&(36 + len).to_le_bytes());
     wav.extend_from_slice(b"WAVEfmt ");
     wav.extend_from_slice(&16u32.to_le_bytes());
     wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&48000u32.to_le_bytes());
-    wav.extend_from_slice(&96000u32.to_le_bytes());
-    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * u32::from(channels) * 2).to_le_bytes());
+    wav.extend_from_slice(&(channels * 2).to_le_bytes());
     wav.extend_from_slice(&16u16.to_le_bytes());
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&len.to_le_bytes());
-    for _ in 0..frames {
-        wav.extend_from_slice(&value.to_le_bytes());
+    for sample in samples {
+        wav.extend_from_slice(&sample.to_le_bytes());
     }
     TempFile::new("wav", &wav)
 }

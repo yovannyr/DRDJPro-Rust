@@ -333,6 +333,9 @@ impl AudioController {
                     ui.set_left_time(time.into());
                     ui.set_left_grid_active(s.grid.is_some());
                     ui.set_left_grid_caption(caption.into());
+                    ui.set_left_suggested_bpm(
+                        s.tempo.map_or(0, |estimate| estimate.bpm.round() as i32),
+                    );
                 }
                 DeckId::B => {
                     ui.set_right_title(s.title.into());
@@ -342,6 +345,9 @@ impl AudioController {
                     ui.set_right_time(time.into());
                     ui.set_right_grid_active(s.grid.is_some());
                     ui.set_right_grid_caption(caption.into());
+                    ui.set_right_suggested_bpm(
+                        s.tempo.map_or(0, |estimate| estimate.bpm.round() as i32),
+                    );
                 }
             }
         }
@@ -379,6 +385,82 @@ mod tests {
             c.tick();
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn estimated_bpm_is_a_track_suggestion_and_never_automatically_applies_a_grid() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let pulse = |bpm| {
+            let samples: Vec<_> = crate::tempo::pulse_train(bpm, 8000, 12)
+                .iter()
+                .map(|v| (*v * 32767.0) as i16)
+                .collect();
+            crate::test_support::wav_samples(&samples, 8000, 1)
+        };
+        let left = pulse(90.0);
+        let right = pulse(140.0);
+        let bad = TempFile::new("wav", b"invalid");
+        let steady = crate::test_support::wav_samples(&vec![8192; 8000 * 12], 8000, 1);
+        let paths = Arc::new(Mutex::new(VecDeque::from([
+            Some(left.path().to_owned()),
+            Some(right.path().to_owned()),
+            None,
+            Some(bad.path().to_owned()),
+            Some(steady.path().to_owned()),
+        ])));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(move || paths.lock().unwrap().pop_front().unwrap()),
+        );
+        assert_eq!(
+            control(&ui, "DECK A use BPM suggestion").accessible_enabled(),
+            Some(false)
+        );
+        control(&ui, "DECK A load track").invoke_accessible_default_action();
+        finish(&c);
+        let suggestion = ui.get_left_suggested_bpm();
+        assert!((suggestion - 90).abs() <= 1);
+        assert_eq!(ui.get_left_grid_bpm(), 120); // Estimate never overwrites pending user input.
+        assert!(!ui.get_left_grid_active() && !ui.get_left_playing());
+        control(&ui, "DECK A use BPM suggestion").invoke_accessible_default_action();
+        assert_eq!(ui.get_left_grid_bpm(), suggestion);
+        assert!(engine.snapshot(DeckId::A).grid.is_none());
+        control(&ui, "DECK A set beatgrid").invoke_accessible_default_action();
+        assert_eq!(
+            engine.snapshot(DeckId::A).grid.unwrap().bpm(),
+            f64::from(suggestion)
+        );
+        engine.play(DeckId::A);
+        c.tick();
+        control(&ui, "DECK B load track").invoke_accessible_default_action();
+        finish(&c);
+        let other = ui.get_right_suggested_bpm();
+        assert!((other - 140).abs() <= 1);
+        control(&ui, "DECK B use BPM suggestion").invoke_accessible_default_action();
+        assert_eq!(ui.get_right_grid_bpm(), other);
+        assert!(!ui.get_right_grid_active());
+        assert!(ui.get_left_playing() && ui.get_left_grid_active());
+        for _ in 0..2 {
+            // Cancellation and invalid data preserve old suggestions and grid.
+            control(&ui, "DECK A load track").invoke_accessible_default_action();
+            finish(&c);
+            assert_eq!(ui.get_left_suggested_bpm(), suggestion);
+            assert!(ui.get_left_grid_active());
+            assert_eq!(ui.get_right_suggested_bpm(), other);
+        }
+        control(&ui, "DECK A load track").invoke_accessible_default_action();
+        finish(&c);
+        assert_eq!(ui.get_left_suggested_bpm(), 0);
+        assert_eq!(
+            control(&ui, "DECK A use BPM suggestion").accessible_enabled(),
+            Some(false)
+        );
+        assert!(!ui.get_left_grid_active());
+        assert_eq!(ui.get_right_suggested_bpm(), other);
+        assert_eq!(ui.get_left_grid_bpm(), suggestion);
     }
     #[test]
     fn manual_bpm_grid_controls_overlay_geometry_and_track_lifetime_are_independent() {

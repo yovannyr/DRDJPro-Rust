@@ -133,3 +133,26 @@ After the final source change, all commands completed with exit code 0:
 Coverage includes invalid/fractional BPM, beats before/after anchor, downbeat phase, bounded/ordered viewport lines, actual accessible BPM/apply/clear actions, geometry at two widths, zoom, unchanged model reuse, transport/restart lifetime and independent track reload. In an earlier debug diagnostic, 1000 manual-grid viewport calculations took 4.7396 ms; this is control-plane calculation timing, not rendering, audio latency or hard real-time acceptance.
 
 The color slice is published; this manual-grid slice remains local and uncommitted for review. The release EXE is rebuilt. No automatic BPM/meter detection, grid persistence, musical beat correctness, visual/design approval, physical listening or cross-platform build is claimed. Phase 3 remains partial; rendering/frame-time and Windows/macOS evaluation are still open.
+
+## Grid publication and experimental tempo suggestion — latest verification (2026-10-24)
+
+Before publication, formatting, strict Clippy, all 34 tests and release build passed again. The preceding manual-grid slice was committed locally as 61466b9 and published through the connected GitHub account as 999f9b77404ed67673fcbf114b56c79443b5972e. Both point to tree ae10d79e5696ed2ca28162478d2cf4d4a6d1c9d7. The remote ref update was non-forced with an expected-parent check. Fetch/rebase skipped the equivalent local commit, git ls-remote confirmed local/remote main matched and the working tree was clean before new implementation. Stored CLI credentials were not changed.
+
+The next bounded local slice adds `src/tempo.rs`, loading-time tempo suggestions and explicit USE ~ adoption into the pending BPM field. At least 8 seconds and an input rate of 8 kHz are required; only the first 60 seconds are analyzed. Squared channel power preserves anti-phase stereo. A roughly 200 Hz smoothed onset envelope is correlated over 40–240 BPM; weak candidates are rejected and a strong local maximum is interpolated. Thresholds are heuristic, not calibrated confidence. No candidate is a valid result. Audio samples, transport and manual grid state are never automatically changed by a suggestion. No dependencies were added.
+
+After the final source change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 38 passed, 0 failed, 0 ignored; 3.93 s test execution |
+| `cargo build --release` | Passed; 11.57 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, stereo, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed |
+
+Regression evidence includes 21 deterministic pulse fixtures at 8/44.1/48 kHz (40–240 BPM, including 128.5 BPM), each within 1 BPM; rejection of silence/DC/steady tones and the decoded MP3 sine fixture, deterministic noise, short/invalid/non-finite input; opposite-phase stereo and amplitude variation; and an exact first-60-second cap. An actual loading-worker WAV test covers per-deck suggestions, accessible USE/apply actions, unchanged manual field/grid/playback until explicit action, cancel/error retention and removal after steady-track reload. Generalized PCM WAV test generation remains self-contained.
+
+An isolated diagnostic debug run measured the 21 synthetic pulse estimates in 419.487 ms. This is a regression-workload observation, not audio callback, GUI frame-time or physical latency acceptance. Real-music corpus accuracy, sparse intros, subdivisions, tempo changes and half/double-tempo ambiguity are unqualified. The GUI rounds suggestions to whole BPM; downbeat/anchor placement stays manual.
+
+The manual-grid slice is published. This tempo-suggestion slice remains local and uncommitted for review; the release EXE is rebuilt. Phase 3 remains partial. No automatic beat/downbeat alignment, persistence, visual/native-dialog test, physical listening acceptance, cross-platform build or hard real-time qualification was performed.

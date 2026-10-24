@@ -16,6 +16,7 @@ The prototype combines a provisional Slint UI with Rodio audio playback. Default
 - Frequency data shares the track lifetime; the timer only re-bins prepared energy for the visible detail range. Unchanged viewport/color models are reused.
 - Each deck now has a manual BPM field (integer 40–240), GRID HERE and GRID OFF. GRID HERE explicitly applies the field value and anchors a constant-tempo 4/4 downbeat at the current engine position. Before that action the grid is off; the default 120 field is not an analyzed tempo. The caption shows the active grid BPM, so editing a pending field does not silently change it.
 - Detail-view beat lines follow the same visible time range as the waveform, with stronger lines every four beats. The grid survives pause, seek, Cue and EOF/restart, resets on successful track reload and can be cleared independently per deck. No audio tempo/pitch change or automatic synchronization is applied.
+- During loading, an experimental onset-envelope autocorrelation may suggest 40–240 BPM from at most the first 60 seconds. Tracks shorter than 8 seconds, silence, steady audio and weak candidates can produce no suggestion. USE ~ copies the rounded suggestion to the pending BPM field only; GRID HERE is still required to apply a user-selected anchor. Suggestions do not overwrite user input, start playback or change audio tempo. Half/double-tempo ambiguity and incorrect suggestions on real music remain possible.
 - Procedural waveform data is used only by explicit demo mode; detail zoom is disabled there.
 
 ## Local acceptance status
@@ -33,6 +34,6 @@ Geometry/event tests do not establish visual quality or rendering performance. S
 
 ## Explicit remaining scope
 
-Automatic beatgrid/BPM/key analysis, grid persistence/adjustment tools, jog/pitch, EQ/meters, headphone routing, device recovery, library/persistence and controller integration remain open. Click-free seeking and professional real-time qualification also remain open. The library footer is still a status placeholder. Minimum window height is now 680 logical pixels to accommodate the detail view; layout geometry checks are not a visual usability acceptance.
+Production BPM validation, automatic downbeat/key analysis, grid persistence/adjustment tools, jog/pitch, EQ/meters, headphone routing, device recovery, library/persistence and controller integration remain open. Click-free seeking and professional real-time qualification also remain open. The library footer is still a status placeholder. Minimum window height is now 680 logical pixels to accommodate the detail view; layout geometry checks are not a visual usability acceptance.
 
 Next scope requires review. Finish the representative waveform/UI evaluation in bounded slices and record visual/rendering evidence before choosing Slint as the final framework. See MIGRATION_PLAN.md, FEATURE_CATALOG.md and AUDIO_PLAYBACK.md.

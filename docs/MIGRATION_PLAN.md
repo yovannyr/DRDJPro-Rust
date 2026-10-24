@@ -57,3 +57,7 @@ The detail/zoom slice is published on main as 10e3de8. The next local slice adds
 ## Manual-grid checkpoint (2026-10-24)
 
 The frequency-color slice is published on main as 54b5ba9. The next local slice adds a user-defined BPM/anchor and 4/4 beat lines to the detail view. It establishes grid timing and interaction without claiming automatic BPM estimation. Phase 3 remains partial: automatic analysis, visual approval, rendering/frame-time evidence and cross-platform evaluation remain open. Grid persistence and tempo/sync behavior require separate slices.
+
+## Tempo-suggestion checkpoint (2026-10-24)
+
+The manual-grid slice is published on main as 999f9b7. The next local slice adds an experimental BPM suggestion during bounded offline track preparation. It is adopted only into the pending BPM field; grid/anchor application remains manual. Deterministic pulse and headless workflow tests establish regression behavior, not music-corpus accuracy or automatic beat alignment. Phase 3 remains partial: production BPM/downbeat work, visual approval, rendering measurements and Windows/macOS evaluation remain open.
