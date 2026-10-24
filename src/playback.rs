@@ -84,6 +84,34 @@ impl DualDeckEngine {
         self.deck_b.set_volume(b);
     }
 
+    pub fn is_a_paused(&self) -> bool {
+        self.deck_a.is_paused()
+    }
+
+    pub fn is_b_paused(&self) -> bool {
+        self.deck_b.is_paused()
+    }
+
+    pub fn position_a(&self) -> std::time::Duration {
+        self.deck_a.get_pos()
+    }
+
+    pub fn position_b(&self) -> std::time::Duration {
+        self.deck_b.get_pos()
+    }
+
+    pub fn cue_a(&self) -> Result<(), rodio::source::SeekError> {
+        self.deck_a.try_seek(std::time::Duration::ZERO)?;
+        self.deck_a.pause();
+        Ok(())
+    }
+
+    pub fn cue_b(&self) -> Result<(), rodio::source::SeekError> {
+        self.deck_b.try_seek(std::time::Duration::ZERO)?;
+        self.deck_b.pause();
+        Ok(())
+    }
+
     pub fn wait_for_end(&self) {
         self.deck_a.sleep_until_end();
         self.deck_b.sleep_until_end();
