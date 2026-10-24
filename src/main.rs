@@ -43,6 +43,21 @@ fn main() -> Result<(), slint::PlatformError> {
         }
         return Ok(());
     }
+    if std::env::args().nth(1).as_deref() == Some("--mix") {
+        let args: Vec<_> = std::env::args().collect();
+        if args.len() != 4 {
+            eprintln!("Usage: drdjpro-ui-spike --mix <deck-a.mp3> <deck-b.mp3>");
+            std::process::exit(2);
+        }
+        if let Err(err) = playback::mix_files(
+            std::path::Path::new(&args[2]),
+            std::path::Path::new(&args[3]),
+        ) {
+            eprintln!("Audio mixing failed: {err}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let ui = AppWindow::new()?;
 
     let waveform: Vec<f32> = (0..240)
