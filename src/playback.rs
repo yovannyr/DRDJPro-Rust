@@ -132,10 +132,10 @@ mod tests {
     #[test]
     fn crossfader_extremes_and_midpoint() {
         let mut mixer = MixerLevels {
-        crossfader: 0.0,
-        channel_a: 1.0,
-        channel_b: 1.0,
-    };
+            crossfader: 0.0,
+            channel_a: 1.0,
+            channel_b: 1.0,
+        };
         assert_eq!(mixer.volumes(), (1.0, 0.0));
         mixer.crossfader = 1.0;
         assert_eq!(mixer.volumes(), (0.0, 1.0));
