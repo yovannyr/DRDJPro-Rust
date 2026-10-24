@@ -1,6 +1,81 @@
 //! Fixed-size full-track peak overview, computed only while preparing a track.
 
 pub const OVERVIEW_BINS: usize = 256;
+const DETAIL_FRAMES_PER_PEAK: usize = 256;
+
+/// A bounded high-resolution envelope, built by the loading worker.
+/// At the PCM limit this retains at most 1 MiB per mono track, less for stereo.
+pub struct DetailPeaks {
+    peaks: Vec<f32>,
+    frames: usize,
+    sample_rate: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetailRange {
+    pub start_frame: usize,
+    pub end_frame: usize,
+}
+
+impl DetailPeaks {
+    pub fn new(samples: &[f32], channels: u16, sample_rate: u32) -> Self {
+        let channels = usize::from(channels);
+        assert!(channels > 0 && sample_rate > 0 && samples.len().is_multiple_of(channels));
+        let peaks = samples
+            .chunks(DETAIL_FRAMES_PER_PEAK * channels)
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+            })
+            .collect();
+        Self {
+            peaks,
+            frames: samples.len() / channels,
+            sample_rate,
+        }
+    }
+
+    /// Follow the playhead, pinning the viewport to the track boundaries.
+    pub fn range(&self, position: std::time::Duration, window_seconds: u32) -> DetailRange {
+        let visible = (u64::from(window_seconds.clamp(2, 32)) * u64::from(self.sample_rate))
+            .min(self.frames as u64) as usize;
+        let frame = (position.as_secs_f64() * f64::from(self.sample_rate))
+            .round()
+            .clamp(0.0, self.frames as f64) as usize;
+        let start = frame.saturating_sub(visible / 2).min(self.frames - visible);
+        DetailRange {
+            start_frame: start,
+            end_frame: start + visible,
+        }
+    }
+
+    pub fn percent(&self, frame: usize) -> f32 {
+        if self.frames == 0 {
+            0.0
+        } else {
+            100.0 * frame as f32 / self.frames as f32
+        }
+    }
+
+    /// Re-bin only the small visible envelope; never scan PCM on the GUI timer.
+    pub fn render(&self, range: DetailRange) -> Vec<f32> {
+        let frames = range.end_frame - range.start_frame;
+        let bins = frames.min(OVERVIEW_BINS);
+        (0..bins)
+            .map(|i| {
+                let first = range.start_frame + i * frames / bins;
+                let end = range.start_frame + (i + 1) * frames / bins;
+                let start_peak = first / DETAIL_FRAMES_PER_PEAK;
+                let end_peak = end.div_ceil(DETAIL_FRAMES_PER_PEAK).min(self.peaks.len());
+                self.peaks[start_peak..end_peak]
+                    .iter()
+                    .copied()
+                    .fold(0.0_f32, f32::max)
+            })
+            .collect()
+    }
+}
 
 /// Each bin covers the same fraction of the track. Channel magnitudes are combined
 /// with max, not averaged, so opposite-phase stereo signals cannot cancel out.
@@ -24,6 +99,86 @@ pub fn peak_overview(samples: &[f32], channels: u16) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn detail_follows_position_and_clamps_zoom_and_track_edges() {
+        let detail = DetailPeaks::new(&vec![0.0; 48_000 * 30], 1, 48_000);
+        assert_eq!(
+            detail.range(Duration::ZERO, 8),
+            DetailRange {
+                start_frame: 0,
+                end_frame: 384_000
+            }
+        );
+        assert_eq!(
+            detail.range(Duration::from_secs(15), 8),
+            DetailRange {
+                start_frame: 528_000,
+                end_frame: 912_000
+            }
+        );
+        assert_eq!(
+            detail.range(Duration::from_secs(30), 8),
+            DetailRange {
+                start_frame: 1_056_000,
+                end_frame: 1_440_000
+            }
+        );
+        let zoomed = detail.range(Duration::from_secs(15), 4);
+        assert_eq!(
+            zoomed,
+            DetailRange {
+                start_frame: 624_000,
+                end_frame: 816_000
+            }
+        );
+        assert_eq!(detail.percent(zoomed.start_frame), 100.0 * 13.0 / 30.0);
+        assert_eq!(
+            detail.range(Duration::ZERO, 0),
+            detail.range(Duration::ZERO, 2)
+        );
+        assert_eq!(
+            detail.range(Duration::from_secs(100), 100),
+            detail.range(Duration::from_secs(30), 32)
+        );
+        let short = DetailPeaks::new(&[0.1, -0.7, 0.2], 1, 44_100);
+        let range = short.range(Duration::from_secs(1), 8);
+        assert_eq!(
+            range,
+            DetailRange {
+                start_frame: 0,
+                end_frame: 3
+            }
+        );
+        assert_eq!(short.render(range), vec![0.7; 3]);
+    }
+
+    #[test]
+    fn detail_preserves_stereo_transients_final_chunk_and_local_content() {
+        let mut samples: Vec<_> = (0..48_000 * 20)
+            .flat_map(|frame| {
+                let value = if frame < 48_000 * 10 { 0.25 } else { 0.75 };
+                [value, -value]
+            })
+            .collect();
+        samples.extend_from_slice(&[0.0, -0.9]);
+        let detail = DetailPeaks::new(&samples, 2, 48_000);
+        assert_eq!(detail.peaks.len(), (48_000usize * 20 + 1).div_ceil(256));
+        assert_eq!(detail.peaks.last(), Some(&0.9));
+        let start = detail.render(detail.range(Duration::ZERO, 4));
+        assert_eq!(start, vec![0.25; OVERVIEW_BINS]);
+        let middle = detail.render(detail.range(Duration::from_secs(15), 4));
+        assert_eq!(middle, vec![0.75; OVERVIEW_BINS]);
+        let final_view = detail.render(detail.range(Duration::from_secs(21), 4));
+        assert_eq!(final_view.last(), Some(&0.9));
+        let start = std::time::Instant::now();
+        for frame in 0..1000 {
+            let range = detail.range(Duration::from_millis(frame * 10), 8);
+            assert!(detail.render(range).len() <= OVERVIEW_BINS);
+        }
+        eprintln!("1000 detail view re-bins: {:?}", start.elapsed());
+    }
 
     #[test]
     fn empty_short_and_silent_tracks_have_honest_peaks() {

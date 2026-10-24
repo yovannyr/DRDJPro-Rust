@@ -15,6 +15,10 @@ use std::{
 };
 
 type LoadResult = Option<Result<PreparedTrack, String>>;
+struct DetailCache {
+    source: Arc<crate::waveform::DetailPeaks>,
+    range: crate::waveform::DetailRange,
+}
 pub type TrackPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub struct AudioController {
     ui: slint::Weak<AppWindow>,
@@ -22,6 +26,7 @@ pub struct AudioController {
     picker: TrackPicker,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
     displayed_overviews: RefCell<[Option<Arc<[f32]>>; 2]>,
+    displayed_details: RefCell<[Option<DetailCache>; 2]>,
 }
 impl AudioController {
     pub fn wire(ui: &AppWindow, engine: Rc<DualDeckEngine>, picker: TrackPicker) -> Rc<Self> {
@@ -31,6 +36,7 @@ impl AudioController {
             picker,
             pending: RefCell::new(None),
             displayed_overviews: RefCell::new([None, None]),
+            displayed_details: RefCell::new([None, None]),
         });
         ui.set_audio_enabled(true);
         for id in [DeckId::A, DeckId::B] {
@@ -84,6 +90,16 @@ impl AudioController {
             match id {
                 DeckId::A => ui.on_seek_left(seek),
                 DeckId::B => ui.on_seek_right(seek),
+            }
+            let weak = Rc::downgrade(&controller);
+            let zoom = move || {
+                if let Some(c) = weak.upgrade() {
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_zoom_left(zoom),
+                DeckId::B => ui.on_zoom_right(zoom),
             }
         }
         let weak = Rc::downgrade(&controller);
@@ -188,6 +204,48 @@ impl AudioController {
             }
             drop(displayed);
             let percent = s.percent();
+            if let Some(detail) = &s.detail {
+                let seconds = match id {
+                    DeckId::A => ui.get_left_detail_window(),
+                    DeckId::B => ui.get_right_detail_window(),
+                }
+                .clamp(2, 32) as u32;
+                let range = detail.range(s.position, seconds);
+                let start = detail.percent(range.start_frame);
+                let end = detail.percent(range.end_frame);
+                let marker = if end > start {
+                    (100.0 * (percent - start) / (end - start)).clamp(0.0, 100.0)
+                } else {
+                    0.0
+                };
+                let mut cache = self.displayed_details.borrow_mut();
+                let changed = cache[index].as_ref().is_none_or(|previous| {
+                    !Arc::ptr_eq(&previous.source, detail) || previous.range != range
+                });
+                if changed {
+                    let model = ModelRc::new(Rc::new(VecModel::from(detail.render(range))));
+                    match id {
+                        DeckId::A => ui.set_left_detail(model),
+                        DeckId::B => ui.set_right_detail(model),
+                    }
+                    cache[index] = Some(DetailCache {
+                        source: Arc::clone(detail),
+                        range,
+                    });
+                }
+                match id {
+                    DeckId::A => {
+                        ui.set_left_detail_start(start);
+                        ui.set_left_detail_end(end);
+                        ui.set_left_detail_marker(marker);
+                    }
+                    DeckId::B => {
+                        ui.set_right_detail_start(start);
+                        ui.set_right_detail_end(end);
+                        ui.set_right_detail_marker(marker);
+                    }
+                }
+            }
             let time = format!("{} / {}", clock(s.position), clock(s.duration));
             match id {
                 DeckId::A => {
@@ -233,6 +291,109 @@ mod tests {
             c.tick();
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn detail_zoom_and_clicks_follow_local_time_without_changing_other_deck() {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(&ui, Rc::clone(&engine), Arc::new(|| None));
+        ui.show().unwrap();
+        assert_eq!(
+            control(&ui, "DECK A zoom in").accessible_enabled(),
+            Some(false)
+        );
+        let wav = wav_file(8192, 48_000 * 30);
+        engine.load_a(wav.path()).unwrap();
+        engine.load_b(&fixture()).unwrap();
+        c.tick();
+        assert_eq!(
+            ui.get_left_detail().row_count(),
+            crate::waveform::OVERVIEW_BINS
+        );
+        let overview = ui.get_left_waveform();
+        let right_model = ui.get_right_detail();
+        for _ in 0..2 {
+            control(&ui, "DECK A zoom in").invoke_accessible_default_action();
+        }
+        assert_eq!(ui.get_left_detail_window(), 2);
+        assert_eq!(
+            control(&ui, "DECK A zoom in").accessible_enabled(),
+            Some(false)
+        );
+        for _ in 0..4 {
+            control(&ui, "DECK A zoom out").invoke_accessible_default_action();
+        }
+        assert_eq!(ui.get_left_detail_window(), 32);
+        assert_eq!(
+            control(&ui, "DECK A zoom out").accessible_enabled(),
+            Some(false)
+        );
+        for _ in 0..2 {
+            control(&ui, "DECK A zoom in").invoke_accessible_default_action();
+        }
+        assert_eq!(ui.get_left_detail_window(), 8);
+        engine.play(DeckId::A);
+        for width in [1200.0, 850.0] {
+            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            engine.seek_percent(DeckId::A, 50.0).unwrap();
+            c.tick();
+            assert!((ui.get_left_detail_start() - 100.0 * 11.0 / 30.0).abs() < 0.001);
+            assert!((ui.get_left_detail_end() - 100.0 * 19.0 / 30.0).abs() < 0.001);
+            let view = control(&ui, "DECK A detailed waveform");
+            let origin = view.absolute_position();
+            let size = view.size();
+            let position = slint::LogicalPosition::new(
+                origin.x + size.width * 0.25,
+                origin.y + size.height / 2.0,
+            );
+            ui.window()
+                .dispatch_event(WindowEvent::PointerMoved { position });
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            // Quarter of the 11..19s view is 13s, not quarter of the whole track.
+            assert!((engine.snapshot(DeckId::A).position.as_secs_f64() - 13.0).abs() < 0.001);
+            assert!(ui.get_left_playing());
+            assert!((ui.get_left_detail_marker() - 50.0).abs() < 0.01);
+            let marker = control(&ui, "DECK A detail playhead");
+            assert!(
+                (marker.absolute_position().x
+                    - origin.x
+                    - (size.width - marker.size().width) / 2.0)
+                    .abs()
+                    < 0.1
+            );
+        }
+        output.by_ref().take(4800).for_each(drop);
+        c.tick();
+        assert!(ui.get_left_detail_start() > 30.0);
+        assert_eq!(ui.get_right_position(), 0.0);
+        assert_eq!(ui.get_right_detail_window(), 8);
+        assert_eq!(ui.get_right_detail(), right_model);
+        engine.pause(DeckId::A);
+        c.tick();
+        let paused = ui.get_left_detail();
+        c.tick();
+        assert_eq!(ui.get_left_detail(), paused);
+        engine.seek_percent(DeckId::A, 100.0).unwrap();
+        c.tick();
+        assert!((ui.get_left_detail_marker() - 100.0).abs() < 0.001);
+        assert!(!ui.get_left_playing());
+        engine.cue(DeckId::A);
+        c.tick();
+        assert_eq!(ui.get_left_detail_marker(), 0.0);
+        assert_eq!(ui.get_left_detail_start(), 0.0);
+        assert_eq!(ui.get_left_waveform(), overview);
+        ui.hide().unwrap();
     }
     #[test]
     fn headless_overview_clicks_map_to_track_time_and_playhead_at_different_widths() {
@@ -375,12 +536,14 @@ mod tests {
         finish(&c);
         assert!(ui.get_left_loaded());
         let left_waveform = ui.get_left_waveform();
+        let left_detail = ui.get_left_detail();
         assert!(!ui.get_right_loaded());
         assert!(!ui.get_left_playing());
         control(&ui, "DECK B load track").invoke_accessible_default_action();
         finish(&c);
         assert!(ui.get_right_loaded());
         let right_waveform = ui.get_right_waveform();
+        let right_detail = ui.get_right_detail();
         assert!(ui.get_right_title().ends_with("tone-9s.mp3"));
         control(&ui, "DECK A play/pause").invoke_accessible_default_action();
         assert!(engine.snapshot(DeckId::A).playing);
@@ -413,6 +576,8 @@ mod tests {
         assert_eq!(ui.get_status(), "Selection cancelled");
         assert_eq!(ui.get_left_waveform(), left_waveform);
         assert_eq!(ui.get_right_waveform(), right_waveform);
+        assert_eq!(ui.get_left_detail(), left_detail);
+        assert_eq!(ui.get_right_detail(), right_detail);
         control(&ui, "DECK B load track").invoke_accessible_default_action();
         finish(&c);
         assert!(!ui.get_right_playing());
@@ -420,5 +585,7 @@ mod tests {
         assert_eq!(ui.get_left_title(), title);
         assert_ne!(ui.get_right_waveform(), right_waveform);
         assert_eq!(ui.get_left_waveform(), left_waveform);
+        assert_ne!(ui.get_right_detail(), right_detail);
+        assert_eq!(ui.get_left_detail(), left_detail);
     }
 }

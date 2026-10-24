@@ -68,3 +68,24 @@ Coverage includes exact peaks for mono, opposite-phase stereo, silence, short tr
 An earlier diagnostic run analyzed 30 seconds of stereo PCM into 256 bins in 212.0467 ms in the debug test binary. This is an observation, not a GUI frame-time, device-latency or real-time callback benchmark. Peak calculation runs during track preparation, outside playback and GUI timer processing; each retained peak overview uses at most 1024 bytes of sample data (excluding allocation metadata/GUI representation).
 
 Updated MIGRATION_PLAN.md, GUI_COMPONENTS.md, FEATURE_CATALOG.md, UI_SPIKE.md and AUDIO_PLAYBACK.md to describe the current implementation and remaining phase gates. Phase 3 remains partial: detailed waveform/zoom/beat analysis, visual review and Windows/macOS rendering evaluation are still open. No screenshot/visual, native-dialog, physical listening, cross-platform build or hard real-time acceptance was performed. The release EXE was rebuilt; changes remain local and uncommitted, ready for slice review.
+
+## Publication and detail-view follow-up — latest verification (2026-10-24)
+
+Before publication, fmt, strict Clippy, all 23 tests and release build passed again. The requested prior work was committed locally as acf2819. HTTPS push failed with 403 because Git's configured account lacked write permission; the connected GitHub account yovannyr published the identical tree through the Git objects API as e06dc335649e298de78863a547738fda2443cdce. Both commits have tree 71d1c5ff02329a4f0c381a2c9a280067b74fc8c2. A non-forced remote ref update was used. Fetch/rebase skipped the equivalent local commit and aligned main; git ls-remote confirmed the same remote SHA and the working tree was clean before further implementation. Stored CLI credentials were not changed.
+
+The next bounded local slice adds prepared high-resolution peak envelopes, following 2–32-second detail views, independent zoom controls and click seeking within each visible range. Envelopes retain one maximum magnitude per 256 PCM frames and at most 1 MiB per mono track at the PCM cap. Stereo channels are combined without cancellation. At most 256 visible bars are re-binned on the control plane; no PCM scan occurs on the GUI timer. Unchanged ranges reuse their model. This is peak-envelope detail, not sample-level editing or frequency-color analysis.
+
+After the final source change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 26 passed, 0 failed, 0 ignored; 1.64 s test execution |
+| `cargo build --release` | Passed; 21.67 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, stereo, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed |
+
+Coverage includes zoom limits; short tracks; start/middle/end bounds; stereo transients/final chunks; local visible content; real headless zoom actions and pointer events at two window widths; correct visible-time targets; playing/paused/EOF/Cue states; marker geometry; unchanged-model reuse; and error/cancel/reload deck isolation. In an earlier diagnostic run, 1000 visible-range re-bins took 48.3591 ms in the debug test binary; this is not a Slint rendering/frame-time or real-time callback benchmark.
+
+The preceding slices are published. This new detail-view slice remains local and uncommitted for review. The release executable is rebuilt. Phase 3 remains partial; frequency colors, beatgrid/BPM, visual/rendering evaluation and macOS acceptance remain open. No visual/native-dialog test, physical listening acceptance or hard real-time qualification was performed.

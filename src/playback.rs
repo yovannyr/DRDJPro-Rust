@@ -60,6 +60,7 @@ pub struct PreparedTrack {
     pub title: String,
     samples: SamplesBuffer,
     overview: Arc<[f32]>,
+    detail: Arc<crate::waveform::DetailPeaks>,
 }
 impl PreparedTrack {
     /// Decode on a worker, never inside an audio callback. Limit retained PCM to 256 MiB/track.
@@ -95,6 +96,7 @@ impl PreparedTrack {
             return Err("No complete audio frames decoded".into());
         }
         let overview = crate::waveform::peak_overview(&samples, channels).into();
+        let detail = Arc::new(crate::waveform::DetailPeaks::new(&samples, channels, rate));
         Ok(Self {
             title: path
                 .file_name()
@@ -103,6 +105,7 @@ impl PreparedTrack {
                 .into_owned(),
             samples: SamplesBuffer::new(channels, rate, samples),
             overview,
+            detail,
         })
     }
     pub fn duration(&self) -> Duration {
@@ -150,6 +153,7 @@ pub struct DeckSnapshot {
     pub position: Duration,
     pub duration: Duration,
     pub overview: Option<Arc<[f32]>>,
+    pub detail: Option<Arc<crate::waveform::DetailPeaks>>,
 }
 impl DeckSnapshot {
     pub fn percent(&self) -> f32 {
@@ -308,6 +312,7 @@ impl DualDeckEngine {
             position,
             duration,
             overview: deck.track.as_ref().map(|t| Arc::clone(&t.overview)),
+            detail: deck.track.as_ref().map(|t| Arc::clone(&t.detail)),
         }
     }
     pub fn set_levels(&self, levels: MixerLevels) {
@@ -412,6 +417,7 @@ mod tests {
             PreparedTrack {
                 title: "stereo step".into(),
                 overview: crate::waveform::peak_overview(&samples, 2).into(),
+                detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48_000)),
                 samples: SamplesBuffer::new(2, 48_000, samples),
             },
         );
