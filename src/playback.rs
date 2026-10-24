@@ -100,6 +100,7 @@ pub fn play_file(path: &Path) -> Result<(), Box<dyn Error>> {
     });
     engine.play_a();
     engine.wait_for_end();
+    engine.stop_a();
     Ok(())
 }
 
@@ -114,9 +115,13 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
         channel_a: 1.0,
         channel_b: 1.0,
     });
+    engine.pause_a();
+    engine.pause_b();
     engine.play_a();
     engine.play_b();
     engine.wait_for_end();
+    engine.stop_a();
+    engine.stop_b();
     Ok(())
 }
 
