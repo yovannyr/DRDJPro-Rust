@@ -16,8 +16,8 @@ impl MixerLevels {
     pub fn volumes(self) -> (f32, f32) {
         let x = self.crossfader.clamp(0.0, 1.0);
         (
-            (self.channel_a.clamp(0.0, 1.0) * (1.0 - x)),
-            (self.channel_b.clamp(0.0, 1.0) * x),
+            self.channel_a.clamp(0.0, 1.0) * (1.0 - x),
+            self.channel_b.clamp(0.0, 1.0) * x,
         )
     }
 }
@@ -36,7 +36,11 @@ impl DualDeckEngine {
         let deck_b = Sink::connect_new(stream.mixer());
         deck_a.pause();
         deck_b.pause();
-        Ok(Self { _stream: stream, deck_a, deck_b })
+        Ok(Self {
+            _stream: stream,
+            deck_a,
+            deck_b,
+        })
     }
 
     pub fn load_a(&self, path: &Path) -> Result<(), Box<dyn Error>> {
@@ -55,12 +59,24 @@ impl DualDeckEngine {
         Ok(())
     }
 
-    pub fn play_a(&self) { self.deck_a.play(); }
-    pub fn play_b(&self) { self.deck_b.play(); }
-    pub fn pause_a(&self) { self.deck_a.pause(); }
-    pub fn pause_b(&self) { self.deck_b.pause(); }
-    pub fn stop_a(&self) { self.deck_a.stop(); }
-    pub fn stop_b(&self) { self.deck_b.stop(); }
+    pub fn play_a(&self) {
+        self.deck_a.play();
+    }
+    pub fn play_b(&self) {
+        self.deck_b.play();
+    }
+    pub fn pause_a(&self) {
+        self.deck_a.pause();
+    }
+    pub fn pause_b(&self) {
+        self.deck_b.pause();
+    }
+    pub fn stop_a(&self) {
+        self.deck_a.stop();
+    }
+    pub fn stop_b(&self) {
+        self.deck_b.stop();
+    }
 
     pub fn set_levels(&self, levels: MixerLevels) {
         let (a, b) = levels.volumes();
@@ -77,7 +93,11 @@ impl DualDeckEngine {
 pub fn play_file(path: &Path) -> Result<(), Box<dyn Error>> {
     let engine = DualDeckEngine::open_default()?;
     engine.load_a(path)?;
-    engine.set_levels(MixerLevels { crossfader: 0.0, channel_a: 1.0, channel_b: 1.0 });
+    engine.set_levels(MixerLevels {
+        crossfader: 0.0,
+        channel_a: 1.0,
+        channel_b: 1.0,
+    });
     engine.play_a();
     engine.wait_for_end();
     Ok(())
@@ -89,7 +109,11 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
     let engine = DualDeckEngine::open_default()?;
     engine.load_a(a)?;
     engine.load_b(b)?;
-    engine.set_levels(MixerLevels { crossfader: 0.5, channel_a: 1.0, channel_b: 1.0 });
+    engine.set_levels(MixerLevels {
+        crossfader: 0.5,
+        channel_a: 1.0,
+        channel_b: 1.0,
+    });
     engine.play_a();
     engine.play_b();
     engine.wait_for_end();
@@ -102,7 +126,11 @@ mod tests {
 
     #[test]
     fn crossfader_extremes_and_midpoint() {
-        let mut mixer = MixerLevels { crossfader: 0.0, channel_a: 1.0, channel_b: 1.0 };
+        let mut mixer = MixerLevels {
+        crossfader: 0.0,
+        channel_a: 1.0,
+        channel_b: 1.0,
+    };
         assert_eq!(mixer.volumes(), (1.0, 0.0));
         mixer.crossfader = 1.0;
         assert_eq!(mixer.volumes(), (0.0, 1.0));
@@ -112,9 +140,17 @@ mod tests {
 
     #[test]
     fn channel_gain_and_crossfader_are_clamped() {
-        let mixer = MixerLevels { crossfader: 2.0, channel_a: 2.0, channel_b: 0.25 };
+        let mixer = MixerLevels {
+            crossfader: 2.0,
+            channel_a: 2.0,
+            channel_b: 0.25,
+        };
         assert_eq!(mixer.volumes(), (0.0, 0.25));
-        let mixer = MixerLevels { crossfader: -1.0, channel_a: -3.0, channel_b: 1.0 };
+        let mixer = MixerLevels {
+            crossfader: -1.0,
+            channel_a: -3.0,
+            channel_b: 1.0,
+        };
         assert_eq!(mixer.volumes(), (0.0, 0.0));
     }
 
