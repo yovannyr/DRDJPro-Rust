@@ -156,3 +156,21 @@ Regression evidence includes 21 deterministic pulse fixtures at 8/44.1/48 kHz (4
 An isolated diagnostic debug run measured the 21 synthetic pulse estimates in 419.487 ms. This is a regression-workload observation, not audio callback, GUI frame-time or physical latency acceptance. Real-music corpus accuracy, sparse intros, subdivisions, tempo changes and half/double-tempo ambiguity are unqualified. The GUI rounds suggestions to whole BPM; downbeat/anchor placement stays manual.
 
 The manual-grid slice is published. This tempo-suggestion slice remains local and uncommitted for review; the release EXE is rebuilt. Phase 3 remains partial. No automatic beat/downbeat alignment, persistence, visual/native-dialog test, physical listening acceptance, cross-platform build or hard real-time qualification was performed.
+
+## User-provided UI reference review
+
+Reviewed Softwareübersicht.md in full and inspected the numbered Softwareübersicht.png. The image selects Extended mode. The 110-page image-only DRDJ-UserManual-DRDJ.pdf was parsed for page count and rendered with Poppler; focused visual reading covered contents and UI pages 21, 25–30, 39–41 and 53–58. It was not represented as a full manual audit. Intermediate page images remain in ignored target/reference-audit/.
+
+GUI_COMPONENTS.md now groups all 59 numbered controls exactly once and records manual page references, Rust implementation gaps, source ambiguities and the next bounded Extended-layout slice. MIGRATION_PLAN.md prioritizes the reference workspace structure before expanding unrelated analysis features. Important differences include shared detailed waveforms and a large library area; original/current BPM and elapsed/remaining time; drag scrubbing; and a separate transactional grid editor with Save/Cancel and bar/downbeat semantics.
+
+Validation: a Python coverage assertion confirmed IDs 1–59 are present exactly once; git diff --check passed. Only planning/inventory/this log were changed; reference PDF/Markdown/PNG and application sources were left intact. Cargo checks were not rerun for this documentation-only change. Inspecting reference images is not a visual test or acceptance of the application. Existing untracked src/tempo.rs was preserved.
+
+## Extended workspace and session library — local verification (2026-10-24)
+
+This bounded slice implements reusable compact deck heads, shared detailed waveforms, a real session track table and separate status. The composition root injects the native multi-file selector; file inspection and loading use background workers. Stable IDs survive sorting; filtering hides and clears unavailable selections. Name/type/path search/sort, local arrow navigation, selected-track loading, duplicate/missing/unsupported import handling, cancellation and decoding errors are exercised with actual WAV/MP3 fixtures. Playing-deck replacement is rejected both before loading and after decoding if playback began in between.
+
+Final checks: `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` passed; `cargo test` passed all 41 tests (0 failures/ignored, 3.58 s). The strengthened keyboard assertion verifies the exact next track in current sort order, rather than merely a nonempty selection. Existing mixer, seek, waveform, grid and tempo regression tests still pass. Headless geometry is checked at 850x740 and 1280x860.
+
+`cargo build --release` passed in 18.31 s. The rebuilt executable analyzed tests/fixtures/tone-9s.mp3 successfully: 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592. `git diff --check` passed (only Git line-ending conversion notices).
+
+The library is session-only, accepts at most 5,000 selected paths per import and 100,000 stored entries. Import validates extension/existence; decode validity is established on load. These bounds are not scale benchmarks. No persistence, tags/crates/history, native-dialog interaction, application visual review, physical listening, device-latency measurement or macOS build is claimed. The full professional product remains the target; MIGRATION_PLAN.md records release gates and the proposed next persistence slice. Work remains local for review; pre-existing changes and untracked tempo.rs were retained.

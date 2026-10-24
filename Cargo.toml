@@ -7,7 +7,7 @@ name = "drdjpro-ui-spike"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
-description = "DrDJ Pro Rust: two-deck Slint UI prototype"
+description = "DrDJ Pro Rust desktop DJ application"
 
 [dependencies]
 rfd = "=0.15.4"

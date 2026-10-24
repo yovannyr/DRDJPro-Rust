@@ -1,250 +1,186 @@
-import { Button, Slider, SpinBox, VerticalBox, HorizontalBox } from "std-widgets.slint";
-
+import { Button, Slider, SpinBox, LineEdit, ListView } from "std-widgets.slint";
 export struct BeatLine { position: float, downbeat: bool }
+export struct LibraryRow { id: int, name: string, format: string, path: string }
 
-component DeckPanel inherits Rectangle {
+component WaveformStrip inherits Rectangle {
+    in property <string> deck-label;
+    in property <bool> overview;
+    in property <brush> accent;
+    in property <[float]> values;
+    in property <[color]> colors;
+    in property <[BeatLine]> beats;
+    in property <bool> enabled;
+    in property <float> position;
+    in property <float> marker;
+    in property <float> range-start: 0;
+    in property <float> range-end: 100;
+    callback seek(float);
+    background: #070b11; clip: true;
+    for value[i] in values : Rectangle {
+        x: i * parent.width / max(1, values.length);
+        y: (parent.height - self.height) / 2;
+        width: parent.width / max(1, values.length);
+        height: clamp(value, 0, 1) * max(0px, parent.height - 6px);
+        background: i < colors.length ? colors[i] : accent;
+    }
+    for line in beats : Rectangle {
+        accessible-role: image; accessible-label: deck-label + " beat line"; accessible-value: line.position;
+        x: clamp(line.position, 0, 100) / 100 * max(0px, parent.width - self.width);
+        width: line.downbeat ? 2px : 1px; height: parent.height;
+        background: line.downbeat ? #ffffff99 : #ffffff40;
+    }
+    Rectangle {
+        accessible-role: image;
+        accessible-label: deck-label + (overview ? " waveform playhead" : " detail playhead");
+        accessible-value: marker;
+        x: clamp(marker, 0, 100) / 100 * max(0px, parent.width - self.width);
+        width: 2px; height: parent.height; background: #ffffff;
+    }
+    TouchArea {
+        enabled: root.enabled; accessible-role: slider;
+        accessible-label: deck-label + (overview ? " waveform overview" : " detailed waveform");
+        accessible-enabled: self.enabled; accessible-value: position;
+        accessible-value-minimum: range-start; accessible-value-maximum: range-end;
+        accessible-action-set-value(v) => { if self.enabled && v.is-float() { root.seek(clamp(v.to-float(), range-start, range-end)); } }
+        clicked => { if self.width > 0px { root.seek(range-start + clamp(self.mouse-x / self.width, 0, 1) * (range-end - range-start)); } }
+    }
+}
+
+component CompactDeck inherits Rectangle {
     in property <string> deck-label;
     in property <brush> accent;
+    in property <string> track-title;
+    in property <string> time-text;
     in property <[float]> waveform;
+    in property <[color]> colors;
+    in property <bool> audio-enabled;
+    in property <bool> loaded;
+    in property <bool> loading;
+    in property <bool> playing;
+    in-out property <float> position;
+    callback load(); callback toggle(); callback cue(); callback seek(float);
+    background: #171c24; border-width: 1px; border-color: #303b4b;
+    VerticalLayout {
+        padding: 8px; spacing: 4px;
+        HorizontalLayout {
+            Text { text: deck-label + " / INT"; color: accent; font-weight: 700; font-size: 15px; }
+            Button { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !playing; clicked => { root.load(); } }
+            Button { text: playing ? "PAUSE" : "PLAY"; accessible-label: deck-label + " play/pause"; enabled: !audio-enabled || loaded; clicked => { root.toggle(); } }
+            Button { text: "CUE"; accessible-label: deck-label + " cue"; enabled: !audio-enabled || loaded; clicked => { root.cue(); } }
+        }
+        Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
+        WaveformStrip {
+            height: 42px; overview: true; deck-label: root.deck-label; accent: root.accent;
+            values: root.waveform; colors: root.colors; position: root.position; marker: root.position;
+            enabled: !audio-enabled || loaded;
+            seek(value) => { if audio-enabled { root.seek(value); } else { root.position = value; } }
+        }
+        HorizontalLayout {
+            Text { text: "ELAPSED / TOTAL  " + time-text; color: #a8b3c3; font-size: 11px; }
+            Text { text: round(position) + "%"; color: accent; font-size: 11px; horizontal-alignment: right; }
+        }
+        Slider { minimum: 0; maximum: 100; value <=> position; accessible-label: deck-label + " position"; enabled: !audio-enabled || loaded; changed(value) => { if audio-enabled { root.seek(value); } } }
+    }
+}
+
+component DetailWaveform inherits Rectangle {
+    in property <string> deck-label;
+    in property <brush> accent;
     in property <[float]> detail;
-    in property <[color]> waveform-colors;
-    in property <[color]> detail-colors;
+    in property <[color]> colors;
     in property <[BeatLine]> beats;
+    in property <bool> enabled;
     in property <bool> grid-active;
-    in property <string> grid-caption: "GRID OFF";
+    in property <string> grid-caption;
     in-out property <int> grid-bpm: 120;
-    in property <int> suggested-bpm: 0;
+    in property <int> suggested-bpm;
+    in property <float> position;
     in property <float> detail-start;
     in property <float> detail-end: 100;
-    in property <float> detail-marker;
+    in property <float> marker;
     in-out property <int> detail-window: 8;
-    in property <bool> audio-enabled: false;
-    in property <bool> loaded: false;
-    in property <bool> loading: false;
-    in property <string> track-title: "DEMO TRACK";
-    in property <string> time-text: "SIMULATION";
-    in-out property <bool> playing;
-    in-out property <float> position;
-    callback play-clicked();
-    callback cue-clicked();
-    callback load-clicked();
-    callback seek-requested(float);
-    callback zoom-changed();
-    callback grid-clicked();
-    callback clear-grid-clicked();
-
-    background: #151e2d;
-    border-radius: 10px;
-    horizontal-stretch: 1;
+    callback seek(float); callback zoom(); callback set-grid(); callback clear-grid();
+    background: #10151d;
     VerticalLayout {
-        padding: 12px;
-        spacing: 6px;
-        Text {
-            text: deck-label;
-            color: accent;
-            font-size: 21px;
-            font-weight: 700;
+        padding: 3px; spacing: 2px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: deck-label; color: accent; width: 62px; font-size: 12px; vertical-alignment: center; }
+            Text { text: "≤ " + detail-window + " s"; color: #abb6c6; width: 44px; font-size: 11px; vertical-alignment: center; }
+            Button { text: "+"; width: 32px; accessible-label: deck-label + " zoom in"; enabled: root.enabled && detail-window > 2; clicked => { detail-window = max(2, detail-window / 2); root.zoom(); } }
+            Button { text: "−"; width: 32px; accessible-label: deck-label + " zoom out"; enabled: root.enabled && detail-window < 32; clicked => { detail-window = min(32, detail-window * 2); root.zoom(); } }
+            Button { text: suggested-bpm > 0 ? "USE ~" + suggested-bpm : "NO EST."; width: 80px; accessible-label: deck-label + " use BPM suggestion"; enabled: root.enabled && suggested-bpm > 0; clicked => { grid-bpm = suggested-bpm; } }
+            SpinBox { minimum: 40; maximum: 240; width: 70px; value <=> grid-bpm; enabled: root.enabled; accessible-label: deck-label + " manual BPM"; }
+            Button { text: "GRID HERE"; width: 88px; accessible-label: deck-label + " set beatgrid"; enabled: root.enabled; clicked => { root.set-grid(); } }
+            Button { text: "GRID OFF"; width: 80px; accessible-label: deck-label + " clear beatgrid"; enabled: grid-active; clicked => { root.clear-grid(); } }
+            Text { text: grid-caption; color: #a0adbe; font-size: 11px; overflow: elide; vertical-alignment: center; }
         }
-        Text {
-            text: track-title;
-            overflow: elide;
-            color: #c4d0df;
-            font-size: 13px;
+        WaveformStrip {
+            height: 54px; overview: false; deck-label: root.deck-label; accent: root.accent;
+            values: root.detail; colors: root.colors; beats: root.beats; enabled: root.enabled;
+            position: root.position; marker: root.marker; range-start: root.detail-start; range-end: root.detail-end;
+            seek(value) => { root.seek(value); }
         }
-        Button {
-            text: "LOAD MP3 / WAV";
-            accessible-label: deck-label + " load track";
-            enabled: audio-enabled && !loading;
-            clicked => { load-clicked(); }
-        }
-        overview := Rectangle {
-            height: 56px;
-            background: #0a1220;
-            clip: true;
-            for value[i] in waveform : Rectangle {
-                x: i * parent.width / max(1, waveform.length);
-                y: (parent.height - self.height) / 2;
-                width: parent.width / max(1, waveform.length);
-                height: clamp(value, 0, 1) * (parent.height - 16px);
-                background: i < waveform-colors.length ? waveform-colors[i] : accent;
-            }
-            Rectangle {
-                accessible-role: image;
-                accessible-label: deck-label + " waveform playhead";
-                accessible-value: position;
-                x: clamp(position, 0, 100) / 100 * max(0px, parent.width - self.width);
-                width: 2px;
-                height: parent.height;
-                background: #f9fafc;
-            }
-            TouchArea {
-                enabled: !audio-enabled || loaded;
-                accessible-role: slider;
-                accessible-label: deck-label + " waveform overview";
-                accessible-enabled: self.enabled;
-                accessible-value: position;
-                accessible-value-minimum: 0;
-                accessible-value-maximum: 100;
-                accessible-action-set-value(v) => {
-                    if self.enabled && v.is-float() {
-                        if audio-enabled { root.seek-requested(v.to-float()); }
-                        else { position = clamp(v.to-float(), 0, 100); }
-                    }
-                }
-                clicked => {
-                    if self.width > 0px {
-                        let target = clamp(100 * self.mouse-x / self.width, 0, 100);
-                        if audio-enabled { root.seek-requested(target); }
-                        else { position = target; }
-                    }
-                }
-            }
+    }
+}
+
+component TrackLibrary inherits Rectangle {
+    in property <[LibraryRow]> rows;
+    in property <string> count-text;
+    in property <string> empty-text;
+    in property <bool> busy;
+    in property <bool> can-load-left;
+    in property <bool> can-load-right;
+    in property <int> selection: -1;
+    in-out property <string> query;
+    callback import-files(); callback search(); callback select-track(int); callback move-selection(int);
+    callback sort-column(int); callback load-left(); callback load-right();
+    background: #121821; border-color: #303b4b; border-width: 1px;
+    VerticalLayout {
+        padding: 6px; spacing: 4px;
+        HorizontalLayout {
+            Text { text: "LOCAL LIBRARY"; color: #e4ebf6; font-weight: 700; vertical-alignment: center; }
+            Button { text: busy ? "WORKING…" : "ADD FILES"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
+            LineEdit { text <=> query; placeholder-text: "Search filename or path"; accessible-label: "Library search"; edited => { root.search(); } }
+            Button { text: "X"; width: 30px; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
+            Button { text: "LOAD A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
+            Button { text: "LOAD B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
         }
         HorizontalLayout {
-            spacing: 6px;
-            Text {
-                text: "DETAIL ≤ " + detail-window + " s";
-                color: #9bacbf;
-                vertical-alignment: center;
-            }
-            Button {
-                text: "+";
-                accessible-label: deck-label + " zoom in";
-                enabled: audio-enabled && loaded && detail-window > 2;
-                clicked => { detail-window = max(2, detail-window / 2); root.zoom-changed(); }
-            }
-            Button {
-                text: "−";
-                accessible-label: deck-label + " zoom out";
-                enabled: audio-enabled && loaded && detail-window < 32;
-                clicked => { detail-window = min(32, detail-window * 2); root.zoom-changed(); }
-            }
+            Button { text: "TRACK ↕"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
+            Button { text: "TYPE ↕"; width: 70px; accessible-label: "Sort library by type"; clicked => { root.sort-column(1); } }
+            Button { text: "LOCATION ↕"; horizontal-stretch: 3; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
         }
-        HorizontalLayout {
-            spacing: 6px;
-            Button {
-                text: suggested-bpm > 0 ? "USE ~" + suggested-bpm : "NO EST.";
-                accessible-label: deck-label + " use BPM suggestion";
-                accessible-description: "Copy experimental tempo estimate to BPM field; grid and playback remain unchanged";
-                enabled: audio-enabled && loaded && suggested-bpm > 0;
-                clicked => { grid-bpm = suggested-bpm; }
+        nav := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.DownArrow { root.move-selection(1); return accept; }
+                if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
+                return reject;
             }
-            SpinBox {
-                accessible-label: deck-label + " manual BPM";
-                enabled: audio-enabled && loaded;
-                minimum: 40;
-                maximum: 240;
-                value <=> grid-bpm;
-            }
-            Button {
-                text: "GRID HERE";
-                accessible-label: deck-label + " set beatgrid";
-                enabled: audio-enabled && loaded;
-                clicked => { root.grid-clicked(); }
-            }
-        }
-        Rectangle {
-            height: 100px;
-            background: #0a1220;
-            clip: true;
-            for value[i] in detail : Rectangle {
-                x: i * parent.width / max(1, detail.length);
-                y: (parent.height - self.height) / 2;
-                width: parent.width / max(1, detail.length);
-                height: clamp(value, 0, 1) * (parent.height - 12px);
-                background: i < detail-colors.length ? detail-colors[i] : accent;
-            }
-            for line in beats : Rectangle {
-                accessible-role: image;
-                accessible-label: deck-label + " beat line";
-                accessible-value: line.position;
-                x: clamp(line.position, 0, 100) / 100 * max(0px, parent.width - self.width);
-                width: line.downbeat ? 2px : 1px;
-                height: parent.height;
-                background: line.downbeat ? #ffffff99 : #ffffff40;
-            }
-            Rectangle {
-                accessible-role: image;
-                accessible-label: deck-label + " detail playhead";
-                accessible-value: detail-marker;
-                x: clamp(detail-marker, 0, 100) / 100 * max(0px, parent.width - self.width);
-                width: 2px;
-                height: parent.height;
-                background: #f9fafc;
-            }
-            TouchArea {
-                enabled: audio-enabled && loaded;
-                accessible-role: slider;
-                accessible-label: deck-label + " detailed waveform";
-                accessible-enabled: self.enabled;
-                accessible-value: position;
-                accessible-value-minimum: detail-start;
-                accessible-value-maximum: detail-end;
-                accessible-action-set-value(v) => {
-                    if self.enabled && v.is-float() {
-                        root.seek-requested(clamp(v.to-float(), detail-start, detail-end));
+            ListView {
+                for row in root.rows : Rectangle {
+                    height: 30px; background: root.selection == row.id ? #194b70 : #1a222e;
+                    accessible-role: button; accessible-label: "Library track " + row.id;
+                    accessible-description: row.name + " " + row.path;
+                    accessible-action-default => { root.select-track(row.id); nav.focus(); }
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        Text { text: row.name; color: #e4ebf6; overflow: elide; horizontal-stretch: 2; }
+                        Text { text: row.format; color: #9faec2; width: 70px; }
+                        Text { text: row.path; color: #9faec2; overflow: elide; horizontal-stretch: 3; }
                     }
-                }
-                clicked => {
-                    if self.width > 0px {
-                        let fraction = clamp(self.mouse-x / self.width, 0, 1);
-                        root.seek-requested(detail-start + fraction * (detail-end - detail-start));
-                    }
+                    TouchArea { clicked => { root.select-track(row.id); nav.focus(); } }
                 }
             }
+            Text { text: empty-text; visible: rows.length == 0; color: #9faec2; horizontal-alignment: center; vertical-alignment: center; }
         }
-        Text {
-            text: time-text + "  /  " + round(position) + "%";
-            color: #9bacbf;
-            font-size: 12px;
-        }
-        Slider {
-            enabled: !audio-enabled || loaded;
-            accessible-label: deck-label + " position";
-            minimum: 0;
-            maximum: 100;
-            value <=> position;
-            changed(value) => { if audio-enabled { root.seek-requested(value); } }
-        }
-        HorizontalLayout {
-            spacing: 8px;
-            Button {
-                text: playing ? "PAUSE" : "PLAY";
-                enabled: !audio-enabled || loaded;
-                accessible-label: deck-label + " play/pause";
-                clicked => { play-clicked(); }
-            }
-            Button {
-                text: "CUE";
-                enabled: !audio-enabled || loaded;
-                accessible-label: deck-label + " cue";
-                clicked => { cue-clicked(); }
-            }
-            Button {
-                text: "GRID OFF";
-                accessible-label: deck-label + " clear beatgrid";
-                enabled: grid-active;
-                clicked => { root.clear-grid-clicked(); }
-            }
-        }
-        Rectangle { background: transparent; vertical-stretch: 1; }
-        HorizontalLayout {
-            Text { text: root.audio-enabled ? "BASS" : "SIMULATED"; color: #ea5a5a; font-size: 11px; }
-            Text { text: root.audio-enabled ? "MID" : "NO AUDIO"; color: #46dc64; font-size: 11px; }
-            Text { text: root.audio-enabled ? "HIGH" : "SYNTHETIC"; color: #508cfa; font-size: 11px; }
-        }
-        Text { text: grid-caption; color: #9bacbf; font-size: 11px; }
+        Text { text: count-text; color: #9faec2; font-size: 11px; }
     }
 }
 
 export component AppWindow inherits Window {
-    title: "DrDJ Pro — Rust UI Spike";
-    preferred-width: 1200px;
-    preferred-height: 740px;
-    min-width: 850px;
-    min-height: 680px;
-    background: #0b111c;
-
+    title: "DrDJ Pro"; preferred-width: 1280px; preferred-height: 860px;
+    min-width: 850px; min-height: 740px; background: #090d13;
     in property <[float]> left-waveform;
     in property <[float]> right-waveform;
     in property <[float]> left-detail;
@@ -303,131 +239,89 @@ export component AppWindow inherits Window {
     callback clear-grid-left();
     callback clear-grid-right();
 
+    in property <[LibraryRow]> library-rows;
+    in property <string> library-count: "0 tracks";
+    in property <string> library-empty: "Add MP3/WAV files to your library";
+    in property <bool> library-busy: false;
+    in property <int> selected-track: -1;
+    in-out property <string> library-query;
+    callback import-library(); callback library-search(); callback select-library(int);
+    callback move-library-selection(int); callback sort-library(int);
+    callback load-library-left(); callback load-library-right();
     VerticalLayout {
-        padding: 18px;
-        spacing: 16px;
-        Text {
-            text: "DrDJ Pro    /    RUST UI PROTOTYPE";
-            color: #f1f5fb;
-            font-size: 23px;
-            font-weight: 700;
-            vertical-alignment: center;
-            height: 48px;
+        padding: 8px; spacing: 6px;
+        HorizontalLayout {
+            height: 32px;
+            Text { text: "DRDJ PRO"; color: #f1f4fa; font-size: 21px; font-weight: 800; vertical-alignment: center; }
+            Text { text: "EXTENDED / " + (audio-enabled ? "INTERNAL AUDIO" : "SIMULATION · NO AUDIO"); color: #9cacc1; horizontal-alignment: right; vertical-alignment: center; }
         }
         HorizontalLayout {
-            spacing: 12px;
-            DeckPanel {
-                deck-label: "DECK A";
-                accent: #36c9ef;
-                playing <=> root.left-playing;
-                position <=> root.left-position;
-                waveform: root.left-waveform;
-                waveform-colors: root.left-waveform-colors;
-                detail-colors: root.left-detail-colors;
-                beats: root.left-beats;
-                grid-active: root.left-grid-active;
-                grid-caption: root.left-grid-caption;
-                grid-bpm <=> root.left-grid-bpm;
-                suggested-bpm: root.left-suggested-bpm;
-                grid-clicked => { root.grid-left(); }
-                clear-grid-clicked => { root.clear-grid-left(); }
-                detail: root.left-detail;
-                detail-start: root.left-detail-start;
-                detail-end: root.left-detail-end;
-                detail-marker: root.left-detail-marker;
-                detail-window <=> root.left-detail-window;
-                zoom-changed => { root.zoom-left(); }
-                audio-enabled: root.audio-enabled;
-                loaded: root.left-loaded;
-                loading: root.loading;
-                track-title: root.left-title;
-                time-text: root.left-time;
-                load-clicked => { root.load-left(); }
-                seek-requested(value) => { root.seek-left(value); }
-                play-clicked => { root.toggle-left(); }
-                cue-clicked => { root.reset-left(); }
+            height: 166px; spacing: 8px;
+            CompactDeck {
+                deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
+                waveform: root.left-waveform; colors: root.left-waveform-colors;
+                playing: root.left-playing; position <=> root.left-position;
+                audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.loading || root.library-busy;
+                load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } seek(value) => { root.seek-left(value); }
             }
-            Rectangle {
-                width: 220px;
-                background: #151e2d;
-                border-radius: 10px;
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 14px;
-                    Text {
-                        text: "MIXER";
-                        color: #f0f4ff;
-                        font-size: 19px;
-                        font-weight: 700;
-                        horizontal-alignment: center;
-                    }
-                    Text { text: "CHANNEL A"; color: #36c9ef; font-size: 12px; }
-                    Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
-                    Text { text: "CHANNEL B"; color: #ffae58; font-size: 12px; }
-                    Slider { accessible-label: "Channel B fader"; minimum: 0; maximum: 1; value <=> root.channel-b; changed => { root.mixer-changed(); } }
-                    Text { text: "CROSSFADER"; color: #d7e1ef; font-size: 12px; }
-                    Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
-                    Rectangle { background: transparent; vertical-stretch: 1; }
-                    Text {
-                        text: root.audio-enabled ? "LINEAR AUDIO MIX" : "UI DEMO ONLY";
-                        color: #8b9ab2;
-                        font-size: 11px;
-                        horizontal-alignment: center;
-                    }
-                }
-            }
-            DeckPanel {
-                deck-label: "DECK B";
-                accent: #ffae58;
-                playing <=> root.right-playing;
-                position <=> root.right-position;
-                waveform: root.right-waveform;
-                waveform-colors: root.right-waveform-colors;
-                detail-colors: root.right-detail-colors;
-                beats: root.right-beats;
-                grid-active: root.right-grid-active;
-                grid-caption: root.right-grid-caption;
-                grid-bpm <=> root.right-grid-bpm;
-                suggested-bpm: root.right-suggested-bpm;
-                grid-clicked => { root.grid-right(); }
-                clear-grid-clicked => { root.clear-grid-right(); }
-                detail: root.right-detail;
-                detail-start: root.right-detail-start;
-                detail-end: root.right-detail-end;
-                detail-marker: root.right-detail-marker;
-                detail-window <=> root.right-detail-window;
-                zoom-changed => { root.zoom-right(); }
-                audio-enabled: root.audio-enabled;
-                loaded: root.right-loaded;
-                loading: root.loading;
-                track-title: root.right-title;
-                time-text: root.right-time;
-                load-clicked => { root.load-right(); }
-                seek-requested(value) => { root.seek-right(value); }
-                play-clicked => { root.toggle-right(); }
-                cue-clicked => { root.reset-right(); }
+            CompactDeck {
+                deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
+                waveform: root.right-waveform; colors: root.right-waveform-colors;
+                playing: root.right-playing; position <=> root.right-position;
+                audio-enabled: root.audio-enabled; loaded: root.right-loaded; loading: root.loading || root.library-busy;
+                load => { root.load-right(); } toggle => { root.toggle-right(); } cue => { root.reset-right(); } seek(value) => { root.seek-right(value); }
             }
         }
         Rectangle {
-            height: 66px;
-            background: #151e2d;
-            border-radius: 10px;
+            height: 36px; background: #171d27;
             HorizontalLayout {
-                padding: 15px;
-                spacing: 20px;
-                Text {
-                    text: "LIBRARY";
-                    color: #f1f5fb;
-                    font-weight: 700;
-                    vertical-alignment: center;
+                padding: 4px; spacing: 8px;
+                Text { text: "A"; color: #36c9ef; vertical-alignment: center; }
+                Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
+                Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
+                Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
+                Text { text: "B"; color: #ffae58; vertical-alignment: center; }
+                Slider { accessible-label: "Channel B fader"; minimum: 0; maximum: 1; value <=> root.channel-b; changed => { root.mixer-changed(); } }
+            }
+        }
+        Rectangle {
+            accessible-role: groupbox; accessible-label: "Shared waveform area";
+            height: 184px; background: #10151d;
+            VerticalLayout { spacing: 2px;
+                DetailWaveform {
+                    deck-label: "DECK A"; accent: #36c9ef; detail: root.left-detail; colors: root.left-detail-colors;
+                    beats: root.left-beats; position: root.left-position; marker: root.left-detail-marker;
+                    detail-start: root.left-detail-start; detail-end: root.left-detail-end;
+                    detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
+                    grid-active: root.left-grid-active; grid-caption: root.left-grid-caption;
+                    suggested-bpm: root.left-suggested-bpm; enabled: root.audio-enabled && root.left-loaded;
+                    seek(value) => { root.seek-left(value); } zoom => { root.zoom-left(); }
+                    set-grid => { root.grid-left(); } clear-grid => { root.clear-grid-left(); }
                 }
-                Text {
-                    text: root.status;
-                    overflow: elide;
-                    color: #92a2b9;
-                    vertical-alignment: center;
+                DetailWaveform {
+                    deck-label: "DECK B"; accent: #ffae58; detail: root.right-detail; colors: root.right-detail-colors;
+                    beats: root.right-beats; position: root.right-position; marker: root.right-detail-marker;
+                    detail-start: root.right-detail-start; detail-end: root.right-detail-end;
+                    detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
+                    grid-active: root.right-grid-active; grid-caption: root.right-grid-caption;
+                    suggested-bpm: root.right-suggested-bpm; enabled: root.audio-enabled && root.right-loaded;
+                    seek(value) => { root.seek-right(value); } zoom => { root.zoom-right(); }
+                    set-grid => { root.grid-right(); } clear-grid => { root.clear-grid-right(); }
                 }
             }
         }
+        TrackLibrary {
+            accessible-role: groupbox; accessible-label: "Track library area"; vertical-stretch: 1; min-height: 160px;
+            rows: root.library-rows; count-text: root.library-count; empty-text: root.library-empty;
+            selection: root.selected-track; query <=> root.library-query;
+            busy: root.loading || root.library-busy || !root.audio-enabled;
+            can-load-left: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.left-playing;
+            can-load-right: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.right-playing;
+            import-files => { root.import-library(); } search => { root.library-search(); }
+            select-track(id) => { root.select-library(id); } move-selection(delta) => { root.move-library-selection(delta); }
+            sort-column(field) => { root.sort-library(field); }
+            load-left => { root.load-library-left(); } load-right => { root.load-library-right(); }
+        }
+        Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
     }
 }

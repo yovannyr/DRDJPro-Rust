@@ -14,27 +14,40 @@ use std::{
     },
 };
 
-type LoadResult = Option<Result<PreparedTrack, String>>;
+type LoadResult = Option<Result<(PathBuf, PreparedTrack), String>>;
+type ImportResult = Option<crate::library::ImportBatch>;
 struct DetailCache {
     source: Arc<crate::waveform::DetailPeaks>,
     range: crate::waveform::DetailRange,
     grid: Option<crate::beatgrid::BeatGrid>,
 }
 pub type TrackPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+pub type LibraryPicker = Arc<dyn Fn() -> Option<Vec<PathBuf>> + Send + Sync>;
 pub struct AudioController {
     ui: slint::Weak<AppWindow>,
     engine: Rc<DualDeckEngine>,
     picker: TrackPicker,
+    library_picker: LibraryPicker,
+    library: RefCell<crate::library::Library>,
+    pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
     displayed_overviews: RefCell<[Option<Arc<[f32]>>; 2]>,
     displayed_details: RefCell<[Option<DetailCache>; 2]>,
 }
 impl AudioController {
-    pub fn wire(ui: &AppWindow, engine: Rc<DualDeckEngine>, picker: TrackPicker) -> Rc<Self> {
+    pub fn wire(
+        ui: &AppWindow,
+        engine: Rc<DualDeckEngine>,
+        picker: TrackPicker,
+        library_picker: LibraryPicker,
+    ) -> Rc<Self> {
         let controller = Rc::new(Self {
             ui: ui.as_weak(),
             engine,
             picker,
+            library_picker,
+            library: RefCell::new(crate::library::Library::default()),
+            pending_import: RefCell::new(None),
             pending: RefCell::new(None),
             displayed_overviews: RefCell::new([None, None]),
             displayed_details: RefCell::new([None, None]),
@@ -139,6 +152,64 @@ impl AudioController {
                 c.apply_levels();
             }
         });
+        let weak = Rc::downgrade(&controller);
+        ui.on_import_library(move || {
+            if let Some(c) = weak.upgrade() {
+                c.start_import(Arc::clone(&c.library_picker));
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_library_search(move || {
+            if let Some(c) = weak.upgrade() {
+                if let Some(ui) = c.ui.upgrade() {
+                    c.library
+                        .borrow_mut()
+                        .set_query(ui.get_library_query().to_string());
+                    c.publish_library();
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_select_library(move |id| {
+            if let Some(c) = weak.upgrade() {
+                c.library.borrow_mut().select(id);
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_selected_track(c.library.borrow().selected_id());
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_move_library_selection(move |delta| {
+            if let Some(c) = weak.upgrade() {
+                c.library.borrow_mut().move_selection(delta);
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_selected_track(c.library.borrow().selected_id());
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_sort_library(move |field| {
+            if let Some(c) = weak.upgrade() {
+                c.library.borrow_mut().sort(field);
+                c.publish_library();
+            }
+        });
+        for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(&controller);
+            let load = move || {
+                if let Some(c) = weak.upgrade() {
+                    let path = c.library.borrow().selected_path();
+                    if let Some(path) = path {
+                        c.start_load(id, Arc::new(move || Some(path.clone())));
+                    }
+                }
+            };
+            match id {
+                DeckId::A => ui.on_load_library_left(load),
+                DeckId::B => ui.on_load_library_right(load),
+            }
+        }
+        controller.publish_library();
         controller.apply_levels();
         controller.refresh();
         controller
@@ -153,20 +224,30 @@ impl AudioController {
         }
     }
     fn request_load(&self, id: DeckId) {
-        if self.pending.borrow().is_some() {
+        self.start_load(id, Arc::clone(&self.picker));
+    }
+    fn start_load(&self, id: DeckId, picker: TrackPicker) {
+        if self.pending.borrow().is_some() || self.pending_import.borrow().is_some() {
             return;
         }
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        if self.engine.snapshot(id).playing {
+            ui.set_status(format!("Pause deck {id:?} before replacing its track").into());
+            return;
+        }
         ui.set_loading(true);
         ui.set_status("Select MP3/WAV; decoding runs in the background".into());
         let (tx, rx) = mpsc::sync_channel(1);
-        let picker = Arc::clone(&self.picker);
         match std::thread::Builder::new()
             .name("track-loader".into())
             .spawn(move || {
-                let result = picker().map(|path| PreparedTrack::open(&path));
+                let result = picker().map(|path| {
+                    let path = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
+                    let track = PreparedTrack::open(&path)?;
+                    Ok((path, track))
+                });
                 let _ = tx.send(result);
             }) {
             Ok(_) => {
@@ -184,9 +265,15 @@ impl AudioController {
         };
         ui.set_loading(false);
         match result {
-            Some(Ok(track)) => {
-                self.engine.install(id, track);
-                ui.set_status(format!("Deck {id:?} loaded and paused").into());
+            Some(Ok((path, track))) => {
+                self.library.borrow_mut().insert([path]);
+                self.publish_library();
+                if self.engine.snapshot(id).playing {
+                    ui.set_status(format!("Load discarded: deck {id:?} started playing").into());
+                } else {
+                    self.engine.install(id, track);
+                    ui.set_status(format!("Deck {id:?} loaded and paused").into());
+                }
             }
             Some(Err(err)) => ui.set_status(format!("Deck {id:?}: {err}").into()),
             None => ui.set_status("Selection cancelled".into()),
@@ -194,6 +281,31 @@ impl AudioController {
         self.refresh();
     }
     pub fn tick(&self) {
+        let import = self
+            .pending_import
+            .borrow()
+            .as_ref()
+            .and_then(|rx| match rx.try_recv() {
+                Ok(result) => Some(Ok(result)),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(Err("Library worker stopped unexpectedly")),
+            });
+        if let Some(result) = import {
+            self.pending_import.borrow_mut().take();
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_library_busy(false);
+                match result {
+                    Ok(Some(batch)) => {
+                        let total = batch.paths.len();
+                        let added = self.library.borrow_mut().insert(batch.paths);
+                        ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
+                        self.publish_library();
+                    }
+                    Ok(None) => ui.set_status("Library import cancelled".into()),
+                    Err(error) => ui.set_status(error.into()),
+                }
+            }
+        }
         let result = self
             .pending
             .borrow()
@@ -210,6 +322,60 @@ impl AudioController {
             self.complete_load(id, result);
         }
         self.refresh();
+    }
+    pub fn import_paths(&self, paths: Vec<PathBuf>) {
+        self.start_import(Arc::new(move || Some(paths.clone())));
+    }
+    fn start_import(&self, picker: LibraryPicker) {
+        if self.pending.borrow().is_some() || self.pending_import.borrow().is_some() {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        ui.set_library_busy(true);
+        ui.set_status("Importing local MP3/WAV files…".into());
+        let (tx, rx) = mpsc::sync_channel(1);
+        match std::thread::Builder::new()
+            .name("library-import".into())
+            .spawn(move || {
+                let _ = tx.send(picker().map(crate::library::inspect_paths));
+            }) {
+            Ok(_) => *self.pending_import.borrow_mut() = Some(rx),
+            Err(err) => {
+                ui.set_library_busy(false);
+                ui.set_status(format!("Cannot start library worker: {err}").into());
+            }
+        }
+    }
+    fn publish_library(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let library = self.library.borrow();
+        let visible = library.visible();
+        let rows: Vec<_> = visible
+            .iter()
+            .map(|track| crate::LibraryRow {
+                id: track.id,
+                name: track.name.clone().into(),
+                format: track.format.clone().into(),
+                path: track.path.to_string_lossy().into_owned().into(),
+            })
+            .collect();
+        ui.set_library_count(format!("{} / {} tracks", visible.len(), library.len()).into());
+        ui.set_library_empty(
+            if library.len() == 0 {
+                "Add MP3/WAV files to your library"
+            } else if visible.is_empty() {
+                "No tracks match your search"
+            } else {
+                ""
+            }
+            .into(),
+        );
+        ui.set_library_rows(ModelRc::new(Rc::new(VecModel::from(rows))));
+        ui.set_selected_track(library.selected_id());
     }
     fn refresh(&self) {
         let Some(ui) = self.ui.upgrade() else {
@@ -386,6 +552,138 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
+    fn finish_import(c: &AudioController) {
+        assert!(c.pending_import.borrow().is_some());
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while c.pending_import.borrow().is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            c.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    #[test]
+    fn extended_workspace_library_search_loads_correct_tracks_and_protects_playing_decks() {
+        use slint::{
+            platform::{Key, WindowEvent},
+            Model,
+        };
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let wav = wav_file(8192, 48_000);
+        let bad = TempFile::new("mp3", b"invalid music");
+        let unsupported = TempFile::new("txt", b"not music");
+        let batches = Arc::new(Mutex::new(VecDeque::from([
+            Some(vec![
+                wav.path().to_owned(),
+                fixture(),
+                bad.path().to_owned(),
+                wav.path().to_owned(),
+                unsupported.path().to_owned(),
+                PathBuf::from("missing.wav"),
+            ]),
+            None,
+        ])));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(move || batches.lock().unwrap().pop_front().unwrap()),
+        );
+        ui.show().unwrap();
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        control(&ui, "Import library files").invoke_accessible_default_action();
+        assert!(ui.get_library_busy());
+        finish_import(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 3);
+        assert!(ui.get_status().contains("3 skipped"));
+        assert_eq!(ui.get_selected_track(), -1);
+        control(&ui, "Library track 2").invoke_accessible_default_action();
+        control(&ui, "Sort library by name").invoke_accessible_default_action();
+        assert_eq!(ui.get_selected_track(), 2);
+        control(&ui, "Load selected into deck A").invoke_accessible_default_action();
+        finish(&c);
+        assert!(ui.get_left_title().ends_with("tone-9s.mp3"));
+        assert!(!ui.get_right_loaded());
+        control(&ui, "Library search").set_accessible_value(".WAV");
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(ui.get_selected_track(), -1);
+        assert_eq!(
+            control(&ui, "Load selected into deck A").accessible_enabled(),
+            Some(false)
+        );
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        control(&ui, "Load selected into deck B").invoke_accessible_default_action();
+        finish(&c);
+        assert!(ui.get_right_title().ends_with(".wav"));
+        control(&ui, "Library search").set_accessible_value("no matching file");
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        assert!(ui.get_library_empty().contains("No tracks match"));
+        control(&ui, "Clear library search").invoke_accessible_default_action();
+        assert_eq!(ui.get_library_rows().row_count(), 3);
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        let ordered_ids: Vec<_> = ui.get_library_rows().iter().map(|row| row.id).collect();
+        let selected_index = ordered_ids.iter().position(|id| *id == 1).unwrap();
+        let next_id = ordered_ids[(selected_index + 1).min(ordered_ids.len() - 1)];
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::DownArrow.into(),
+        });
+        assert_eq!(ui.get_selected_track(), next_id);
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        control(&ui, "DECK A play/pause").invoke_accessible_default_action();
+        let title = ui.get_left_title();
+        assert_eq!(
+            control(&ui, "Load selected into deck A").accessible_enabled(),
+            Some(false)
+        );
+        ui.invoke_load_library_left();
+        assert!(c.pending.borrow().is_none());
+        assert!(ui.get_status().contains("Pause deck A"));
+        assert_eq!(ui.get_left_title(), title);
+        ui.invoke_toggle_left();
+        ui.invoke_load_library_left();
+        ui.invoke_toggle_left(); // Starts old track while a replacement is being decoded.
+        finish(&c);
+        assert_eq!(ui.get_left_title(), title);
+        assert!(ui.get_left_playing());
+        assert!(ui.get_status().contains("Load discarded"));
+        ui.invoke_toggle_left();
+        control(&ui, "Library track 3").invoke_accessible_default_action();
+        control(&ui, "Load selected into deck A").invoke_accessible_default_action();
+        finish(&c);
+        assert_eq!(ui.get_left_title(), title);
+        assert!(ui.get_status().starts_with("Deck A:"));
+        control(&ui, "Import library files").invoke_accessible_default_action();
+        finish_import(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 3);
+        assert_eq!(ui.get_status(), "Library import cancelled");
+        for (width, height) in [(850.0, 740.0), (1280.0, 860.0)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let shared = control(&ui, "Shared waveform area");
+            let library = control(&ui, "Track library area");
+            let status = control(&ui, "Application status");
+            let left = control(&ui, "DECK A detailed waveform");
+            let right = control(&ui, "DECK B detailed waveform");
+            let overview = control(&ui, "DECK A waveform overview");
+            assert!(overview.absolute_position().y < shared.absolute_position().y);
+            assert!((left.absolute_position().x - right.absolute_position().x).abs() < 0.1);
+            assert!((left.size().width - right.size().width).abs() < 0.1);
+            assert!(left.size().width > overview.size().width * 1.5);
+            assert!(left.absolute_position().y < right.absolute_position().y);
+            assert!(
+                library.absolute_position().y
+                    >= shared.absolute_position().y + shared.size().height - 0.1
+            );
+            assert!(library.size().height >= 159.0);
+            assert!(
+                status.absolute_position().y
+                    >= library.absolute_position().y + library.size().height - 0.1
+            );
+            assert!(status.absolute_position().y + status.size().height <= height + 0.1);
+        }
+        ui.hide().unwrap();
+    }
     #[test]
     fn estimated_bpm_is_a_track_suggestion_and_never_automatically_applies_a_grid() {
         i_slint_backend_testing::init_no_event_loop();
@@ -414,6 +712,7 @@ mod tests {
             &ui,
             Rc::clone(&engine),
             Arc::new(move || paths.lock().unwrap().pop_front().unwrap()),
+            Arc::new(|| None),
         );
         assert_eq!(
             control(&ui, "DECK A use BPM suggestion").accessible_enabled(),
@@ -443,6 +742,7 @@ mod tests {
         assert_eq!(ui.get_right_grid_bpm(), other);
         assert!(!ui.get_right_grid_active());
         assert!(ui.get_left_playing() && ui.get_left_grid_active());
+        control(&ui, "DECK A play/pause").invoke_accessible_default_action();
         for _ in 0..2 {
             // Cancellation and invalid data preserve old suggestions and grid.
             control(&ui, "DECK A load track").invoke_accessible_default_action();
@@ -469,7 +769,12 @@ mod tests {
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
         let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
-        let c = AudioController::wire(&ui, Rc::clone(&engine), Arc::new(|| None));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
         ui.show().unwrap();
         assert_eq!(
             control(&ui, "DECK A set beatgrid").accessible_enabled(),
@@ -536,7 +841,12 @@ mod tests {
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
         let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
-        let c = AudioController::wire(&ui, Rc::clone(&engine), Arc::new(|| None));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
         ui.show().unwrap();
         assert_eq!(
             control(&ui, "DECK A zoom in").accessible_enabled(),
@@ -641,7 +951,12 @@ mod tests {
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
         let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
-        let c = AudioController::wire(&ui, Rc::clone(&engine), Arc::new(|| None));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
         ui.show().unwrap(); // Testing backend only: no native window or visual acceptance.
         assert_eq!(
             control(&ui, "DECK A waveform overview").accessible_enabled(),
@@ -713,7 +1028,12 @@ mod tests {
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
         let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
-        let c = AudioController::wire(&ui, Rc::clone(&engine), Arc::new(|| None));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
         assert_eq!(
             control(&ui, "DECK A position").accessible_enabled(),
             Some(false)
@@ -767,7 +1087,7 @@ mod tests {
             Some(wav.path().to_owned()),
         ])));
         let picker: TrackPicker = Arc::new(move || paths.lock().unwrap().pop_front().unwrap());
-        let c = AudioController::wire(&ui, Rc::clone(&engine), picker);
+        let c = AudioController::wire(&ui, Rc::clone(&engine), picker, Arc::new(|| None));
         assert!(!ui.get_left_loaded());
         control(&ui, "DECK A load track").invoke_accessible_default_action();
         assert!(ui.get_loading());
@@ -833,6 +1153,7 @@ mod tests {
         assert_eq!(ui.get_right_waveform(), right_waveform);
         assert_eq!(ui.get_left_detail(), left_detail);
         assert_eq!(ui.get_right_detail(), right_detail);
+        control(&ui, "DECK B play/pause").invoke_accessible_default_action();
         control(&ui, "DECK B load track").invoke_accessible_default_action();
         finish(&c);
         assert!(!ui.get_right_playing());

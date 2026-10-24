@@ -1,4 +1,12 @@
-# Migration plan (draft)
+# DrDJ Pro product and migration plan
+
+## Product goal and release gate
+
+The target is a complete professional DJ application. Spikes in the historical checkpoints below describe evaluation work, not the intended finished product. Current builds are development checkpoints; production readiness is not established by compilation or headless tests alone.
+
+Release requires a traceable disposition and acceptance evidence for every FEATURE_CATALOG capability and all 59 numbered UI reference items. Core acceptance includes durable library/session data, reliable transport and cue/loop workflows, tempo/sync, mixer DSP, device/output/headphone routing, hardware integration, recovery and measured performance. Optional/provider-dependent features need explicit supported scope rather than hidden stubs. Windows/macOS builds, sustained physical audio/device tests, visual/usability review and representative music-corpus analysis remain release gates.
+
+Deliver in reviewed, bounded slices with working behavior and regression evidence. Keep the existing executable name during development for CI/command compatibility; its historical name does not define the product scope.
 
 ## Reference
 .NET repository: https://github.com/yovannyr/DRDJ
@@ -61,3 +69,19 @@ The frequency-color slice is published on main as 54b5ba9. The next local slice 
 ## Tempo-suggestion checkpoint (2026-10-24)
 
 The manual-grid slice is published on main as 999f9b7. The next local slice adds an experimental BPM suggestion during bounded offline track preparation. It is adopted only into the pending BPM field; grid/anchor application remains manual. Deterministic pulse and headless workflow tests establish regression behavior, not music-corpus accuracy or automatic beat alignment. Phase 3 remains partial: production BPM/downbeat work, visual approval, rendering measurements and Windows/macOS evaluation remain open.
+
+## User-provided UI reference baseline
+
+`Softwareübersicht.md`, its numbered `Softwareübersicht.png`, and `DRDJ-UserManual-DRDJ.pdf` now provide the primary layout/interaction references for upcoming UI slices. GUI_COMPONENTS.md maps all 59 overview items, records focused manual page references, and separates current Rust behavior from reference requirements.
+
+Priority within phase 3 is now to align the working prototype with the Extended reference workspace: compact deck metadata/overview areas, shared detailed waveforms, a substantial library region and separate status. Preserve engine wiring and regression tests while changing layout. Add additional display modes and full grid/library editors only in separately scoped steps. More analysis features alone do not close the current layout gap.
+
+The manual is a behavior reference, not proof of Rust feature parity or a decision to implement Serato-specific account/licensing/hardware/library compatibility. Image-only reference pages were inspected; the application has not thereby passed visual acceptance. Phase 3 remains partial.
+
+## Extended workspace and session library checkpoint (2026-10-24)
+
+Implemented compact deck heads/overviews, shared stacked detail waveforms, retained engine-connected mixer controls, a resizable library region and separate status. Reusable Slint components retain transport, seek, zoom and grid behavior. Real MP3/WAV file imports run through a background worker; the session table supports case-insensitive search, name/type/path sorting, stable selection, arrow navigation and paused loading into either deck. Direct successful loads also enter the table. Replacing a playing deck is blocked, including a second check after background decoding.
+
+This closes the scoped layout structure and session-browser foundation, not phase 3 or the complete library. Headless geometry tests do not establish visual acceptance. Import is limited to 5,000 selected paths per operation and 100,000 session entries; these limits are safeguards, not performance qualification. Extension/existence inspection occurs at import and actual decode validation at load. Failed loads retain the installed track.
+
+Next proposed slice, after review: durable local library storage with atomic save/recovery, stable identity across restarts, missing-file handling and restart tests. Then metadata/crates/history and a transactional grid editor, followed by prioritized cue/loop, tempo/sync, mixer/routing and hardware slices with reference acceptance. Native-dialog, visual, physical-audio and platform qualification must accompany the appropriate release gates.

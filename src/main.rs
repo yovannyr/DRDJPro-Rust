@@ -4,6 +4,7 @@ use std::{rc::Rc, time::Duration};
 mod audio;
 mod beatgrid;
 mod controller;
+mod library;
 mod playback;
 mod tempo;
 #[cfg(test)]
@@ -130,11 +131,20 @@ fn main() -> Result<(), slint::PlatformError> {
                 .pick_file()
         });
         ui.set_status("Select a track for either deck".into());
-        Some(controller::AudioController::wire(
+        let controller = controller::AudioController::wire(
             &ui,
             Rc::clone(engine),
             picker,
-        ))
+            std::sync::Arc::new(|| {
+                rfd::FileDialog::new()
+                    .add_filter("MP3 / WAV audio", &["mp3", "wav"])
+                    .pick_files()
+            }),
+        );
+        if let Some((left, right)) = &gui_tracks {
+            controller.import_paths(vec![left.into(), right.into()]);
+        }
+        Some(controller)
     } else {
         wire_decks(&ui);
         ui.set_status("Simulation: start without --demo for real audio".into());

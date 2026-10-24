@@ -35,6 +35,16 @@ Legend: **Specified** = arc42/roadmap requirement, not verified implementation. 
 ## Migration policy
 Every item needs source file(s), target crate(s), acceptance criteria, reference test(s), GUI control(s) and verified status before marking it complete. No silent feature drops.
 
+## Extended workspace and session library acceptance (2026-10-24)
+
+| ID | Implemented behavior | Automated evidence / remaining boundary |
+| --- | --- | --- |
+| R-UI-EXT-01 | Compact heads, shared stacked detail waveforms, library and separate status (`ui/app.slint`) | Headless geometry at 850x740 and 1280x860; visual/framework acceptance open |
+| R-LIB-01 | Worker import of existing MP3/WAV paths, duplicates/invalid paths counted, cancel preserved (`library.rs`, `controller.rs`) | Real generated WAV and bundled MP3 imports; decode occurs at load; persistence/folder scans open |
+| R-LIB-02 | Case-insensitive search, deterministic name/type/path sort and stable selected IDs | Domain and accessible UI tests, hidden selections cleared; tags/crates/history open |
+| R-LIB-03 | Selected path loads into A/B, selection independent of sorting | Actual worker/engine headless test; native picker and physical output acceptance open |
+| R-LOAD-03 | Playing decks cannot be replaced, even when started during decode | UI guard plus controller completion guard tested; old track survives decode failure |
+
 ## Local Rust loading/mixer slice (2026-10-24)
 
 These entries describe Rust evidence only; .NET implementation parity has not been independently established.
