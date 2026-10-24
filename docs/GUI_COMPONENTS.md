@@ -28,3 +28,7 @@ Classify each item as built-in, styled built-in, or custom only after a Slint pr
 - Automated tests and visual review completed
 
 Reference visuals must be used for design comparison, not copied proprietary assets.
+
+## Local overview checkpoint (2026-10-24)
+
+The overview now uses custom Slint rectangles and a TouchArea, backed by up to 256 real PCM peak bins per deck. Headless tests cover peaks, pointer/time mapping, accessible percentage input, marker geometry at two widths and independent load/reload state. The detailed scrolling/multicolor waveform remains open. This does not finalize the framework or satisfy the visual/performance definition of done above; no visual review or rendering profile has been completed.

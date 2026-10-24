@@ -30,3 +30,18 @@ Known documented modules: Desktop; Audio.Abstractions; Audio.Engine; Audio.Windo
 
 ## Budget discipline
 One bounded task at a time; reserve capacity for tests, visual review and rework. Do not use a single broad agent prompt for migration.
+
+## Local checkpoint (2026-10-24)
+
+This is an implementation checkpoint, not phase completion or a feature-parity claim. Evidence and exact local commands are recorded in LOCAL_VALIDATION.md; acceptance IDs are in FEATURE_CATALOG.md.
+
+| Phase | Current status | Remaining acceptance |
+| --- | --- | --- |
+| 1 — inventory | Partial feature/control inventory | Code-level .NET reference and reference-test audit |
+| 2 — architecture/evaluation | Cargo workspace and focused modules; Slint/Rodio prototype | Framework choice, audio backend and real-time qualification |
+| 3 — representative deck UI | Two decks, real track loading/transport/mixer/seeking, real full-track peak overview and playhead | Detailed waveform evaluation, visual review and rendering/interaction measurements on Windows/macOS |
+| 4 — incremental audio | MP3/WAV and deck/mixer/seek behavior headless-tested | Reference parity, DSP/routing/device behavior and physical real-time tests |
+| 5 — hardware/library/persistence | File selection foundation only | Library, persistence and controller slices |
+| 6 — cross-platform acceptance | Open | Platform builds, long-run stability, performance and usability |
+
+The latest bounded slice replaces synthetic audio-mode bars with real PCM peaks and connects overview clicks to seeking. It intentionally does not add zoom, BPM/beatgrid, hardware or new dependencies. Phase 3 stays partial. Subsequent scope requires review.

@@ -34,3 +34,32 @@ Legend: **Specified** = arc42/roadmap requirement, not verified implementation. 
 
 ## Migration policy
 Every item needs source file(s), target crate(s), acceptance criteria, reference test(s), GUI control(s) and verified status before marking it complete. No silent feature drops.
+
+## Local Rust loading/mixer slice (2026-10-24)
+
+These entries describe Rust evidence only; .NET implementation parity has not been independently established.
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-LOAD-01 | MP3/WAV selection and paused load in A/B (`controller.rs`, `playback.rs`, `app.slint`) | Bundled MP3 + generated WAV, injected selector, actual worker and accessible Load actions | Native dialog appearance and physical output not tested |
+| R-LOAD-02 | Reload, cancel, decode failure preserve deck isolation | Headless controller and actual sink tests; invalid/missing/unsupported/size limit cases | Strict detection of partially corrupt streams deferred |
+| R-MIX-01 | Channel A/B and linear crossfader affect Rodio | Accessible slider actions plus exact offline mixed sample assertions for endpoints, midpoint, attenuation and mute | No EQ, limiter, equal-power curve or headphone bus |
+| R-POS-01 | Engine-derived elapsed/total/percent; pause, Cue, EOF and restart | Offline mixer advance/freeze and controller snapshot assertions | Device latency uncompensated; detailed waveform/beat analysis open |
+| R-BUILD-01 | Local checks independent of Slint CI debug variable | Compiler config enables accessibility metadata; ordinary Cargo checks | Windows host only; no cross-platform or hard real-time acceptance claim |
+
+## Seeking follow-up slice (2026-10-24)
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-SEEK-01 | Per-deck position slider seeks prepared PCM (`playback.rs`, `controller.rs`, `app.slint`) | Accessible GUI slider tests for A/B; paused/playing state, EOF/restart, Cue, offset reset on reload; direct MP3 seek | Abrupt source replacement, no click suppression or physical output acceptance |
+| R-SEEK-02 | Preserve gain, other-deck state and stereo channel identity after seek | Exact stereo output samples on both sides of a step signal, advance/freeze after offsets, error/bounds tests without a running audio consumer | Rodio internal locks remain; device latency and sample-accurate synchronization unverified |
+
+The stereo regression test exposed Rodio queue startup metadata describing mono/44.1 kHz before the actual source is active. Replacement sinks now report the fixed track format through a small output adapter. This also applies to initial load and Cue; there is still one fixed-format track per sink.
+
+## Full-track peak overview slice (2026-10-24)
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-WAVE-01 | At most 256 equal-time peak bins from prepared PCM (`waveform.rs`, `playback.rs`) | Deterministic mono/stereo, silence, short-track, uneven boundaries and last-frame tests; WAV/MP3 preparation checks | Absolute peak envelope only, no frequency colors, normalization, BPM or beatgrid |
+| R-WAVE-02 | Separate per-deck overview and engine playhead (`controller.rs`, `app.slint`) | Model identity remains stable through timer/seek/Cue; load/reload/error/cancel preserve deck isolation | Slint rendering and visual design not accepted |
+| R-WAVE-03 | Click full-track overview to seek | Real pointer events and accessible value actions in the headless backend; time mapping and marker geometry at two window widths including 0/100% | No physical interaction or visual/usability claim; detailed zoom/scroll deferred |

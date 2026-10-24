@@ -1,27 +1,28 @@
-# Audio output spike
+# Audio loading and mixer slice
 
-This slice adds actual output-device playback independently of the Slint GUI.
+The default application and `--gui` open the OS default Rodio/CPAL audio output and start with two empty decks. Each deck has a native MP3/WAV file selector. `--gui <deck-a.mp3> <deck-b.wav>` still preloads both tracks paused. `--demo` explicitly selects the simulated UI without opening audio hardware. Missing audio output is reported to stderr and startup fails; automatic device recovery is deferred.
 
-## Try it on your own computer
+## Behavior and boundaries
 
-```sh
-cargo run --release -- --play /path/to/music.mp3
-cargo run --release -- --mix /path/to/deck-a.mp3 /path/to/deck-b.mp3
-cargo run --release -- --gui /path/to/deck-a.mp3 /path/to/deck-b.mp3
-cargo run --release -- --analyze /path/to/music.mp3
-```
+- File selection and decoding from the GUI run on one named worker, with at most one selection/load outstanding. Both Load buttons are disabled until it completes. Playback of the current tracks continues while choosing/decoding. Cancel and errors leave both existing decks intact; errors appear in the status line.
+- A successful load replaces only the selected deck, paused at zero, with the filename displayed. Empty, unreadable, unsupported and undecodable files are rejected. MP3/WAV only; the decoder can accept a partially damaged file if it produces complete samples. Strict corruption detection is deferred.
+- PCM is prepared before installation, limited to 256 MiB per track (roughly 12.7 minutes of stereo 44.1 kHz f32). Two retained decks plus old/new data during replacement and temporary decoding copies can use considerably more memory. This is a bounded prototype, not a streaming library implementation.
+- Play/Pause, Cue and end/restart use the same application-owned deck engine. Cue installs a fresh paused source at zero, including after EOF. Reload and Cue avoid Rodio's blocking stop/append and seek feedback waits; prepared buffers share sample storage through Arc.
+- Channel A/B and crossfader sliders apply actual sink volumes. Gains are linear: `A = channel_a * (1 - crossfader)`, `B = channel_b * crossfader`. Initial channel levels are 1, crossfader 0.5. This is not an equal-power DJ curve; no limiter is provided.
+- Elapsed/total time and percent use decoded frame duration and Rodio's source position. The GUI refreshes every 33 ms; sink controls/position have approximately 5 ms granularity and are not corrected for device output latency. EOF displays stopped at 100%; Play restarts. The position slider seeks its own deck while preserving Play/Pause and mixer gains. Values are clamped to 0–100%; non-finite requests are rejected without changing playback. Seeking to 100% stops; Play restarts from zero. Seeking backward after EOF remains paused. The GUI timer continues to report the source position including the seek offset.
+- Seeking clones the shared PCM source, moves its cursor on the control plane and installs a replacement sink. It does not call the blocking Sink::try_seek. Each replacement sink contains one fixed-format source; a small output adapter reports its actual channel count/sample rate from the start, avoiding Rodio queue startup metadata that initially describes mono/44.1 kHz. No decoding or file access occurs during seeking. Like existing Cue/reload, replacement can have a short control-propagation overlap (approximately 5 ms); click suppression and sample-accurate output synchronization remain open.
+- Each audio deck now displays a real static peak overview of its complete track. Up to 256 equal-time bins take the maximum absolute sample across channels, calculated from the same PCM as playback before installation. Peaks are not normalized; only their visual heights are clamped to 0–1. The moving marker uses engine percent and clicking the overview seeks that deck. Prepared tracks share immutable peak storage and the controller replaces GUI models only when track data changes. Synthetic bars remain only in explicit --demo mode. Slint remains provisional; no visual review or physical listening test was performed.
 
-The first command opens the OS default output device via Rodio/CPAL and plays one MP3 or WAV. The second creates two independent Rodio sinks, starts both music files simultaneously, and mixes them onto one output device at a fixed centered crossfader position. It requires a working local sound device. The third command opens the two-deck Slint UI with both files loaded but paused. Play/Pause controls each Rodio sink, while Cue seeks its deck to zero and pauses it. No sound device is opened in ordinary no-argument UI demo mode. The final command decodes and analyzes audio without an audio device.
+## Automated evidence
 
-## What automated CI validates
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `cargo build --release` are the local acceptance commands. `build.rs` enables Slint debug info directly so accessibility tests work without CI-only environment configuration. Cargo.lock pins the application's dependency resolution.
 
-* Native compilation for Windows x64, macOS ARM64 and Linux x64.
-* Headless Rodio sink transport operations and linear crossfader gain math without requiring sound hardware.
-* MP3 and WAV decoding and validation using the synthetic PCM fixture and short freely usable MP3 from Samplelib.
-* Slint UI smoke tests and code formatting/lints.
+Headless tests use the same Rodio mixer/sinks and GUI controller without an output device. They cover selector callback wiring with an injected picker, actual worker decode for MP3/WAV, paused load, independent transport, reload, Cue, EOF/restart, failure/cancel preservation, bounded load requests, actual accessible mixer/position slider actions, finite/clamped seek input, MP3 seeking, transport/gain preservation during seeking, and correct rendered stereo samples before/after backward and forward jumps. Offline rendering asserts mixed sample values at crossfader endpoints, center, channel attenuation and mute; it also checks position advance/freeze. The PCM file is removed before rendering to confirm playback does not depend on open input files. Bundled generated MP3 and synthetic WAV fixtures make normal local tests independent of downloads. The optional DRDJ_AUDIO_TEST_FILE override remains available for the analysis test.
 
-**CI cannot verify audible output on physical equipment.** Perform a local listening test before declaring the real-time playback integration complete. Do not describe this proof-of-concept as a professional DJ audio engine: there is no independent headphone cue, DVS, tempo adjustment, device routing selector or low-latency measurement. The crossfader is a simple linear gain control, not a DJ-standard equal-power curve. The GUI Play/Pause and Cue buttons control real audio when opened with --gui and two tracks; without --gui, they remain a headless demonstration. The waveform, percent-position slider, and mixer sliders are still UI placeholders even in --gui mode and do not reflect true audio playback positions or affect audio output.
+Offline render timings are diagnostic measurements of CPU rendering, not device latency, callback deadline measurements or proof of lock/allocation freedom. Rodio 0.21.1 itself uses mutexes and queues in its mixer/sink path. There is no custom real-time callback in this slice, and professional real-time acceptance remains open.
 
-## Next slice
+## CLI tools retained
 
-Build a persistent application-owned dual-deck controller with reliable load/reload/seek/cue behavior, deterministic offline rendered mix tests and proper device-loss/error handling before binding it to the Slint UI.
+`--analyze <file>` decodes and reports metrics without audio hardware. `--play <file>` and `--mix <a> <b>` use the same prepared tracks and default physical output, blocking until playback ends. These CLI paths preload synchronously before showing any GUI.
+
+Next scope requires review: detailed waveform/beat analysis, click-free/sample-accurate seeking, streaming decoding/memory policy, device loss, headphone routing, EQ/limiting and real hardware performance are not part of this change.

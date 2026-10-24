@@ -174,10 +174,10 @@ mod tests {
     }
 
     #[test]
-    fn decodes_freely_licensed_music_fixture_when_available() {
-        let Ok(path) = std::env::var("DRDJ_AUDIO_TEST_FILE") else {
-            return; // CI provides the fixture; offline developers can run all other tests.
-        };
+    fn decodes_bundled_mp3_fixture() {
+        let path = std::env::var_os("DRDJ_AUDIO_TEST_FILE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(crate::test_support::fixture);
         let result = analyze_file(Path::new(&path)).expect("decode real music sample");
         assert!(result.sample_rate >= 8_000);
         assert!(result.channels >= 1 && result.channels <= 8);

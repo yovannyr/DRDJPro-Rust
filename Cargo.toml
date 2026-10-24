@@ -1,3 +1,7 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
 [package]
 name = "drdjpro-ui-spike"
 version = "0.1.0"
@@ -6,6 +10,7 @@ rust-version = "1.92"
 description = "DrDJ Pro Rust: two-deck Slint UI prototype"
 
 [dependencies]
+rfd = "=0.15.4"
 slint = "=1.18.1"
 rodio = { version = "=0.21.1", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-wav", "symphonia-pcm"] }
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "pcm"] }

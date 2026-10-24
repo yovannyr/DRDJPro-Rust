@@ -5,10 +5,16 @@ component DeckPanel inherits Rectangle {
     in property <brush> accent;
     in property <[float]> waveform;
     in property <bool> audio-enabled: false;
+    in property <bool> loaded: false;
+    in property <bool> loading: false;
+    in property <string> track-title: "DEMO TRACK";
+    in property <string> time-text: "SIMULATION";
     in-out property <bool> playing;
     in-out property <float> position;
     callback play-clicked();
     callback cue-clicked();
+    callback load-clicked();
+    callback seek-requested(float);
 
     background: #151e2d;
     border-radius: 10px;
@@ -23,54 +29,91 @@ component DeckPanel inherits Rectangle {
             font-weight: 700;
         }
         Text {
-            text: "DEMO TRACK  /  124 BPM  /  8A";
+            text: track-title;
+            overflow: elide;
             color: #c4d0df;
             font-size: 13px;
         }
-        Rectangle {
+        Button {
+            text: "LOAD MP3 / WAV";
+            accessible-label: deck-label + " load track";
+            enabled: audio-enabled && !loading;
+            clicked => { load-clicked(); }
+        }
+        overview := Rectangle {
             height: 155px;
             background: #0a1220;
             clip: true;
             for value[i] in waveform : Rectangle {
-                x: (i * 7 - position * 7) * 1px;
-                y: (155 - value * 126) / 2 * 1px;
-                width: 4px;
-                height: value * 126 * 1px;
-                background: Math.mod(i, 4) == 0 ? accent : #406a8d;
-                border-radius: 2px;
+                x: i * parent.width / max(1, waveform.length);
+                y: (parent.height - self.height) / 2;
+                width: parent.width / max(1, waveform.length);
+                height: clamp(value, 0, 1) * (parent.height - 16px);
+                background: accent;
             }
             Rectangle {
-                x: parent.width / 2;
+                accessible-role: image;
+                accessible-label: deck-label + " waveform playhead";
+                accessible-value: position;
+                x: clamp(position, 0, 100) / 100 * max(0px, parent.width - self.width);
                 width: 2px;
+                height: parent.height;
                 background: #f9fafc;
+            }
+            TouchArea {
+                enabled: !audio-enabled || loaded;
+                accessible-role: slider;
+                accessible-label: deck-label + " waveform overview";
+                accessible-enabled: self.enabled;
+                accessible-value: position;
+                accessible-value-minimum: 0;
+                accessible-value-maximum: 100;
+                accessible-action-set-value(v) => {
+                    if self.enabled && v.is-float() {
+                        if audio-enabled { root.seek-requested(v.to-float()); }
+                        else { position = clamp(v.to-float(), 0, 100); }
+                    }
+                }
+                clicked => {
+                    if self.width > 0px {
+                        let target = clamp(100 * self.mouse-x / self.width, 0, 100);
+                        if audio-enabled { root.seek-requested(target); }
+                        else { position = target; }
+                    }
+                }
             }
         }
         Text {
-            text: "POSITION  " + round(position) + "%";
+            text: time-text + "  /  " + round(position) + "%";
             color: #9bacbf;
             font-size: 12px;
         }
         Slider {
+            enabled: !audio-enabled || loaded;
+            accessible-label: deck-label + " position";
             minimum: 0;
             maximum: 100;
             value <=> position;
+            changed(value) => { if audio-enabled { root.seek-requested(value); } }
         }
         HorizontalLayout {
             spacing: 8px;
             Button {
                 text: playing ? "PAUSE" : "PLAY";
+                enabled: !audio-enabled || loaded;
                 accessible-label: deck-label + " play/pause";
                 clicked => { play-clicked(); }
             }
             Button {
                 text: "CUE";
+                enabled: !audio-enabled || loaded;
                 accessible-label: deck-label + " cue";
                 clicked => { cue-clicked(); }
             }
         }
         Rectangle { background: transparent; vertical-stretch: 1; }
         Text {
-            text: root.audio-enabled ? "AUDIO OUTPUT ACTIVE • LOADED FROM CLI" : "SIMULATED PLAYBACK • NO AUDIO OUTPUT";
+            text: root.audio-enabled ? "REAL AUDIO • FULL TRACK PEAK OVERVIEW" : "SIMULATED PLAYBACK • SYNTHETIC WAVEFORM";
             color: #788ba2;
             font-size: 11px;
         }
@@ -85,8 +128,20 @@ export component AppWindow inherits Window {
     min-height: 580px;
     background: #0b111c;
 
-    in property <[float]> waveform;
+    in property <[float]> left-waveform;
+    in property <[float]> right-waveform;
     in property <bool> audio-enabled: false;
+    in property <bool> loading: false;
+    in property <bool> left-loaded: false;
+    in property <bool> right-loaded: false;
+    in property <string> left-title: "DEMO TRACK";
+    in property <string> right-title: "DEMO TRACK";
+    in property <string> left-time: "SIMULATION";
+    in property <string> right-time: "SIMULATION";
+    in property <string> status;
+    in-out property <float> channel-a: 1;
+    in-out property <float> channel-b: 1;
+    in-out property <float> crossfader: 0.5;
     in-out property <bool> left-playing: false;
     in-out property <bool> right-playing: false;
     in-out property <float> left-position: 0;
@@ -95,6 +150,11 @@ export component AppWindow inherits Window {
     callback toggle-right();
     callback reset-left();
     callback reset-right();
+    callback load-left();
+    callback load-right();
+    callback mixer-changed();
+    callback seek-left(float);
+    callback seek-right(float);
 
     VerticalLayout {
         padding: 18px;
@@ -114,8 +174,14 @@ export component AppWindow inherits Window {
                 accent: #36c9ef;
                 playing <=> root.left-playing;
                 position <=> root.left-position;
-                waveform: root.waveform;
+                waveform: root.left-waveform;
                 audio-enabled: root.audio-enabled;
+                loaded: root.left-loaded;
+                loading: root.loading;
+                track-title: root.left-title;
+                time-text: root.left-time;
+                load-clicked => { root.load-left(); }
+                seek-requested(value) => { root.seek-left(value); }
                 play-clicked => { root.toggle-left(); }
                 cue-clicked => { root.reset-left(); }
             }
@@ -134,14 +200,14 @@ export component AppWindow inherits Window {
                         horizontal-alignment: center;
                     }
                     Text { text: "CHANNEL A"; color: #36c9ef; font-size: 12px; }
-                    Slider { minimum: 0; maximum: 100; value: 78; }
+                    Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                     Text { text: "CHANNEL B"; color: #ffae58; font-size: 12px; }
-                    Slider { minimum: 0; maximum: 100; value: 78; }
+                    Slider { accessible-label: "Channel B fader"; minimum: 0; maximum: 1; value <=> root.channel-b; changed => { root.mixer-changed(); } }
                     Text { text: "CROSSFADER"; color: #d7e1ef; font-size: 12px; }
-                    Slider { minimum: 0; maximum: 100; value: 50; }
+                    Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
                     Rectangle { background: transparent; vertical-stretch: 1; }
                     Text {
-                        text: "UI DEMO ONLY";
+                        text: root.audio-enabled ? "LINEAR AUDIO MIX" : "UI DEMO ONLY";
                         color: #8b9ab2;
                         font-size: 11px;
                         horizontal-alignment: center;
@@ -153,8 +219,14 @@ export component AppWindow inherits Window {
                 accent: #ffae58;
                 playing <=> root.right-playing;
                 position <=> root.right-position;
-                waveform: root.waveform;
+                waveform: root.right-waveform;
                 audio-enabled: root.audio-enabled;
+                loaded: root.right-loaded;
+                loading: root.loading;
+                track-title: root.right-title;
+                time-text: root.right-time;
+                load-clicked => { root.load-right(); }
+                seek-requested(value) => { root.seek-right(value); }
                 play-clicked => { root.toggle-right(); }
                 cue-clicked => { root.reset-right(); }
             }
@@ -173,7 +245,8 @@ export component AppWindow inherits Window {
                     vertical-alignment: center;
                 }
                 Text {
-                    text: "Drop-in browser / track table planned for the next slice";
+                    text: root.status;
+                    overflow: elide;
                     color: #92a2b9;
                     vertical-alignment: center;
                 }
