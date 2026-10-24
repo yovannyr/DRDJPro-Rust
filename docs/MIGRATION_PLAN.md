@@ -49,3 +49,7 @@ The latest bounded slice replaces synthetic audio-mode bars with real PCM peaks 
 ## Detail-view follow-up (2026-10-24)
 
 The preceding loading/mixer/seeking/overview slices are published on main as e06dc33. The next local slice adds a following peak-envelope view with independent 2–32-second zoom and click-to-seek in the visible range. It uses precomputed data, not repeated PCM analysis during playback. Phase 3 remains partial: frequency-color/beat visualization, visual review, rendering/frame-time measurements and Windows/macOS evaluation are still open. Do not infer sample-level editing, professional real-time readiness or cross-platform acceptance from the headless tests.
+
+## Frequency-color checkpoint (2026-10-24)
+
+The detail/zoom slice is published on main as 10e3de8. The next local slice adds approximate low/mid/high energy colors to overview and detail views, using analysis during loading and bounded re-binning during UI updates. It changes no audio samples and adds no dependencies. Phase 3 remains partial: beatgrid/BPM, visual approval, rendering/frame-time evidence and Windows/macOS evaluation remain open. The palette communicates approximate frequency energy, not calibrated spectral measurements.

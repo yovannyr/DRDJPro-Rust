@@ -5,6 +5,8 @@ component DeckPanel inherits Rectangle {
     in property <brush> accent;
     in property <[float]> waveform;
     in property <[float]> detail;
+    in property <[color]> waveform-colors;
+    in property <[color]> detail-colors;
     in property <float> detail-start;
     in property <float> detail-end: 100;
     in property <float> detail-marker;
@@ -55,7 +57,7 @@ component DeckPanel inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: parent.width / max(1, waveform.length);
                 height: clamp(value, 0, 1) * (parent.height - 16px);
-                background: accent;
+                background: i < waveform-colors.length ? waveform-colors[i] : accent;
             }
             Rectangle {
                 accessible-role: image;
@@ -118,7 +120,7 @@ component DeckPanel inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: parent.width / max(1, detail.length);
                 height: clamp(value, 0, 1) * (parent.height - 12px);
-                background: accent;
+                background: i < detail-colors.length ? detail-colors[i] : accent;
             }
             Rectangle {
                 accessible-role: image;
@@ -179,10 +181,10 @@ component DeckPanel inherits Rectangle {
             }
         }
         Rectangle { background: transparent; vertical-stretch: 1; }
-        Text {
-            text: root.audio-enabled ? "REAL AUDIO • FULL TRACK PEAK OVERVIEW" : "SIMULATED PLAYBACK • SYNTHETIC WAVEFORM";
-            color: #788ba2;
-            font-size: 11px;
+        HorizontalLayout {
+            Text { text: root.audio-enabled ? "BASS" : "SIMULATED"; color: #ea5a5a; font-size: 11px; }
+            Text { text: root.audio-enabled ? "MID" : "NO AUDIO"; color: #46dc64; font-size: 11px; }
+            Text { text: root.audio-enabled ? "HIGH" : "SYNTHETIC"; color: #508cfa; font-size: 11px; }
         }
     }
 }
@@ -199,6 +201,10 @@ export component AppWindow inherits Window {
     in property <[float]> right-waveform;
     in property <[float]> left-detail;
     in property <[float]> right-detail;
+    in property <[color]> left-waveform-colors;
+    in property <[color]> right-waveform-colors;
+    in property <[color]> left-detail-colors;
+    in property <[color]> right-detail-colors;
     in property <float> left-detail-start;
     in property <float> left-detail-end: 100;
     in property <float> left-detail-marker;
@@ -254,6 +260,8 @@ export component AppWindow inherits Window {
                 playing <=> root.left-playing;
                 position <=> root.left-position;
                 waveform: root.left-waveform;
+                waveform-colors: root.left-waveform-colors;
+                detail-colors: root.left-detail-colors;
                 detail: root.left-detail;
                 detail-start: root.left-detail-start;
                 detail-end: root.left-detail-end;
@@ -305,6 +313,8 @@ export component AppWindow inherits Window {
                 playing <=> root.right-playing;
                 position <=> root.right-position;
                 waveform: root.right-waveform;
+                waveform-colors: root.right-waveform-colors;
+                detail-colors: root.right-detail-colors;
                 detail: root.right-detail;
                 detail-start: root.right-detail-start;
                 detail-end: root.right-detail-end;

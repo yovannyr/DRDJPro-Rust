@@ -71,3 +71,11 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | R-DETAIL-01 | Prepared high-resolution peak envelope and bounded local re-binning | Stereo/transient/final-bin tests, short-track and start/middle/end viewport tests, clamped zoom | 256-frame envelope precision; no signed oscillogram, frequency colors or beatgrid |
 | R-DETAIL-02 | Per-deck following viewport with 2–32s zoom | Actual accessible zoom controls, independent deck state, paused cache identity, playing/EOF/Cue marker checks | Headless geometry and events only; rendering/visual acceptance open |
 | R-DETAIL-03 | Detail clicks seek within visible time range | Real pointer events at two widths, local-time target assertion; error/cancel/reload model isolation | Existing abrupt seek transition; no physical listening acceptance |
+
+## Frequency-color follow-up (2026-10-24)
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-COLOR-01 | Approximate low/mid/high energy colors from PCM (`waveform_color.rs`) | 80 Hz/1 kHz/high-frequency tests at 8/44.1/48/96 kHz; opposite-phase stereo, silence, temporal transitions and partial final chunk | First-order display heuristic, not FFT/spectrum measurement, beat analysis or audio filtering |
+| R-COLOR-02 | Full overview and following detail share a red/green/blue palette | Matching peak/color model lengths, local-content re-bin tests, real MP3/WAV GUI models and independent reload/error/cancel behavior | No visual/design approval or device listening acceptance |
+| R-COLOR-03 | Prepare frequency data once; reuse unchanged view models | Paused color-model identity plus existing zoom/seek/marker tests; diagnostic peak/color re-bin timing | GUI control-plane allocations remain; rendering/frame pacing and hard real-time gates open |

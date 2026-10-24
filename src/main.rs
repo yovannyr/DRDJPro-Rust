@@ -8,6 +8,7 @@ mod playback;
 mod test_support;
 mod transport;
 mod waveform;
+mod waveform_color;
 
 slint::include_modules!();
 

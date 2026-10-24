@@ -196,9 +196,19 @@ impl AudioController {
             if changed {
                 let peaks = s.overview.as_ref().map_or_else(Vec::new, |v| v.to_vec());
                 let model = ModelRc::new(Rc::new(VecModel::from(peaks)));
+                let colors = s
+                    .detail
+                    .as_ref()
+                    .map_or_else(ModelRc::default, |d| color_model(d.overview_colors()));
                 match id {
-                    DeckId::A => ui.set_left_waveform(model),
-                    DeckId::B => ui.set_right_waveform(model),
+                    DeckId::A => {
+                        ui.set_left_waveform(model);
+                        ui.set_left_waveform_colors(colors);
+                    }
+                    DeckId::B => {
+                        ui.set_right_waveform(model);
+                        ui.set_right_waveform_colors(colors);
+                    }
                 }
                 displayed[index] = s.overview.clone();
             }
@@ -224,9 +234,16 @@ impl AudioController {
                 });
                 if changed {
                     let model = ModelRc::new(Rc::new(VecModel::from(detail.render(range))));
+                    let colors = color_model(&detail.render_colors(range));
                     match id {
-                        DeckId::A => ui.set_left_detail(model),
-                        DeckId::B => ui.set_right_detail(model),
+                        DeckId::A => {
+                            ui.set_left_detail(model);
+                            ui.set_left_detail_colors(colors);
+                        }
+                        DeckId::B => {
+                            ui.set_right_detail(model);
+                            ui.set_right_detail_colors(colors);
+                        }
                     }
                     cache[index] = Some(DetailCache {
                         source: Arc::clone(detail),
@@ -265,6 +282,13 @@ impl AudioController {
             }
         }
     }
+}
+fn color_model(colors: &[crate::waveform_color::Rgb]) -> ModelRc<slint::Color> {
+    let colors: Vec<_> = colors
+        .iter()
+        .map(|c| slint::Color::from_rgb_u8(c.0, c.1, c.2))
+        .collect();
+    ModelRc::new(Rc::new(VecModel::from(colors)))
 }
 fn clock(time: std::time::Duration) -> String {
     let secs = time.as_secs();
@@ -382,8 +406,10 @@ mod tests {
         engine.pause(DeckId::A);
         c.tick();
         let paused = ui.get_left_detail();
+        let paused_colors = ui.get_left_detail_colors();
         c.tick();
         assert_eq!(ui.get_left_detail(), paused);
+        assert_eq!(ui.get_left_detail_colors(), paused_colors);
         engine.seek_percent(DeckId::A, 100.0).unwrap();
         c.tick();
         assert!((ui.get_left_detail_marker() - 100.0).abs() < 0.001);
@@ -514,6 +540,7 @@ mod tests {
     }
     #[test]
     fn headless_gui_load_transport_faders_errors_cancel_and_position() {
+        use slint::Model;
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
@@ -537,12 +564,26 @@ mod tests {
         assert!(ui.get_left_loaded());
         let left_waveform = ui.get_left_waveform();
         let left_detail = ui.get_left_detail();
+        let left_colors = ui.get_left_waveform_colors();
+        assert_eq!(left_colors.row_count(), left_waveform.row_count());
+        let bass = left_colors.row_data(left_colors.row_count() - 1).unwrap();
+        assert!(bass.red() > bass.green() && bass.red() > bass.blue());
+        assert_eq!(
+            ui.get_left_detail_colors().row_count(),
+            left_detail.row_count()
+        );
         assert!(!ui.get_right_loaded());
         assert!(!ui.get_left_playing());
         control(&ui, "DECK B load track").invoke_accessible_default_action();
         finish(&c);
         assert!(ui.get_right_loaded());
         let right_waveform = ui.get_right_waveform();
+        let right_colors = ui.get_right_waveform_colors();
+        assert_eq!(right_colors.row_count(), right_waveform.row_count());
+        assert!((0..right_colors.row_count()).any(|i| {
+            let color = right_colors.row_data(i).unwrap();
+            color.green() > color.red() && color.green() > color.blue()
+        }));
         let right_detail = ui.get_right_detail();
         assert!(ui.get_right_title().ends_with("tone-9s.mp3"));
         control(&ui, "DECK A play/pause").invoke_accessible_default_action();
@@ -574,6 +615,8 @@ mod tests {
         finish(&c);
         assert_eq!(ui.get_left_title(), title);
         assert_eq!(ui.get_status(), "Selection cancelled");
+        assert_eq!(ui.get_left_waveform_colors(), left_colors);
+        assert_eq!(ui.get_right_waveform_colors(), right_colors);
         assert_eq!(ui.get_left_waveform(), left_waveform);
         assert_eq!(ui.get_right_waveform(), right_waveform);
         assert_eq!(ui.get_left_detail(), left_detail);
@@ -584,6 +627,8 @@ mod tests {
         assert_eq!(ui.get_right_position(), 0.0);
         assert_eq!(ui.get_left_title(), title);
         assert_ne!(ui.get_right_waveform(), right_waveform);
+        assert_ne!(ui.get_right_waveform_colors(), right_colors);
+        assert_eq!(ui.get_left_waveform_colors(), left_colors);
         assert_eq!(ui.get_left_waveform(), left_waveform);
         assert_ne!(ui.get_right_detail(), right_detail);
         assert_eq!(ui.get_left_detail(), left_detail);

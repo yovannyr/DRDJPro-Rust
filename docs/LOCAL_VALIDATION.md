@@ -89,3 +89,26 @@ After the final source change, all commands completed with exit code 0:
 Coverage includes zoom limits; short tracks; start/middle/end bounds; stereo transients/final chunks; local visible content; real headless zoom actions and pointer events at two window widths; correct visible-time targets; playing/paused/EOF/Cue states; marker geometry; unchanged-model reuse; and error/cancel/reload deck isolation. In an earlier diagnostic run, 1000 visible-range re-bins took 48.3591 ms in the debug test binary; this is not a Slint rendering/frame-time or real-time callback benchmark.
 
 The preceding slices are published. This new detail-view slice remains local and uncommitted for review. The release executable is rebuilt. Phase 3 remains partial; frequency colors, beatgrid/BPM, visual/rendering evaluation and macOS acceptance remain open. No visual/native-dialog test, physical listening acceptance or hard real-time qualification was performed.
+
+## Detail publication and frequency colors — latest verification (2026-10-24)
+
+Before committing the detail/zoom slice, formatting, strict Clippy, all 26 tests and release build passed again. The requested preceding work was committed locally as 89650b7 and published using the connected GitHub account as 10e3de81a5b53ce5ed32cf35eb87f3c8f919d43e. Both have tree 8420fcc2480e0e8786dd749b82f70b81bdeae586. The remote ref was updated without force with an expected-parent check. Fetch/rebase skipped the equivalent local commit; git ls-remote confirmed local/remote main matched. The working tree was clean before starting the next slice. Known failing CLI credentials were not changed or retried.
+
+The next bounded local slice adds `src/waveform_color.rs` and per-bin RGB models for both waveform views. Analysis uses complementary first-order low-pass filters around 200 Hz and 2 kHz, with prewarped bilinear coefficients and separate per-channel state. Squared band samples are accumulated in f64, then relative energy blends bass red, mids green and highs blue. This is an approximate display heuristic, not an FFT, calibrated spectrum, beat detection or audio EQ. Peak heights and audio playback sources are unchanged. Analysis runs during loading, and the GUI re-bins only prepared data for detail views. No dependency was added.
+
+A regression test initially exposed insufficient high-frequency separation at an 8 kHz sample rate with exponential smoothing. The coefficients were corrected; tone classification now passes at 8/44.1/48/96 kHz. Additional tests cover opposite-phase stereo, neutral silence, temporal color transitions, the last partial block, visible-range peak/color correspondence and GUI color-model counts/identity across pause, error/cancel and independent reload.
+
+After the final source change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 30 passed, 0 failed, 0 ignored; 2.66 s test execution |
+| `cargo build --release` | Passed; 9.01 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, stereo, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed |
+
+An earlier diagnostic debug run measured 1000 visible peak/color re-bins in 547.6169 ms. This is not GUI rendering/frame-time, device latency or hard real-time acceptance. High-resolution peak and band-energy values together retain at most 7 MiB per mono track at the PCM cap (less for stereo), excluding small overview/GUI/allocation metadata. Rodio callback limitations remain.
+
+The detail/zoom slice is published. This frequency-color slice remains local and uncommitted for review; the release EXE is rebuilt. Phase 3 remains partial: BPM/beatgrid, visual/design approval, rendering/frame-time measurements and macOS acceptance remain open. No visual/native-dialog test, physical listening acceptance or cross-platform build was performed.

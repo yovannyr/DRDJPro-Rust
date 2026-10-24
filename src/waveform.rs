@@ -4,11 +4,12 @@ pub const OVERVIEW_BINS: usize = 256;
 const DETAIL_FRAMES_PER_PEAK: usize = 256;
 
 /// A bounded high-resolution envelope, built by the loading worker.
-/// At the PCM limit this retains at most 1 MiB per mono track, less for stereo.
+/// Peak and band energy data together retain at most 7 MiB per mono track at the PCM limit.
 pub struct DetailPeaks {
     peaks: Vec<f32>,
     frames: usize,
     sample_rate: u32,
+    bands: crate::waveform_color::BandAnalysis,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,13 @@ impl DetailPeaks {
             peaks,
             frames: samples.len() / channels,
             sample_rate,
+            bands: crate::waveform_color::analyze(
+                samples,
+                channels as u16,
+                sample_rate,
+                DETAIL_FRAMES_PER_PEAK,
+                OVERVIEW_BINS,
+            ),
         }
     }
 
@@ -60,20 +68,37 @@ impl DetailPeaks {
 
     /// Re-bin only the small visible envelope; never scan PCM on the GUI timer.
     pub fn render(&self, range: DetailRange) -> Vec<f32> {
-        let frames = range.end_frame - range.start_frame;
-        let bins = frames.min(OVERVIEW_BINS);
-        (0..bins)
-            .map(|i| {
-                let first = range.start_frame + i * frames / bins;
-                let end = range.start_frame + (i + 1) * frames / bins;
-                let start_peak = first / DETAIL_FRAMES_PER_PEAK;
-                let end_peak = end.div_ceil(DETAIL_FRAMES_PER_PEAK).min(self.peaks.len());
-                self.peaks[start_peak..end_peak]
-                    .iter()
-                    .copied()
-                    .fold(0.0_f32, f32::max)
+        self.peak_ranges(range)
+            .map(|range| self.peaks[range].iter().copied().fold(0.0_f32, f32::max))
+            .collect()
+    }
+
+    pub fn overview_colors(&self) -> &[crate::waveform_color::Rgb] {
+        &self.bands.overview
+    }
+
+    pub fn render_colors(&self, range: DetailRange) -> Vec<crate::waveform_color::Rgb> {
+        self.peak_ranges(range)
+            .map(|range| {
+                let mut energy = crate::waveform_color::BandEnergy::default();
+                for value in &self.bands.detail[range] {
+                    energy.add(*value);
+                }
+                energy.color()
             })
             .collect()
+    }
+
+    fn peak_ranges(&self, range: DetailRange) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+        let frames = range.end_frame - range.start_frame;
+        let bins = frames.min(OVERVIEW_BINS);
+        (0..bins).map(move |i| {
+            let first = range.start_frame + i * frames / bins;
+            let end = range.start_frame + (i + 1) * frames / bins;
+            let start_peak = first / DETAIL_FRAMES_PER_PEAK;
+            let end_peak = end.div_ceil(DETAIL_FRAMES_PER_PEAK).min(self.peaks.len());
+            start_peak..end_peak
+        })
     }
 }
 
@@ -100,6 +125,29 @@ pub fn peak_overview(samples: &[f32], channels: u16) -> Vec<f32> {
 mod tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn detail_color_rebin_matches_visible_frequency_content_and_peak_count() {
+        let rate = 8000;
+        let samples: Vec<_> = (0..rate * 8)
+            .map(|frame| {
+                let frequency = if frame < rate * 4 { 80.0 } else { 2800.0 };
+                0.5 * (std::f32::consts::TAU * frequency * frame as f32 / rate as f32).sin()
+            })
+            .collect();
+        let detail = DetailPeaks::new(&samples, 1, rate);
+        let low_range = detail.range(Duration::from_secs(1), 2);
+        let high_range = detail.range(Duration::from_secs(6), 2);
+        let low = detail.render_colors(low_range);
+        let high = detail.render_colors(high_range);
+        assert_eq!(low.len(), detail.render(low_range).len());
+        assert_eq!(high.len(), detail.render(high_range).len());
+        assert!(low[128].0 > low[128].1 && low[128].0 > low[128].2);
+        assert!(high[128].2 > high[128].0 && high[128].2 > high[128].1);
+        assert_eq!(
+            detail.overview_colors().len(),
+            peak_overview(&samples, 1).len()
+        );
+    }
 
     #[test]
     fn detail_follows_position_and_clamps_zoom_and_track_edges() {
@@ -175,9 +223,11 @@ mod tests {
         let start = std::time::Instant::now();
         for frame in 0..1000 {
             let range = detail.range(Duration::from_millis(frame * 10), 8);
-            assert!(detail.render(range).len() <= OVERVIEW_BINS);
+            let peaks = detail.render(range);
+            assert!(peaks.len() <= OVERVIEW_BINS);
+            assert_eq!(peaks.len(), detail.render_colors(range).len());
         }
-        eprintln!("1000 detail view re-bins: {:?}", start.elapsed());
+        eprintln!("1000 detail peak/color re-bins: {:?}", start.elapsed());
     }
 
     #[test]

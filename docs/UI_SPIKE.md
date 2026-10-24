@@ -12,6 +12,8 @@ The prototype combines a provisional Slint UI with Rodio audio playback. Default
 - Overview data is shared with the prepared track. Seeking/Cue/timer updates reuse the same GUI model; successful reload replaces only its deck. Error/cancel preserve existing models.
 - A second peak-envelope view follows the playhead with independent 2/4/8/16/32-second zoom per deck (8 seconds by default). At the start/end the view is pinned to track boundaries; short tracks fill the whole view. Its click target maps to the visible time range, while the overview still maps to the complete track.
 - Detailed peaks are prepared once per 256 PCM frames on the loader. Only the visible envelope is re-binned to at most 256 GUI bars; paused/unchanged viewports reuse their model. Peak boundaries have 256-frame precision (about 5.8 ms at 44.1 kHz); this is an amplitude envelope, not sample-level editing.
+- Both real-track views now color bars from approximate low/mid/high band energy: bass red, mids green, highs blue, with a matching legend. The loader uses complementary first-order filters around 200 Hz and 2 kHz, sums squared samples per channel, and blends the palette by relative energy. Opposite-phase stereo is not downmixed. This is a display heuristic, not an FFT or an equalizer. Peak heights and playback samples are unchanged.
+- Frequency data shares the track lifetime; the timer only re-bins prepared energy for the visible detail range. Unchanged viewport/color models are reused.
 - Procedural waveform data is used only by explicit demo mode; detail zoom is disabled there.
 
 ## Local acceptance status
@@ -29,6 +31,6 @@ Geometry/event tests do not establish visual quality or rendering performance. S
 
 ## Explicit remaining scope
 
-Frequency-colored waveform, beatgrid/BPM/key analysis, jog/pitch, EQ/meters, headphone routing, device recovery, library/persistence and controller integration remain open. Click-free seeking and professional real-time qualification also remain open. The library footer is still a status placeholder. Minimum window height is now 680 logical pixels to accommodate the detail view; layout geometry checks are not a visual usability acceptance.
+Beatgrid/BPM/key analysis, jog/pitch, EQ/meters, headphone routing, device recovery, library/persistence and controller integration remain open. Click-free seeking and professional real-time qualification also remain open. The library footer is still a status placeholder. Minimum window height is now 680 logical pixels to accommodate the detail view; layout geometry checks are not a visual usability acceptance.
 
 Next scope requires review. Finish the representative waveform/UI evaluation in bounded slices and record visual/rendering evidence before choosing Slint as the final framework. See MIGRATION_PLAN.md, FEATURE_CATALOG.md and AUDIO_PLAYBACK.md.
