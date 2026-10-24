@@ -79,3 +79,11 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | R-COLOR-01 | Approximate low/mid/high energy colors from PCM (`waveform_color.rs`) | 80 Hz/1 kHz/high-frequency tests at 8/44.1/48/96 kHz; opposite-phase stereo, silence, temporal transitions and partial final chunk | First-order display heuristic, not FFT/spectrum measurement, beat analysis or audio filtering |
 | R-COLOR-02 | Full overview and following detail share a red/green/blue palette | Matching peak/color model lengths, local-content re-bin tests, real MP3/WAV GUI models and independent reload/error/cancel behavior | No visual/design approval or device listening acceptance |
 | R-COLOR-03 | Prepare frequency data once; reuse unchanged view models | Paused color-model identity plus existing zoom/seek/marker tests; diagnostic peak/color re-bin timing | GUI control-plane allocations remain; rendering/frame pacing and hard real-time gates open |
+
+## Manual beatgrid follow-up (2026-10-24)
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-GRID-01 | Validated constant-BPM 4/4 grid anchored at current source position (`beatgrid.rs`, `playback.rs`) | Invalid/fractional BPM, anchored positive/negative indices, spacing/downbeats, bounded 32s view | Manually defined; no automatic musical correctness, variable tempo or meter detection |
+| R-GRID-02 | Per-deck BPM/apply/clear and detail overlay (`controller.rs`, `app.slint`) | Actual accessible BPM/button actions, line count and geometry at two widths, zoom and independent grid state | Headless event/geometry checks only; visual approval open |
+| R-GRID-03 | Track-owned grid lifetime | Engine/GUI tests preserve through seek/Cue/EOF restart and invalid/failed load; reload resets only its track | No persistence or audio tempo/sync change |

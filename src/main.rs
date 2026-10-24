@@ -2,6 +2,7 @@ use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
 mod audio;
+mod beatgrid;
 mod controller;
 mod playback;
 #[cfg(test)]

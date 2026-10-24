@@ -117,6 +117,7 @@ struct Deck {
     sink: Sink,
     track: Option<PreparedTrack>,
     offset: Duration,
+    grid: Option<crate::beatgrid::BeatGrid>,
 }
 // A fresh Rodio queue initially reports mono/44.1 kHz even when stereo PCM is queued.
 // Each replacement sink contains exactly one fixed-format track. Report that format
@@ -154,6 +155,7 @@ pub struct DeckSnapshot {
     pub duration: Duration,
     pub overview: Option<Arc<[f32]>>,
     pub detail: Option<Arc<crate::waveform::DetailPeaks>>,
+    pub grid: Option<crate::beatgrid::BeatGrid>,
 }
 impl DeckSnapshot {
     pub fn percent(&self) -> f32 {
@@ -187,6 +189,7 @@ impl DualDeckEngine {
                 sink,
                 track: None,
                 offset: Duration::ZERO,
+                grid: None,
             })
         });
         let engine = Self {
@@ -201,7 +204,7 @@ impl DualDeckEngine {
     /// Replace only after preparation succeeded. Fresh sinks avoid stop/append waiting for audio.
     pub fn install(&self, id: DeckId, track: PreparedTrack) {
         let source = track.samples.clone();
-        self.replace_source(id, track, source, Duration::ZERO, false);
+        self.replace_source(id, track, source, Duration::ZERO, false, None);
     }
     fn replace_source(
         &self,
@@ -210,6 +213,7 @@ impl DualDeckEngine {
         source: SamplesBuffer,
         offset: Duration,
         playing: bool,
+        grid: Option<crate::beatgrid::BeatGrid>,
     ) {
         let (sink, queue) = Sink::new();
         let output = DeckOutput {
@@ -229,6 +233,7 @@ impl DualDeckEngine {
             sink,
             track: Some(track),
             offset,
+            grid,
         };
     }
     /// Seek the shared PCM source on the control plane, without Sink::try_seek's audio feedback wait.
@@ -236,18 +241,26 @@ impl DualDeckEngine {
         if !percent.is_finite() {
             return Err("Invalid seek position".into());
         }
-        let (track, playing) = {
+        let (track, playing, grid) = {
             let deck = self.decks[id.index()].borrow();
             (
                 deck.track.clone().ok_or("No track loaded")?,
                 !deck.sink.is_paused() && !deck.sink.empty(),
+                deck.grid,
             )
         };
         let duration = track.duration();
         let offset = duration.mul_f64(f64::from(percent.clamp(0.0, 100.0)) / 100.0);
         let mut source = track.samples.clone();
         source.try_seek(offset).map_err(|e| e.to_string())?;
-        self.replace_source(id, track, source, offset, playing && offset < duration);
+        self.replace_source(
+            id,
+            track,
+            source,
+            offset,
+            playing && offset < duration,
+            grid,
+        );
         Ok(())
     }
     pub fn load_a(&self, path: &Path) -> Result<(), Box<dyn Error>> {
@@ -261,19 +274,15 @@ impl DualDeckEngine {
     pub fn play(&self, id: DeckId) {
         let restart = {
             let deck = self.decks[id.index()].borrow();
-            if deck.sink.empty()
-                || deck
-                    .track
-                    .as_ref()
-                    .is_some_and(|t| deck.offset >= t.duration())
-            {
-                deck.track.clone()
-            } else {
-                None
-            }
+            deck.track.is_some()
+                && (deck.sink.empty()
+                    || deck
+                        .track
+                        .as_ref()
+                        .is_some_and(|t| deck.offset >= t.duration()))
         };
-        if let Some(track) = restart {
-            self.install(id, track);
+        if restart {
+            self.cue(id);
         }
         let deck = self.decks[id.index()].borrow();
         if deck.track.is_some() {
@@ -284,10 +293,27 @@ impl DualDeckEngine {
         self.decks[id.index()].borrow().sink.pause();
     }
     pub fn cue(&self, id: DeckId) {
-        let track = self.decks[id.index()].borrow().track.clone();
+        let (track, grid) = {
+            let deck = self.decks[id.index()].borrow();
+            (deck.track.clone(), deck.grid)
+        };
         if let Some(track) = track {
-            self.install(id, track);
+            let source = track.samples.clone();
+            self.replace_source(id, track, source, Duration::ZERO, false, grid);
         }
+    }
+    pub fn set_grid_here(&self, id: DeckId, bpm: f64) -> Result<(), String> {
+        let position = self.snapshot(id).position;
+        let grid = crate::beatgrid::BeatGrid::new(bpm, position)?;
+        let mut deck = self.decks[id.index()].borrow_mut();
+        if deck.track.is_none() {
+            return Err("Load a track before setting its grid".into());
+        }
+        deck.grid = Some(grid);
+        Ok(())
+    }
+    pub fn clear_grid(&self, id: DeckId) {
+        self.decks[id.index()].borrow_mut().grid = None;
     }
     pub fn snapshot(&self, id: DeckId) -> DeckSnapshot {
         let deck = self.decks[id.index()].borrow();
@@ -313,6 +339,7 @@ impl DualDeckEngine {
             duration,
             overview: deck.track.as_ref().map(|t| Arc::clone(&t.overview)),
             detail: deck.track.as_ref().map(|t| Arc::clone(&t.detail)),
+            grid: deck.grid,
         }
     }
     pub fn set_levels(&self, levels: MixerLevels) {
@@ -353,6 +380,39 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn manual_grid_belongs_to_its_track_and_survives_transport_but_not_reload() {
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        assert!(engine.set_grid_here(DeckId::A, 120.0).is_err());
+        let wav = wav_file(8192, 48_000);
+        engine.load_a(wav.path()).unwrap();
+        engine.load_b(wav.path()).unwrap();
+        engine.seek_percent(DeckId::A, 50.0).unwrap();
+        engine.set_grid_here(DeckId::A, 120.0).unwrap();
+        engine.set_grid_here(DeckId::B, 90.0).unwrap();
+        let left = engine.snapshot(DeckId::A).grid;
+        let right = engine.snapshot(DeckId::B).grid;
+        engine.play(DeckId::A);
+        assert!(engine.set_grid_here(DeckId::A, f64::NAN).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).grid, left);
+        assert!(engine.snapshot(DeckId::A).playing);
+        engine.seek_percent(DeckId::A, 75.0).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).grid, left);
+        engine.cue(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).grid, left);
+        engine.seek_percent(DeckId::A, 100.0).unwrap();
+        engine.play(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).grid, left);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+        assert!(engine.load_a(Path::new("missing.wav")).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).grid, left);
+        engine.load_a(wav.path()).unwrap();
+        assert!(engine.snapshot(DeckId::A).grid.is_none());
+        assert_eq!(engine.snapshot(DeckId::B).grid, right);
+        engine.clear_grid(DeckId::B);
+        assert!(engine.snapshot(DeckId::B).grid.is_none());
+    }
     #[test]
     fn seek_preserves_state_clamps_bounds_and_rejects_nonfinite_input() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);

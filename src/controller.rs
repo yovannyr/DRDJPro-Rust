@@ -18,6 +18,7 @@ type LoadResult = Option<Result<PreparedTrack, String>>;
 struct DetailCache {
     source: Arc<crate::waveform::DetailPeaks>,
     range: crate::waveform::DetailRange,
+    grid: Option<crate::beatgrid::BeatGrid>,
 }
 pub type TrackPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub struct AudioController {
@@ -100,6 +101,36 @@ impl AudioController {
             match id {
                 DeckId::A => ui.on_zoom_left(zoom),
                 DeckId::B => ui.on_zoom_right(zoom),
+            }
+            let weak = Rc::downgrade(&controller);
+            let set_grid = move || {
+                if let Some(c) = weak.upgrade() {
+                    if let Some(ui) = c.ui.upgrade() {
+                        let bpm = match id {
+                            DeckId::A => ui.get_left_grid_bpm(),
+                            DeckId::B => ui.get_right_grid_bpm(),
+                        };
+                        if let Err(err) = c.engine.set_grid_here(id, f64::from(bpm)) {
+                            ui.set_status(format!("Deck {id:?}: {err}").into());
+                        }
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_grid_left(set_grid),
+                DeckId::B => ui.on_grid_right(set_grid),
+            }
+            let weak = Rc::downgrade(&controller);
+            let clear_grid = move || {
+                if let Some(c) = weak.upgrade() {
+                    c.engine.clear_grid(id);
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_clear_grid_left(clear_grid),
+                DeckId::B => ui.on_clear_grid_right(clear_grid),
             }
         }
         let weak = Rc::downgrade(&controller);
@@ -232,6 +263,10 @@ impl AudioController {
                 let changed = cache[index].as_ref().is_none_or(|previous| {
                     !Arc::ptr_eq(&previous.source, detail) || previous.range != range
                 });
+                let grid_changed = changed
+                    || cache[index]
+                        .as_ref()
+                        .is_none_or(|previous| previous.grid != s.grid);
                 if changed {
                     let model = ModelRc::new(Rc::new(VecModel::from(detail.render(range))));
                     let colors = color_model(&detail.render_colors(range));
@@ -245,9 +280,30 @@ impl AudioController {
                             ui.set_right_detail_colors(colors);
                         }
                     }
+                }
+                if grid_changed {
+                    let lines = s.grid.map_or_else(Vec::new, |grid| {
+                        grid.lines(detail.time(range.start_frame), detail.time(range.end_frame))
+                    });
+                    let model = ModelRc::new(Rc::new(VecModel::from(
+                        lines
+                            .into_iter()
+                            .map(|line| crate::BeatLine {
+                                position: line.percent,
+                                downbeat: line.downbeat,
+                            })
+                            .collect::<Vec<_>>(),
+                    )));
+                    match id {
+                        DeckId::A => ui.set_left_beats(model),
+                        DeckId::B => ui.set_right_beats(model),
+                    }
+                }
+                if grid_changed {
                     cache[index] = Some(DetailCache {
                         source: Arc::clone(detail),
                         range,
+                        grid: s.grid,
                     });
                 }
                 match id {
@@ -264,6 +320,10 @@ impl AudioController {
                 }
             }
             let time = format!("{} / {}", clock(s.position), clock(s.duration));
+            let caption = s.grid.map_or_else(
+                || "GRID OFF".into(),
+                |grid| format!("{} BPM · MANUAL 4/4", grid.bpm()),
+            );
             match id {
                 DeckId::A => {
                     ui.set_left_title(s.title.into());
@@ -271,6 +331,8 @@ impl AudioController {
                     ui.set_left_playing(s.playing);
                     ui.set_left_position(percent);
                     ui.set_left_time(time.into());
+                    ui.set_left_grid_active(s.grid.is_some());
+                    ui.set_left_grid_caption(caption.into());
                 }
                 DeckId::B => {
                     ui.set_right_title(s.title.into());
@@ -278,6 +340,8 @@ impl AudioController {
                     ui.set_right_playing(s.playing);
                     ui.set_right_position(percent);
                     ui.set_right_time(time.into());
+                    ui.set_right_grid_active(s.grid.is_some());
+                    ui.set_right_grid_caption(caption.into());
                 }
             }
         }
@@ -315,6 +379,72 @@ mod tests {
             c.tick();
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn manual_bpm_grid_controls_overlay_geometry_and_track_lifetime_are_independent() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(&ui, Rc::clone(&engine), Arc::new(|| None));
+        ui.show().unwrap();
+        assert_eq!(
+            control(&ui, "DECK A set beatgrid").accessible_enabled(),
+            Some(false)
+        );
+        assert_eq!(ui.get_left_beats().row_count(), 0);
+        let wav = wav_file(8192, 48_000 * 8);
+        engine.load_a(wav.path()).unwrap();
+        engine.load_b(wav.path()).unwrap();
+        engine.seek_percent(DeckId::A, 25.0).unwrap();
+        c.tick();
+        let peaks = ui.get_left_detail();
+        control(&ui, "DECK A manual BPM").set_accessible_value("120");
+        control(&ui, "DECK A set beatgrid").invoke_accessible_default_action();
+        assert!(ui.get_left_grid_active());
+        assert!(ui.get_left_grid_caption().contains("120 BPM"));
+        assert_eq!(ui.get_left_beats().row_count(), 17);
+        let anchor = ui.get_left_beats().row_data(4).unwrap();
+        assert_eq!(anchor.position, 25.0);
+        assert!(anchor.downbeat);
+        assert_eq!(ui.get_left_position(), 25.0);
+        assert!(!ui.get_left_playing());
+        assert_eq!(ui.get_right_beats().row_count(), 0);
+        assert_eq!(ui.get_left_detail(), peaks);
+        let grid_model = ui.get_left_beats();
+        c.tick();
+        assert_eq!(ui.get_left_beats(), grid_model);
+        for width in [1200.0, 850.0] {
+            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            let view = control(&ui, "DECK A detailed waveform");
+            let lines: Vec<_> =
+                ElementHandle::find_by_accessible_label(&ui, "DECK A beat line").collect();
+            assert_eq!(lines.len(), 17);
+            for (index, line) in lines.iter().enumerate() {
+                let expected = view.absolute_position().x
+                    + index as f32 / 16.0 * (view.size().width - line.size().width);
+                assert!((line.absolute_position().x - expected).abs() < 0.1);
+            }
+        }
+        control(&ui, "DECK B manual BPM").set_accessible_value("90");
+        control(&ui, "DECK B set beatgrid").invoke_accessible_default_action();
+        let right = ui.get_right_beats();
+        assert!(ui.get_right_grid_active());
+        control(&ui, "DECK A zoom in").invoke_accessible_default_action();
+        assert!(ui.get_left_beats().row_count() <= 9);
+        assert_eq!(ui.get_right_beats(), right);
+        control(&ui, "DECK A cue").invoke_accessible_default_action();
+        assert!(ui.get_left_grid_active());
+        control(&ui, "DECK A clear beatgrid").invoke_accessible_default_action();
+        assert!(!ui.get_left_grid_active());
+        assert_eq!(ui.get_left_beats().row_count(), 0);
+        assert_eq!(ui.get_right_beats(), right);
+        engine.load_b(wav.path()).unwrap();
+        c.tick();
+        assert!(!ui.get_right_grid_active());
+        assert_eq!(ui.get_right_beats().row_count(), 0);
+        ui.hide().unwrap();
     }
     #[test]
     fn detail_zoom_and_clicks_follow_local_time_without_changing_other_deck() {

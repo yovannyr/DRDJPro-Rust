@@ -1,4 +1,6 @@
-import { Button, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Button, Slider, SpinBox, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export struct BeatLine { position: float, downbeat: bool }
 
 component DeckPanel inherits Rectangle {
     in property <string> deck-label;
@@ -7,6 +9,10 @@ component DeckPanel inherits Rectangle {
     in property <[float]> detail;
     in property <[color]> waveform-colors;
     in property <[color]> detail-colors;
+    in property <[BeatLine]> beats;
+    in property <bool> grid-active;
+    in property <string> grid-caption: "GRID OFF";
+    in-out property <int> grid-bpm: 120;
     in property <float> detail-start;
     in property <float> detail-end: 100;
     in property <float> detail-marker;
@@ -23,13 +29,15 @@ component DeckPanel inherits Rectangle {
     callback load-clicked();
     callback seek-requested(float);
     callback zoom-changed();
+    callback grid-clicked();
+    callback clear-grid-clicked();
 
     background: #151e2d;
     border-radius: 10px;
     horizontal-stretch: 1;
     VerticalLayout {
-        padding: 16px;
-        spacing: 8px;
+        padding: 12px;
+        spacing: 6px;
         Text {
             text: deck-label;
             color: accent;
@@ -49,7 +57,7 @@ component DeckPanel inherits Rectangle {
             clicked => { load-clicked(); }
         }
         overview := Rectangle {
-            height: 64px;
+            height: 56px;
             background: #0a1220;
             clip: true;
             for value[i] in waveform : Rectangle {
@@ -111,8 +119,25 @@ component DeckPanel inherits Rectangle {
                 clicked => { detail-window = min(32, detail-window * 2); root.zoom-changed(); }
             }
         }
+        HorizontalLayout {
+            spacing: 6px;
+            Text { text: "BPM"; color: #9bacbf; vertical-alignment: center; }
+            SpinBox {
+                accessible-label: deck-label + " manual BPM";
+                enabled: audio-enabled && loaded;
+                minimum: 40;
+                maximum: 240;
+                value <=> grid-bpm;
+            }
+            Button {
+                text: "GRID HERE";
+                accessible-label: deck-label + " set beatgrid";
+                enabled: audio-enabled && loaded;
+                clicked => { root.grid-clicked(); }
+            }
+        }
         Rectangle {
-            height: 110px;
+            height: 100px;
             background: #0a1220;
             clip: true;
             for value[i] in detail : Rectangle {
@@ -121,6 +146,15 @@ component DeckPanel inherits Rectangle {
                 width: parent.width / max(1, detail.length);
                 height: clamp(value, 0, 1) * (parent.height - 12px);
                 background: i < detail-colors.length ? detail-colors[i] : accent;
+            }
+            for line in beats : Rectangle {
+                accessible-role: image;
+                accessible-label: deck-label + " beat line";
+                accessible-value: line.position;
+                x: clamp(line.position, 0, 100) / 100 * max(0px, parent.width - self.width);
+                width: line.downbeat ? 2px : 1px;
+                height: parent.height;
+                background: line.downbeat ? #ffffff99 : #ffffff40;
             }
             Rectangle {
                 accessible-role: image;
@@ -179,6 +213,12 @@ component DeckPanel inherits Rectangle {
                 accessible-label: deck-label + " cue";
                 clicked => { cue-clicked(); }
             }
+            Button {
+                text: "GRID OFF";
+                accessible-label: deck-label + " clear beatgrid";
+                enabled: grid-active;
+                clicked => { root.clear-grid-clicked(); }
+            }
         }
         Rectangle { background: transparent; vertical-stretch: 1; }
         HorizontalLayout {
@@ -186,6 +226,7 @@ component DeckPanel inherits Rectangle {
             Text { text: root.audio-enabled ? "MID" : "NO AUDIO"; color: #46dc64; font-size: 11px; }
             Text { text: root.audio-enabled ? "HIGH" : "SYNTHETIC"; color: #508cfa; font-size: 11px; }
         }
+        Text { text: grid-caption; color: #9bacbf; font-size: 11px; }
     }
 }
 
@@ -205,6 +246,14 @@ export component AppWindow inherits Window {
     in property <[color]> right-waveform-colors;
     in property <[color]> left-detail-colors;
     in property <[color]> right-detail-colors;
+    in property <[BeatLine]> left-beats;
+    in property <[BeatLine]> right-beats;
+    in property <bool> left-grid-active;
+    in property <bool> right-grid-active;
+    in property <string> left-grid-caption: "GRID OFF";
+    in property <string> right-grid-caption: "GRID OFF";
+    in-out property <int> left-grid-bpm: 120;
+    in-out property <int> right-grid-bpm: 120;
     in property <float> left-detail-start;
     in property <float> left-detail-end: 100;
     in property <float> left-detail-marker;
@@ -240,6 +289,10 @@ export component AppWindow inherits Window {
     callback seek-right(float);
     callback zoom-left();
     callback zoom-right();
+    callback grid-left();
+    callback grid-right();
+    callback clear-grid-left();
+    callback clear-grid-right();
 
     VerticalLayout {
         padding: 18px;
@@ -262,6 +315,12 @@ export component AppWindow inherits Window {
                 waveform: root.left-waveform;
                 waveform-colors: root.left-waveform-colors;
                 detail-colors: root.left-detail-colors;
+                beats: root.left-beats;
+                grid-active: root.left-grid-active;
+                grid-caption: root.left-grid-caption;
+                grid-bpm <=> root.left-grid-bpm;
+                grid-clicked => { root.grid-left(); }
+                clear-grid-clicked => { root.clear-grid-left(); }
                 detail: root.left-detail;
                 detail-start: root.left-detail-start;
                 detail-end: root.left-detail-end;
@@ -315,6 +374,12 @@ export component AppWindow inherits Window {
                 waveform: root.right-waveform;
                 waveform-colors: root.right-waveform-colors;
                 detail-colors: root.right-detail-colors;
+                beats: root.right-beats;
+                grid-active: root.right-grid-active;
+                grid-caption: root.right-grid-caption;
+                grid-bpm <=> root.right-grid-bpm;
+                grid-clicked => { root.grid-right(); }
+                clear-grid-clicked => { root.clear-grid-right(); }
                 detail: root.right-detail;
                 detail-start: root.right-detail-start;
                 detail-end: root.right-detail-end;

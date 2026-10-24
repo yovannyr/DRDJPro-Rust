@@ -112,3 +112,24 @@ After the final source change, all commands completed with exit code 0:
 An earlier diagnostic debug run measured 1000 visible peak/color re-bins in 547.6169 ms. This is not GUI rendering/frame-time, device latency or hard real-time acceptance. High-resolution peak and band-energy values together retain at most 7 MiB per mono track at the PCM cap (less for stereo), excluding small overview/GUI/allocation metadata. Rodio callback limitations remain.
 
 The detail/zoom slice is published. This frequency-color slice remains local and uncommitted for review; the release EXE is rebuilt. Phase 3 remains partial: BPM/beatgrid, visual/design approval, rendering/frame-time measurements and macOS acceptance remain open. No visual/native-dialog test, physical listening acceptance or cross-platform build was performed.
+
+## Color publication and manual beatgrid — latest verification (2026-10-24)
+
+Before publication, formatting, strict Clippy, all 30 tests and the release build passed again. The preceding color slice was committed locally as c66e4b4 and published through the connected GitHub account as 54b5ba91d3abdba08262fc90d3d563d8d22b861d. Both point to tree 0cd51bb6371b92c484f65c227e242ebaae4ff65b. Remote update was non-forced with an expected-parent check; fetch/rebase skipped the equivalent local commit. git ls-remote verified local/remote main matched, with a clean working tree before new implementation. Stored CLI credentials were not changed.
+
+The next bounded local slice adds `src/beatgrid.rs`, track-owned grid metadata, per-deck manual BPM/apply/clear controls and detail-view beat/downbeat overlays. BPM must be finite and between 40 and 240. GRID HERE explicitly anchors a 4/4 downbeat at the current source position; the initial field value is not analyzed music metadata. The domain accepts fractional BPM; the GUI uses whole BPM. Beat indices are computed from the anchor rather than cumulatively rounding periods. At most 129 lines are needed for the supported 32-second/240-BPM viewport. Grid data survives Play/Pause, seek, Cue and EOF/restart, but resets on successful reload of that track. Invalid BPM or failed load preserves the previous grid. No dependency, tempo processing, automatic BPM detection or sync engine was added.
+
+After the final source change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 34 passed, 0 failed, 0 ignored; 2.95 s test execution |
+| `cargo build --release` | Passed; 10.58 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, stereo, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed |
+
+Coverage includes invalid/fractional BPM, beats before/after anchor, downbeat phase, bounded/ordered viewport lines, actual accessible BPM/apply/clear actions, geometry at two widths, zoom, unchanged model reuse, transport/restart lifetime and independent track reload. In an earlier debug diagnostic, 1000 manual-grid viewport calculations took 4.7396 ms; this is control-plane calculation timing, not rendering, audio latency or hard real-time acceptance.
+
+The color slice is published; this manual-grid slice remains local and uncommitted for review. The release EXE is rebuilt. No automatic BPM/meter detection, grid persistence, musical beat correctness, visual/design approval, physical listening or cross-platform build is claimed. Phase 3 remains partial; rendering/frame-time and Windows/macOS evaluation are still open.

@@ -65,6 +65,9 @@ impl DetailPeaks {
             100.0 * frame as f32 / self.frames as f32
         }
     }
+    pub fn time(&self, frame: usize) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(frame as f64 / f64::from(self.sample_rate))
+    }
 
     /// Re-bin only the small visible envelope; never scan PCM on the GUI timer.
     pub fn render(&self, range: DetailRange) -> Vec<f32> {
