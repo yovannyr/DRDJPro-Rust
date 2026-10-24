@@ -1126,9 +1126,12 @@ dependencies = [
  "i-slint-backend-testing",
  "rfd",
  "rodio",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "symphonia",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 import { Button, Slider, SpinBox, LineEdit, ListView } from "std-widgets.slint";
 export struct BeatLine { position: float, downbeat: bool }
-export struct LibraryRow { id: int, name: string, format: string, path: string }
+export struct LibraryRow { id: int, name: string, format: string, path: string, available: bool }
 
 component WaveformStrip inherits Rectangle {
     in property <string> deck-label;
@@ -128,6 +128,8 @@ component TrackLibrary inherits Rectangle {
     in property <[LibraryRow]> rows;
     in property <string> count-text;
     in property <string> empty-text;
+    in property <string> storage-text;
+    in property <bool> save-failed;
     in property <bool> busy;
     in property <bool> can-load-left;
     in property <bool> can-load-right;
@@ -135,6 +137,7 @@ component TrackLibrary inherits Rectangle {
     in-out property <string> query;
     callback import-files(); callback search(); callback select-track(int); callback move-selection(int);
     callback sort-column(int); callback load-left(); callback load-right();
+    callback retry-save();
     background: #121821; border-color: #303b4b; border-width: 1px;
     VerticalLayout {
         padding: 6px; spacing: 4px;
@@ -161,12 +164,12 @@ component TrackLibrary inherits Rectangle {
                 for row in root.rows : Rectangle {
                     height: 30px; background: root.selection == row.id ? #194b70 : #1a222e;
                     accessible-role: button; accessible-label: "Library track " + row.id;
-                    accessible-description: row.name + " " + row.path;
+                    accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.path;
                     accessible-action-default => { root.select-track(row.id); nav.focus(); }
                     HorizontalLayout {
                         padding-left: 6px;
                         Text { text: row.name; color: #e4ebf6; overflow: elide; horizontal-stretch: 2; }
-                        Text { text: row.format; color: #9faec2; width: 70px; }
+                        Text { text: row.available ? row.format : "MISSING"; color: row.available ? #9faec2 : #ffae58; width: 70px; }
                         Text { text: row.path; color: #9faec2; overflow: elide; horizontal-stretch: 3; }
                     }
                     TouchArea { clicked => { root.select-track(row.id); nav.focus(); } }
@@ -174,7 +177,11 @@ component TrackLibrary inherits Rectangle {
             }
             Text { text: empty-text; visible: rows.length == 0; color: #9faec2; horizontal-alignment: center; vertical-alignment: center; }
         }
-        Text { text: count-text; color: #9faec2; font-size: 11px; }
+        HorizontalLayout {
+            Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
+            Text { text: storage-text; accessible-role: text; accessible-label: "Library storage status"; color: save-failed ? #ffae58 : #9faec2; font-size: 11px; overflow: elide; vertical-alignment: center; }
+            if save-failed : Button { text: "RETRY SAVE"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
+        }
     }
 }
 
@@ -241,6 +248,9 @@ export component AppWindow inherits Window {
 
     in property <[LibraryRow]> library-rows;
     in property <string> library-count: "0 tracks";
+    in property <string> library-storage: "Session library";
+    in property <bool> library-save-failed;
+    callback retry-library-save();
     in property <string> library-empty: "Add MP3/WAV files to your library";
     in property <bool> library-busy: false;
     in property <int> selected-track: -1;
@@ -313,6 +323,7 @@ export component AppWindow inherits Window {
         TrackLibrary {
             accessible-role: groupbox; accessible-label: "Track library area"; vertical-stretch: 1; min-height: 160px;
             rows: root.library-rows; count-text: root.library-count; empty-text: root.library-empty;
+            storage-text: root.library-storage; save-failed: root.library-save-failed;
             selection: root.selected-track; query <=> root.library-query;
             busy: root.loading || root.library-busy || !root.audio-enabled;
             can-load-left: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.left-playing;
@@ -321,6 +332,7 @@ export component AppWindow inherits Window {
             select-track(id) => { root.select-library(id); } move-selection(delta) => { root.move-library-selection(delta); }
             sort-column(field) => { root.sort-library(field); }
             load-left => { root.load-library-left(); } load-right => { root.load-library-right(); }
+            retry-save => { root.retry-library-save(); }
         }
         Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
     }

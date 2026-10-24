@@ -6,6 +6,46 @@ use std::{
 
 pub const MAX_IMPORT: usize = 5000;
 const MAX_TRACKS: usize = 100_000;
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Catalog {
+    pub version: u32,
+    pub tracks: Vec<SavedTrack>,
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedTrack {
+    pub id: i32,
+    pub path: PathBuf,
+}
+impl Catalog {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != 1 {
+            return Err(format!("Unsupported library version {}", self.version));
+        }
+        if self.tracks.len() > MAX_TRACKS {
+            return Err("Library track limit exceeded".into());
+        }
+        let mut ids = HashSet::new();
+        let mut paths = HashSet::new();
+        for track in &self.tracks {
+            if track.id <= 0
+                || track.id == i32::MAX
+                || !ids.insert(track.id)
+                || !track.path.is_absolute()
+                || !paths.insert(identity(&track.path))
+                || !track
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("mp3") || e.eq_ignore_ascii_case("wav"))
+            {
+                return Err("Invalid or duplicate library identity/path".into());
+            }
+        }
+        Ok(())
+    }
+}
 pub struct ImportBatch {
     pub paths: Vec<PathBuf>,
     pub rejected: usize,
@@ -33,10 +73,31 @@ pub struct Track {
     pub path: PathBuf,
     pub name: String,
     pub format: String,
+    pub available: bool,
+}
+impl Track {
+    fn new(id: i32, path: PathBuf, available: bool) -> Self {
+        Self {
+            id,
+            name: path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            format: path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_uppercase(),
+            path,
+            available,
+        }
+    }
 }
 #[derive(Default)]
 pub struct Library {
     tracks: Vec<Track>,
+    last_id: i32,
     keys: HashSet<PathBuf>,
     query: String,
     selected: Option<i32>,
@@ -54,6 +115,36 @@ fn identity(path: &Path) -> PathBuf {
     }
 }
 impl Library {
+    /// Called by the storage worker: availability checks never run in the UI tick.
+    pub fn restore(catalog: Catalog) -> Result<Self, String> {
+        catalog.validate()?;
+        let mut library = Self::default();
+        for saved in catalog.tracks {
+            let available = saved.path.is_file();
+            library.keys.insert(identity(&saved.path));
+            library
+                .tracks
+                .push(Track::new(saved.id, saved.path, available));
+            library.last_id = library.last_id.max(saved.id);
+        }
+        Ok(library)
+    }
+    pub fn catalog(&self) -> Catalog {
+        Catalog {
+            version: 1,
+            tracks: self
+                .tracks
+                .iter()
+                .map(|t| SavedTrack {
+                    id: t.id,
+                    path: t.path.clone(),
+                })
+                .collect(),
+        }
+    }
+    pub fn missing_count(&self) -> usize {
+        self.tracks.iter().filter(|t| !t.available).count()
+    }
     /// Paths must already be inspected/canonicalized by the worker.
     pub fn insert(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> usize {
         let before = self.tracks.len();
@@ -61,23 +152,22 @@ impl Library {
             if self.tracks.len() == MAX_TRACKS {
                 break;
             }
-            if !self.keys.insert(identity(&path)) {
+            if self.keys.contains(&identity(&path)) {
+                if let Some(track) = self
+                    .tracks
+                    .iter_mut()
+                    .find(|t| identity(&t.path) == identity(&path))
+                {
+                    track.available = true;
+                }
                 continue;
             }
-            self.tracks.push(Track {
-                id: self.tracks.len() as i32 + 1,
-                name: path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
-                format: path
-                    .extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_uppercase(),
-                path,
-            });
+            let Some(id) = self.last_id.checked_add(1).filter(|id| *id < i32::MAX) else {
+                break;
+            };
+            self.last_id = id;
+            self.keys.insert(identity(&path));
+            self.tracks.push(Track::new(id, path, true));
         }
         self.tracks.len() - before
     }

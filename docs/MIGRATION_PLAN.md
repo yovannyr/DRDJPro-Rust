@@ -47,9 +47,9 @@ This is an implementation checkpoint, not phase completion or a feature-parity c
 | --- | --- | --- |
 | 1 — inventory | Partial feature/control inventory | Code-level .NET reference and reference-test audit |
 | 2 — architecture/evaluation | Cargo workspace and focused modules; Slint/Rodio prototype | Framework choice, audio backend and real-time qualification |
-| 3 — representative deck UI | Two decks, real track loading/transport/mixer/seeking, real full-track peak overview and playhead | Detailed waveform evaluation, visual review and rendering/interaction measurements on Windows/macOS |
+| 3 — representative deck UI | Extended workspace, dual transport/mixer/seek, peak/color detail views and manual grid | Visual review, rendering/interaction measurements and Windows/macOS framework qualification |
 | 4 — incremental audio | MP3/WAV and deck/mixer/seek behavior headless-tested | Reference parity, DSP/routing/device behavior and physical real-time tests |
-| 5 — hardware/library/persistence | File selection foundation only | Library, persistence and controller slices |
+| 5 — hardware/library/persistence | Searchable local catalog, durable IDs/paths, atomic saves and backup recovery | Metadata/crates/history, relocation, session restore and hardware slices |
 | 6 — cross-platform acceptance | Open | Platform builds, long-run stability, performance and usability |
 
 The latest bounded slice replaces synthetic audio-mode bars with real PCM peaks and connects overview clicks to seeking. It intentionally does not add zoom, BPM/beatgrid, hardware or new dependencies. Phase 3 stays partial. Subsequent scope requires review.
@@ -85,3 +85,11 @@ Implemented compact deck heads/overviews, shared stacked detail waveforms, retai
 This closes the scoped layout structure and session-browser foundation, not phase 3 or the complete library. Headless geometry tests do not establish visual acceptance. Import is limited to 5,000 selected paths per operation and 100,000 session entries; these limits are safeguards, not performance qualification. Extension/existence inspection occurs at import and actual decode validation at load. Failed loads retain the installed track.
 
 Next proposed slice, after review: durable local library storage with atomic save/recovery, stable identity across restarts, missing-file handling and restart tests. Then metadata/crates/history and a transactional grid editor, followed by prioritized cue/loop, tempo/sync, mixer/routing and hardware slices with reference acceptance. Native-dialog, visual, physical-audio and platform qualification must accompany the appropriate release gates.
+
+## Durable catalog checkpoint (2026-10-24)
+
+The Extended workspace/session-library slice and the preceding user UI/reference commit are now published on main as 45285cf (parent f50fba4). Local and remote heads were verified equal with a clean worktree before starting this slice. Both published trees were checked against their original local commit trees; the CLI's wrong-account credentials were not changed.
+
+The current bounded slice adds a versioned, user-local library catalog with stable track IDs and paths, background startup/save, same-directory atomic file replacement, previous-good backup recovery and a process-owned OS file lock. Missing files remain listed and marked; errors preserve installed deck audio. Unrecoverable or unknown-version files are preserved and the application explicitly switches to session-only library behavior. Write failures stay visible with Retry Save. Normal shutdown flushes the latest catalog on the storage worker; a final save failure returns an error exit.
+
+See LIBRARY_STORAGE.md for format, paths, recovery boundaries and acceptance evidence. Next proposed slice after review: track metadata and durable crates, beginning with schema evolution and reference-backed acceptance. Session/deck restoration, relocation tools, full grid editor, visual/audio qualification and the remaining professional feature gates stay open.

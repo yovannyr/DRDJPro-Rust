@@ -44,6 +44,9 @@ Every item needs source file(s), target crate(s), acceptance criteria, reference
 | R-LIB-02 | Case-insensitive search, deterministic name/type/path sort and stable selected IDs | Domain and accessible UI tests, hidden selections cleared; tags/crates/history open |
 | R-LIB-03 | Selected path loads into A/B, selection independent of sorting | Actual worker/engine headless test; native picker and physical output acceptance open |
 | R-LOAD-03 | Playing decks cannot be replaced, even when started during decode | UI guard plus controller completion guard tested; old track survives decode failure |
+| R-LIB-04 | Versioned durable IDs/paths and missing-file retention (`library.rs`, `library_store.rs`) | Unicode/ID/missing-file restart and real restored-track headless load; tags/crates/relocation open |
+| R-LIB-05 | Atomic catalog replacement, previous-good backup, unknown/corrupt data preservation | Interrupted temp, forced write failure, backup recovery and invalid/future schema tests; power-loss qualification open |
+| R-LIB-06 | Background storage, OS writer lock, visible errors/retry, latest-snapshot shutdown flush | Lock exclusion/release, pending-save close and GUI failure/retry tests; maximum-scale performance and cross-platform acceptance open |
 
 ## Local Rust loading/mixer slice (2026-10-24)
 

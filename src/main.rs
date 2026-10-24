@@ -5,6 +5,7 @@ mod audio;
 mod beatgrid;
 mod controller;
 mod library;
+mod library_store;
 mod playback;
 mod tempo;
 #[cfg(test)]
@@ -141,9 +142,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     .pick_files()
             }),
         );
-        if let Some((left, right)) = &gui_tracks {
-            controller.import_paths(vec![left.into(), right.into()]);
-        }
+        let initial_paths = gui_tracks
+            .as_ref()
+            .map_or_else(Vec::new, |(left, right)| vec![left.into(), right.into()]);
+        controller.restore_library(library_store::default_path(), initial_paths);
         Some(controller)
     } else {
         wire_decks(&ui);
@@ -152,6 +154,7 @@ fn main() -> Result<(), slint::PlatformError> {
     };
 
     let timer = Timer::default();
+    let closing_controller = controller.clone();
     let weak = ui.as_weak();
     timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
         if let Some(ui) = weak.upgrade() {
@@ -170,7 +173,16 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    ui.run()
+    let result = ui.run();
+    timer.stop();
+    if let Some(controller) = closing_controller {
+        if let Err(error) = controller.close_library() {
+            return Err(slint::PlatformError::Other(format!(
+                "Library final save failed: {error}"
+            )));
+        }
+    }
+    result
 }
 
 fn wire_decks(ui: &AppWindow) {

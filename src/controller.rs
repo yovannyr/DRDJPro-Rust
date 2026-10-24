@@ -5,7 +5,7 @@ use crate::{
 };
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -29,6 +29,12 @@ pub struct AudioController {
     picker: TrackPicker,
     library_picker: LibraryPicker,
     library: RefCell<crate::library::Library>,
+    persistence: RefCell<Option<crate::library_store::Worker>>,
+    storage_ready: Cell<bool>,
+    dirty: Cell<bool>,
+    saving: Cell<bool>,
+    save_failed: Cell<bool>,
+    initial_paths: RefCell<Vec<PathBuf>>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
     displayed_overviews: RefCell<[Option<Arc<[f32]>>; 2]>,
@@ -47,6 +53,12 @@ impl AudioController {
             picker,
             library_picker,
             library: RefCell::new(crate::library::Library::default()),
+            persistence: RefCell::new(None),
+            storage_ready: Cell::new(true),
+            dirty: Cell::new(false),
+            saving: Cell::new(false),
+            save_failed: Cell::new(false),
+            initial_paths: RefCell::new(Vec::new()),
             pending_import: RefCell::new(None),
             pending: RefCell::new(None),
             displayed_overviews: RefCell::new([None, None]),
@@ -210,9 +222,140 @@ impl AudioController {
             }
         }
         controller.publish_library();
+        let weak = Rc::downgrade(&controller);
+        ui.on_retry_library_save(move || {
+            if let Some(c) = weak.upgrade() {
+                c.save_failed.set(false);
+                c.save_library();
+            }
+        });
         controller.apply_levels();
         controller.refresh();
         controller
+    }
+    pub fn restore_library(&self, path: Result<PathBuf, String>, initial_paths: Vec<PathBuf>) {
+        let result = path.and_then(crate::library_store::Worker::start);
+        match result {
+            Ok(worker) => {
+                *self.persistence.borrow_mut() = Some(worker);
+                self.storage_ready.set(false);
+                *self.initial_paths.borrow_mut() = initial_paths;
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_library_busy(true);
+                    ui.set_library_storage("Restoring library…".into());
+                }
+            }
+            Err(error) => {
+                self.storage_error(&error, false);
+                if !initial_paths.is_empty() {
+                    self.import_paths(initial_paths);
+                }
+            }
+        }
+    }
+    fn storage_error(&self, error: &str, retry: bool) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_library_storage(format!("Library NOT saved: {error}").into());
+            ui.set_library_save_failed(retry);
+        }
+    }
+    fn library_changed(&self) {
+        self.dirty.set(true);
+        self.save_failed.set(false);
+    }
+    fn poll_storage(&self) {
+        let event = self
+            .persistence
+            .borrow()
+            .as_ref()
+            .map(|w| w.events.try_recv());
+        match event {
+            Some(Ok(crate::library_store::Event::Loaded(result))) => {
+                self.storage_ready.set(true);
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_library_busy(false);
+                }
+                match result {
+                    Ok((library, note)) => {
+                        *self.library.borrow_mut() = library;
+                        self.publish_library();
+                        if let Some(ui) = self.ui.upgrade() {
+                            ui.set_library_storage(note.into());
+                        }
+                    }
+                    Err(error) => {
+                        self.persistence.borrow_mut().take();
+                        self.storage_error(&format!("{error}; session only"), false);
+                    }
+                }
+                let paths = self.initial_paths.take();
+                if !paths.is_empty() {
+                    self.import_paths(paths);
+                }
+            }
+            Some(Ok(crate::library_store::Event::Saved(result))) => {
+                self.saving.set(false);
+                match result {
+                    Ok(()) => {
+                        if let Some(ui) = self.ui.upgrade() {
+                            ui.set_library_storage("Library saved".into());
+                            ui.set_library_save_failed(false);
+                        }
+                    }
+                    Err(error) => {
+                        self.dirty.set(true);
+                        self.save_failed.set(true);
+                        self.storage_error(&error, true);
+                    }
+                }
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.persistence.borrow_mut().take();
+                self.storage_ready.set(true);
+                self.saving.set(false);
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_library_busy(false);
+                }
+                self.storage_error("Storage worker stopped; session only", false);
+            }
+            _ => {}
+        }
+    }
+    fn save_library(&self) {
+        if !self.storage_ready.get()
+            || !self.dirty.get()
+            || self.saving.get()
+            || self.save_failed.get()
+        {
+            return;
+        }
+        let storage = self.persistence.borrow();
+        let Some(worker) = storage.as_ref() else {
+            return;
+        };
+        match worker.save(self.library.borrow().catalog()) {
+            Ok(()) => {
+                self.dirty.set(false);
+                self.saving.set(true);
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_library_storage("Saving library…".into());
+                    ui.set_library_save_failed(false);
+                }
+            }
+            Err(error) => {
+                self.save_failed.set(true);
+                self.storage_error(&error, true);
+            }
+        }
+    }
+    pub fn close_library(&self) -> Result<(), String> {
+        if let Some(worker) = self.persistence.borrow_mut().take() {
+            let final_catalog = (self.storage_ready.get()
+                && (self.dirty.get() || self.saving.get()))
+            .then(|| self.library.borrow().catalog());
+            worker.close(final_catalog)?;
+        }
+        Ok(())
     }
     fn apply_levels(&self) {
         if let Some(ui) = self.ui.upgrade() {
@@ -227,7 +370,10 @@ impl AudioController {
         self.start_load(id, Arc::clone(&self.picker));
     }
     fn start_load(&self, id: DeckId, picker: TrackPicker) {
-        if self.pending.borrow().is_some() || self.pending_import.borrow().is_some() {
+        if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+        {
             return;
         }
         let Some(ui) = self.ui.upgrade() else {
@@ -267,6 +413,7 @@ impl AudioController {
         match result {
             Some(Ok((path, track))) => {
                 self.library.borrow_mut().insert([path]);
+                self.library_changed();
                 self.publish_library();
                 if self.engine.snapshot(id).playing {
                     ui.set_status(format!("Load discarded: deck {id:?} started playing").into());
@@ -281,6 +428,7 @@ impl AudioController {
         self.refresh();
     }
     pub fn tick(&self) {
+        self.poll_storage();
         let import = self
             .pending_import
             .borrow()
@@ -298,6 +446,7 @@ impl AudioController {
                     Ok(Some(batch)) => {
                         let total = batch.paths.len();
                         let added = self.library.borrow_mut().insert(batch.paths);
+                        self.library_changed();
                         ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
                         self.publish_library();
                     }
@@ -321,13 +470,17 @@ impl AudioController {
             self.pending.borrow_mut().take();
             self.complete_load(id, result);
         }
+        self.save_library();
         self.refresh();
     }
     pub fn import_paths(&self, paths: Vec<PathBuf>) {
         self.start_import(Arc::new(move || Some(paths.clone())));
     }
     fn start_import(&self, picker: LibraryPicker) {
-        if self.pending.borrow().is_some() || self.pending_import.borrow().is_some() {
+        if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+        {
             return;
         }
         let Some(ui) = self.ui.upgrade() else {
@@ -361,9 +514,18 @@ impl AudioController {
                 name: track.name.clone().into(),
                 format: track.format.clone().into(),
                 path: track.path.to_string_lossy().into_owned().into(),
+                available: track.available,
             })
             .collect();
-        ui.set_library_count(format!("{} / {} tracks", visible.len(), library.len()).into());
+        ui.set_library_count(
+            format!(
+                "{} / {} tracks ({} missing)",
+                visible.len(),
+                library.len(),
+                library.missing_count()
+            )
+            .into(),
+        );
         ui.set_library_empty(
             if library.len() == 0 {
                 "Add MP3/WAV files to your library"
@@ -536,7 +698,12 @@ mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file, TempFile};
     use i_slint_backend_testing::ElementHandle;
-    use std::{collections::VecDeque, sync::Mutex, time::Duration};
+    use std::{
+        collections::VecDeque,
+        sync::Mutex,
+        thread,
+        time::{Duration, Instant},
+    };
     fn control(ui: &AppWindow, label: &str) -> ElementHandle {
         let controls: Vec<_> = ElementHandle::find_by_accessible_label(ui, label).collect();
         assert_eq!(controls.len(), 1, "accessible control {label}");
@@ -560,6 +727,120 @@ mod tests {
             c.tick();
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+    fn finish_storage(c: &AudioController) {
+        let until = Instant::now() + Duration::from_secs(15);
+        loop {
+            c.tick();
+            if c.storage_ready.get()
+                && !c.saving.get()
+                && (!c.dirty.get() || c.save_failed.get() || c.persistence.borrow().is_none())
+            {
+                break;
+            }
+            assert!(Instant::now() < until, "storage worker did not finish");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    #[test]
+    fn durable_library_restores_real_track_ids_missing_rows_and_loads_after_restart() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.json");
+        let wav = wav_file(8192, 48_000);
+        let missing = dir.path().join("will-disappear.wav");
+        std::fs::copy(wav.path(), &missing).unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let ui = AppWindow::new().unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(path.clone()), vec![fixture(), missing.clone()]);
+        assert!(ui.get_library_busy());
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 2);
+        assert_eq!(ui.get_library_storage(), "Library saved");
+        // A later import may be newer than the outstanding disk snapshot at shutdown.
+        c.import_paths(vec![wav.path().into()]);
+        finish_import(&c);
+        c.close_library().unwrap();
+        drop(c);
+        std::fs::remove_file(&missing).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(path.clone()), Vec::new());
+        finish_storage(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 3);
+        let missing_row = ui
+            .get_library_rows()
+            .iter()
+            .find(|row| row.id == 2)
+            .unwrap();
+        assert!(!missing_row.available);
+        assert!(ui.get_library_count().contains("1 missing"));
+        ui.invoke_select_library(1);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(ui.get_left_title().ends_with("tone-9s.mp3"));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(c.library.borrow().selected_id(), 1);
+        ui.invoke_select_library(2);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(ui.get_left_title().ends_with("tone-9s.mp3"));
+        assert!(!ui.get_status().contains("loaded and paused"));
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn durable_library_reports_write_failure_retry_and_damaged_startup_without_data_loss() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.json");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(path.clone()), Vec::new());
+        finish_storage(&c);
+        std::fs::create_dir(&path).unwrap();
+        c.import_paths(vec![fixture()]);
+        finish_import(&c);
+        finish_storage(&c);
+        assert!(ui.get_library_save_failed());
+        assert!(ui.get_library_storage().contains("NOT saved"));
+        std::fs::remove_dir(&path).unwrap();
+        ui.invoke_retry_library_save();
+        finish_storage(&c);
+        assert!(!ui.get_library_save_failed());
+        assert_eq!(ui.get_library_storage(), "Library saved");
+        c.close_library().unwrap();
+        std::fs::write(&path, b"unrecoverable catalog").unwrap();
+        let ui = AppWindow::new().unwrap();
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(path.clone()), Vec::new());
+        finish_storage(&c);
+        assert!(ui.get_library_storage().contains("session only"));
+        c.import_paths(vec![fixture()]);
+        finish_import(&c);
+        c.close_library().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"unrecoverable catalog");
     }
     #[test]
     fn extended_workspace_library_search_loads_correct_tracks_and_protects_playing_decks() {

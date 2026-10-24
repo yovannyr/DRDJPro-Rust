@@ -174,3 +174,24 @@ Final checks: `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings
 `cargo build --release` passed in 18.31 s. The rebuilt executable analyzed tests/fixtures/tone-9s.mp3 successfully: 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592. `git diff --check` passed (only Git line-ending conversion notices).
 
 The library is session-only, accepts at most 5,000 selected paths per import and 100,000 stored entries. Import validates extension/existence; decode validity is established on load. These bounds are not scale benchmarks. No persistence, tags/crates/history, native-dialog interaction, application visual review, physical listening, device-latency measurement or macOS build is claimed. The full professional product remains the target; MIGRATION_PLAN.md records release gates and the proposed next persistence slice. Work remains local for review; pre-existing changes and untracked tempo.rs were retained.
+
+## Publication and durable catalog — latest verification (2026-10-24)
+
+The previous Extended/session-library slice was committed locally as ea1abd1. Direct HTTPS push was denied (403) under the installed CLI account; SSH had no usable authentication and the explicitly selected repository-owner HTTPS account had no stored credential. Publication therefore used the connected GitHub account. The preceding local user UI/reference commit 3cc2dd9 was also unpublished, so its complete contents (including the PDF/PNG references) were uploaded first. Published commits f50fba4 and 45285cf have exactly the original local UI/application trees, respectively. The main ref update was non-forced with an expected-parent check. Fetch/rebase skipped the equivalent local commits; git rev-parse and git ls-remote confirmed local/remote main at 45285cf294562cc2dcd45ad5b1e189e00a62aaff, with a clean worktree before the new slice. Stored credentials were not modified.
+
+The new local slice adds library_store.rs, a validated version-1 JSON catalog, explicit serde/serde_json dependencies already present in Cargo.lock and test-only tempfile. The composition root injects the user-local storage path. One storage worker owns the OS file lock, validates/restores tracks and availability, writes/syncs temporary files and atomically replaces primary/previous-good backup files. Unknown-version or unrecoverable catalogs are preserved with visible session-only behavior. Storage errors remain visible independently of transport status, with Retry Save for write failures. Normal close flushes the latest snapshot; final failure returns an error. No audio callback code changed.
+
+After the final source change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 50 passed, 0 failed, 0 ignored; 3.75 s |
+| `cargo build --release` | Passed; 17.17 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; only Git line-ending notices |
+
+Nine additional tests cover stable IDs/Unicode paths and additions across store restart, retained missing files, previous-good recovery without propagating corruption, ignored interrupted temp files, forced rename failure and retry, unknown schema/unrecoverable preservation, bounded/invalid input, writer-lock exclusion/release, final snapshot flush during pending save, and headless controller recreation with real MP3/WAV loading. Restart evidence recreates workers/controllers/stores; it is not an interactive full-application or physical power-loss test. The existing Extended geometry and audio/mixer/seek/grid regression tests remain green.
+
+LIBRARY_STORAGE.md documents the current storage contract. Track metadata/crates/history, session/deck restoration, relocation tools, maximum-scale timing, cross-platform builds and physical failure/latency qualification remain open. No visual/native-dialog or listening acceptance is claimed. The prior slice is published; this persistence slice and rebuilt release executable remain local for review.
