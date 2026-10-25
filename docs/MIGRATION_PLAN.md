@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 107 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 112 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Bis einschließlich präziser Loop-Bereichsanzeige ist `fa710ac` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Die optionale Auto-Loop-Beat-Ausrichtung folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
+Veröffentlichungsstand: Bis einschließlich optionaler Auto-Loop-Beat-Ausrichtung ist `4babd3b` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Die Geschwindigkeits-/Pitch-Engine folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
 
 ### Nächste und offene Arbeitspakete
 
@@ -41,7 +41,8 @@ Veröffentlichungsstand: Bis einschließlich präziser Loop-Bereichsanzeige ist 
 - [x] ✅ Beatbasierte Auto-Loops (⅛–32 Beats) aus bestätigter manueller BPM und Halbieren/Verdoppeln bestehender Loop-Grenzen.
 - [x] ✅ Loop-Bereiche mit In/Out-Markierungen in Übersicht/Detail, präzisem Clipping und Anzeige von Aktiv/Inaktiv.
 - [x] ✅ Optionale Beat-Ausrichtung neu erzeugter Auto-Loops anhand des bestätigten manuellen Grids.
-- [ ] ☐ **Als Nächstes:** Playback-Geschwindigkeit/Pitch als Engine-Grundlage mit Offline-Tests; GUI, Keylock und Sync separat.
+- [x] ✅ Engine-Grundlage für gekoppelte Playback-Geschwindigkeit/Pitch 0,5–2,0×, mit Quellzeit- und Offline-Signaltests.
+- [ ] ☐ **Als Nächstes:** GUI-Pitch-Steuerung und Anzeige von Original-/aktuellem BPM; Keylock und Sync separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -232,3 +233,13 @@ The reviewed loop-range slice was published as fa710ac before this bounded conti
 Changing the checkbox alone never moves or resizes playback. The preference is independent per deck and transient; it is not a stored track/grid setting. Pending grid edits, saved cue/loop data, manual In/Out, half/double and cue recall remain unaffected. No trigger scheduling, global quantization, keylock or sync is implemented. Domain, engine and actual headless checkbox/auto actions cover tie/anchor/preroll/rounding behavior, failures retaining active state, other-deck isolation and draft-versus-committed timing. Existing two-size AUTO geometry includes the new checkbox. No schema/dependency/sample callback code changed.
 
 Next proposed reviewed slice: playback speed/pitch control-plane and PCM source foundation with deterministic offline tests; GUI, keylock and sync remain separate acceptance scopes. Native visual/listening/physical latency, musical grid correctness, cue trigger scheduling and platform qualification remain open. Publication requires the standing independent GPT-6 Astra medium review and final green checks.
+
+## Coupled playback speed/pitch engine checkpoint (2026-10-25)
+
+This bounded engine-first slice adds validated requested0.5–2.0 speed factors and rounded effective source sample rates. A prepared immutable PCM clone receives a fixed playback rate on the control plane; DeckOutput reports that exact format for its lifetime, and the existing Rodio resampling path produces coupled pitch/time changes. Sink::set_speed is not used because DeckOutput intentionally fixes metadata per installed source. Source sample iteration remains unchanged and allocation/lock-free in its own next(); Rodio queues/resampler/control callbacks are not claimed lock-free or hard-real-time qualified.
+
+Speed changes replace the source at current original-track position, retaining Play/Pause, active loop/bounds, grid and mixer. Sink playback elapsed time is mapped by effective rate/base rate to original source time before EOF/clipping/loop wrapping. Seek/Cue, loop activation/exit/resize and pause preserve the deck factor. Successful new-track preparation starts at1x; failed preparation preserves state. Invalid factors/rate overflow fail before mutation. Requested/effective values remain distinct because rates are whole Hz. The public engine setter is staged with a narrow dead-code allowance pending GUI wiring; no GUI/persistence/new dependency was added.
+
+Tests measure rendered pitch frequency, signal duration and stereo antisymmetry at0.5/1/1.25/2x, source-time control resolution, effective-rate rounding, loop/speed lifecycle and failures/other-deck/gain isolation. Queue-leading silence and the existing5ms position publication tick are measured/accounted separately from signal duration. This does not establish artifact-free live fader changes, anti-alias/resampling quality, hardware latency or musical acceptance. Next proposed reviewed slice is GUI pitch control and requested/effective speed plus original/current BPM display; native rendering/listening, smoothing/coalescing, keylock and Sync remain separate acceptance gates. Publication requires independent Astra-medium review and final green checks.
+
+Review follow-up coverage also renders44.1kHz at requested1.333333/effective4/3 and directly asserts steady-state loop-region samples over repeated changed-rate wraps, resizing and another rate change. These checks deliberately exclude the control-plane settling transition; no click-free claim is made.

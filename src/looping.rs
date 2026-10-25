@@ -70,7 +70,7 @@ pub fn frame_time(frame: usize, rate: u32) -> Duration {
 pub struct PcmSource {
     data: Arc<[f32]>,
     channels: u16,
-    rate: u32,
+    playback_rate: u32,
     cursor: usize,
     region: Option<FrameLoop>,
 }
@@ -80,10 +80,14 @@ impl PcmSource {
         Self {
             data: data.into(),
             channels,
-            rate,
+            playback_rate: rate,
             cursor: 0,
             region: None,
         }
+    }
+    /// Configure on the control plane; iterator/sample storage stays unchanged.
+    pub fn set_playback_rate(&mut self, rate: std::num::NonZeroU32) {
+        self.playback_rate = rate.get();
     }
     pub fn frames(&self) -> usize {
         self.data.len() / usize::from(self.channels)
@@ -113,7 +117,7 @@ impl Source for PcmSource {
         self.channels
     }
     fn sample_rate(&self) -> u32 {
-        self.rate
+        self.playback_rate
     }
     fn current_span_len(&self) -> Option<usize> {
         None
@@ -123,7 +127,7 @@ impl Source for PcmSource {
             None
         } else {
             Some(Duration::from_nanos(
-                (self.frames() as u128 * 1_000_000_000 / u128::from(self.rate)) as u64,
+                (self.frames() as u128 * 1_000_000_000 / u128::from(self.playback_rate)) as u64,
             ))
         }
     }
@@ -132,7 +136,7 @@ impl Source for PcmSource {
         {
             self.frames()
         } else {
-            frame_at(time, self.rate).min(self.frames())
+            frame_at(time, self.playback_rate).min(self.frames())
         };
         self.cursor = self.region.map_or(frame, |r| r.wrap(frame)) * usize::from(self.channels);
         Ok(())
@@ -168,6 +172,25 @@ mod tests {
     }
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator;
+    #[test]
+    fn playback_rate_changes_duration_seek_units_and_preserves_stereo_storage() {
+        let mut source = PcmSource::new(2, 4, vec![0., 1., 2., 3., 4., 5., 6., 7.]);
+        let original = source.clone();
+        source.set_playback_rate(std::num::NonZeroU32::new(8).unwrap());
+        assert_eq!(source.sample_rate(), 8);
+        assert_eq!(source.total_duration(), Some(Duration::from_millis(500)));
+        assert_eq!(original.sample_rate(), 4);
+        source.try_seek(Duration::from_millis(250)).unwrap();
+        assert_eq!(source.next(), Some(4.));
+        assert_eq!(source.next(), Some(5.));
+        source.try_seek(Duration::from_millis(500)).unwrap();
+        assert_eq!(source.next(), None);
+        source.set_loop(FrameLoop::new(1, 3, 4).unwrap()).unwrap();
+        assert!(source.total_duration().is_none());
+        for i in 0..400 {
+            assert_eq!(source.next(), Some([2., 3., 4., 5.][i % 4]));
+        }
+    }
     #[test]
     fn beat_lengths_round_once_and_resize_validates_before_mutation() {
         for rate in [44100, 48000, 96000] {
@@ -222,6 +245,7 @@ mod tests {
     fn repeated_loop_output_allocates_nothing_after_preparation() {
         let mut source = PcmSource::new(2, 48_000, vec![0.25, -0.25, 0.5, -0.5]);
         source.set_loop(FrameLoop::new(0, 2, 2).unwrap()).unwrap();
+        source.set_playback_rate(std::num::NonZeroU32::new(72_000).unwrap());
         COUNT.with(|c| c.set(Some(0)));
         let started = std::time::Instant::now();
         for _ in 0..1_000_000 {

@@ -1,5 +1,6 @@
 //! Control-plane loading and two Rodio decks. Rodio itself is not lock-free.
 use crate::looping::{frame_at, frame_time, FrameLoop, PcmSource};
+use crate::playback_speed::PlaybackSpeed;
 use rodio::{mixer::Mixer, Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use std::{
     cell::{Cell, RefCell},
@@ -125,6 +126,7 @@ struct Deck {
     loop_in: Option<usize>,
     loop_region: Option<FrameLoop>,
     loop_active: bool,
+    speed: Option<PlaybackSpeed>,
     grid: Option<crate::beatgrid::BeatGrid>,
 }
 // A fresh Rodio queue initially reports mono/44.1 kHz even when stereo PCM is queued.
@@ -205,6 +207,7 @@ impl DualDeckEngine {
                 loop_in: None,
                 loop_region: None,
                 loop_active: false,
+                speed: None,
                 grid: None,
             })
         });
@@ -226,11 +229,29 @@ impl DualDeckEngine {
         &self,
         id: DeckId,
         track: PreparedTrack,
-        source: PcmSource,
+        mut source: PcmSource,
         offset: Duration,
         playing: bool,
         grid: Option<crate::beatgrid::BeatGrid>,
     ) {
+        let (loop_in, loop_region, speed) = {
+            let deck = self.decks[id.index()].borrow();
+            if deck
+                .track
+                .as_ref()
+                .is_some_and(|old| Arc::ptr_eq(&old.detail, &track.detail))
+            {
+                (deck.loop_in, deck.loop_region, deck.speed.unwrap())
+            } else {
+                (
+                    None,
+                    None,
+                    PlaybackSpeed::new(1., track.samples.sample_rate())
+                        .expect("Prepared source format was validated"),
+                )
+            }
+        };
+        source.set_playback_rate(speed.output_rate());
         let (sink, queue) = Sink::new();
         let output = DeckOutput {
             queue,
@@ -245,18 +266,7 @@ impl DualDeckEngine {
             sink.play();
         }
         self.mixer.add(output);
-        let (loop_in, loop_region) = {
-            let deck = self.decks[id.index()].borrow();
-            if deck
-                .track
-                .as_ref()
-                .is_some_and(|old| Arc::ptr_eq(&old.detail, &track.detail))
-            {
-                (deck.loop_in, deck.loop_region)
-            } else {
-                (None, None)
-            }
-        };
+
         *self.decks[id.index()].borrow_mut() = Deck {
             sink,
             track: Some(track),
@@ -264,6 +274,7 @@ impl DualDeckEngine {
             loop_in,
             loop_region,
             loop_active: false,
+            speed: Some(speed),
             grid,
         };
     }
@@ -302,6 +313,43 @@ impl DualDeckEngine {
             playing && offset < duration,
             grid,
         );
+        Ok(())
+    }
+    // Staged engine API; the following reviewed slice connects the GUI pitch control.
+    #[allow(dead_code)]
+    pub fn set_speed(&self, id: DeckId, factor: f64) -> Result<(), String> {
+        let (track, playing, grid, region, speed) = {
+            let deck = self.decks[id.index()].borrow();
+            let track = deck.track.clone().ok_or("Load a track first")?;
+            let speed = PlaybackSpeed::new(factor, track.samples.sample_rate())?;
+            if deck
+                .speed
+                .is_some_and(|current| current.requested() == speed.requested())
+            {
+                return Ok(());
+            }
+            (
+                track,
+                !deck.sink.is_paused() && !deck.sink.empty(),
+                deck.grid,
+                if deck.loop_active {
+                    deck.loop_region
+                } else {
+                    None
+                },
+                speed,
+            )
+        };
+        let position = self.snapshot(id).position;
+        let mut source = track.samples.clone();
+        if let Some(region) = region {
+            source.set_loop(region)?;
+        }
+        source.try_seek(position).map_err(|e| e.to_string())?;
+        // Source preparation/validation succeeded. Replacement is synchronous on this control plane.
+        self.decks[id.index()].borrow_mut().speed = Some(speed);
+        self.replace_source(id, track, source, position, playing, grid);
+        self.decks[id.index()].borrow_mut().loop_active = region.is_some();
         Ok(())
     }
     // Manual-loop commands run on the control plane.
@@ -565,20 +613,22 @@ impl DualDeckEngine {
             .track
             .as_ref()
             .map_or(Duration::ZERO, PreparedTrack::duration);
+        let source_elapsed = deck
+            .sink
+            .get_pos()
+            .mul_f64(deck.speed.map_or(1., PlaybackSpeed::effective_factor));
+        let absolute = deck.offset.saturating_add(source_elapsed);
         let position = if deck.track.is_some() && deck.sink.empty() {
             duration
         } else {
-            deck.offset
-                .saturating_add(deck.sink.get_pos())
-                .min(duration)
+            absolute.min(duration)
         };
         let position = if deck.loop_active {
             let track = deck.track.as_ref().unwrap();
             frame_time(
-                deck.loop_region.unwrap().wrap(frame_at(
-                    deck.offset.saturating_add(deck.sink.get_pos()),
-                    track.samples.sample_rate(),
-                )),
+                deck.loop_region
+                    .unwrap()
+                    .wrap(frame_at(absolute, track.samples.sample_rate())),
                 track.samples.sample_rate(),
             )
         } else {
@@ -654,6 +704,229 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn changed_rate_loop_wraps_and_resizes_render_only_region_samples_after_settling() {
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        let samples: Vec<_> = (0..48000)
+            .flat_map(|frame| {
+                let value = if (12000..24000).contains(&frame) {
+                    0.4
+                } else {
+                    0.8
+                };
+                [value, -value]
+            })
+            .collect();
+        engine.install(
+            DeckId::A,
+            PreparedTrack {
+                path: Arc::from(Path::new("speed-loop.wav")),
+                title: "speed loop".into(),
+                overview: crate::waveform::peak_overview(&samples, 2).into(),
+                detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48000)),
+                tempo: None,
+                samples: PcmSource::new(2, 48000, samples),
+            },
+        );
+        engine.set_levels(MixerLevels {
+            channel_a: 0.5,
+            channel_b: 1.,
+            crossfader: 0.,
+        });
+        engine
+            .restore_loop(
+                DeckId::A,
+                Duration::from_millis(250),
+                Duration::from_millis(500),
+            )
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.set_speed(DeckId::A, 1.5).unwrap();
+        engine.play(DeckId::A);
+        for stage in 0..3 {
+            if stage == 1 {
+                engine.resize_loop(DeckId::A, false).unwrap();
+            }
+            if stage == 2 {
+                engine.set_speed(DeckId::A, 0.75).unwrap();
+            }
+            // Control-plane replacement has an existing queue/control settling interval.
+            // Steady-state assertions deliberately do not qualify the transition itself.
+            output.by_ref().take(8192).for_each(drop);
+            let rendered: Vec<_> = output.by_ref().take(48000 * 2 * 2).collect();
+            assert_eq!(rendered.len(), 48000 * 2 * 2);
+            for frame in rendered.as_chunks::<2>().0 {
+                assert!((frame[0] - 0.2).abs() < 1e-6, "stage{stage}: {frame:?}");
+                assert!((frame[1] + 0.2).abs() < 1e-6);
+            }
+            let snapshot = engine.snapshot(DeckId::A);
+            assert!(snapshot.playing && snapshot.loop_active);
+            assert!((snapshot.loop_in.unwrap()..snapshot.loop_out.unwrap())
+                .contains(&snapshot.position));
+        }
+    }
+    #[test]
+    fn speed_offline_render_measures_pitch_duration_stereo_and_source_time() {
+        for (base, factor) in [
+            (48000, 0.5),
+            (48000, 1.),
+            (48000, 1.25),
+            (48000, 2.),
+            (44100, 1.333333),
+        ] {
+            let effective = (f64::from(base) * factor).round() / f64::from(base);
+            let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+            let engine = DualDeckEngine::from_mixer(mixer);
+            let samples: Vec<_> = (0..base)
+                .flat_map(|frame| {
+                    let value =
+                        0.25 * (std::f32::consts::TAU * 440. * frame as f32 / base as f32).sin();
+                    [value, -value]
+                })
+                .collect();
+            engine.install(
+                DeckId::A,
+                PreparedTrack {
+                    path: Arc::from(Path::new("speed-tone.wav")),
+                    title: "speed tone".into(),
+                    overview: crate::waveform::peak_overview(&samples, 2).into(),
+                    detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, base)),
+                    tempo: None,
+                    samples: PcmSource::new(2, base, samples),
+                },
+            );
+            engine.set_levels(MixerLevels {
+                channel_a: 1.,
+                channel_b: 1.,
+                crossfader: 0.,
+            });
+            engine.set_speed(DeckId::A, factor).unwrap();
+            engine.play(DeckId::A);
+            let mut rendered: Vec<_> = output.by_ref().take(19200).collect();
+
+            let left: Vec<_> = rendered
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|frame| {
+                    assert!((frame[0] + frame[1]).abs() < 1e-5);
+                    frame[0]
+                })
+                .collect();
+            let first_signal = left.iter().position(|sample| sample.abs() > 1e-5).unwrap();
+            let signal = &left[first_signal..];
+            let expected_source_time = signal.len() as f64 / 48000. * effective;
+            // Sink publishes its counter every 5 ms; compare source time after measured
+            // queue lead-in, allowing that control tick and two source-frame roundings.
+            let position = engine.snapshot(DeckId::A).position.as_secs_f64();
+            assert!(
+                (position - expected_source_time).abs() <= 0.005 * effective + 2. / f64::from(base),
+                "factor {factor}: source time {position}, expected near {expected_source_time}"
+            );
+            let crossings = signal
+                .windows(2)
+                .filter(|w| w[0] <= 0. && w[1] > 0.)
+                .count();
+            let frequency = crossings as f64 * 48000. / signal.len() as f64;
+            // A finite zero-crossing window has one-crossing frequency resolution.
+            let resolution = 48000. / signal.len() as f64;
+            assert!(
+                (frequency - 440. * effective).abs() <= resolution + 0.01,
+                "factor {factor}, measured {frequency} Hz"
+            );
+            rendered.extend(output.by_ref().take(48000 * 6));
+            let last = rendered
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .rposition(|frame| frame[0].abs() > 1e-5)
+                .unwrap()
+                + 1;
+            let first = rendered
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .position(|frame| frame[0].abs() > 1e-5)
+                .unwrap();
+            let span = last - first;
+            assert!(
+                (span as f64 - 48000. / effective).abs() <= 4.,
+                "factor {factor}, signal span {span}, leading silent frames {first}"
+            );
+            eprintln!(
+                "source {base} Hz speed {factor} (effective {effective}): leading silence {first} output frames, signal span {span} frames"
+            );
+            assert!(!engine.snapshot(DeckId::A).playing);
+            assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+        }
+    }
+    #[test]
+    fn speed_controls_preserve_loop_phase_transport_grid_gains_and_reset_on_new_track() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        assert!(engine.set_speed(DeckId::A, 1.25).is_err());
+        let file = wav_file(8192, 48000 * 8);
+        let other = wav_file(4096, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        engine.set_levels(MixerLevels {
+            channel_a: 0.6,
+            channel_b: 0.8,
+            crossfader: 0.3,
+        });
+        let volumes = engine.output_volumes();
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(2))
+            .unwrap();
+        engine.set_speed(DeckId::A, 1.25).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(2));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine
+            .restore_loop(
+                DeckId::A,
+                Duration::from_millis(500),
+                Duration::from_millis(1500),
+            )
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        output.by_ref().take(24000).for_each(drop);
+        let before = engine.snapshot(DeckId::A);
+        assert!((before.position.as_secs_f64() - 1.125).abs() < 0.02);
+        engine.set_speed(DeckId::A, 0.5).unwrap();
+        let after = engine.snapshot(DeckId::A);
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.loop_out, before.loop_out);
+        assert!(after.playing && after.loop_active);
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(grid));
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.decks[1].borrow().speed.unwrap().requested(), 1.);
+        for value in [f64::NAN, f64::INFINITY, 0., 0.49, 2.01] {
+            assert!(engine.set_speed(DeckId::A, value).is_err());
+            assert_eq!(engine.snapshot(DeckId::A).position, after.position);
+            assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+        }
+        engine.pause(DeckId::A);
+        let paused = engine.snapshot(DeckId::A).position;
+        output.by_ref().take(4096).for_each(drop);
+        assert_eq!(engine.snapshot(DeckId::A).position, paused);
+        engine.seek_percent(DeckId::A, 50.).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(4));
+        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+        engine.cue(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+        assert!(engine.load_a(Path::new("missing-speed.wav")).is_err());
+        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+        engine.load_a(other.path()).unwrap();
+        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 1.);
+        assert_eq!(engine.output_volumes(), volumes);
+    }
     #[test]
     fn aligned_auto_loop_is_optional_and_validated_before_active_state_changes() {
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);

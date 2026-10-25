@@ -184,3 +184,7 @@ AUTO now includes a per-deck BEAT SNAP checkbox (off by default) plus a caption 
 The second AUTO row grows to26px within the existing260px deck allocation. Headless geometry includes the checkbox at850x740/1280x860 alongside all three panels; native focus/contrast/layout review remains open. Manual boundaries, cue recall, half/double and saved slots do not snap, and the setting is not persisted across application restarts. Tempo/keylock/sync and global quantization remain open.
 
 Beat boundary/tie decisions use the exact binary rational value of committed BPM with checked integer arithmetic, avoiding float floor/ceil errors around zero and midpoint boundaries. ±1 ns around a midpoint is covered by regression tests; this numerical correctness does not establish musical grid accuracy.
+
+## Playback speed/pitch engine checkpoint (2026-10-25)
+
+Overview30/32/57 remains open at the GUI boundary. The engine now supports validated0.5–2.0 coupled playback speed/pitch with original-source position and loop semantics; there is no pitch fader/range/reset or original/current BPM display yet. This engine-first slice does not expose an unverified GUI control. New tracks reset to1x, failed loads preserve the installed factor, and seek/Cue/loops retain it. GUI wiring must present requested/effective speed honestly, retain source-time displays and verify actual controls. Smooth live-fader updates/resampling quality and physical latency need separate qualification; keylock/Sync are not implemented.
