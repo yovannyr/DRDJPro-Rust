@@ -1537,6 +1537,7 @@ impl AudioController {
         self.refresh();
     }
     pub fn tick(&self) {
+        self.engine.collect_retired();
         self.cancel_stale_nudges();
         self.apply_pending_pitch();
         self.poll_storage();

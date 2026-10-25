@@ -28,7 +28,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 123 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 124 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Review als `e1371a8` gepusht. Die momentane GUI ist anschließend implementiert, nach Review-Korrekturen erneut unabhängig geprüft und mit 121 Tests sowie Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
 
@@ -47,7 +47,8 @@ Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Re
 - [x] ✅ Engine-Zustand für temporäres relatives ±2%-Nudge, Basis-Pitch-Erhalt und sicheren neutralen Release/Transport-Abbruch.
 - [x] ✅ Momentane Nudge-GUI mit Pointer-/Tasten-Release, Fokus-/Panel-/Lade-/Transport-/EOF-/Shutdown-Abbruch und Headless-Ereignistests.
 - [x] ✅ Opus1: Performance-Steuerung deckweise von Laden/Import entkoppelt; Restore-/Quellschutz und persistente Cue-Änderungen getestet.
-- [ ] ☐ Opus2/3: präzise Quellenwechsel-/Nudge-Flanken und nachgewiesene PCM-Freigabe außerhalb des Audio-Pfads.
+- [x] ✅ Opus3: alte PCM-Besitzer bis zum tatsächlichen Queue-Retirement halten; Freigabe im Kontrollthread mit separatem Pull-Thread getestet.
+- [ ] ☐ Opus2: präzise Quellenwechsel-/Nudge-Flanken ohne Verwendung der verzögerten Sink-Position.
 - [x] ✅ Opus6: lesbaren Katalog bei Metadaten-Backfill-Schreibfehler erhalten; Retry und Neustart mit injiziertem Schreibfehler getestet.
 - [ ] ☐ Opus5/7: Katalog-/Decode-Skalierung messen, Delta-Persistenz und Worker-Abbruch umsetzen.
 - [ ] ☐ Opus4: LOOP/Reloop/OUT-Semantik am Handbuch abgleichen; keine automatische Verhaltensänderung aufgrund des Modellbefunds.
@@ -298,3 +299,9 @@ A symmetric headless regression holds the other deck's real picker worker via ch
 After reviewed3034f92, Store::open retains successfully restored/enriched catalog data when its optional backfill save fails. Worker LoadedLibrary carries that warning together with the library and startup note in one event, so no fake save completion can race command accounting. Controller publishes the catalog, retains the worker, marks dirty/save_failed and exposes the existing Retry Save path. Fatal inspect/schema/migration failures retain their existing preservation/error behavior. No schema/dependency/audio/UI-source change.
 
 A headless regression seeds a real unscanned WAV record, injects a SQLite metadata INSERT abort trigger, verifies the visible enriched title and stable ID with DB scanned still0, loads the track, removes the trigger, retries, checks scanned1 and restarts successfully. This proves this optional write-failure path; it is not a new physical power-loss/platform qualification. Final review and checks are recorded in LOCAL_VALIDATION.
+
+## Opus3: control-plane PCM retirement checkpoint (2026-10-25)
+
+After reviewed f4a505d, each custom DeckOutput owns a retirement marker declared after its queue. Rust field-drop order destroys the queued PCM owner before a Release store publishes retirement. Source replacement transfers the old PreparedTrack into a control-plane retained list before dropping the old Sink. GUI ticks and subsequent replacements Acquire-check acknowledgements and reclaim old track buffers only on that control plane; sink.empty or elapsed time is not used as proof. Engine Drop signals sinks and drops its owned stream before track-buffer fields; the local Windows CPAL implementation joins its render thread on stream drop. Injected renderers on another thread must be stopped/joined by their owner before engine drop.
+
+A real offline mixer on a separate thread verifies the old PCM remains alive after queue/mixer destruction with exactly the control owner left, then its last strong owner is released only after collect_retired on the test/control thread. The Weak observer retains the Arc allocation, so this is not an allocator-level free measurement. This establishes old PCM ownership reclamation in the tested lifecycle, not hard-real-time qualification: Rodio queue/resampler locks and small wrapper/marker allocations/frees remain. A stalled renderer retains buffers until acknowledged rather than prematurely freeing them. Native shutdown, device latency, listening and cross-platform qualification remain open. Delayed playhead/source transitions are a separate Opus2 slice.

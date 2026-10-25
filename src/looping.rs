@@ -89,6 +89,10 @@ impl PcmSource {
     pub fn set_playback_rate(&mut self, rate: std::num::NonZeroU32) {
         self.playback_rate = rate.get();
     }
+    #[cfg(test)]
+    pub(crate) fn storage_weak(&self) -> std::sync::Weak<[f32]> {
+        Arc::downgrade(&self.data)
+    }
     pub fn frames(&self) -> usize {
         self.data.len() / usize::from(self.channels)
     }

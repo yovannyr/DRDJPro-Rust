@@ -7,7 +7,10 @@ use std::{
     error::Error,
     fs::File,
     path::Path,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -121,6 +124,7 @@ impl PreparedTrack {
 
 struct Deck {
     sink: Sink,
+    source_retired: Option<Arc<AtomicBool>>,
     track: Option<PreparedTrack>,
     offset: Duration,
     loop_in: Option<usize>,
@@ -131,6 +135,16 @@ struct Deck {
     nudge: i32,
     grid: Option<crate::beatgrid::BeatGrid>,
 }
+struct SourceRetirement(Arc<AtomicBool>);
+impl Drop for SourceRetirement {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+struct RetiredTrack {
+    _track: PreparedTrack,
+    released: Arc<AtomicBool>,
+}
 // A fresh Rodio queue initially reports mono/44.1 kHz even when stereo PCM is queued.
 // Each replacement sink contains exactly one fixed-format track. Report that format
 // throughout its lifetime so the output converter cannot misinterpret initial samples.
@@ -138,6 +152,8 @@ struct DeckOutput {
     queue: rodio::queue::SourcesQueueOutput,
     channels: u16,
     sample_rate: u32,
+    // Rust drops fields in declaration order: publish only AFTER the queue's PCM Arc is gone.
+    _retirement: SourceRetirement,
 }
 impl Iterator for DeckOutput {
     type Item = f32;
@@ -191,8 +207,17 @@ pub struct DualDeckEngine {
     decks: [RefCell<Deck>; 2],
     levels: Cell<MixerLevels>,
     mixer: Mixer,
-    // Drop the stream only after the sinks.
+    retired: RefCell<Vec<RetiredTrack>>,
+    // Drop explicitly stops the owned device before releasing track-buffer owners.
     _stream: Option<OutputStream>,
+}
+impl Drop for DualDeckEngine {
+    fn drop(&mut self) {
+        for deck in &mut self.decks {
+            deck.get_mut().sink.stop();
+        }
+        drop(self._stream.take());
+    }
 }
 impl DualDeckEngine {
     pub fn open_default() -> Result<Self, Box<dyn Error>> {
@@ -201,12 +226,14 @@ impl DualDeckEngine {
         engine._stream = Some(stream);
         Ok(engine)
     }
+    /// An injected renderer on another thread must be stopped/joined before this engine drops.
     pub(crate) fn from_mixer(mixer: Mixer) -> Self {
         let decks = std::array::from_fn(|_| {
             let sink = Sink::connect_new(&mixer);
             sink.pause();
             RefCell::new(Deck {
                 sink,
+                source_retired: None,
                 track: None,
                 offset: Duration::ZERO,
                 loop_in: None,
@@ -222,10 +249,17 @@ impl DualDeckEngine {
             decks,
             levels: Cell::new(MixerLevels::default()),
             mixer,
+            retired: RefCell::new(Vec::new()),
             _stream: None,
         };
         engine.set_levels(MixerLevels::default());
         engine
+    }
+    /// Control-plane reclamation after the source queue acknowledges destruction.
+    pub fn collect_retired(&self) {
+        self.retired
+            .borrow_mut()
+            .retain(|track| !track.released.load(Ordering::Acquire));
     }
     /// Replace only after preparation succeeded. Fresh sinks avoid stop/append waiting for audio.
     pub fn install(&self, id: DeckId, track: PreparedTrack) {
@@ -266,12 +300,15 @@ impl DualDeckEngine {
                 )
             }
         };
+        self.collect_retired();
         source.set_playback_rate(speed.output_rate());
+        let source_retired = Arc::new(AtomicBool::new(false));
         let (sink, queue) = Sink::new();
         let output = DeckOutput {
             queue,
             channels: source.channels(),
             sample_rate: source.sample_rate(),
+            _retirement: SourceRetirement(Arc::clone(&source_retired)),
         };
         sink.pause();
         let (a, b) = self.levels.get().volumes();
@@ -282,18 +319,29 @@ impl DualDeckEngine {
         }
         self.mixer.add(output);
 
-        *self.decks[id.index()].borrow_mut() = Deck {
-            sink,
-            track: Some(track),
-            offset,
-            loop_in,
-            loop_region,
-            loop_active: false,
-            speed: Some(speed),
-            base_factor,
-            nudge,
-            grid,
-        };
+        let mut old = std::mem::replace(
+            &mut *self.decks[id.index()].borrow_mut(),
+            Deck {
+                sink,
+                source_retired: Some(source_retired),
+                track: Some(track),
+                offset,
+                loop_in,
+                loop_region,
+                loop_active: false,
+                speed: Some(speed),
+                base_factor,
+                nudge,
+                grid,
+            },
+        );
+        // Transfer ownership before old Sink::drop signals the audio path to stop.
+        if let (Some(track), Some(released)) = (old.track.take(), old.source_retired.take()) {
+            self.retired.borrow_mut().push(RetiredTrack {
+                _track: track,
+                released,
+            });
+        }
     }
     /// Seek the shared PCM source on the control plane, without Sink::try_seek's audio feedback wait.
     pub fn seek_percent(&self, id: DeckId, percent: f32) -> Result<(), String> {
@@ -769,6 +817,46 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn replaced_pcm_survives_audio_queue_drop_until_control_plane_reclamation() {
+        for warmup in [0, 1000] {
+            let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+            let engine = DualDeckEngine::from_mixer(mixer);
+            let file = wav_file(8192, 48000);
+            let next = wav_file(4096, 48000);
+            let track = PreparedTrack::open(file.path()).unwrap();
+            let storage = track.samples.storage_weak();
+            engine.install(DeckId::A, track);
+            engine.play(DeckId::A);
+            for _ in 0..warmup {
+                output.next();
+            }
+            engine.load_a(next.path()).unwrap();
+            engine.collect_retired();
+            assert_eq!(engine.retired.borrow().len(), 1);
+            assert!(storage.strong_count() >= 2);
+            let observe = storage.clone();
+            let audio = std::thread::spawn(move || {
+                for _ in 0..1000 {
+                    output.next();
+                }
+                // Destruction of the mixer also exercises retirement of a still queued source.
+                drop(output);
+                assert_eq!(
+                    observe.strong_count(),
+                    1,
+                    "control-plane owner must retain PCM after audio queue destruction"
+                );
+                std::thread::current().id()
+            });
+            assert_ne!(audio.join().unwrap(), std::thread::current().id());
+            assert_eq!(storage.strong_count(), 1);
+            assert!(engine.retired.borrow()[0].released.load(Ordering::Acquire));
+            engine.collect_retired();
+            assert_eq!(storage.strong_count(), 0);
+            assert!(engine.retired.borrow().is_empty());
+        }
+    }
     #[test]
     fn nudge_release_tracks_latest_base_and_transport_cancels_without_state_loss() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
