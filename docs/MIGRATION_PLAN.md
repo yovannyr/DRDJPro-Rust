@@ -28,7 +28,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 135 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 140 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die Opus-Korrekturen für deckweise Steuerung, Backfill-Fehler, PCM-Retirement und Render-Timing wurden nach Astra-Mittel-Reviews einzeln gepusht. Revisionsgebundene Track-Deltas sind ebenfalls unabhängig geprüft und mit135 Tests/Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
 
@@ -51,7 +51,7 @@ Veröffentlichungsstand: Die Opus-Korrekturen für deckweise Steuerung, Backfill
 - [x] ✅ Opus2: feste Ausgabeformate, frameweise Render-Position und Pitch/Nudge ohne Sink-Neustart;50 kurze Flanken gegen PCM-Rampe geprüft.
 - [x] ✅ Opus6: lesbaren Katalog bei Metadaten-Backfill-Schreibfehler erhalten; Retry und Neustart mit injiziertem Schreibfehler getestet.
 - [x] ✅ Opus5: revisionsgebundene Track-Deltas, begrenzte Zeilenänderungen, periodische geprüfte Backups und Retry/Close; Snapshot bei100000 Tracks vermessen.
-- [ ] ☐ Opus7: Decode-Speicherspitzen vermeiden und Lade-/Import-Worker kooperativ abbrechen.
+- [x] ✅ Opus7: PCM-Puffer ohne Sample-Kopie teilen, fallibel begrenzt reservieren und Lade-/Import-Worker kooperativ abbrechen; späte Ergebnisse verworfen.
 - [ ] ☐ Weitere Skalierung: Crate-Beziehungen granularisieren (aktuell Snapshot nur bei Crate-Änderung), größere Bibliotheksansichten virtualisieren.
 - [ ] ☐ Opus4: LOOP/Reloop/OUT-Semantik am Handbuch abgleichen; keine automatische Verhaltensänderung aufgrund des Modellbefunds.
 - [ ] ☐ Danach: validiertes Tempo-Matching aus bestätigten manuellen Grids; Phasen-Sync und Keylock separat.
@@ -327,3 +327,11 @@ After reviewed e91319e, Library marks changed track indexes and crate state with
 Worker applies deltas in one Immediate SQLite transaction with lightweight application/schema checks, stable identity/path checks, bounded per-track cue/loop/grid writes and conditional metadata upserts. Full writes retain migration/recovery/test responsibilities. Integrity-checked online backups occur before the first delta, after an empty backup can be superseded, on dirty60s checkpoint opportunities (including idle timeout), and on clean close. Normal cue saves do not inspect/backup/rewrite the whole catalog. Failed checkpoints use bounded retry delay and a distinct warning event, leaving save accounting intact; an empty delta can explicitly retry backup. Backups can lag recent commits until checkpoint/clean close, and I/O failures can extend that lag. SQLite synchronous=EXTRA transactions remain; this is not a new physical power-loss guarantee. Crate mutation still carries/replaces its relationship snapshot; finer crate deltas and large view virtualization remain separate optimization work.
 
 Measured debug-test snapshot for100000 records: a single-cue delta used3 allocations/~20.1us versus100002/~162.25ms for full catalog cloning. SQL tests at1000/10000 tracks changed2 rows for one cue (~3.98/~4.50ms in the focused run), preserved unrelated rows, rolled back an injected trigger failure and retried latest data. Additional tests cover revision acknowledgement/newer edits, failed delta retry, due-backup fault/retry and an idle timed checkpoint. These are local sample measurements, not production latency bounds. Review/final evidence in LOCAL_VALIDATION.
+
+## Opus7: PCM ownership and cancellable jobs checkpoint (2026-10-26)
+
+After reviewed bb06a94, PcmSource privately shares an Arc<Vec<f32>> that takes the original Vec allocation without copying samples into an Arc slice. This also means test Weak observers retain the small Arc owner block rather than the Vec sample allocation after its last strong owner drops; prior Opus3 evidence remains a historical last-owner proof. Decode uses fallible try_reserve_exact with an8MiB speculative hint cap, bounded growth and the existing256MiB retained PCM sample limit. A controlled1M-sample decode/ownership test recorded2 allocator requests,0 reallocations and4000040 live/peak requested bytes; a pointer identity test independently verifies transfer. This is isolated allocator bookkeeping, not process RSS/decoder/analysis/device peak qualification. Large unknown-length reallocations, analysis buffers and multiple loaded decks still need whole-process budgets.
+
+A small Cancellation token is checked before I/O, every4096 decoded samples and between analysis stages; imports check between metadata files and before returning. Controller retains one global job slot until worker acknowledgement, checks cancellation again before applying even already queued results, and cancels on close/drop. The footer CANCEL action targets load/import only, not a database commit/restore. Native pickers and synchronous OS I/O cannot be forcibly interrupted; cancellation is cooperative and stage boundaries are not a hardware deadline. A completed cancelled load/import preserves old deck/library data, and the next job receives a fresh token.
+
+Headless tests block real picker callbacks through channels, cancel twice, retain admission until acknowledgement, verify successful subsequent loading, cancel import, reject a ready late result, cancel on close and check two-size button geometry. Synthetic decoder cancellation occurs mid-iterator rather than only at EOF; pre-cancelled paths/imports do not inspect files. No schema/dependency change or native visual/dialog/listening acceptance. Full gates/review in LOCAL_VALIDATION.

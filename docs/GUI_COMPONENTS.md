@@ -220,3 +220,7 @@ Deck controls/grid editors use left-busy/right-busy, derived from restore readin
 ## Opus2: renderer-backed pitch and playhead (2026-10-25)
 
 Pitch/nudge now publish rate commands to a stable renderer without seeking or replacing its Sink. The original-source playhead is published after complete output frames rather than reconstructed from the5ms Sink timer. Requested/effective pitch and BPM captions keep the same contract. Same-track seek/Cue/loop/pause use frame-boundary commands; explicit seek target is visible until acknowledged. Device output format is injected from the actual stream configuration. Existing focus/input/restore/source guards remain. Fifty short-flank ramp regressions measure rendered continuity at supported fixture rates; no native visual/listening/physical latency or DSP anti-alias quality acceptance is inferred.
+
+## Opus7: background-job cancellation (2026-10-26)
+
+The library footer shows CANCEL while a load/import job owns the single slot. Requesting cancellation is idempotent and keeps that slot busy until completion acknowledgement; it does not launch overlapping replacement jobs or cancel storage commits. The worker checks cooperatively and the controller rejects late ready results before deck/library mutation. Closing the controller requests cancellation too. Native file pickers/OS reads cannot be force-closed by this token; no native interaction acceptance is claimed. Headless tests verify active-button geometry at850x740/1280x860, preserved deck/gain/library state and recovery with a fresh job token.

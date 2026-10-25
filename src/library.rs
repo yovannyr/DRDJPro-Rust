@@ -67,13 +67,22 @@ pub struct ImportBatch {
     pub metadata: Vec<(PathBuf, crate::track_metadata::TrackMetadata)>,
     pub rejected: usize,
 }
+#[cfg(test)]
 pub fn inspect_paths(paths: Vec<PathBuf>) -> ImportBatch {
+    inspect_paths_cancellable(paths, &crate::cancellation::Cancellation::default()).unwrap()
+}
+pub(crate) fn inspect_paths_cancellable(
+    paths: Vec<PathBuf>,
+    cancel: &crate::cancellation::Cancellation,
+) -> Result<ImportBatch, String> {
+    cancel.check()?;
     let mut result = ImportBatch {
         paths: Vec::new(),
         metadata: Vec::new(),
         rejected: paths.len().saturating_sub(MAX_IMPORT),
     };
     for path in paths.into_iter().take(MAX_IMPORT) {
+        cancel.check()?;
         let supported = path
             .extension()
             .and_then(|v| v.to_str())
@@ -88,7 +97,8 @@ pub fn inspect_paths(paths: Vec<PathBuf>) -> ImportBatch {
             _ => result.rejected += 1,
         }
     }
-    result
+    cancel.check()?;
+    Ok(result)
 }
 
 pub struct Track {
@@ -527,6 +537,17 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancelled_import_does_not_inspect_or_return_partial_paths() {
+        let cancel = crate::cancellation::Cancellation::default();
+        cancel.request();
+        assert!(
+            inspect_paths_cancellable(vec![std::path::PathBuf::from("missing.wav")], &cancel)
+                .err()
+                .unwrap()
+                .contains("cancelled")
+        );
+    }
     #[test]
     fn delta_snapshot_at_100000_tracks_only_clones_changed_records_and_acks_exact_revision() {
         let profile = tempfile::tempdir().unwrap();

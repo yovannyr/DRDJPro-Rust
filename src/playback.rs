@@ -71,9 +71,28 @@ pub struct PreparedTrack {
 impl PreparedTrack {
     /// Decode on a worker, never inside an audio callback. Limit retained PCM to 256 MiB/track.
     pub fn open(path: &Path) -> Result<Self, String> {
-        Self::open_with_limit(path, 64 * 1024 * 1024)
+        Self::open_cancellable(path, &crate::cancellation::Cancellation::default())
     }
+    pub(crate) fn open_cancellable(
+        path: &Path,
+        cancel: &crate::cancellation::Cancellation,
+    ) -> Result<Self, String> {
+        Self::open_cancellable_with_limit(path, 64 * 1024 * 1024, cancel)
+    }
+    #[cfg(test)]
     fn open_with_limit(path: &Path, limit: usize) -> Result<Self, String> {
+        Self::open_cancellable_with_limit(
+            path,
+            limit,
+            &crate::cancellation::Cancellation::default(),
+        )
+    }
+    fn open_cancellable_with_limit(
+        path: &Path,
+        limit: usize,
+        cancel: &crate::cancellation::Cancellation,
+    ) -> Result<Self, String> {
+        cancel.check()?;
         if !path
             .extension()
             .and_then(|s| s.to_str())
@@ -89,22 +108,25 @@ impl PreparedTrack {
         if channels == 0 || rate == 0 {
             return Err("Invalid audio format".into());
         }
-        let mut samples = Vec::new();
-        for sample in decoder {
-            if samples.len() == limit {
-                return Err("Track exceeds the 256 MiB decoded PCM limit".into());
-            }
-            if !sample.is_finite() {
-                return Err("Non-finite audio sample".into());
-            }
-            samples.push(sample);
-        }
+        let hint = decoder
+            .total_duration()
+            .and_then(|d| {
+                d.as_nanos()
+                    .checked_mul(u128::from(rate))?
+                    .checked_mul(u128::from(channels))
+            })
+            .map_or(0, |n| (n / 1_000_000_000).min(limit as u128) as usize);
+        let samples = collect_pcm(decoder, hint, limit, cancel)?;
         if samples.is_empty() || samples.len() % usize::from(channels) != 0 {
             return Err("No complete audio frames decoded".into());
         }
+        cancel.check()?;
         let overview = crate::waveform::peak_overview(&samples, channels).into();
+        cancel.check()?;
         let detail = Arc::new(crate::waveform::DetailPeaks::new(&samples, channels, rate));
+        cancel.check()?;
         let tempo = crate::tempo::estimate(&samples, channels, rate);
+        cancel.check()?;
         Ok(Self {
             path: canonical.into(),
             title: path
@@ -123,6 +145,38 @@ impl PreparedTrack {
     }
 }
 
+fn collect_pcm(
+    samples: impl Iterator<Item = f32>,
+    hint: usize,
+    limit: usize,
+    cancel: &crate::cancellation::Cancellation,
+) -> Result<Vec<f32>, String> {
+    cancel.check()?;
+    // Bound speculative header reservation to8MiB. Unknown/underreported lengths grow fallibly.
+    let reserve = hint.min(limit).min(2 * 1024 * 1024);
+    let mut data = Vec::new();
+    data.try_reserve_exact(reserve)
+        .map_err(|e| format!("Cannot reserve PCM memory: {e}"))?;
+    for sample in samples {
+        if data.len().is_multiple_of(4096) {
+            cancel.check()?;
+        }
+        if data.len() == limit {
+            return Err("Track exceeds the 256 MiB decoded PCM limit".into());
+        }
+        if !sample.is_finite() {
+            return Err("Non-finite audio sample".into());
+        }
+        if data.len() == data.capacity() {
+            let next = data.capacity().saturating_mul(2).max(4096).min(limit);
+            data.try_reserve_exact(next - data.len())
+                .map_err(|e| format!("Cannot grow PCM memory: {e}"))?;
+        }
+        data.push(sample);
+    }
+    cancel.check()?;
+    Ok(data)
+}
 struct Deck {
     sink: Sink,
     source_retired: Option<Arc<AtomicBool>>,
@@ -871,6 +925,56 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn pcm_decode_reserves_bounded_memory_and_shared_transfer_avoids_a_second_buffer() {
+        let cancel = crate::cancellation::Cancellation::default();
+        let mut source = None;
+        let stats = crate::looping::measured_heap(|| {
+            let pcm = collect_pcm(
+                std::iter::repeat_n(0.25, 1000000),
+                1000000,
+                2000000,
+                &cancel,
+            )
+            .unwrap();
+            source = Some(PcmSource::new(1, 48000, pcm));
+        });
+        assert_eq!(source.unwrap().frames(), 1000000);
+        assert_eq!(stats.reallocations, 0);
+        assert_eq!(stats.allocations, 2);
+        assert!(
+            stats.peak_bytes >= 4000000 && stats.peak_bytes <= 4001024,
+            "{stats:?}"
+        );
+        assert_eq!(stats.deallocations, 0);
+        let small = collect_pcm(std::iter::repeat_n(0.5, 3), usize::MAX, 10, &cancel).unwrap();
+        assert_eq!(small.len(), 3);
+        assert!(small.capacity() <= 10);
+        assert!(collect_pcm(std::iter::repeat_n(0.5, 11), 0, 10, &cancel).is_err());
+        println!("isolated1M-sample decode/shared ownership: {stats:?}");
+    }
+    #[test]
+    fn cancelled_decode_stops_midstream_and_never_opens_pre_cancelled_paths() {
+        let cancel = crate::cancellation::Cancellation::default();
+        let consumed = Cell::new(0);
+        let iterator = (0..100000).map(|i| {
+            consumed.set(i + 1);
+            if i == 5000 {
+                cancel.request();
+            }
+            0.25
+        });
+        assert!(collect_pcm(iterator, 0, 100000, &cancel)
+            .unwrap_err()
+            .contains("cancelled"));
+        assert!((5001..=9096).contains(&consumed.get()));
+        assert!(
+            PreparedTrack::open_cancellable(Path::new("does-not-exist.wav"), &cancel)
+                .err()
+                .unwrap()
+                .contains("cancelled")
+        );
+    }
     #[test]
     fn cli_completion_wait_uses_render_eof_while_installed_queues_remain_alive() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);

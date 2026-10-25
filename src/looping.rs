@@ -68,7 +68,7 @@ pub fn frame_time(frame: usize, rate: u32) -> Duration {
 }
 #[derive(Clone)]
 pub struct PcmSource {
-    data: Arc<[f32]>,
+    data: Arc<Vec<f32>>,
     channels: u16,
     playback_rate: u32,
     cursor: usize,
@@ -78,7 +78,7 @@ impl PcmSource {
     pub fn new(channels: u16, rate: u32, data: Vec<f32>) -> Self {
         assert!(channels > 0 && rate > 0 && data.len().is_multiple_of(usize::from(channels)));
         Self {
-            data: data.into(),
+            data: Arc::new(data),
             channels,
             playback_rate: rate,
             cursor: 0,
@@ -103,7 +103,7 @@ impl PcmSource {
         self.region
     }
     #[cfg(test)]
-    pub(crate) fn storage_weak(&self) -> std::sync::Weak<[f32]> {
+    pub(crate) fn storage_weak(&self) -> std::sync::Weak<Vec<f32>> {
         Arc::downgrade(&self.data)
     }
     pub fn frames(&self) -> usize {
@@ -160,6 +160,19 @@ impl Source for PcmSource {
     }
 }
 #[cfg(test)]
+#[derive(Clone, Copy, Default, Debug)]
+pub(crate) struct HeapStats {
+    pub allocations: usize,
+    pub deallocations: usize,
+    pub reallocations: usize,
+    pub live_bytes: usize,
+    pub peak_bytes: usize,
+}
+#[cfg(test)]
+pub(crate) fn measured_heap(action: impl FnOnce()) -> HeapStats {
+    tests::measure_heap(action)
+}
+#[cfg(test)]
 pub(crate) fn counted_allocations(action: impl FnOnce()) -> usize {
     tests::count_allocations(action)
 }
@@ -168,7 +181,36 @@ mod tests {
     use super::*;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
-    thread_local! { static COUNT: Cell<Option<usize>> = const { Cell::new(None) }; }
+    thread_local! {
+        static COUNT: Cell<Option<usize>> = const { Cell::new(None) };
+        static HEAP: Cell<Option<HeapStats>> = const { Cell::new(None) };
+    }
+    pub(super) fn measure_heap(action: impl FnOnce()) -> HeapStats {
+        HEAP.with(|s| {
+            assert!(s.get().is_none());
+            s.set(Some(HeapStats::default()));
+        });
+        action();
+        HEAP.with(|s| s.replace(None).unwrap())
+    }
+    fn heap_update(size: usize, old: usize, reallocation: bool, deallocation: bool) {
+        let _ = HEAP.try_with(|cell| {
+            if let Some(mut s) = cell.get() {
+                if deallocation {
+                    s.deallocations += 1;
+                    s.live_bytes = s.live_bytes.saturating_sub(old);
+                } else {
+                    s.allocations += 1;
+                    if reallocation {
+                        s.reallocations += 1;
+                    }
+                    s.peak_bytes = s.peak_bytes.max(s.live_bytes.saturating_add(size));
+                    s.live_bytes = s.live_bytes.saturating_sub(old).saturating_add(size);
+                }
+                cell.set(Some(s));
+            }
+        });
+    }
     pub(super) fn count_allocations(action: impl FnOnce()) -> usize {
         COUNT.with(|count| {
             assert!(count.get().is_none());
@@ -180,6 +222,7 @@ mod tests {
     struct CountingAllocator;
     unsafe impl GlobalAlloc for CountingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            heap_update(layout.size(), 0, false, false);
             let _ = COUNT.try_with(|count| {
                 if let Some(n) = count.get() {
                     count.set(Some(n + 1));
@@ -188,9 +231,11 @@ mod tests {
             System.alloc(layout)
         }
         unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            heap_update(0, layout.size(), false, true);
             System.dealloc(pointer, layout);
         }
         unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            heap_update(size, layout.size(), true, false);
             let _ = COUNT.try_with(|count| {
                 if let Some(n) = count.get() {
                     count.set(Some(n + 1));
@@ -201,6 +246,17 @@ mod tests {
     }
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator;
+    #[test]
+    fn shared_pcm_moves_the_existing_vec_buffer_without_copying_it() {
+        let data = vec![0.25; 1000000];
+        let pointer = data.as_ptr();
+        let capacity = data.capacity();
+        let source = PcmSource::new(1, 48000, data);
+        assert_eq!(source.data.as_ref().as_ptr(), pointer);
+        assert_eq!(source.data.capacity(), capacity);
+        let clone = source.clone();
+        assert!(Arc::ptr_eq(&source.data, &clone.data));
+    }
     #[test]
     fn playback_rate_changes_duration_seek_units_and_preserves_stereo_storage() {
         let mut source = PcmSource::new(2, 4, vec![0., 1., 2., 3., 4., 5., 6., 7.]);

@@ -3,6 +3,7 @@ use std::{rc::Rc, time::Duration};
 
 mod audio;
 mod beatgrid;
+mod cancellation;
 mod controller;
 mod crates;
 mod deck_render;

@@ -415,6 +415,8 @@ component CratePanel inherits Rectangle {
 }
 
 component TrackLibrary inherits Rectangle {
+    in property <bool> job-active;
+    callback cancel-job();
     in property <[LibraryRow]> rows;
     in property <string> count-text;
     in property <string> empty-text;
@@ -476,6 +478,7 @@ component TrackLibrary inherits Rectangle {
         HorizontalLayout {
             Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
             Text { text: storage-text; accessible-role: text; accessible-label: "Library storage status"; color: save-failed ? #ffae58 : #9faec2; font-size: 11px; overflow: elide; vertical-alignment: center; }
+            if root.job-active : Button { text: "CANCEL"; accessible-label: "Cancel background load or import"; clicked => { root.cancel-job(); } }
             if save-failed : Button { text: "RETRY SAVE"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
         }
     }
@@ -512,6 +515,8 @@ export component AppWindow inherits Window {
     in-out property <int> right-detail-window: 8;
     in property <bool> audio-enabled: false;
     in property <bool> loading: false;
+    in property <bool> background-job-active;
+    callback cancel-background-job();
     in property <bool> left-busy: false;
     in property <bool> right-busy: false;
     in property <bool> left-loaded: false;
@@ -773,6 +778,8 @@ export component AppWindow inherits Window {
             select-track(id) => { root.select-library(id); } move-selection(delta) => { root.move-library-selection(delta); }
             sort-column(field) => { root.sort-library(field); }
             load-left => { root.load-library-left(); } load-right => { root.load-library-right(); }
+            job-active: root.background-job-active;
+            cancel-job => {root.cancel-background-job();}
             retry-save => { root.retry-library-save(); }
         }
             }

@@ -16,7 +16,7 @@ use std::{
 
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
-type ImportResult = Option<crate::library::ImportBatch>;
+type ImportResult = Option<Result<crate::library::ImportBatch, String>>;
 struct PitchRequest {
     source: Arc<crate::waveform::DetailPeaks>,
     factor: f64,
@@ -74,11 +74,19 @@ pub struct AudioController {
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
+    pending_cancel: RefCell<Option<crate::cancellation::Cancellation>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
     displayed_loops: RefCell<[Option<crate::saved_loops::SavedLoops>; 2]>,
     displayed_cues: RefCell<[Option<(crate::hot_cues::HotCues, std::time::Duration)>; 2]>,
     displayed_overviews: RefCell<[Option<Arc<[f32]>>; 2]>,
     displayed_details: RefCell<[Option<DetailCache>; 2]>,
+}
+impl Drop for AudioController {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.pending_cancel.get_mut().as_ref() {
+            cancel.request();
+        }
+    }
 }
 impl AudioController {
     pub fn wire(
@@ -110,6 +118,7 @@ impl AudioController {
             cue_editors: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
+            pending_cancel: RefCell::new(None),
             pending: RefCell::new(None),
             displayed_loops: RefCell::new([None, None]),
             displayed_cues: RefCell::new([None, None]),
@@ -117,6 +126,18 @@ impl AudioController {
             displayed_details: RefCell::new([None, None]),
         });
         ui.set_audio_enabled(true);
+        let weak = Rc::downgrade(&controller);
+        ui.on_cancel_background_job(move || {
+            if let Some(c) = weak.upgrade() {
+                if let Some(cancel) = c.pending_cancel.borrow().as_ref() {
+                    cancel.request();
+                }
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status("Cancellation requested".into());
+                }
+                c.refresh();
+            }
+        });
         for id in [DeckId::A, DeckId::B] {
             let weak = Rc::downgrade(&controller);
             let toggle = move || {
@@ -1468,6 +1489,9 @@ impl AudioController {
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
+        if let Some(cancel) = self.pending_cancel.borrow().as_ref() {
+            cancel.request();
+        }
         for id in [DeckId::A, DeckId::B] {
             self.cancel_nudge(id);
         }
@@ -1515,15 +1539,19 @@ impl AudioController {
         ui.set_loading(true);
         ui.set_status("Select MP3/WAV; decoding runs in the background".into());
         let (tx, rx) = mpsc::sync_channel(1);
+        let cancel = crate::cancellation::Cancellation::default();
+        *self.pending_cancel.borrow_mut() = Some(cancel.clone());
         match std::thread::Builder::new()
             .name("track-loader".into())
             .spawn(move || {
                 let result = picker().map(|path| {
+                    cancel.check()?;
                     let path = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
-                    let track = PreparedTrack::open(&path)?;
+                    let track = PreparedTrack::open_cancellable(&path, &cancel)?;
                     let mut metadata = crate::track_metadata::read(&path);
                     metadata.duration_ms = Some(track.duration().as_millis() as u64);
                     metadata.duration_exact = true;
+                    cancel.check()?;
                     Ok((path, track, metadata))
                 });
                 let _ = tx.send(result);
@@ -1532,6 +1560,7 @@ impl AudioController {
                 *self.pending.borrow_mut() = Some((id, rx));
             }
             Err(err) => {
+                self.pending_cancel.borrow_mut().take();
                 ui.set_loading(false);
                 ui.set_status(format!("Cannot start loader: {err}").into());
             }
@@ -1581,11 +1610,21 @@ impl AudioController {
                 Err(TryRecvError::Disconnected) => Some(Err("Library worker stopped unexpectedly")),
             });
         if let Some(result) = import {
+            let cancelled = self
+                .pending_cancel
+                .borrow_mut()
+                .take()
+                .is_some_and(|c| c.is_cancelled());
+            let result = if cancelled {
+                Ok(Some(Err("Operation cancelled".to_string())))
+            } else {
+                result
+            };
             self.pending_import.borrow_mut().take();
             if let Some(ui) = self.ui.upgrade() {
                 ui.set_library_busy(false);
                 match result {
-                    Ok(Some(batch)) => {
+                    Ok(Some(Ok(batch))) => {
                         let total = batch.paths.len();
                         let added = self
                             .library
@@ -1606,6 +1645,7 @@ impl AudioController {
                         self.publish_library();
                     }
                     Ok(None) => ui.set_status("Library import cancelled".into()),
+                    Ok(Some(Err(error))) => ui.set_status(error.into()),
                     Err(error) => ui.set_status(error.into()),
                 }
             }
@@ -1622,8 +1662,20 @@ impl AudioController {
                 }
             });
         if let Some((id, result)) = result {
+            let cancelled = self
+                .pending_cancel
+                .borrow_mut()
+                .take()
+                .is_some_and(|c| c.is_cancelled());
             self.pending.borrow_mut().take();
-            self.complete_load(id, result);
+            self.complete_load(
+                id,
+                if cancelled {
+                    Some(Err("Operation cancelled".into()))
+                } else {
+                    result
+                },
+            );
         }
         self.save_library();
         self.refresh();
@@ -1645,17 +1697,23 @@ impl AudioController {
         self.import_crate.set(self.library.borrow().active_crate());
         ui.set_status("Importing local MP3/WAV files…".into());
         let (tx, rx) = mpsc::sync_channel(1);
+        let cancel = crate::cancellation::Cancellation::default();
+        *self.pending_cancel.borrow_mut() = Some(cancel.clone());
         match std::thread::Builder::new()
             .name("library-import".into())
             .spawn(move || {
-                let _ = tx.send(picker().map(crate::library::inspect_paths));
+                let _ = tx.send(
+                    picker().map(|paths| crate::library::inspect_paths_cancellable(paths, &cancel)),
+                );
             }) {
             Ok(_) => *self.pending_import.borrow_mut() = Some(rx),
             Err(err) => {
+                self.pending_cancel.borrow_mut().take();
                 ui.set_library_busy(false);
                 ui.set_status(format!("Cannot start library worker: {err}").into());
             }
         }
+        self.refresh();
     }
     fn publish_library(&self) {
         let Some(ui) = self.ui.upgrade() else {
@@ -1736,6 +1794,9 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        ui.set_background_job_active(
+            self.pending.borrow().is_some() || self.pending_import.borrow().is_some(),
+        );
         ui.set_left_busy(!self.can_control_deck(DeckId::A));
         ui.set_right_busy(!self.can_control_deck(DeckId::B));
         for id in [DeckId::A, DeckId::B] {
@@ -2207,6 +2268,122 @@ mod tests {
         }
     }
     #[test]
+    fn cancel_background_jobs_preserves_decks_rejects_late_results_and_releases_single_slot() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let old = wav_file(8192, 96000);
+        let next = wav_file(4096, 96000);
+        let imported = wav_file(2048, 96000);
+        engine.load_a(old.path()).unwrap();
+        engine.load_b(old.path()).unwrap();
+        engine.play(DeckId::A);
+        let (release, wait) = mpsc::channel();
+        let wait = Mutex::new(wait);
+        let (entered, entry) = mpsc::channel();
+        let path = next.path().to_path_buf();
+        let picker = Arc::new(move || {
+            entered.send(()).unwrap();
+            wait.lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(15))
+                .unwrap();
+            Some(path.clone())
+        });
+        let (release_import, wait_import) = mpsc::channel();
+        let wait_import = Mutex::new(wait_import);
+        let (entered_import, entry_import) = mpsc::channel();
+        let path = imported.path().to_path_buf();
+        let library_picker = Arc::new(move || {
+            entered_import.send(()).unwrap();
+            wait_import
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(15))
+                .unwrap();
+            Some(vec![path.clone()])
+        });
+        let c = AudioController::wire(&ui, Rc::clone(&engine), picker, library_picker);
+        ui.show().unwrap();
+        let original = engine.snapshot(DeckId::B).detail.unwrap();
+        let volumes = engine.output_volumes();
+        ui.invoke_load_right();
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(ui.get_background_job_active());
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let cancel = control(&ui, "Cancel background load or import");
+            assert_eq!(cancel.accessible_enabled(), Some(true));
+            assert!(cancel.size().width > 0. && cancel.size().height > 0.);
+            assert!(cancel.absolute_position().x + cancel.size().width <= width + 0.1);
+            assert!(cancel.absolute_position().y + cancel.size().height <= height + 0.1);
+        }
+        control(&ui, "Cancel background load or import").invoke_accessible_default_action();
+        control(&ui, "Cancel background load or import").invoke_accessible_default_action();
+        assert!(c.pending_cancel.borrow().as_ref().unwrap().is_cancelled());
+        assert!(c.pending.borrow().is_some());
+        ui.invoke_load_right();
+        assert!(
+            entry.try_recv().is_err(),
+            "single job slot remains occupied until acknowledgement"
+        );
+        release.send(()).unwrap();
+        finish(&c);
+        assert!(Arc::ptr_eq(
+            &original,
+            &engine.snapshot(DeckId::B).detail.unwrap()
+        ));
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert_eq!(c.library.borrow().len(), 0);
+        assert!(ui.get_status().contains("cancelled"));
+        assert!(!ui.get_background_job_active());
+        ui.invoke_load_right();
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        release.send(()).unwrap();
+        finish(&c);
+        let installed = engine.snapshot(DeckId::B).detail.unwrap();
+        assert!(!Arc::ptr_eq(&original, &installed));
+        let revision = c.library.borrow().revision();
+        let count = c.library.borrow().len();
+        ui.invoke_import_library();
+        entry_import.recv_timeout(Duration::from_secs(5)).unwrap();
+        control(&ui, "Cancel background load or import").invoke_accessible_default_action();
+        release_import.send(()).unwrap();
+        finish_import(&c);
+        assert_eq!(c.library.borrow().len(), count);
+        assert_eq!(c.library.borrow().revision(), revision);
+        // Cancellation must win even after a complete result was already queued.
+        let (sender, receiver) = mpsc::channel();
+        *c.pending.borrow_mut() = Some((DeckId::B, receiver));
+        *c.pending_cancel.borrow_mut() = Some(crate::cancellation::Cancellation::default());
+        sender
+            .send(Some(Ok((
+                imported.path().to_path_buf(),
+                PreparedTrack::open(imported.path()).unwrap(),
+                crate::track_metadata::read(imported.path()),
+            ))))
+            .unwrap();
+        ui.invoke_cancel_background_job();
+        c.tick();
+        assert!(Arc::ptr_eq(
+            &installed,
+            &engine.snapshot(DeckId::B).detail.unwrap()
+        ));
+        assert_eq!(c.library.borrow().revision(), revision);
+        ui.invoke_load_right();
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        c.close_library().unwrap();
+        assert!(c.pending_cancel.borrow().as_ref().unwrap().is_cancelled());
+        release.send(()).unwrap();
+        finish(&c);
+        assert!(Arc::ptr_eq(
+            &installed,
+            &engine.snapshot(DeckId::B).detail.unwrap()
+        ));
+        assert_eq!(engine.output_volumes(), volumes);
+    }
+    #[test]
     fn deck_performance_survives_other_deck_picker_decode_and_library_import() {
         i_slint_backend_testing::init_no_event_loop();
         for (active, loading, label) in [
@@ -2321,9 +2498,9 @@ mod tests {
             assert_eq!(c.library.borrow().grid(&path).unwrap().bpm(), 120.);
             assert!(c.library.borrow().saved_loops(&path).slots()[0].is_some());
             import_tx
-                .send(Some(crate::library::inspect_paths(vec![file
+                .send(Some(Ok(crate::library::inspect_paths(vec![file
                     .path()
-                    .to_path_buf()])))
+                    .to_path_buf()]))))
                 .unwrap();
             finish_import(&c);
             finish_storage(&c);
