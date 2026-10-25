@@ -1593,6 +1593,11 @@ impl AudioController {
                 (s.requested_speed - 1.) * 100.,
                 (s.effective_speed - 1.) * 100.
             );
+            let pitch = if s.nudge_direction != 0 {
+                format!("Nudge {:+}% · {pitch}", s.nudge_direction * 2)
+            } else {
+                pitch
+            };
             let pitch = if pitch_outside {
                 format!("Outside range · {pitch}")
             } else {

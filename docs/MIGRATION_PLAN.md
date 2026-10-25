@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 115 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 118 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Bis einschließlich Pitch-GUI und BPM-Anzeige ist `c366c79` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Pitch-Bereiche und Feinsteuerung folgen demselben Review-/Prüf-/Veröffentlichungsablauf.
+Veröffentlichungsstand: Pitch-Bereiche und Feinsteuerung sind nach unabhängigem Astra-Mittel-Review als `a1d3b3b` gepusht. Der Nudge-Abschnitt folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
 
 ### Nächste und offene Arbeitspakete
 
@@ -44,7 +44,8 @@ Veröffentlichungsstand: Bis einschließlich Pitch-GUI und BPM-Anzeige ist `c366
 - [x] ✅ Engine-Grundlage für gekoppelte Playback-Geschwindigkeit/Pitch 0,5–2,0×, mit Quellzeit- und Offline-Signaltests.
 - [x] ✅ Pitch-Fader/Reset mit gebündelten, quellgebundenen Anfragen und Anzeige von gewünschtem/effektivem Pitch sowie Quell-/aktuellem BPM.
 - [x] ✅ Pitch-Bereiche ±8/±16/±50/Wide und driftfreie 0,01-Prozentpunkt-Feinschritte ohne stillen Rate-Reset beim Bereichswechsel.
-- [ ] ☐ **Als Nächstes:** temporäres Pitch-Nudge mit sicherem Loslassen/Abbruch; Keylock und Sync separat.
+- [x] ✅ Engine-Zustand für temporäres relatives ±2%-Nudge, Basis-Pitch-Erhalt und sicheren neutralen Release/Transport-Abbruch.
+- [ ] ☐ **Als Nächstes:** momentane Nudge-GUI mit Loslassen/Abbruch/Fokusverlust; Keylock und Sync separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -261,3 +262,11 @@ The reviewed GUI baseline is published as c366c79. This bounded slice adds per-d
 GUI requests quantize to0.01 percentage points before the existing effective-Hz mapping. Fine± actions use integer hundredths of a percent, building from the source-bound pending target if present, so bursts coalesce without accumulated float drift. Range-edge rejection preserves the last valid pending fine target. Reset and all rate changes continue through the reviewed bounded queue. Audio source, engine speed algorithm, storage and dependencies are unchanged.
 
 Domain and actual headless tests cover all bounds/quantization,100-step forward/backward stability, out-of-range current-state display, range-only no-seek/no-rate change, boundaries retaining queued steps, invalid indices, independent decks, new-track reset/session range retention and two-size geometry. Native usability/focus, audible transitions, resampling quality and physical latency remain unqualified. Next proposed reviewed slice is temporary nudge with safe release/cancellation; keylock and Sync remain separate. Publication follows independent Astra-medium review and final green checks.
+
+## Temporary nudge engine checkpoint (2026-10-25)
+
+The reviewed range/fine baseline is published as a1d3b3b. This bounded engine-first slice separates permanent base pitch from the temporary nudge direction(-1/0/+1) and actual rate. Nudge multiplies the current base by0.98/1/1.02; it is not an additive percentage-point edit. A valid permanent pitch change during nudge updates the base; release derives neutral rate from that latest base rather than restoring a captured stale value. Unsupported base/combined-rate/direction requests fail before mutation. Nonneutral activation requires a playing loaded deck; neutral release is idempotent and succeeds unloaded/after EOF without starting playback.
+
+Pause freezes the current original-source phase and cancels nudge; successful explicit seek/Cue cancel it after preparation, while failed operations retain state. Successful new tracks reset base1x/neutral; failed preparation retains the active state. Loop phase/bounds/grid/mixer and other-deck ownership remain intact. Playback snapshots report base requested pitch and actual effective pitch separately, with a nudge-state caption. PlaybackSpeed now stores only validated rate data; the requested permanent factor has a single owner in Deck. No dependency/schema/sample iterator change was needed. The staged engine nudge setter awaits GUI momentary input in the next reviewed slice.
+
+Offline tests cover rate composition, failed limits, paused/unloaded guards, current-base release, transport/new-track/EOF release and steady stereo tone frequency after direction changes. These do not qualify live transitions, native input cancellation, physical latency or musical beat alignment. The following slice must implement robust pointer/key release, focus/panel/loading/shutdown cancellation and headless lifecycle coverage. Publication follows independent Astra-medium review and final green checks.

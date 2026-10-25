@@ -127,6 +127,8 @@ struct Deck {
     loop_region: Option<FrameLoop>,
     loop_active: bool,
     speed: Option<PlaybackSpeed>,
+    base_factor: f64,
+    nudge: i32,
     grid: Option<crate::beatgrid::BeatGrid>,
 }
 // A fresh Rodio queue initially reports mono/44.1 kHz even when stereo PCM is queued.
@@ -171,6 +173,7 @@ pub struct DeckSnapshot {
     pub loop_in: Option<Duration>,
     pub loop_out: Option<Duration>,
     pub loop_active: bool,
+    pub nudge_direction: i32,
     pub requested_speed: f64,
     pub effective_speed: f64,
 }
@@ -210,6 +213,8 @@ impl DualDeckEngine {
                 loop_region: None,
                 loop_active: false,
                 speed: None,
+                base_factor: 1.,
+                nudge: 0,
                 grid: None,
             })
         });
@@ -236,20 +241,28 @@ impl DualDeckEngine {
         playing: bool,
         grid: Option<crate::beatgrid::BeatGrid>,
     ) {
-        let (loop_in, loop_region, speed) = {
+        let (loop_in, loop_region, speed, base_factor, nudge) = {
             let deck = self.decks[id.index()].borrow();
             if deck
                 .track
                 .as_ref()
                 .is_some_and(|old| Arc::ptr_eq(&old.detail, &track.detail))
             {
-                (deck.loop_in, deck.loop_region, deck.speed.unwrap())
+                (
+                    deck.loop_in,
+                    deck.loop_region,
+                    deck.speed.unwrap(),
+                    deck.base_factor,
+                    deck.nudge,
+                )
             } else {
                 (
                     None,
                     None,
                     PlaybackSpeed::new(1., track.samples.sample_rate())
                         .expect("Prepared source format was validated"),
+                    1.,
+                    0,
                 )
             }
         };
@@ -277,6 +290,8 @@ impl DualDeckEngine {
             loop_region,
             loop_active: false,
             speed: Some(speed),
+            base_factor,
+            nudge,
             grid,
         };
     }
@@ -307,6 +322,7 @@ impl DualDeckEngine {
         }
         let mut source = track.samples.clone();
         source.try_seek(offset).map_err(|e| e.to_string())?;
+        self.reset_nudge_for_replacement(id);
         self.replace_source(
             id,
             track,
@@ -318,14 +334,45 @@ impl DualDeckEngine {
         Ok(())
     }
     pub fn set_speed(&self, id: DeckId, factor: f64) -> Result<(), String> {
+        let nudge = self.decks[id.index()].borrow().nudge;
+        self.set_rate_state(id, factor, nudge)
+    }
+    // Staged control API; momentary GUI input is a separately reviewed slice.
+    #[allow(dead_code)]
+    pub fn set_nudge(&self, id: DeckId, direction: i32) -> Result<(), String> {
+        if !(-1..=1).contains(&direction) {
+            return Err("Nudge direction must be -1, 0 or 1".into());
+        }
+        let base = {
+            let deck = self.decks[id.index()].borrow();
+            if direction == 0 && deck.track.is_none() {
+                return Ok(());
+            }
+            if direction != 0
+                && (deck.track.is_none() || deck.sink.is_paused() || deck.sink.empty())
+            {
+                return Err("Play the deck before nudging".into());
+            }
+            deck.base_factor
+        };
+        self.set_rate_state(id, base, direction)
+    }
+    fn reset_nudge_for_replacement(&self, id: DeckId) {
+        let mut deck = self.decks[id.index()].borrow_mut();
+        if let Some(track) = &deck.track {
+            deck.speed = Some(
+                PlaybackSpeed::new(deck.base_factor, track.samples.sample_rate())
+                    .expect("Base speed was validated"),
+            );
+        }
+        deck.nudge = 0;
+    }
+    fn set_rate_state(&self, id: DeckId, factor: f64, nudge: i32) -> Result<(), String> {
         let (track, playing, grid, region, speed) = {
             let deck = self.decks[id.index()].borrow();
             let track = deck.track.clone().ok_or("Load a track first")?;
-            let speed = PlaybackSpeed::new(factor, track.samples.sample_rate())?;
-            if deck
-                .speed
-                .is_some_and(|current| current.requested() == speed.requested())
-            {
+            let speed = PlaybackSpeed::nudged(factor, nudge, track.samples.sample_rate())?;
+            if deck.base_factor == factor && deck.nudge == nudge {
                 return Ok(());
             }
             (
@@ -347,7 +394,12 @@ impl DualDeckEngine {
         }
         source.try_seek(position).map_err(|e| e.to_string())?;
         // Source preparation/validation succeeded. Replacement is synchronous on this control plane.
-        self.decks[id.index()].borrow_mut().speed = Some(speed);
+        {
+            let mut deck = self.decks[id.index()].borrow_mut();
+            deck.speed = Some(speed);
+            deck.base_factor = factor;
+            deck.nudge = nudge;
+        }
         self.replace_source(id, track, source, position, playing, grid);
         self.decks[id.index()].borrow_mut().loop_active = region.is_some();
         Ok(())
@@ -548,26 +600,36 @@ impl DualDeckEngine {
     pub fn pause(&self, id: DeckId) {
         // Freeze the wrapped control-plane position instead of allowing Rodio's pending
         // periodic position update to move it across a loop boundary after Pause.
-        let active = self.decks[id.index()].borrow().loop_active;
-        if active {
+        let freeze = {
+            let deck = self.decks[id.index()].borrow();
+            deck.loop_active || deck.nudge != 0
+        };
+        if freeze {
             let position = self.snapshot(id).position;
             let (track, region, grid) = {
                 let deck = self.decks[id.index()].borrow();
                 (
                     deck.track.clone().unwrap(),
-                    deck.loop_region.unwrap(),
+                    if deck.loop_active {
+                        deck.loop_region
+                    } else {
+                        None
+                    },
                     deck.grid,
                 )
             };
             let mut source = track.samples.clone();
-            source
-                .set_loop(region)
-                .expect("Installed loop was validated");
+            if let Some(region) = region {
+                source
+                    .set_loop(region)
+                    .expect("Installed loop was validated");
+            }
             source
                 .try_seek(position)
                 .expect("In-memory seek cannot fail");
+            self.reset_nudge_for_replacement(id);
             self.replace_source(id, track, source, position, false, grid);
-            self.decks[id.index()].borrow_mut().loop_active = true;
+            self.decks[id.index()].borrow_mut().loop_active = region.is_some();
         } else {
             self.decks[id.index()].borrow().sink.pause();
         }
@@ -579,6 +641,7 @@ impl DualDeckEngine {
         };
         if let Some(track) = track {
             let source = track.samples.clone();
+            self.reset_nudge_for_replacement(id);
             self.replace_source(id, track, source, Duration::ZERO, false, grid);
         }
     }
@@ -657,7 +720,8 @@ impl DualDeckEngine {
                     .map(|region| frame_time(region.end, t.samples.sample_rate()).min(t.duration()))
             }),
             loop_active: deck.loop_active,
-            requested_speed: deck.speed.map_or(1., PlaybackSpeed::requested),
+            nudge_direction: deck.nudge,
+            requested_speed: deck.base_factor,
             effective_speed: deck.speed.map_or(1., PlaybackSpeed::effective_factor),
         }
     }
@@ -706,6 +770,152 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn nudge_release_tracks_latest_base_and_transport_cancels_without_state_loss() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        engine.set_nudge(DeckId::A, 0).unwrap();
+        assert!(engine.set_nudge(DeckId::A, 1).is_err());
+        let file = wav_file(8192, 48000 * 8);
+        let other = wav_file(4096, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        engine.set_speed(DeckId::A, 1.1).unwrap();
+        assert!(engine.set_nudge(DeckId::A, 1).is_err());
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        engine.set_levels(MixerLevels {
+            channel_a: 0.6,
+            channel_b: 0.8,
+            crossfader: 0.3,
+        });
+        let volumes = engine.output_volumes();
+        engine
+            .restore_loop(
+                DeckId::A,
+                Duration::from_millis(500),
+                Duration::from_millis(1500),
+            )
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        engine.set_nudge(DeckId::A, 1).unwrap();
+        let active = engine.snapshot(DeckId::A);
+        assert_eq!(active.requested_speed, 1.1);
+        assert_eq!(active.nudge_direction, 1);
+        assert!((active.effective_speed - 1.122).abs() < 1e-9);
+        assert!(active.loop_active && active.playing);
+        output.by_ref().take(12000).for_each(drop);
+        assert!((engine.snapshot(DeckId::A).position.as_secs_f64() - 0.7805).abs() < 0.025);
+        let phase = engine.snapshot(DeckId::A).position;
+        engine.set_speed(DeckId::A, 1.2).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, phase);
+        assert!((engine.snapshot(DeckId::A).effective_speed - 1.224).abs() < 1e-9);
+        let before = engine.snapshot(DeckId::A);
+        assert!(engine.set_speed(DeckId::A, 2.).is_err());
+        assert!(engine.set_nudge(DeckId::A, 2).is_err());
+        assert_eq!(
+            engine.snapshot(DeckId::A).requested_speed,
+            before.requested_speed
+        );
+        assert_eq!(engine.snapshot(DeckId::A).position, before.position);
+        engine.set_nudge(DeckId::A, 0).unwrap();
+        let released = engine.snapshot(DeckId::A);
+        assert_eq!(released.requested_speed, 1.2);
+        assert_eq!(released.effective_speed, 1.2);
+        assert_eq!(released.position, phase);
+        assert!(released.loop_active && released.playing);
+        engine.set_nudge(DeckId::A, -1).unwrap();
+        engine.pause(DeckId::A);
+        let paused = engine.snapshot(DeckId::A);
+        assert_eq!(paused.nudge_direction, 0);
+        assert_eq!(paused.effective_speed, 1.2);
+        assert!(paused.loop_active && !paused.playing);
+        engine.play(DeckId::A);
+        engine.set_nudge(DeckId::A, -1).unwrap();
+        engine.seek_percent(DeckId::A, 50.).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(4));
+        engine.set_nudge(DeckId::A, 1).unwrap();
+        engine.cue(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.2);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.play(DeckId::A);
+        engine.set_nudge(DeckId::A, -1).unwrap();
+        assert!(engine.load_a(Path::new("missing-nudge.wav")).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, -1);
+        engine.load_a(other.path()).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.snapshot(DeckId::B).requested_speed, 1.);
+        assert_eq!(engine.output_volumes(), volumes);
+        engine.seek_percent(DeckId::A, 99.).unwrap();
+        engine.play(DeckId::A);
+        engine.set_nudge(DeckId::A, 1).unwrap();
+        output.by_ref().take(24000).for_each(drop);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.set_nudge(DeckId::A, 0).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(8));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.play(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+    }
+    #[test]
+    fn nudge_steady_signal_pitch_returns_to_updated_base_on_release() {
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        let samples: Vec<_> = (0..96000)
+            .flat_map(|frame| {
+                let value = 0.25 * (std::f32::consts::TAU * 440. * frame as f32 / 48000.).sin();
+                [value, -value]
+            })
+            .collect();
+        engine.install(
+            DeckId::A,
+            PreparedTrack {
+                path: Arc::from(Path::new("nudge-tone.wav")),
+                title: "nudge tone".into(),
+                overview: crate::waveform::peak_overview(&samples, 2).into(),
+                detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48000)),
+                tempo: None,
+                samples: PcmSource::new(2, 48000, samples),
+            },
+        );
+        engine.set_levels(MixerLevels {
+            channel_a: 1.,
+            channel_b: 1.,
+            crossfader: 0.,
+        });
+        engine.play(DeckId::A);
+        for (direction, base) in [(1, 1.), (0, 1.), (-1, 1.), (1, 1.05), (0, 1.05)] {
+            engine.set_speed(DeckId::A, base).unwrap();
+            engine.set_nudge(DeckId::A, direction).unwrap();
+            output.by_ref().take(8192).for_each(drop);
+            let rendered: Vec<_> = output.by_ref().take(19200).collect();
+            assert_eq!(rendered.len(), 19200);
+            let left: Vec<_> = rendered
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|frame| {
+                    assert!((frame[0] + frame[1]).abs() < 1e-5);
+                    frame[0]
+                })
+                .collect();
+            let crossings = left.windows(2).filter(|w| w[0] <= 0. && w[1] > 0.).count();
+            let measured = crossings as f64 * 48000. / left.len() as f64;
+            let expected = 440. * engine.snapshot(DeckId::A).effective_speed;
+            assert!(
+                (measured - expected).abs() <= 5.1,
+                "direction{direction}, base{base}, measured{measured}"
+            );
+            assert_eq!(engine.snapshot(DeckId::A).requested_speed, base);
+        }
+    }
     #[test]
     fn changed_rate_loop_wraps_and_resizes_render_only_region_samples_after_settling() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
@@ -907,11 +1117,11 @@ mod tests {
         assert_eq!(engine.snapshot(DeckId::A).grid, Some(grid));
         assert_eq!(engine.output_volumes(), volumes);
         assert!(engine.snapshot(DeckId::B).playing);
-        assert_eq!(engine.decks[1].borrow().speed.unwrap().requested(), 1.);
+        assert_eq!(engine.snapshot(DeckId::B).requested_speed, 1.);
         for value in [f64::NAN, f64::INFINITY, 0., 0.49, 2.01] {
             assert!(engine.set_speed(DeckId::A, value).is_err());
             assert_eq!(engine.snapshot(DeckId::A).position, after.position);
-            assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+            assert_eq!(engine.snapshot(DeckId::A).requested_speed, 0.5);
         }
         engine.pause(DeckId::A);
         let paused = engine.snapshot(DeckId::A).position;
@@ -919,14 +1129,14 @@ mod tests {
         assert_eq!(engine.snapshot(DeckId::A).position, paused);
         engine.seek_percent(DeckId::A, 50.).unwrap();
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(4));
-        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 0.5);
         engine.cue(DeckId::A);
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
-        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 0.5);
         assert!(engine.load_a(Path::new("missing-speed.wav")).is_err());
-        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 0.5);
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 0.5);
         engine.load_a(other.path()).unwrap();
-        assert_eq!(engine.decks[0].borrow().speed.unwrap().requested(), 1.);
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
         assert_eq!(engine.output_volumes(), volumes);
     }
     #[test]
