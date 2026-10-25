@@ -188,3 +188,9 @@ Beat boundary/tie decisions use the exact binary rational value of committed BPM
 ## Playback speed/pitch engine checkpoint (2026-10-25)
 
 Overview30/32/57 remains open at the GUI boundary. The engine now supports validated0.5–2.0 coupled playback speed/pitch with original-source position and loop semantics; there is no pitch fader/range/reset or original/current BPM display yet. This engine-first slice does not expose an unverified GUI control. New tracks reset to1x, failed loads preserve the installed factor, and seek/Cue/loops retain it. GUI wiring must present requested/effective speed honestly, retain source-time displays and verify actual controls. Smooth live-fader updates/resampling quality and physical latency need separate qualification; keylock/Sync are not implemented.
+
+## Pitch GUI checkpoint (2026-10-25)
+
+The deck tools cycle CUES → SLOTS → AUTO → PITCH → CUES. PITCH reuses the existing panel height for a-50..+100% slider,1x reset, requested/effective percent and source/current BPM text. BPM is labeled Manual for committed grid data, Estimate with~ for the existing experimental candidate, or unavailable. Effective speed, not the requested pre-rounding factor, scales current BPM. Source time/loop overlays keep original-track coordinates; pitch does not edit the grid or tags.
+
+Events are latest-wins per deck and apply on the next GUI tick; source replacement/loading guards discard stale queued changes. The source-bound queue prevents a gesture for an old track affecting a new one. Successful new loads reset1x and reflect that thumb position; failed loads retain it. No UI sample-rate field, live-audio quality claim or silent persistence is introduced. Four-panel headless geometry at850x740/1280x860 passes; native focus/usability/contrast and physical audio remain unqualified. Selected pitch ranges, fine gestures, smoothing/live transition qualification, keylock and Sync remain open.

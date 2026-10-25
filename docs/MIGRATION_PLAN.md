@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 112 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 113 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Bis einschließlich optionaler Auto-Loop-Beat-Ausrichtung ist `4babd3b` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Die Geschwindigkeits-/Pitch-Engine folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
+Veröffentlichungsstand: Die unabhängig reviewte Geschwindigkeits-/Pitch-Engine ist als `376a174` gepusht. Die Pitch-GUI folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
 
 ### Nächste und offene Arbeitspakete
 
@@ -42,7 +42,8 @@ Veröffentlichungsstand: Bis einschließlich optionaler Auto-Loop-Beat-Ausrichtu
 - [x] ✅ Loop-Bereiche mit In/Out-Markierungen in Übersicht/Detail, präzisem Clipping und Anzeige von Aktiv/Inaktiv.
 - [x] ✅ Optionale Beat-Ausrichtung neu erzeugter Auto-Loops anhand des bestätigten manuellen Grids.
 - [x] ✅ Engine-Grundlage für gekoppelte Playback-Geschwindigkeit/Pitch 0,5–2,0×, mit Quellzeit- und Offline-Signaltests.
-- [ ] ☐ **Als Nächstes:** GUI-Pitch-Steuerung und Anzeige von Original-/aktuellem BPM; Keylock und Sync separat.
+- [x] ✅ Pitch-Fader/Reset mit gebündelten, quellgebundenen Anfragen und Anzeige von gewünschtem/effektivem Pitch sowie Quell-/aktuellem BPM.
+- [ ] ☐ **Als Nächstes:** wählbare Pitch-Bereiche und Feinsteuerung; Keylock und Sync separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -243,3 +244,11 @@ Speed changes replace the source at current original-track position, retaining P
 Tests measure rendered pitch frequency, signal duration and stereo antisymmetry at0.5/1/1.25/2x, source-time control resolution, effective-rate rounding, loop/speed lifecycle and failures/other-deck/gain isolation. Queue-leading silence and the existing5ms position publication tick are measured/accounted separately from signal duration. This does not establish artifact-free live fader changes, anti-alias/resampling quality, hardware latency or musical acceptance. Next proposed reviewed slice is GUI pitch control and requested/effective speed plus original/current BPM display; native rendering/listening, smoothing/coalescing, keylock and Sync remain separate acceptance gates. Publication requires independent Astra-medium review and final green checks.
 
 Review follow-up coverage also renders44.1kHz at requested1.333333/effective4/3 and directly asserts steady-state loop-region samples over repeated changed-rate wraps, resizing and another rate change. These checks deliberately exclude the control-plane settling transition; no click-free claim is made.
+
+## Coalesced GUI pitch controls checkpoint (2026-10-25)
+
+The engine-first slice passed independent Astra-medium review and final112-test checks before publication376a174. This follow-up adds a fourth PITCH tools panel with a fixed-50..+100% fader and1x reset, requested/effective pitch captions, and manual-grid or explicitly approximate estimated source/current BPM. Current BPM uses the effective rate ratio; absent analysis stays unavailable. No keylock/Sync, tag-BPM claim or selected-range control is implied.
+
+GUI fader/reset events are validated and coalesced into one pending request per deck, retaining only the latest. The existing33ms application timer applies at most one pending setting per deck per tick. Requests capture the installed prepared-source identity and are discarded if loading/restore/import starts or the source is replaced before application. Invalid events clear that deck's pending request and leave the engine unchanged. Play/Pause, position, loop/bounds, grid and mixer are retained by the reviewed engine. GUI bindings display applied engine values after the tick; coalescing does not qualify audible live transitions.
+
+Actual headless slider/reset tests cover bursts, default/unloaded states, final request ownership, manual/current BPM, invalid/loading/stale-source rejection, failure retention and deck isolation. Two-size layout now covers all four tool panels within the existing260px deck. No schema/dependency/sample-source code changed. Next proposed reviewed slice is selectable pitch ranges and fine adjustments. Native visuals/focus/listening, interpolation/anti-alias/transition quality, keylock/Sync, controller hardware and platform gates remain open. Publication requires the standing review/final-check gate.

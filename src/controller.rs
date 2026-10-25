@@ -17,6 +17,10 @@ use std::{
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<crate::library::ImportBatch>;
+struct PitchRequest {
+    source: Arc<crate::waveform::DetailPeaks>,
+    factor: f64,
+}
 struct CueSession {
     path: Arc<std::path::Path>,
     source: Arc<crate::waveform::DetailPeaks>,
@@ -59,6 +63,7 @@ pub struct AudioController {
     crate_delete: Cell<Option<i32>>,
     crate_target: Cell<i32>,
     import_crate: Cell<i32>,
+    pending_pitch: RefCell<[Option<PitchRequest>; 2]>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
@@ -91,6 +96,7 @@ impl AudioController {
             crate_delete: Cell::new(None),
             crate_target: Cell::new(0),
             import_crate: Cell::new(0),
+            pending_pitch: RefCell::new([None, None]),
             cue_editors: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
@@ -240,6 +246,7 @@ impl AudioController {
         controller.wire_grid_editor(ui);
         controller.wire_hot_cues(ui);
         controller.wire_loops(ui);
+        controller.wire_pitch(ui);
         controller.wire_saved_loops(ui);
         controller.refresh();
         controller
@@ -539,6 +546,88 @@ impl AudioController {
                     (DeckId::A, _) => ui.on_delete_loop_left(action),
                     (DeckId::B, _) => ui.on_delete_loop_right(action),
                 }
+            }
+        }
+    }
+    fn queue_pitch(&self, id: DeckId, percent: f32) -> Result<(), String> {
+        self.pending_pitch.borrow_mut()[Self::grid_index(id)].take();
+        if !self.can_change_crates() {
+            return Err("Finish loading before changing pitch".into());
+        }
+        let source = self
+            .engine
+            .snapshot(id)
+            .detail
+            .ok_or("Load a track first")?;
+        let factor = 1. + f64::from(percent) / 100.;
+        crate::playback_speed::PlaybackSpeed::new(factor, source.sample_rate())?;
+        self.pending_pitch.borrow_mut()[Self::grid_index(id)] =
+            Some(PitchRequest { source, factor });
+        Ok(())
+    }
+    fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
+        for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let change = move |value| {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.queue_pitch(id, value);
+                    if let Some(ui) = c.ui.upgrade() {
+                        match result {
+                            Ok(()) => ui.set_status(format!("Deck {id:?}: pitch queued").into()),
+                            Err(error) => {
+                                ui.set_status(error.into());
+                                c.refresh();
+                            }
+                        }
+                    }
+                }
+            };
+            match id {
+                DeckId::A => ui.on_pitch_left(change),
+                DeckId::B => ui.on_pitch_right(change),
+            }
+            let weak = Rc::downgrade(self);
+            let reset = move || {
+                if let Some(c) = weak.upgrade() {
+                    if let Err(error) = c.queue_pitch(id, 0.) {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                    }
+                }
+            };
+            match id {
+                DeckId::A => ui.on_reset_pitch_left(reset),
+                DeckId::B => ui.on_reset_pitch_right(reset),
+            }
+        }
+    }
+    fn apply_pending_pitch(&self) {
+        for id in [DeckId::A, DeckId::B] {
+            let Some(request) = self.pending_pitch.borrow_mut()[Self::grid_index(id)].take() else {
+                continue;
+            };
+            let result = if !self.can_change_crates() {
+                Err("Pending pitch discarded during loading".into())
+            } else if self
+                .engine
+                .snapshot(id)
+                .detail
+                .as_ref()
+                .is_none_or(|source| !Arc::ptr_eq(source, &request.source))
+            {
+                Err("Pending pitch discarded after track replacement".into())
+            } else {
+                self.engine.set_speed(id, request.factor)
+            };
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_status(
+                    match result {
+                        Ok(()) => format!("Deck {id:?}: pitch applied"),
+                        Err(error) => error,
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -1239,6 +1328,7 @@ impl AudioController {
         self.refresh();
     }
     pub fn tick(&self) {
+        self.apply_pending_pitch();
         self.poll_storage();
         let import = self
             .pending_import
@@ -1408,6 +1498,38 @@ impl AudioController {
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.snapshot(id);
             let index = Self::grid_index(id);
+            let pitch = format!(
+                "Requested {:+.2}% · effective {:+.4}% · coupled",
+                (s.requested_speed - 1.) * 100.,
+                (s.effective_speed - 1.) * 100.
+            );
+            let bpm = if let Some(grid) = s.grid {
+                format!(
+                    "Manual BPM: {:.2} → {:.2}",
+                    grid.bpm(),
+                    grid.bpm() * s.effective_speed
+                )
+            } else if let Some(tempo) = s.tempo {
+                format!(
+                    "Estimate BPM: ~{:.2} → ~{:.2}",
+                    tempo.bpm,
+                    tempo.bpm * s.effective_speed
+                )
+            } else {
+                "Source BPM unavailable".into()
+            };
+            match id {
+                DeckId::A => {
+                    ui.set_left_pitch_percent(((s.requested_speed - 1.) * 100.) as f32);
+                    ui.set_left_pitch_caption(pitch.into());
+                    ui.set_left_bpm_caption(bpm.into());
+                }
+                DeckId::B => {
+                    ui.set_right_pitch_percent(((s.requested_speed - 1.) * 100.) as f32);
+                    ui.set_right_pitch_caption(pitch.into());
+                    ui.set_right_bpm_caption(bpm.into());
+                }
+            }
             let bounds = match (s.loop_in, s.loop_out) {
                 (Some(start), Some(end)) => {
                     format!("{:.3}–{:.3} s", start.as_secs_f64(), end.as_secs_f64())
@@ -1809,6 +1931,104 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn pitch_gui_coalesces_source_bound_requests_reset_bpm_and_loading_failures() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 8);
+        let other = wav_file(4096, 48000 * 8);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        for _ in 0..3 {
+            control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        }
+        assert!(!control(&ui, "DECK A pitch").accessible_enabled().unwrap());
+        ui.invoke_pitch_left(8.);
+        assert!(ui.get_status().contains("Load"));
+        assert!(c.pending_pitch.borrow()[0].is_none());
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        c.tick();
+        assert_eq!(ui.get_left_bpm_caption(), "Source BPM unavailable");
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+            )
+            .unwrap();
+        c.tick();
+        for value in ["25", "50", "8"] {
+            control(&ui, "DECK A pitch").set_accessible_value(value);
+        }
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        assert!(c.pending_pitch.borrow()[0].is_some());
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.08);
+        assert_eq!(ui.get_left_pitch_percent(), 8.);
+        assert!(ui.get_left_bpm_caption().contains("120.00 → 129.60"));
+        assert!(ui.get_left_pitch_caption().contains("effective +8.0000%"));
+        assert!(c.pending_pitch.borrow()[0].is_none());
+        engine
+            .restore_loop(DeckId::A, Duration::from_secs(2), Duration::from_secs(4))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let before = engine.snapshot(DeckId::A);
+        let volumes = engine.output_volumes();
+        control(&ui, "DECK A pitch").set_accessible_value("-25");
+        c.tick();
+        let after = engine.snapshot(DeckId::A);
+        assert_eq!(after.requested_speed, 0.75);
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.loop_out, before.loop_out);
+        assert!(after.playing && after.loop_active);
+        assert_eq!(after.grid, before.grid);
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.snapshot(DeckId::B).requested_speed, 1.);
+        control(&ui, "DECK A reset pitch").invoke_accessible_default_action();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 0.75);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        assert_eq!(ui.get_left_pitch_percent(), 0.);
+        ui.invoke_pitch_left(8.);
+        ui.invoke_pitch_left(f32::NAN);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        assert!(c.pending_pitch.borrow()[0].is_none());
+        ui.invoke_pitch_left(8.);
+        c.storage_ready.set(false);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        assert!(ui.get_status().contains("loading"));
+        c.storage_ready.set(true);
+        engine.pause(DeckId::A);
+        ui.invoke_pitch_left(16.);
+        engine.load_a(other.path()).unwrap();
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        assert_eq!(ui.get_left_pitch_percent(), 0.);
+        assert!(ui.get_status().contains("replacement"));
+        ui.invoke_pitch_left(16.);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.16);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(engine
+            .load_a(std::path::Path::new("missing-pitch-gui.wav"))
+            .is_err());
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.16);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(!c.dirty.get());
     }
     #[test]
     fn auto_loop_snap_checkbox_is_per_deck_explicit_and_uses_committed_anchor() {
@@ -3408,6 +3628,22 @@ mod tests {
                 }
                 control(&ui, &format!("{deck} deck tools panel"))
                     .invoke_accessible_default_action();
+                for action in [
+                    "pitch",
+                    "reset pitch",
+                    "pitch values",
+                    "source and current BPM",
+                ] {
+                    let item = control(&ui, &format!("{deck} {action}"));
+                    assert!(item.absolute_position().x >= 0.);
+                    assert!(item.absolute_position().x + item.size().width <= width + 0.1);
+                    assert!(
+                        item.absolute_position().y + item.size().height
+                            <= shared.absolute_position().y
+                    );
+                }
+                control(&ui, &format!("{deck} deck tools panel"))
+                    .invoke_accessible_default_action();
                 let delete = control(&ui, &format!("{deck} delete hot cue"));
                 assert!(
                     delete.absolute_position().y + delete.size().height
@@ -3486,6 +3722,22 @@ mod tests {
         finish(&c);
         let other = ui.get_right_suggested_bpm();
         assert!((other - 140).abs() <= 1);
+        assert!(ui.get_right_bpm_caption().starts_with("Estimate BPM: ~"));
+        ui.invoke_pitch_right(25.);
+        c.tick();
+        let caption = ui.get_right_bpm_caption();
+        let values: Vec<f64> = caption
+            .split('~')
+            .skip(1)
+            .map(|part| part.split_whitespace().next().unwrap().parse().unwrap())
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert!((values[0] - 140.).abs() <= 1.);
+        assert!((values[1] - 175.).abs() <= 1.5);
+        assert!(ui.get_left_bpm_caption().starts_with("Manual BPM:"));
+        ui.invoke_reset_pitch_right();
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::B).requested_speed, 1.);
         control(&ui, "DECK B use BPM suggestion").invoke_accessible_default_action();
         assert_eq!(ui.get_right_grid_bpm(), other);
         assert!(!ui.get_right_grid_active());
@@ -3502,6 +3754,7 @@ mod tests {
         control(&ui, "DECK A load track").invoke_accessible_default_action();
         finish(&c);
         assert_eq!(ui.get_left_suggested_bpm(), 0);
+        assert_eq!(ui.get_left_bpm_caption(), "Source BPM unavailable");
         assert_eq!(
             control(&ui, "DECK A use BPM suggestion").accessible_enabled(),
             Some(false)

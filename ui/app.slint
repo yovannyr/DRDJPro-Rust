@@ -104,6 +104,10 @@ component CompactDeck inherits Rectangle {
     property <int> delete-slot: 1;
     property <int> tools-panel: 0;
     in property <bool> grid-active;
+    in-out property <float> pitch-percent;
+    in property <string> pitch-caption;
+    in property <string> bpm-caption;
+    callback pitch(float); callback reset-pitch();
     in-out property <int> auto-loop-index: 5;
     in-out property <bool> auto-loop-snap: false;
     callback auto-loop(); callback half-loop(); callback double-loop();
@@ -163,7 +167,7 @@ component CompactDeck inherits Rectangle {
             Button { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
             Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " activate loop"; enabled: loaded && !loading && loop-ready && !loop-active; clicked => { root.loop-activate(); } }
             Button { text: "EXIT"; accessible-label: root.deck-label + " exit loop"; enabled: loaded && !loading && loop-active; clicked => { root.loop-exit(); } }
-            Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : "CUES"); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.tools-panel = root.tools-panel == 2 ? 0 : root.tools-panel + 1; } }
+            Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : "CUES")); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.tools-panel = root.tools-panel == 3 ? 0 : root.tools-panel + 1; } }
             Text { width: 64px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
         }
         if root.tools-panel == 1 : HorizontalLayout {
@@ -186,6 +190,17 @@ component CompactDeck inherits Rectangle {
             height: 26px; spacing: 2px;
             CheckBox { text: "BEAT SNAP"; checked <=> root.auto-loop-snap; accessible-label: root.deck-label + " auto loop beat snap"; enabled: loaded && !loading && grid-active; }
             Text { text: root.auto-loop-snap ? "Nearest beat · manual grid" : "Start at playhead"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
+        }
+        if root.tools-panel == 3 : VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                height: 28px;
+                Slider { minimum: -50; maximum: 100; value <=> root.pitch-percent; accessible-label: root.deck-label + " pitch"; enabled: loaded && !loading; changed(value) => { root.pitch(value); } }
+                Text { width: 58px; text: round(root.pitch-percent*100)/100 + "%"; color: #b9c7d9; font-size: 11px; vertical-alignment: center; }
+                Button { width: 48px; text: "1×"; accessible-label: root.deck-label + " reset pitch"; enabled: loaded && !loading; clicked => { root.reset-pitch(); } }
+            }
+            Text { height: 12px; text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " pitch values"; accessible-description: root.pitch-caption; }
+            Text { height: 12px; text: root.bpm-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " source and current BPM"; accessible-description: root.bpm-caption; }
         }
         if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 26px;
@@ -436,6 +451,10 @@ export component AppWindow inherits Window {
     in-out property <float> left-position: 0;
     in-out property <float> right-position: 0;
     in property <[HotCueRow]> left-hot-cues;
+    in-out property <float> left-pitch-percent;
+    in property <string> left-pitch-caption;
+    in property <string> left-bpm-caption;
+    callback pitch-left(float); callback reset-pitch-left();
     in-out property <bool> left-auto-loop-snap: false;
     in-out property <int> left-auto-loop-index: 5;
     callback auto-loop-left(); callback half-loop-left(); callback double-loop-left();
@@ -455,6 +474,10 @@ export component AppWindow inherits Window {
     in-out property <string> left-cue-rgb;
     callback edit-hot-cue-left(int); callback save-hot-cue-left(); callback cancel-hot-cue-left();
     in property <[HotCueRow]> right-hot-cues;
+    in-out property <float> right-pitch-percent;
+    in property <string> right-pitch-caption;
+    in property <string> right-bpm-caption;
+    callback pitch-right(float); callback reset-pitch-right();
     in-out property <bool> right-auto-loop-snap: false;
     in-out property <int> right-auto-loop-index: 5;
     callback auto-loop-right(); callback half-loop-right(); callback double-loop-right();
@@ -537,6 +560,8 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
+                pitch-percent <=> root.left-pitch-percent; pitch-caption: root.left-pitch-caption; bpm-caption: root.left-bpm-caption;
+                pitch(value) => { root.pitch-left(value); } reset-pitch => { root.reset-pitch-left(); }
                 grid-active: root.left-grid-active; auto-loop-index <=> root.left-auto-loop-index; auto-loop-snap <=> root.left-auto-loop-snap;
                 auto-loop => { root.auto-loop-left(); } half-loop => { root.half-loop-left(); } double-loop => { root.double-loop-left(); }
                 saved-loops: root.left-saved-loops; saved-loop-slot <=> root.left-saved-loop-slot; saved-loop-name <=> root.left-saved-loop-name;
@@ -557,6 +582,8 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 waveform: root.right-waveform; colors: root.right-waveform-colors;
+                pitch-percent <=> root.right-pitch-percent; pitch-caption: root.right-pitch-caption; bpm-caption: root.right-bpm-caption;
+                pitch(value) => { root.pitch-right(value); } reset-pitch => { root.reset-pitch-right(); }
                 grid-active: root.right-grid-active; auto-loop-index <=> root.right-auto-loop-index; auto-loop-snap <=> root.right-auto-loop-snap;
                 auto-loop => { root.auto-loop-right(); } half-loop => { root.half-loop-right(); } double-loop => { root.double-loop-right(); }
                 saved-loops: root.right-saved-loops; saved-loop-slot <=> root.right-saved-loop-slot; saved-loop-name <=> root.right-saved-loop-name;

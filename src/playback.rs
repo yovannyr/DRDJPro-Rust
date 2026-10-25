@@ -171,6 +171,8 @@ pub struct DeckSnapshot {
     pub loop_in: Option<Duration>,
     pub loop_out: Option<Duration>,
     pub loop_active: bool,
+    pub requested_speed: f64,
+    pub effective_speed: f64,
 }
 impl DeckSnapshot {
     pub fn percent(&self) -> f32 {
@@ -315,8 +317,6 @@ impl DualDeckEngine {
         );
         Ok(())
     }
-    // Staged engine API; the following reviewed slice connects the GUI pitch control.
-    #[allow(dead_code)]
     pub fn set_speed(&self, id: DeckId, factor: f64) -> Result<(), String> {
         let (track, playing, grid, region, speed) = {
             let deck = self.decks[id.index()].borrow();
@@ -657,6 +657,8 @@ impl DualDeckEngine {
                     .map(|region| frame_time(region.end, t.samples.sample_rate()).min(t.duration()))
             }),
             loop_active: deck.loop_active,
+            requested_speed: deck.speed.map_or(1., PlaybackSpeed::requested),
+            effective_speed: deck.speed.map_or(1., PlaybackSpeed::effective_factor),
         }
     }
     #[cfg(test)]
