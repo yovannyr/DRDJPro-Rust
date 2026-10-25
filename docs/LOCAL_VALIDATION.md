@@ -195,3 +195,93 @@ After the final source change, all commands completed with exit code 0:
 Nine additional tests cover stable IDs/Unicode paths and additions across store restart, retained missing files, previous-good recovery without propagating corruption, ignored interrupted temp files, forced rename failure and retry, unknown schema/unrecoverable preservation, bounded/invalid input, writer-lock exclusion/release, final snapshot flush during pending save, and headless controller recreation with real MP3/WAV loading. Restart evidence recreates workers/controllers/stores; it is not an interactive full-application or physical power-loss test. The existing Extended geometry and audio/mixer/seek/grid regression tests remain green.
 
 LIBRARY_STORAGE.md documents the current storage contract. Track metadata/crates/history, session/deck restoration, relocation tools, maximum-scale timing, cross-platform builds and physical failure/latency qualification remain open. No visual/native-dialog or listening acceptance is claimed. The prior slice is published; this persistence slice and rebuilt release executable remain local for review.
+
+## SQLite migration — latest local verification (2026-10-24)
+
+Baseline: main at published 9f7501083e830dbaae8a924f9b51eea64419f854, clean working tree. Before edits, cargo fmt --check, strict Clippy, all 50 tests (3.46 s) and the release build passed. The user authorized replacing the JSON writer with SQLite before metadata/crates work.
+
+Added pinned rusqlite 0.41.0 with bundled SQLite and backup support, default optional features disabled (MSRV 1.89, below this package's 1.92 minimum). Cargo.lock adds rusqlite, libsqlite3-sys 0.39.0, fallible-iterator, fallible-streaming-iterator and vcpkg. The existing worker API is retained. legacy_catalog.rs only reads validated version-1 JSON/backup input; library_store.rs owns schema/transactions, one-time migration, profile locks, previous-good online backups and recovery. Audio callback code and GUI layout were not changed. The former JSON-specific store tests were replaced with SQLite/migration behavior tests; controller restart/error tests now exercise SQLite writer contention and one extra controller/engine restart test covers real MP3 migration and A/B loading.
+
+After the final source change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 57 passed, 0 failed, 0 ignored; 4.20 s (includes the isolated child-test entry point) |
+| `cargo build --release` | Passed; 52.68 s including initial bundled SQLite compilation |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; only Git line-ending notices |
+
+SQLite tests verify primary/backup migration with Unicode/missing paths and unchanged IDs, byte-for-byte preservation of both JSON inputs, no repeat migration, invalid/oversized/newer JSON refusal, atomic schema/import rollback and retry, rollback of removals/partial inserts after an injected SQL error, current/JSON-era writer exclusion, future/foreign database preservation, previous-good SQLite backup recovery with preservation of damaged bytes, no reinitialization from stale JSON after unrecoverable SQLite damage, and final snapshot flush. Headless controllers migrate a real MP3, load ID 73 paused into B, recreate the controller/engine/store and load the same ID into A; existing WAV, missing-file, mixer, transport, waveform and geometry regressions stay green. The retry test uses a real second SQLite connection holding an IMMEDIATE write transaction.
+
+The process-termination test starts an isolated child test executable, commits ID 1, spills uncommitted changes while a rollback journal exists, confirms process-owned writer exclusion, kills/waits for that child, then opens the database again. SQLite restores exactly the committed row (without backup fallback) and PRAGMA integrity_check returns ok; OS locks are released. This is actual process-abort/journal recovery evidence, not a physical power-loss experiment.
+
+All storage fixtures were temporary; no personal user catalog was migrated during these checks. At the next normal application start the new default library.sqlite3 discovers the prior sibling library.json automatically. JSON sources remain intact. No visual/native-dialog, physical listening, device latency, maximum-library performance, macOS or Linux build is claimed. Snapshot/table work and complete previous-good backups remain proportional to catalog size. Metadata, crates and database-backed paging remain future slices. The SQLite slice and rebuilt release executable are local for review, not committed or published in this turn.
+
+## Metadata follow-up — latest local verification (2026-10-24)
+
+After the SQLite slice passed 57 tests and release compilation, the user requested continuing. The bounded follow-up adds track_metadata.rs, generated tagged MP3/WAV test helpers, cached metadata in the domain/SQLite schema, worker import/load integration and actual table columns/search/sort. Existing SQLite changes were retained. Symphonia was reused; this follow-up adds no dependency.
+
+Schema 2 adds track_metadata with bounded Unicode title/artist/album, nullable millisecond duration, a decoded-duration flag, inspection state/error and a cascading track foreign key. Schema-1 upgrade is transactional with a prior backup; successful/failed upgrades retain track IDs and paths. Available records without inspection data are scanned and saved on the storage worker; cached results survive restart and missing files. Header-derived duration is explicitly approximate (~); successful full load replaces it with decoded PCM length. Missing tags do not acquire invented values: filename fallback is a display rule, while artist/album/unknown duration display an em dash. Inspection errors preserve library identity/path and display a TYPE question mark plus an accessible explanation. A path-to-row index avoids per-result catalog scans during metadata assignment. GUI sorting/filtering remain in memory; maximum-scale performance is unqualified.
+
+After the final source/UI change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 64 passed, 0 failed, 0 ignored; 3.86 s (including isolated child-test entry point) |
+| `cargo build --release` | Passed; 18.44 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; only Git line-ending notices |
+
+Seven additional tests cover UTF-8 ID3v2.4 tags and MP3 header duration, WAV INFO tags and untagged fallback, invalid/missing files, bounded/control-cleaned text and invalid duration, schema-1 upgrade/backfill/cache retention when media disappears, failed-upgrade row/version preservation, and a headless real-tagged-MP3/WAV table workflow. That workflow checks displayed tags, artist/album search, numeric duration order, unchanged selected ID, paused A/B loading, the approximate-to-decoded duration transition and persistence after a fresh controller/engine/storage instance. All prior JSON/SQLite migration, transaction/process-crash recovery, mixer, transport, seek, waveform and two-size structural tests remain green.
+
+No personal catalog or audio tags were modified by testing; all new fixtures use temporary files/profiles. This is not a visual/native-dialog or listening test. General tag-conflict/real-music corpus accuracy, musical gapless duration, maximum-scale startup, tag editing, artwork, file watchers, crates and platform qualification remain open. The combined SQLite/metadata work and rebuilt executable remain local and uncommitted for review. The next proposed bounded slice is durable crates and track membership.
+
+## Flat crates — latest local verification (2026-10-24)
+
+Baseline: the preceding local SQLite/metadata work remained uncommitted on main at published 9f75010. All existing changes were retained. Before this slice cargo fmt --check, strict Clippy, all 64 tests (4.21 s) and release build passed again. The user explicitly requested continuing with the next planned crate slice.
+
+Added crates.rs with flat named sets, stable IDs, validated names/references and a persisted crate-ID high-water mark. Library filtering/search/sorting and scoped counts now compose with crate membership. Schema 3 adds crates/crate_tracks and upgrades both prior SQLite versions transactionally, preserving metadata. Relationship snapshots commit with the existing track/metadata snapshot on the same storage worker. No dependency or audio callback code was added/changed. The left CratePanel exposes actual create/rename Save/Cancel, confirmed delete, target-based Add and active-crate Remove; imports capture the destination at worker start. Changing navigation cancels stale confirmation. Empty/duplicate/invalid states and disk-save errors use the existing status flow.
+
+After the final source/UI change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 72 passed, 0 failed, 0 ignored; 4.27 s (including isolated child-test entry point) |
+| `cargo build --release` | Passed; 25.54 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; only Git line-ending notices |
+
+Eight additional tests cover crate name/sequence/reference validation, duplicate and independent memberships, crate/search/selection composition with global track retention, persistence and non-reuse of deleted IDs after normal restart, injected relationship-save failure rolling back names/memberships/sequence followed by retry, successful/failed schema-2 upgrade retaining cached metadata, and the full headless GUI workflow. The GUI test exercises actual accessible controls/callbacks for create/rename, duplicate adds, independent target identity after name sorting, invalid-name correction/cancel, captured-crate import despite later navigation, delete cancel/confirmation and stale-confirm cancellation, membership removal, fresh controller/engine/store restart and paused B loading. It asserts that A remains playing with the same installed title throughout crate changes, all global tracks/files remain, and structural bounds fit 850x740 and 1280x860. This establishes state isolation, not a listening or visual test. Existing transaction/process-abort/integrity, metadata, mixer, transport, waveform and UI regressions remain green.
+
+All storage and import fixtures were temporary; no personal catalog was modified by testing. Flat crate behavior partially implements overview controls 51/54. Subcrates/smart crates, external compatibility, manual track order, multiselection/drag-and-drop, history and autoplay remain open. Full snapshot copies/backups and maximum-size membership performance, native visual/dialog behavior, physical audio/device latency and other platforms remain unqualified. Current SQLite/metadata/crate changes and rebuilt release executable are local and uncommitted for review. The next proposed bounded slice is the transactional Beatgrid editor.
+
+## Transactional constant-grid editor — latest local verification (2026-10-24)
+
+Baseline: preceding SQLite/metadata/crate changes remained local and uncommitted on main at 9f75010 and were retained. Before edits, formatting, strict Clippy, all 72 tests (3.43 s) and release compilation passed. The user authorized continuing with the planned constant-BPM transactional grid slice; variable-tempo/warp markers were explicitly kept outside scope.
+
+BeatGrid now derives first-downbeat/bar labels and bounds persisted anchors to seven days. GridDraft isolates decimal BPM, anchor, ±10 ms slip and staged Clear without any audio ownership. Per-deck controller sessions retain prepared-source identity and original engine/catalog values; Save rejects stale/conflicting drafts, while Cancel and invalid input leave active grids untouched. Successful source replacement cancels the old draft; failed/cancelled loading retains it. Compatible loaded decks of the same canonical path share the committed grid, and application load/restore applies durable track data. PreparedTrack retains its canonical source path, acquired on the load worker; the engine's grid setter changes only control-plane metadata and validates decoded duration. No callback code, samples, source timing, mixer or tempo processing was changed.
+
+SQLite schema 4 adds optional track_grids linked to stable IDs, with finite bounded BPM and integer nanosecond anchors. Schema 1–3 upgrades and grid/metadata/crate snapshots are transactional. Explicit removal deletes the saved grid. Same-path file-content changes are not fingerprinted; an anchor outside the installed decoded duration is rejected and reported for manual repair. Normal Save applies locally and queues background durability, with the existing Saved/NOT saved/Retry Save footer; session-only operation explicitly says so.
+
+Slint now exposes Edit Grid, decimal input, draft-only suggestion adoption, Set 1, slip, zoom, Clear, Save and Cancel. Normal seed controls are disabled for an existing grid. Waveform preview is marked DRAFT; bars are numbered relative to the chosen bar-1 anchor, whose color assignment is red. These are implemented drawing/data semantics, not a visual acceptance result. Existing immediate-apply controller tests were updated to explicitly Save. Independent-deck coverage uses distinct files, with shared-track behavior covered separately.
+
+After the final source/UI change, all commands completed with exit code 0:
+
+| Command | Latest result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 80 passed, 0 failed, 0 ignored; 4.53 s (including isolated child-test entry point) |
+| `cargo build --release` | Passed; 26.78 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; only Git line-ending notices |
+
+Eight additional tests cover pure decimal/comma/range validation with unchanged originals, clear/anchor/clamped slips, bar-0/1/2 phase and first-marker bounds; engine source/position/play/pause/mixer preservation; fractional/nanosecond persistence and explicit deletion; failed grid-write rollback of metadata/crates/grid followed by retry; successful/failed schema-3 upgrade retaining existing metadata/membership; actual headless draft/zoom/invalid/cancel/anchor/save/clear controls during playback; and a two-deck shared-track conflict, failed-load retention, successful reload discard, saved-grid restoration after fresh controller/engine/storage restart and durable clear. Existing migration/process-abort/integrity, crate, metadata, audio, seek and structural waveform checks stay green.
+
+No personal catalog or audio tags were modified by tests; fixtures used temporary files/profiles. No visual/native-dialog, physical listening, device-latency, maximum-size performance or macOS/Linux build acceptance is claimed. Constant 4/4 timing is manually defined, not proven musical beat/downbeat accuracy, variable tempo/meter, Warp, quantization or audio Sync. The accumulated SQLite/metadata/crate/grid work and rebuilt executable remain local and uncommitted for review. The next proposed bounded slice is persistent hot cues, while advanced grid requirements remain in the inventory.

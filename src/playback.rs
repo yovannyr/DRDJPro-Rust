@@ -58,6 +58,7 @@ impl MixerLevels {
 #[derive(Clone)]
 pub struct PreparedTrack {
     pub title: String,
+    path: Arc<Path>,
     samples: SamplesBuffer,
     overview: Arc<[f32]>,
     detail: Arc<crate::waveform::DetailPeaks>,
@@ -76,7 +77,8 @@ impl PreparedTrack {
         {
             return Err("Select an MP3 or WAV file".into());
         }
-        let decoder = Decoder::try_from(File::open(path).map_err(|e| e.to_string())?)
+        let canonical = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+        let decoder = Decoder::try_from(File::open(&canonical).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let channels = decoder.channels();
         let rate = decoder.sample_rate();
@@ -100,6 +102,7 @@ impl PreparedTrack {
         let detail = Arc::new(crate::waveform::DetailPeaks::new(&samples, channels, rate));
         let tempo = crate::tempo::estimate(&samples, channels, rate);
         Ok(Self {
+            path: canonical.into(),
             title: path
                 .file_name()
                 .unwrap_or_default()
@@ -151,6 +154,7 @@ impl Source for DeckOutput {
     }
 }
 pub struct DeckSnapshot {
+    pub path: Option<Arc<Path>>,
     pub title: String,
     pub loaded: bool,
     pub playing: bool,
@@ -306,17 +310,29 @@ impl DualDeckEngine {
             self.replace_source(id, track, source, Duration::ZERO, false, grid);
         }
     }
-    pub fn set_grid_here(&self, id: DeckId, bpm: f64) -> Result<(), String> {
+    #[cfg(test)]
+    fn set_grid_here(&self, id: DeckId, bpm: f64) -> Result<(), String> {
         let position = self.snapshot(id).position;
         let grid = crate::beatgrid::BeatGrid::new(bpm, position)?;
+        self.set_grid(id, Some(grid))
+    }
+    pub fn set_grid(
+        &self,
+        id: DeckId,
+        grid: Option<crate::beatgrid::BeatGrid>,
+    ) -> Result<(), String> {
         let mut deck = self.decks[id.index()].borrow_mut();
         if deck.track.is_none() {
             return Err("Load a track before setting its grid".into());
         }
-        deck.grid = Some(grid);
+        if grid.is_some_and(|grid| grid.anchor() > deck.track.as_ref().unwrap().duration()) {
+            return Err("Grid anchor is outside this track".into());
+        }
+        deck.grid = grid;
         Ok(())
     }
-    pub fn clear_grid(&self, id: DeckId) {
+    #[cfg(test)]
+    fn clear_grid(&self, id: DeckId) {
         self.decks[id.index()].borrow_mut().grid = None;
     }
     pub fn snapshot(&self, id: DeckId) -> DeckSnapshot {
@@ -333,6 +349,7 @@ impl DualDeckEngine {
                 .min(duration)
         };
         DeckSnapshot {
+            path: deck.track.as_ref().map(|t| Arc::clone(&t.path)),
             title: deck
                 .track
                 .as_ref()
@@ -480,6 +497,7 @@ mod tests {
         engine.install(
             DeckId::A,
             PreparedTrack {
+                path: Arc::from(Path::new("synthetic-test.wav")),
                 title: "stereo step".into(),
                 overview: crate::waveform::peak_overview(&samples, 2).into(),
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48_000)),
@@ -660,5 +678,42 @@ mod tests {
         assert_eq!(engine.snapshot(DeckId::A).percent(), 0.0);
         engine.cue(DeckId::A);
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+    }
+    #[test]
+    fn explicit_grid_commit_preserves_source_transport_and_mixer_levels() {
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        let file = crate::test_support::wav_file(8192, 48_000 * 2);
+        engine.load_a(file.path()).unwrap();
+        let levels = MixerLevels {
+            crossfader: 0.3,
+            channel_a: 0.6,
+            channel_b: 0.8,
+        };
+        engine.set_levels(levels);
+        engine.seek_percent(DeckId::A, 25.).unwrap();
+        engine.play(DeckId::A);
+        let before = engine.snapshot(DeckId::A);
+        let grid = crate::beatgrid::BeatGrid::new(128.5, Duration::from_millis(510)).unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        let after = engine.snapshot(DeckId::A);
+        assert_eq!(after.position, before.position);
+        assert!(after.playing);
+        assert!(Arc::ptr_eq(
+            after.detail.as_ref().unwrap(),
+            before.detail.as_ref().unwrap()
+        ));
+        assert_eq!(after.path, before.path);
+        assert_eq!(engine.levels.get().volumes(), levels.volumes());
+        assert!(engine.snapshot(DeckId::B).grid.is_none());
+        assert!(engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(120., Duration::from_secs(3)).unwrap())
+            )
+            .is_err());
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(grid));
+        engine.set_grid(DeckId::A, None).unwrap();
+        assert!(engine.snapshot(DeckId::A).playing);
     }
 }

@@ -14,8 +14,22 @@ use std::{
     },
 };
 
-type LoadResult = Option<Result<(PathBuf, PreparedTrack), String>>;
+type LoadResult =
+    Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<crate::library::ImportBatch>;
+struct GridSession {
+    path: Arc<std::path::Path>,
+    source: Arc<crate::waveform::DetailPeaks>,
+    stored_base: Option<crate::beatgrid::BeatGrid>,
+    draft: crate::beatgrid::GridDraft,
+}
+#[derive(Clone, Copy)]
+enum GridAction {
+    Tempo,
+    Anchor,
+    Nudge(i32),
+    Clear,
+}
 struct DetailCache {
     source: Arc<crate::waveform::DetailPeaks>,
     range: crate::waveform::DetailRange,
@@ -35,6 +49,11 @@ pub struct AudioController {
     saving: Cell<bool>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
+    crate_editor: Cell<Option<i32>>,
+    crate_delete: Cell<Option<i32>>,
+    crate_target: Cell<i32>,
+    import_crate: Cell<i32>,
+    grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
     displayed_overviews: RefCell<[Option<Arc<[f32]>>; 2]>,
@@ -59,6 +78,11 @@ impl AudioController {
             saving: Cell::new(false),
             save_failed: Cell::new(false),
             initial_paths: RefCell::new(Vec::new()),
+            crate_editor: Cell::new(None),
+            crate_delete: Cell::new(None),
+            crate_target: Cell::new(0),
+            import_crate: Cell::new(0),
+            grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
             pending: RefCell::new(None),
             displayed_overviews: RefCell::new([None, None]),
@@ -126,36 +150,6 @@ impl AudioController {
             match id {
                 DeckId::A => ui.on_zoom_left(zoom),
                 DeckId::B => ui.on_zoom_right(zoom),
-            }
-            let weak = Rc::downgrade(&controller);
-            let set_grid = move || {
-                if let Some(c) = weak.upgrade() {
-                    if let Some(ui) = c.ui.upgrade() {
-                        let bpm = match id {
-                            DeckId::A => ui.get_left_grid_bpm(),
-                            DeckId::B => ui.get_right_grid_bpm(),
-                        };
-                        if let Err(err) = c.engine.set_grid_here(id, f64::from(bpm)) {
-                            ui.set_status(format!("Deck {id:?}: {err}").into());
-                        }
-                    }
-                    c.refresh();
-                }
-            };
-            match id {
-                DeckId::A => ui.on_grid_left(set_grid),
-                DeckId::B => ui.on_grid_right(set_grid),
-            }
-            let weak = Rc::downgrade(&controller);
-            let clear_grid = move || {
-                if let Some(c) = weak.upgrade() {
-                    c.engine.clear_grid(id);
-                    c.refresh();
-                }
-            };
-            match id {
-                DeckId::A => ui.on_clear_grid_left(clear_grid),
-                DeckId::B => ui.on_clear_grid_right(clear_grid),
             }
         }
         let weak = Rc::downgrade(&controller);
@@ -230,8 +224,416 @@ impl AudioController {
             }
         });
         controller.apply_levels();
+        controller.wire_crates(ui);
+        controller.wire_grid_editor(ui);
         controller.refresh();
         controller
+    }
+    fn can_change_crates(&self) -> bool {
+        self.storage_ready.get()
+            && self.pending.borrow().is_none()
+            && self.pending_import.borrow().is_none()
+    }
+    fn cancel_crate_dialog(&self) {
+        self.crate_editor.set(None);
+        self.crate_delete.set(None);
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_crate_editor_open(false);
+            ui.set_crate_delete_pending(false);
+        }
+    }
+    fn crate_changed(&self, result: Result<String, String>) {
+        if let Some(ui) = self.ui.upgrade() {
+            match result {
+                Ok(message) => {
+                    self.library_changed();
+                    self.cancel_crate_dialog();
+                    self.publish_library();
+                    ui.set_status(message.into());
+                }
+                Err(error) => ui.set_status(error.into()),
+            }
+        }
+    }
+    fn wire_crates(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_select_crate(move |id| {
+            if let Some(c) = weak.upgrade() {
+                if !c.storage_ready.get() {
+                    return;
+                }
+                let result = c.library.borrow_mut().select_crate(id);
+                c.cancel_crate_dialog();
+                if result.is_ok() {
+                    c.publish_library();
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_target_crate(move |index| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(entry) = c
+                    .library
+                    .borrow()
+                    .crates()
+                    .ordered()
+                    .get(index.max(0) as usize)
+                {
+                    c.crate_target.set(entry.id);
+                }
+            }
+        });
+        for rename in [false, true] {
+            let weak = Rc::downgrade(self);
+            let callback = move || {
+                if let Some(c) = weak.upgrade() {
+                    if !c.can_change_crates() {
+                        return;
+                    }
+                    c.cancel_crate_dialog();
+                    let library = c.library.borrow();
+                    let id = if rename { library.active_crate() } else { 0 };
+                    let name = if rename {
+                        let Some(entry) = library.crates().entries.iter().find(|e| e.id == id)
+                        else {
+                            return;
+                        };
+                        entry.name.clone()
+                    } else {
+                        String::new()
+                    };
+                    c.crate_editor.set(Some(id));
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_crate_edit_name(name.into());
+                        ui.set_crate_dialog_title(
+                            if rename { "Rename crate" } else { "New crate" }.into(),
+                        );
+                        ui.set_crate_editor_open(true);
+                    }
+                }
+            };
+            if rename {
+                ui.on_rename_crate(callback);
+            } else {
+                ui.on_new_crate(callback);
+            }
+        }
+        let weak = Rc::downgrade(self);
+        ui.on_save_crate_name(move || {
+            if let Some(c) = weak.upgrade() {
+                if !c.can_change_crates() {
+                    return;
+                }
+                let Some(id) = c.crate_editor.get() else {
+                    return;
+                };
+                let Some(ui) = c.ui.upgrade() else {
+                    return;
+                };
+                let name = ui.get_crate_edit_name().to_string();
+                let result = if id == 0 {
+                    let mut library = c.library.borrow_mut();
+                    library.create_crate(&name).and_then(|id| {
+                        c.crate_target.set(id);
+                        library.select_crate(id)
+                    })
+                } else {
+                    c.library.borrow_mut().rename_crate(id, &name)
+                };
+                c.crate_changed(result.map(|()| "Crate saved".into()));
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_delete_crate(move || {
+            if let Some(c) = weak.upgrade() {
+                if !c.can_change_crates() {
+                    return;
+                }
+                let library = c.library.borrow();
+                let id = library.active_crate();
+                let Some(entry) = library.crates().entries.iter().find(|e| e.id == id) else {
+                    return;
+                };
+                c.cancel_crate_dialog();
+                c.crate_delete.set(Some(id));
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_crate_dialog_title(format!("Delete {}?", entry.name).into());
+                    ui.set_crate_delete_pending(true);
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_confirm_delete_crate(move || {
+            if let Some(c) = weak.upgrade() {
+                if !c.can_change_crates() {
+                    return;
+                }
+                let Some(id) = c.crate_delete.get() else {
+                    return;
+                };
+                let result = c.library.borrow_mut().delete_crate(id);
+                c.crate_changed(result.map(|()| "Crate deleted; tracks remain in library".into()));
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_cancel_crate_dialog(move || {
+            if let Some(c) = weak.upgrade() {
+                c.cancel_crate_dialog();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_add_to_crate(move || {
+            if let Some(c) = weak.upgrade() {
+                if !c.can_change_crates() {
+                    return;
+                }
+                let result = c
+                    .library
+                    .borrow_mut()
+                    .add_selected_to_crate(c.crate_target.get());
+                c.crate_changed(result.map(|added| {
+                    if added {
+                        "Track added to crate"
+                    } else {
+                        "Track already in crate"
+                    }
+                    .into()
+                }));
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_remove_from_crate(move || {
+            if let Some(c) = weak.upgrade() {
+                if !c.can_change_crates() {
+                    return;
+                }
+                let result = c.library.borrow_mut().remove_selected_from_crate();
+                c.crate_changed(result.map(|_| "Track removed from crate; file retained".into()));
+            }
+        });
+    }
+    fn grid_index(id: DeckId) -> usize {
+        if id == DeckId::A {
+            0
+        } else {
+            1
+        }
+    }
+    fn set_grid_editing(&self, id: DeckId, editing: bool) {
+        if let Some(ui) = self.ui.upgrade() {
+            match id {
+                DeckId::A => ui.set_left_grid_editing(editing),
+                DeckId::B => ui.set_right_grid_editing(editing),
+            }
+        }
+    }
+    fn cancel_grid_editor(&self, id: DeckId) {
+        self.grid_editors.borrow_mut()[Self::grid_index(id)].take();
+        self.set_grid_editing(id, false);
+    }
+    fn grid_bpm_text(ui: &AppWindow, id: DeckId) -> String {
+        match id {
+            DeckId::A => ui.get_left_grid_draft_bpm(),
+            DeckId::B => ui.get_right_grid_draft_bpm(),
+        }
+        .to_string()
+    }
+    fn begin_grid_editor(&self, id: DeckId) -> Result<(), String> {
+        if !self.can_change_crates() {
+            return Err("Finish library loading before editing its grid".into());
+        }
+        if self.grid_editors.borrow()[Self::grid_index(id)].is_some() {
+            return Err("Save or cancel the existing grid draft first".into());
+        }
+        let snapshot = self.engine.snapshot(id);
+        let path = snapshot
+            .path
+            .ok_or("Load a track before editing its grid")?;
+        let source = snapshot.detail.ok_or("Track waveform is unavailable")?;
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let seed = match id {
+            DeckId::A => ui.get_left_grid_bpm(),
+            DeckId::B => ui.get_right_grid_bpm(),
+        };
+        let draft = crate::beatgrid::GridDraft::new(
+            snapshot.grid,
+            f64::from(seed),
+            snapshot.position,
+            snapshot.duration,
+        )?;
+        let text = draft.bpm().to_string().into();
+        match id {
+            DeckId::A => ui.set_left_grid_draft_bpm(text),
+            DeckId::B => ui.set_right_grid_draft_bpm(text),
+        }
+        let stored_base = self.library.borrow().grid(&path);
+        self.grid_editors.borrow_mut()[Self::grid_index(id)] = Some(GridSession {
+            path,
+            source,
+            stored_base,
+            draft,
+        });
+        self.set_grid_editing(id, true);
+        Ok(())
+    }
+    fn change_grid_draft(&self, id: DeckId, action: GridAction) -> Result<(), String> {
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let mut editors = self.grid_editors.borrow_mut();
+        let editor = editors[Self::grid_index(id)]
+            .as_mut()
+            .ok_or("Open Edit Grid first")?;
+        if !matches!(action, GridAction::Clear) {
+            editor.draft.set_bpm(&Self::grid_bpm_text(&ui, id))?;
+        }
+        match action {
+            GridAction::Tempo => Ok(()),
+            GridAction::Anchor => editor.draft.anchor_here(self.engine.snapshot(id).position),
+            GridAction::Nudge(ms) => editor.draft.nudge(ms),
+            GridAction::Clear => {
+                editor.draft.clear();
+                Ok(())
+            }
+        }
+    }
+    fn apply_saved_grid(&self, id: DeckId) -> Result<(), String> {
+        if let Some(path) = self.engine.snapshot(id).path {
+            self.engine
+                .set_grid(id, self.library.borrow().grid(&path))?;
+        }
+        Ok(())
+    }
+    fn save_grid_editor(&self, id: DeckId) -> Result<(), String> {
+        if !self.can_change_crates() {
+            return Err("Finish library loading before saving its grid".into());
+        }
+        let snapshot = self.engine.snapshot(id);
+        let index = Self::grid_index(id);
+        let (path, value) = {
+            let mut editors = self.grid_editors.borrow_mut();
+            let editor = editors[index].as_mut().ok_or("Open Edit Grid first")?;
+            if snapshot
+                .detail
+                .as_ref()
+                .is_none_or(|source| !Arc::ptr_eq(source, &editor.source))
+            {
+                return Err("Track changed; cancel and reopen Edit Grid".into());
+            }
+            if self.library.borrow().grid(&editor.path) != editor.stored_base
+                || snapshot.grid != editor.draft.original()
+            {
+                return Err("Saved grid changed; cancel and reopen Edit Grid".into());
+            }
+            editor.draft.set_bpm(&Self::grid_bpm_text(
+                &self.ui.upgrade().ok_or("Window closed")?,
+                id,
+            ))?;
+            (Arc::clone(&editor.path), editor.draft.value())
+        };
+        self.library.borrow_mut().insert([path.to_path_buf()]);
+        self.library.borrow_mut().set_grid(&path, value)?;
+        self.engine.set_grid(id, value)?;
+        self.library_changed();
+        self.cancel_grid_editor(id);
+        self.publish_library();
+        let other = if id == DeckId::A {
+            DeckId::B
+        } else {
+            DeckId::A
+        };
+        if self
+            .engine
+            .snapshot(other)
+            .path
+            .as_ref()
+            .is_some_and(|p| crate::library::identity(p) == crate::library::identity(&path))
+        {
+            self.engine
+                .set_grid(other, value)
+                .map_err(|e| format!("Grid saved; other deck: {e}"))?;
+        }
+        Ok(())
+    }
+    fn wire_grid_editor(self: &Rc<Self>, ui: &AppWindow) {
+        for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let open = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.begin_grid_editor(id);
+                    c.grid_feedback(result, "Grid draft opened; Save or Cancel");
+                }
+            };
+            match id {
+                DeckId::A => ui.on_grid_left(open),
+                DeckId::B => ui.on_grid_right(open),
+            }
+            for action in [
+                GridAction::Tempo,
+                GridAction::Anchor,
+                GridAction::Nudge(-10),
+                GridAction::Nudge(10),
+                GridAction::Clear,
+            ] {
+                let weak = Rc::downgrade(self);
+                let change = move || {
+                    if let Some(c) = weak.upgrade() {
+                        let result = if matches!(action, GridAction::Clear)
+                            && c.grid_editors.borrow()[Self::grid_index(id)].is_none()
+                        {
+                            c.begin_grid_editor(id)
+                                .and_then(|()| c.change_grid_draft(id, action))
+                        } else {
+                            c.change_grid_draft(id, action)
+                        };
+                        c.grid_feedback(result, "Grid draft updated; Save or Cancel");
+                    }
+                };
+                match (id, action) {
+                    (DeckId::A, GridAction::Tempo) => ui.on_edit_grid_bpm_left(change),
+                    (DeckId::B, GridAction::Tempo) => ui.on_edit_grid_bpm_right(change),
+                    (DeckId::A, GridAction::Anchor) => ui.on_grid_anchor_left(change),
+                    (DeckId::B, GridAction::Anchor) => ui.on_grid_anchor_right(change),
+                    (DeckId::A, GridAction::Nudge(-10)) => ui.on_grid_earlier_left(change),
+                    (DeckId::B, GridAction::Nudge(-10)) => ui.on_grid_earlier_right(change),
+                    (DeckId::A, GridAction::Nudge(_)) => ui.on_grid_later_left(change),
+                    (DeckId::B, GridAction::Nudge(_)) => ui.on_grid_later_right(change),
+                    (DeckId::A, GridAction::Clear) => ui.on_clear_grid_left(change),
+                    (DeckId::B, GridAction::Clear) => ui.on_clear_grid_right(change),
+                }
+            }
+            let weak = Rc::downgrade(self);
+            let save = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.save_grid_editor(id);
+                    let message = if c.persistence.borrow().is_some() {
+                        "Grid applied; catalog save queued"
+                    } else {
+                        "Grid applied for this session only"
+                    };
+                    c.grid_feedback(result, message);
+                }
+            };
+            match id {
+                DeckId::A => ui.on_save_grid_left(save),
+                DeckId::B => ui.on_save_grid_right(save),
+            }
+            let weak = Rc::downgrade(self);
+            let cancel = move || {
+                if let Some(c) = weak.upgrade() {
+                    c.cancel_grid_editor(id);
+                    c.grid_feedback(Ok(()), "Grid draft discarded");
+                }
+            };
+            match id {
+                DeckId::A => ui.on_cancel_grid_left(cancel),
+                DeckId::B => ui.on_cancel_grid_right(cancel),
+            }
+        }
+    }
+    fn grid_feedback(&self, result: Result<(), String>, message: &str) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_status(result.map_or_else(|e| e, |()| message.into()).into());
+        }
+        self.refresh();
     }
     pub fn restore_library(&self, path: Result<PathBuf, String>, initial_paths: Vec<PathBuf>) {
         let result = path.and_then(crate::library_store::Worker::start);
@@ -279,6 +681,11 @@ impl AudioController {
                     Ok((library, note)) => {
                         *self.library.borrow_mut() = library;
                         self.publish_library();
+                        for id in [DeckId::A, DeckId::B] {
+                            if let Err(error) = self.apply_saved_grid(id) {
+                                self.grid_feedback(Err(error), "");
+                            }
+                        }
                         if let Some(ui) = self.ui.upgrade() {
                             ui.set_library_storage(note.into());
                         }
@@ -392,7 +799,10 @@ impl AudioController {
                 let result = picker().map(|path| {
                     let path = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
                     let track = PreparedTrack::open(&path)?;
-                    Ok((path, track))
+                    let mut metadata = crate::track_metadata::read(&path);
+                    metadata.duration_ms = Some(track.duration().as_millis() as u64);
+                    metadata.duration_exact = true;
+                    Ok((path, track, metadata))
                 });
                 let _ = tx.send(result);
             }) {
@@ -411,8 +821,9 @@ impl AudioController {
         };
         ui.set_loading(false);
         match result {
-            Some(Ok((path, track))) => {
-                self.library.borrow_mut().insert([path]);
+            Some(Ok((path, track, metadata))) => {
+                self.library.borrow_mut().insert([path.clone()]);
+                self.library.borrow_mut().set_metadata(&path, metadata);
                 self.library_changed();
                 self.publish_library();
                 if self.engine.snapshot(id).playing {
@@ -420,6 +831,11 @@ impl AudioController {
                 } else {
                     self.engine.install(id, track);
                     ui.set_status(format!("Deck {id:?} loaded and paused").into());
+                    if let Err(error) = self.apply_saved_grid(id) {
+                        ui.set_status(
+                            format!("Deck loaded; saved grid unavailable: {error}").into(),
+                        );
+                    }
                 }
             }
             Some(Err(err)) => ui.set_status(format!("Deck {id:?}: {err}").into()),
@@ -445,9 +861,22 @@ impl AudioController {
                 match result {
                     Ok(Some(batch)) => {
                         let total = batch.paths.len();
-                        let added = self.library.borrow_mut().insert(batch.paths);
+                        let added = self
+                            .library
+                            .borrow_mut()
+                            .insert(batch.paths.iter().cloned());
+                        let assigned = self
+                            .library
+                            .borrow_mut()
+                            .add_paths_to_crate(self.import_crate.get(), &batch.paths);
+                        for (path, metadata) in batch.metadata {
+                            self.library.borrow_mut().set_metadata(&path, metadata);
+                        }
                         self.library_changed();
                         ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
+                        if let Err(error) = assigned {
+                            ui.set_status(format!("Added {added} library tracks; crate assignment failed: {error}").into());
+                        }
                         self.publish_library();
                     }
                     Ok(None) => ui.set_status("Library import cancelled".into()),
@@ -487,6 +916,7 @@ impl AudioController {
             return;
         };
         ui.set_library_busy(true);
+        self.import_crate.set(self.library.borrow().active_crate());
         ui.set_status("Importing local MP3/WAV files…".into());
         let (tx, rx) = mpsc::sync_channel(1);
         match std::thread::Builder::new()
@@ -505,13 +935,45 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        self.library
+            .borrow_mut()
+            .set_query(ui.get_library_query().to_string());
         let library = self.library.borrow();
+        let crates = library.crates().ordered();
+        let target = crates
+            .iter()
+            .position(|entry| entry.id == self.crate_target.get())
+            .or_else(|| (!crates.is_empty()).then_some(0));
+        self.crate_target
+            .set(target.map_or(0, |index| crates[index].id));
+        ui.set_target_crate_index(target.map_or(-1, |index| index as i32));
+        ui.set_crate_names(ModelRc::new(Rc::new(VecModel::from(
+            crates
+                .iter()
+                .map(|c| slint::SharedString::from(c.name.as_str()))
+                .collect::<Vec<_>>(),
+        ))));
+        ui.set_crate_rows(ModelRc::new(Rc::new(VecModel::from(
+            crates
+                .iter()
+                .map(|c| crate::CrateRow {
+                    id: c.id,
+                    name: c.name.clone().into(),
+                    count: c.tracks.len() as i32,
+                })
+                .collect::<Vec<_>>(),
+        ))));
+        ui.set_selected_crate(library.active_crate());
         let visible = library.visible();
         let rows: Vec<_> = visible
             .iter()
             .map(|track| crate::LibraryRow {
                 id: track.id,
-                name: track.name.clone().into(),
+                name: track.display_title().into(),
+                artist: track.metadata.artist.clone().into(),
+                album: track.metadata.album.clone().into(),
+                duration: track.metadata.duration_text().into(),
+                metadata_error: track.metadata.error.clone().unwrap_or_default().into(),
                 format: track.format.clone().into(),
                 path: track.path.to_string_lossy().into_owned().into(),
                 available: track.available,
@@ -521,7 +983,7 @@ impl AudioController {
             format!(
                 "{} / {} tracks ({} missing)",
                 visible.len(),
-                library.len(),
+                library.scope_len(),
                 library.missing_count()
             )
             .into(),
@@ -529,6 +991,11 @@ impl AudioController {
         ui.set_library_empty(
             if library.len() == 0 {
                 "Add MP3/WAV files to your library"
+            } else if visible.is_empty()
+                && library.active_crate() != 0
+                && ui.get_library_query().is_empty()
+            {
+                "This crate is empty. Add tracks or import files."
             } else if visible.is_empty() {
                 "No tracks match your search"
             } else {
@@ -545,6 +1012,25 @@ impl AudioController {
         };
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.snapshot(id);
+            let index = Self::grid_index(id);
+            let changed_track = self.grid_editors.borrow()[index]
+                .as_ref()
+                .is_some_and(|editor| {
+                    s.detail
+                        .as_ref()
+                        .is_none_or(|source| !Arc::ptr_eq(source, &editor.source))
+                });
+            if changed_track {
+                self.cancel_grid_editor(id);
+                ui.set_status(
+                    format!("Deck {id:?}: grid draft discarded after track replacement").into(),
+                );
+            }
+            let editing = self.grid_editors.borrow()[index].is_some();
+            let preview = self.grid_editors.borrow()[index]
+                .as_ref()
+                .map_or(s.grid, |editor| editor.draft.value());
+
             let index = if id == DeckId::A { 0 } else { 1 };
             let mut displayed = self.displayed_overviews.borrow_mut();
             let changed = match (&displayed[index], &s.overview) {
@@ -594,7 +1080,7 @@ impl AudioController {
                 let grid_changed = changed
                     || cache[index]
                         .as_ref()
-                        .is_none_or(|previous| previous.grid != s.grid);
+                        .is_none_or(|previous| previous.grid != preview);
                 if changed {
                     let model = ModelRc::new(Rc::new(VecModel::from(detail.render(range))));
                     let colors = color_model(&detail.render_colors(range));
@@ -610,7 +1096,7 @@ impl AudioController {
                     }
                 }
                 if grid_changed {
-                    let lines = s.grid.map_or_else(Vec::new, |grid| {
+                    let lines = preview.map_or_else(Vec::new, |grid| {
                         grid.lines(detail.time(range.start_frame), detail.time(range.end_frame))
                     });
                     let model = ModelRc::new(Rc::new(VecModel::from(
@@ -619,6 +1105,8 @@ impl AudioController {
                             .map(|line| crate::BeatLine {
                                 position: line.percent,
                                 downbeat: line.downbeat,
+                                first: line.first,
+                                bar: line.bar,
                             })
                             .collect::<Vec<_>>(),
                     )));
@@ -631,7 +1119,7 @@ impl AudioController {
                     cache[index] = Some(DetailCache {
                         source: Arc::clone(detail),
                         range,
-                        grid: s.grid,
+                        grid: preview,
                     });
                 }
                 match id {
@@ -648,10 +1136,15 @@ impl AudioController {
                 }
             }
             let time = format!("{} / {}", clock(s.position), clock(s.duration));
-            let caption = s.grid.map_or_else(
+            let caption = preview.map_or_else(
                 || "GRID OFF".into(),
                 |grid| format!("{} BPM · MANUAL 4/4", grid.bpm()),
             );
+            let caption = if editing {
+                format!("DRAFT · {caption}")
+            } else {
+                caption
+            };
             match id {
                 DeckId::A => {
                     ui.set_left_title(s.title.into());
@@ -747,7 +1240,7 @@ mod tests {
         use slint::Model;
         i_slint_backend_testing::init_no_event_loop();
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
+        let path = dir.path().join("library.sqlite3");
         let wav = wav_file(8192, 48_000);
         let missing = dir.path().join("will-disappear.wav");
         std::fs::copy(wav.path(), &missing).unwrap();
@@ -804,10 +1297,450 @@ mod tests {
         c.close_library().unwrap();
     }
     #[test]
+    fn durable_library_migrates_json_into_sqlite_and_loads_same_id_after_restart() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("library.json");
+        let catalog = crate::library::Catalog {
+            version: 1,
+            crates: Default::default(),
+            tracks: vec![crate::library::SavedTrack {
+                id: 73,
+                path: fixture(),
+                metadata: Default::default(),
+                grid: None,
+            }],
+        };
+        let original = serde_json::to_vec(&catalog).unwrap();
+        std::fs::write(&legacy, &original).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(legacy.clone()), Vec::new());
+        finish_storage(&c);
+        assert!(ui.get_library_storage().contains("Migrated JSON library"));
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 73);
+        ui.invoke_select_library(73);
+        ui.invoke_load_library_right();
+        finish(&c);
+        assert!(ui.get_right_title().ends_with("tone-9s.mp3"));
+        assert!(!ui.get_right_playing());
+        c.close_library().unwrap();
+        assert_eq!(std::fs::read(&legacy).unwrap(), original);
+        drop(c);
+        // Initialized SQLite wins even if the retained legacy input later becomes unreadable.
+        std::fs::write(&legacy, b"stale invalid legacy").unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _restarted_output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(legacy.with_extension("sqlite3")), Vec::new());
+        finish_storage(&c);
+        assert_eq!(ui.get_library_storage(), "SQLite library restored");
+        assert!(!ui.get_right_loaded());
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 73);
+        ui.invoke_select_library(73);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(ui.get_left_title().ends_with("tone-9s.mp3"));
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn metadata_table_search_sort_reload_and_paused_loading_preserve_identity() {
+        use crate::test_support::{tagged_mp3, tagged_wav};
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let mp3 = tagged_mp3("Zulu title", "Artist Ñ", "First album");
+        let wav = tagged_wav("Alpha title", "Other artist", "Second album");
+        let paths = vec![mp3.path().to_owned(), wav.path().to_owned()];
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), paths);
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        let rows: Vec<_> = ui.get_library_rows().iter().collect();
+        assert_eq!(rows[0].name, "Alpha title");
+        assert_eq!(rows[0].id, 2);
+        assert_eq!(rows[1].artist, "Artist Ñ");
+        assert_eq!(rows[1].album, "First album");
+        assert!(rows[1].duration.starts_with('~'));
+        control(&ui, "Library search").set_accessible_value("ARTIST Ñ");
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        ui.invoke_select_library(1);
+        control(&ui, "Clear library search").invoke_accessible_default_action();
+        control(&ui, "Sort library by duration").invoke_accessible_default_action();
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 2);
+        assert_eq!(ui.get_selected_track(), 1);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(ui.get_left_title().ends_with(".mp3"));
+        assert!(!ui.get_left_playing());
+        let row = ui.get_library_rows().iter().find(|r| r.id == 1).unwrap();
+        assert!(!row.duration.starts_with('~'));
+        assert_eq!(row.name, "Zulu title");
+        finish_storage(&c);
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output2) = rodio::mixer::mixer(1, 48000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        let row = ui.get_library_rows().iter().find(|r| r.id == 1).unwrap();
+        assert_eq!(row.name, "Zulu title");
+        assert_eq!(row.artist, "Artist Ñ");
+        assert!(!row.duration.starts_with('~'));
+        control(&ui, "Library search").set_accessible_value("second album");
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 2);
+        ui.invoke_select_library(2);
+        ui.invoke_load_library_right();
+        finish(&c);
+        assert!(ui.get_right_title().ends_with(".wav"));
+        assert!(!ui.get_right_playing());
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn crate_gui_import_assignment_confirmation_restart_and_playing_deck_are_isolated() {
+        use slint::Model;
+        fn create(ui: &AppWindow, name: &str) {
+            control(ui, "New crate").invoke_accessible_default_action();
+            control(ui, "Crate name").set_accessible_value(name);
+            control(ui, "Save crate name").invoke_accessible_default_action();
+        }
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let wav = wav_file(8192, 48_000);
+        let third = wav_file(4096, 24_000);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        ui.invoke_new_crate();
+        assert!(!ui.get_crate_editor_open());
+        finish_storage(&c);
+        ui.show().unwrap();
+        c.import_paths(vec![fixture(), wav.path().to_owned()]);
+        finish_import(&c);
+        create(&ui, "Música 日本");
+        assert_eq!(ui.get_selected_crate(), 1);
+        assert_eq!(ui.get_crate_rows().row_count(), 1);
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        assert!(ui.get_library_empty().contains("crate is empty"));
+        control(&ui, "All library tracks").invoke_accessible_default_action();
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        control(&ui, "Add selected track to crate").invoke_accessible_default_action();
+        control(&ui, "Add selected track to crate").invoke_accessible_default_action();
+        assert_eq!(ui.get_crate_rows().row_data(0).unwrap().count, 1);
+        control(&ui, "Crate 1").invoke_accessible_default_action();
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        control(&ui, "Library search").set_accessible_value("no matching member");
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        control(&ui, "Clear library search").invoke_accessible_default_action();
+        ui.invoke_select_library(1);
+        ui.invoke_load_library_left();
+        finish(&c);
+        ui.invoke_toggle_left();
+        let title = ui.get_left_title();
+        assert!(ui.get_left_playing());
+        control(&ui, "Rename crate").invoke_accessible_default_action();
+        control(&ui, "Crate name").set_accessible_value("Festival");
+        control(&ui, "Save crate name").invoke_accessible_default_action();
+        assert_eq!(ui.get_selected_crate(), 1);
+        assert_eq!(ui.get_crate_rows().row_data(0).unwrap().name, "Festival");
+        control(&ui, "New crate").invoke_accessible_default_action();
+        control(&ui, "Save crate name").invoke_accessible_default_action();
+        assert!(ui.get_crate_editor_open());
+        assert!(ui.get_status().contains("printable"));
+        control(&ui, "Cancel crate dialog").invoke_accessible_default_action();
+        create(&ui, "Warmup");
+        assert_eq!(ui.get_selected_crate(), 2);
+        // An import belongs to the captured crate, even if a later callback changes the filter.
+        c.import_paths(vec![third.path().to_owned()]);
+        ui.invoke_select_crate(1);
+        finish_import(&c);
+        assert_eq!(
+            c.library
+                .borrow()
+                .crates()
+                .entries
+                .iter()
+                .find(|e| e.id == 2)
+                .unwrap()
+                .tracks,
+            std::collections::HashSet::from([3])
+        );
+        control(&ui, "All library tracks").invoke_accessible_default_action();
+        ui.invoke_select_library(1);
+        ui.set_target_crate_index(1);
+        ui.invoke_target_crate(1);
+        control(&ui, "Add selected track to crate").invoke_accessible_default_action();
+        assert_eq!(c.crate_target.get(), 2);
+        ui.invoke_select_crate(1);
+        control(&ui, "Rename crate").invoke_accessible_default_action();
+        control(&ui, "Crate name").set_accessible_value("Zulu");
+        control(&ui, "Save crate name").invoke_accessible_default_action();
+        assert_eq!(c.crate_target.get(), 2);
+        assert_eq!(ui.get_target_crate_index(), 0);
+        control(&ui, "Delete crate").invoke_accessible_default_action();
+        assert!(ui.get_crate_delete_pending());
+        assert_eq!(ui.get_crate_rows().row_count(), 2);
+        control(&ui, "Cancel crate dialog").invoke_accessible_default_action();
+        assert_eq!(ui.get_crate_rows().row_count(), 2);
+        ui.invoke_delete_crate();
+        ui.invoke_select_crate(2);
+        ui.invoke_confirm_delete_crate();
+        assert_eq!(ui.get_crate_rows().row_count(), 2);
+        ui.invoke_select_crate(1);
+        control(&ui, "Delete crate").invoke_accessible_default_action();
+        control(&ui, "Confirm crate deletion").invoke_accessible_default_action();
+        assert_eq!(ui.get_crate_rows().row_count(), 1);
+        assert_eq!(ui.get_selected_crate(), 0);
+        assert_eq!(ui.get_library_rows().row_count(), 3);
+        assert!(ui.get_left_playing());
+        assert_eq!(ui.get_left_title(), title);
+        assert!(fixture().is_file() && wav.path().is_file() && third.path().is_file());
+        ui.invoke_select_crate(2);
+        ui.invoke_select_library(1);
+        control(&ui, "Remove selected track from crate").invoke_accessible_default_action();
+        assert_eq!(ui.get_selected_track(), -1);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 3);
+        assert_eq!(c.library.borrow().len(), 3);
+        assert!(ui.get_left_playing());
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let navigation = control(&ui, "Crate navigation").absolute_position();
+            let status = control(&ui, "Application status");
+            assert!(navigation.x >= 0.);
+            assert!(status.absolute_position().y + status.size().height <= height + 1.);
+        }
+        finish_storage(&c);
+        c.close_library().unwrap();
+        ui.hide().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _restarted) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        assert_eq!(ui.get_crate_rows().row_count(), 1);
+        assert_eq!(ui.get_crate_rows().row_data(0).unwrap().name, "Warmup");
+        assert_eq!(ui.get_selected_crate(), 0);
+        assert_eq!(ui.get_library_rows().row_count(), 3);
+        ui.invoke_select_crate(2);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 3);
+        ui.invoke_select_library(3);
+        ui.invoke_load_library_right();
+        finish(&c);
+        assert!(ui.get_right_title().ends_with(".wav"));
+        assert!(!ui.get_right_playing());
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn grid_editor_drafts_invalid_input_cancel_and_clear_preserve_transport() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48_000 * 8);
+        let other = wav_file(4096, 48_000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        engine.seek_percent(DeckId::A, 25.).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        ui.set_channel_a(0.6);
+        ui.set_channel_b(0.8);
+        ui.set_crossfader(0.3);
+        ui.invoke_mixer_changed();
+        let position = engine.snapshot(DeckId::A).position;
+        control(&ui, "DECK A edit beatgrid").invoke_accessible_default_action();
+        assert!(ui.get_left_grid_editing());
+        assert!(engine.snapshot(DeckId::A).grid.is_none());
+        assert!(!c.dirty.get());
+        assert!(ui.get_left_beats().row_count() > 0);
+        control(&ui, "DECK A zoom in").invoke_accessible_default_action();
+        assert_eq!(ui.get_left_detail_window(), 4);
+        assert!(engine.snapshot(DeckId::A).grid.is_none());
+        assert!(ui
+            .get_left_beats()
+            .iter()
+            .any(|line| line.first && line.bar == 1));
+        assert!(ElementHandle::find_by_accessible_label(&ui, "DECK A bar label").count() > 0);
+        control(&ui, "DECK A draft BPM").set_accessible_value("128.5");
+        control(&ui, "DECK A shift grid later").invoke_accessible_default_action();
+        let draft = c.grid_editors.borrow()[0]
+            .as_ref()
+            .unwrap()
+            .draft
+            .value()
+            .unwrap();
+        assert_eq!(draft.anchor(), position + Duration::from_millis(10));
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        assert!(engine.snapshot(DeckId::B).grid.is_none());
+        control(&ui, "DECK A cancel beatgrid").invoke_accessible_default_action();
+        assert!(!ui.get_left_grid_editing());
+        assert_eq!(ui.get_left_beats().row_count(), 0);
+        assert!(!c.dirty.get());
+        ui.invoke_grid_left();
+        control(&ui, "DECK A draft BPM").set_accessible_value("NaN");
+        ui.invoke_save_grid_left();
+        assert!(ui.get_left_grid_editing());
+        assert!(engine.snapshot(DeckId::A).grid.is_none());
+        assert!(!c.dirty.get());
+        control(&ui, "DECK A draft BPM").set_accessible_value("128,5");
+        control(&ui, "DECK A anchor draft at playhead").invoke_accessible_default_action();
+        engine.play(DeckId::A);
+        control(&ui, "DECK A save beatgrid").invoke_accessible_default_action();
+        let committed = engine.snapshot(DeckId::A).grid.unwrap();
+        assert_eq!(committed.bpm(), 128.5);
+        assert_eq!(committed.anchor(), position);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).grid.is_none());
+        assert_eq!(ui.get_channel_a(), 0.6);
+        assert_eq!(ui.get_crossfader(), 0.3);
+        control(&ui, "DECK A clear beatgrid").invoke_accessible_default_action();
+        assert!(ui.get_left_grid_editing());
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(committed));
+        ui.invoke_cancel_grid_left();
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(committed));
+        ui.invoke_clear_grid_left();
+        control(&ui, "DECK A save beatgrid").invoke_accessible_default_action();
+        assert!(engine.snapshot(DeckId::A).grid.is_none());
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        assert_eq!(ui.get_channel_b(), 0.8);
+        ui.hide().unwrap();
+    }
+    #[test]
+    fn shared_track_grid_conflict_reload_and_restart_keep_explicit_saved_value() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let file = wav_file(8192, 48_000 * 8);
+        let bad = TempFile::new("mp3", b"invalid");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(
+            Ok(db.clone()),
+            vec![file.path().to_owned(), bad.path().to_owned()],
+        );
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        ui.invoke_select_library(1);
+        ui.invoke_load_library_left();
+        finish(&c);
+        ui.invoke_load_library_right();
+        finish(&c);
+        finish_storage(&c);
+        engine.seek_percent(DeckId::A, 25.).unwrap();
+        c.tick();
+        ui.invoke_grid_left();
+        control(&ui, "DECK A draft BPM").set_accessible_value("128.5");
+        ui.invoke_grid_anchor_left();
+        ui.invoke_grid_right();
+        control(&ui, "DECK B draft BPM").set_accessible_value("130");
+        ui.invoke_save_grid_left();
+        finish_storage(&c);
+        let saved = engine.snapshot(DeckId::A).grid.unwrap();
+        assert_eq!(saved.bpm(), 128.5);
+        assert_eq!(saved.anchor(), Duration::from_secs(2));
+        assert_eq!(engine.snapshot(DeckId::B).grid, Some(saved));
+        ui.invoke_save_grid_right();
+        assert!(ui.get_status().contains("changed"));
+        assert!(ui.get_right_grid_editing());
+        assert_eq!(engine.snapshot(DeckId::B).grid, Some(saved));
+        assert!(!c.dirty.get());
+        ui.invoke_cancel_grid_right();
+        assert!(!ui.get_right_grid_editing());
+        ui.invoke_grid_left();
+        control(&ui, "DECK A draft BPM").set_accessible_value("140");
+        ui.invoke_select_library(2);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(ui.get_left_grid_editing());
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(saved));
+        ui.invoke_select_library(1);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(!ui.get_left_grid_editing());
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(saved));
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _new_output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        ui.invoke_select_library(1);
+        ui.invoke_load_library_right();
+        finish(&c);
+        assert_eq!(engine.snapshot(DeckId::B).grid, Some(saved));
+        assert!(!ui.get_right_playing());
+        ui.invoke_clear_grid_right();
+        assert_eq!(engine.snapshot(DeckId::B).grid, Some(saved));
+        ui.invoke_save_grid_right();
+        finish_storage(&c);
+        assert!(engine.snapshot(DeckId::B).grid.is_none());
+        ui.invoke_load_library_right();
+        finish(&c);
+        assert!(engine.snapshot(DeckId::B).grid.is_none());
+        c.close_library().unwrap();
+    }
+    #[test]
     fn durable_library_reports_write_failure_retry_and_damaged_startup_without_data_loss() {
         i_slint_backend_testing::init_no_event_loop();
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
+        let path = dir.path().join("library.sqlite3");
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
         let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
@@ -819,18 +1752,21 @@ mod tests {
         );
         c.restore_library(Ok(path.clone()), Vec::new());
         finish_storage(&c);
-        std::fs::create_dir(&path).unwrap();
+        let blocker = rusqlite::Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
         c.import_paths(vec![fixture()]);
         finish_import(&c);
         finish_storage(&c);
         assert!(ui.get_library_save_failed());
         assert!(ui.get_library_storage().contains("NOT saved"));
-        std::fs::remove_dir(&path).unwrap();
+        blocker.execute_batch("ROLLBACK").unwrap();
+        drop(blocker);
         ui.invoke_retry_library_save();
         finish_storage(&c);
         assert!(!ui.get_library_save_failed());
         assert_eq!(ui.get_library_storage(), "Library saved");
         c.close_library().unwrap();
+        std::fs::remove_file(crate::library_store::side_path(&path, ".bak")).unwrap();
         std::fs::write(&path, b"unrecoverable catalog").unwrap();
         let ui = AppWindow::new().unwrap();
         let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
@@ -1008,7 +1944,8 @@ mod tests {
         control(&ui, "DECK A use BPM suggestion").invoke_accessible_default_action();
         assert_eq!(ui.get_left_grid_bpm(), suggestion);
         assert!(engine.snapshot(DeckId::A).grid.is_none());
-        control(&ui, "DECK A set beatgrid").invoke_accessible_default_action();
+        control(&ui, "DECK A edit beatgrid").invoke_accessible_default_action();
+        control(&ui, "DECK A save beatgrid").invoke_accessible_default_action();
         assert_eq!(
             engine.snapshot(DeckId::A).grid.unwrap().bpm(),
             f64::from(suggestion)
@@ -1058,18 +1995,20 @@ mod tests {
         );
         ui.show().unwrap();
         assert_eq!(
-            control(&ui, "DECK A set beatgrid").accessible_enabled(),
+            control(&ui, "DECK A edit beatgrid").accessible_enabled(),
             Some(false)
         );
         assert_eq!(ui.get_left_beats().row_count(), 0);
         let wav = wav_file(8192, 48_000 * 8);
         engine.load_a(wav.path()).unwrap();
-        engine.load_b(wav.path()).unwrap();
+        let other_wav = wav_file(4096, 48_000 * 8);
+        engine.load_b(other_wav.path()).unwrap();
         engine.seek_percent(DeckId::A, 25.0).unwrap();
         c.tick();
         let peaks = ui.get_left_detail();
         control(&ui, "DECK A manual BPM").set_accessible_value("120");
-        control(&ui, "DECK A set beatgrid").invoke_accessible_default_action();
+        control(&ui, "DECK A edit beatgrid").invoke_accessible_default_action();
+        control(&ui, "DECK A save beatgrid").invoke_accessible_default_action();
         assert!(ui.get_left_grid_active());
         assert!(ui.get_left_grid_caption().contains("120 BPM"));
         assert_eq!(ui.get_left_beats().row_count(), 17);
@@ -1096,7 +2035,8 @@ mod tests {
             }
         }
         control(&ui, "DECK B manual BPM").set_accessible_value("90");
-        control(&ui, "DECK B set beatgrid").invoke_accessible_default_action();
+        control(&ui, "DECK B edit beatgrid").invoke_accessible_default_action();
+        control(&ui, "DECK B save beatgrid").invoke_accessible_default_action();
         let right = ui.get_right_beats();
         assert!(ui.get_right_grid_active());
         control(&ui, "DECK A zoom in").invoke_accessible_default_action();
@@ -1105,6 +2045,7 @@ mod tests {
         control(&ui, "DECK A cue").invoke_accessible_default_action();
         assert!(ui.get_left_grid_active());
         control(&ui, "DECK A clear beatgrid").invoke_accessible_default_action();
+        control(&ui, "DECK A save beatgrid").invoke_accessible_default_action();
         assert!(!ui.get_left_grid_active());
         assert_eq!(ui.get_left_beats().row_count(), 0);
         assert_eq!(ui.get_right_beats(), right);

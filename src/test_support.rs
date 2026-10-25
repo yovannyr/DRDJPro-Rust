@@ -51,3 +51,51 @@ pub fn wav_samples(samples: &[i16], rate: u32, channels: u16) -> TempFile {
     }
     TempFile::new("wav", &wav)
 }
+
+pub fn tagged_mp3(title: &str, artist: &str, album: &str) -> TempFile {
+    fn size(value: usize) -> [u8; 4] {
+        [
+            (value >> 21 & 127) as u8,
+            (value >> 14 & 127) as u8,
+            (value >> 7 & 127) as u8,
+            (value & 127) as u8,
+        ]
+    }
+    let mut tags = Vec::new();
+    for (key, value) in [(b"TIT2", title), (b"TPE1", artist), (b"TALB", album)] {
+        let mut payload = vec![3];
+        payload.extend_from_slice(value.as_bytes());
+        tags.extend_from_slice(key);
+        tags.extend_from_slice(&size(payload.len()));
+        tags.extend_from_slice(&[0, 0]);
+        tags.extend_from_slice(&payload);
+    }
+    let mut bytes = b"ID3\x04\x00\x00".to_vec();
+    bytes.extend_from_slice(&size(tags.len()));
+    bytes.extend_from_slice(&tags);
+    bytes.extend_from_slice(&fs::read(fixture()).unwrap());
+    TempFile::new("mp3", &bytes)
+}
+pub fn tagged_wav(title: &str, artist: &str, album: &str) -> TempFile {
+    let wav = wav_file(8192, 48_000);
+    let raw = fs::read(wav.path()).unwrap();
+    let mut info = b"INFO".to_vec();
+    for (key, value) in [(b"INAM", title), (b"IART", artist), (b"IPRD", album)] {
+        let mut payload = value.as_bytes().to_vec();
+        payload.push(0);
+        info.extend_from_slice(key);
+        info.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        info.extend_from_slice(&payload);
+        if payload.len() % 2 != 0 {
+            info.push(0);
+        }
+    }
+    let mut bytes = raw[..36].to_vec();
+    bytes.extend_from_slice(b"LIST");
+    bytes.extend_from_slice(&(info.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&info);
+    bytes.extend_from_slice(&raw[36..]);
+    let len = bytes.len() as u32 - 8;
+    bytes[4..8].copy_from_slice(&len.to_le_bytes());
+    TempFile::new("wav", &bytes)
+}

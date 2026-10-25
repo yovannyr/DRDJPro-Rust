@@ -1,14 +1,22 @@
-//! Durable catalog I/O. A single worker owns the OS lock and all filesystem work.
-use crate::library::{Catalog, Library};
+//! SQLite catalog storage. The worker owns every database/file operation.
+use crate::library::{self, Catalog, Library, SavedTrack};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, SyncSender},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender},
+    },
     thread::{self, JoinHandle},
+    time::Duration,
 };
+const APPLICATION_ID: i32 = 0x4452444a;
+const SCHEMA_VERSION: i32 = 4;
+static STAGE_ID: AtomicU64 = AtomicU64::new(0);
 
-const MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub fn default_path() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("DRDJ_LIBRARY_PATH") {
         let path = PathBuf::from(path);
@@ -29,129 +37,563 @@ pub fn default_path() -> Result<PathBuf, String> {
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/share")));
     base.filter(|p| p.is_absolute())
-        .map(|p| p.join("DrDJPro/library.json"))
+        .map(|p| p.join("DrDJPro/library.sqlite3"))
         .ok_or_else(|| "No absolute user data directory available".into())
 }
-fn side_path(path: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn side_path(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)
 }
-fn read_catalog(path: &Path) -> Result<(Catalog, Vec<u8>), String> {
-    let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(|e| e.to_string())?
-        .take(MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err("Library file exceeds 32 MiB".into());
+fn paths(requested: &Path) -> Result<(PathBuf, PathBuf), String> {
+    if !requested.is_absolute() {
+        return Err("Library path must be absolute".into());
     }
-    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if let Some(version) = value.get("version").and_then(|v| v.as_u64()) {
-        if version != 1 {
-            return Err(format!("Unsupported library version {version}"));
-        }
+    if requested
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+    {
+        Ok((requested.with_extension("sqlite3"), requested.to_owned()))
+    } else {
+        Ok((requested.to_owned(), requested.with_extension("json")))
     }
-    let catalog: Catalog = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    catalog.validate()?;
-    Ok((catalog, bytes))
 }
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temp = side_path(path, ".tmp");
-    let mut file = OpenOptions::new()
+fn lock(path: &Path) -> Result<File, String> {
+    let file = OpenOptions::new()
+        .read(true)
         .write(true)
         .create(true)
-        .truncate(true)
-        .open(&temp)
+        .truncate(false)
+        .open(side_path(path, ".lock"))
         .map_err(|e| e.to_string())?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
+    file.try_lock()
+        .map_err(|e| format!("Library is in use or cannot be locked: {e}"))?;
+    Ok(file)
+}
+fn connect(path: &Path, create: bool) -> Result<Connection, String> {
+    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    if create {
+        flags |= OpenFlags::SQLITE_OPEN_CREATE;
+    }
+    let connection = Connection::open_with_flags(path, flags).map_err(|e| e.to_string())?;
+    connection
+        .busy_timeout(Duration::from_millis(200))
         .map_err(|e| e.to_string())?;
-    drop(file);
-    // Same-directory rename replaces the complete file; never truncate the live catalog.
-    fs::rename(&temp, path).map_err(|e| e.to_string())
+    connection
+        .pragma_update(None, "trusted_schema", false)
+        .map_err(|e| e.to_string())?;
+    Ok(connection)
+}
+#[derive(Debug)]
+enum InspectError {
+    Preserve(String),
+    Damaged(String),
+}
+impl From<rusqlite::Error> for InspectError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Damaged(error.to_string())
+    }
+}
+fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
+    let app: i32 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
+    let version: i32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if app == 0 && version == 0 {
+        let count: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )?;
+        if count == 0 {
+            return Ok(None);
+        }
+    }
+    if app != APPLICATION_ID {
+        return Err(InspectError::Preserve(
+            "Not a DrDJ library database; original preserved".into(),
+        ));
+    }
+    if !(1..=SCHEMA_VERSION).contains(&version) {
+        return Err(InspectError::Preserve(format!(
+            "Unsupported SQLite library version {version}; original preserved"
+        )));
+    }
+    let check: String = connection.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    if check != "ok" {
+        return Err(InspectError::Damaged(check));
+    }
+    let sql = if version == 1 {
+        "SELECT id,path,path_key,'','','',NULL,0,NULL,0 FROM tracks ORDER BY id LIMIT ?1"
+    } else {
+        "SELECT t.id,t.path,t.path_key,COALESCE(m.title,''),COALESCE(m.artist,''),COALESCE(m.album,''),m.duration_ms,COALESCE(m.scanned,0),m.error,COALESCE(m.duration_exact,0) FROM tracks t LEFT JOIN track_metadata m ON m.track_id=t.id ORDER BY t.id LIMIT ?1"
+    };
+    let mut stmt = connection.prepare(sql)?;
+    let mut rows = stmt.query([library::MAX_TRACKS as i64 + 1])?;
+    let mut tracks = Vec::new();
+    while let Some(row) = rows.next()? {
+        let path = PathBuf::from(row.get::<_, String>(1)?);
+        if row.get::<_, String>(2)? != library::identity(&path).to_string_lossy() {
+            return Err(InspectError::Damaged(
+                "Invalid library path identity".into(),
+            ));
+        }
+        tracks.push(SavedTrack {
+            grid: None,
+            id: row.get(0)?,
+            path,
+            metadata: crate::track_metadata::TrackMetadata {
+                title: row.get(3)?,
+                artist: row.get(4)?,
+                album: row.get(5)?,
+                duration_ms: row
+                    .get::<_, Option<i64>>(6)?
+                    .map(u64::try_from)
+                    .transpose()
+                    .map_err(|_| InspectError::Damaged("Negative metadata duration".into()))?,
+                scanned: row.get(7)?,
+                error: row.get(8)?,
+                duration_exact: row.get(9)?,
+            },
+        });
+    }
+    if version >= 4 {
+        let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
+        let mut statement =
+            connection.prepare("SELECT track_id,bpm,anchor_ns FROM track_grids LIMIT ?1")?;
+        let mut rows = statement.query([library::MAX_TRACKS as i64 + 1])?;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            count += 1;
+            if count > library::MAX_TRACKS {
+                return Err(InspectError::Damaged("Too many saved grids".into()));
+            }
+            let index = indices
+                .get(&row.get::<_, i32>(0)?)
+                .ok_or_else(|| InspectError::Damaged("Orphaned track grid".into()))?;
+            let anchor = u64::try_from(row.get::<_, i64>(2)?)
+                .map_err(|_| InspectError::Damaged("Negative grid anchor".into()))?;
+            tracks[*index].grid = Some(
+                crate::beatgrid::BeatGrid::new(row.get(1)?, Duration::from_nanos(anchor))
+                    .map_err(InspectError::Damaged)?,
+            );
+        }
+    }
+    let crates = if version >= 3 {
+        read_crates(connection)?
+    } else {
+        Default::default()
+    };
+    let catalog = Catalog {
+        version: 1,
+        tracks,
+        crates,
+    };
+    catalog.validate().map_err(InspectError::Damaged)?;
+    Ok(Some(catalog))
+}
+fn read_crates(connection: &Connection) -> Result<crate::crates::CrateCatalog, InspectError> {
+    let value: String = connection.query_row(
+        "SELECT value FROM library_meta WHERE key='last_crate_id'",
+        [],
+        |r| r.get(0),
+    )?;
+    let mut catalog = crate::crates::CrateCatalog {
+        last_id: value
+            .parse()
+            .map_err(|_| InspectError::Damaged("Invalid crate ID sequence".into()))?,
+        entries: Vec::new(),
+    };
+    let mut stmt =
+        connection.prepare("SELECT id,name,name_key FROM crates ORDER BY id LIMIT ?1")?;
+    let mut rows = stmt.query([crate::crates::MAX_CRATES as i64 + 1])?;
+    let mut indices = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let id: i32 = row.get(0)?;
+        let name: String = row.get(1)?;
+        if row.get::<_, String>(2)? != crate::crates::name_key(&name) {
+            return Err(InspectError::Damaged("Invalid crate name identity".into()));
+        }
+        indices.insert(id, catalog.entries.len());
+        catalog.entries.push(crate::crates::Crate {
+            id,
+            name,
+            tracks: HashSet::new(),
+        });
+    }
+    let mut stmt = connection.prepare("SELECT crate_id,track_id FROM crate_tracks LIMIT ?1")?;
+    let mut rows = stmt.query([crate::crates::MAX_MEMBERSHIPS as i64 + 1])?;
+    let mut count = 0;
+    while let Some(row) = rows.next()? {
+        count += 1;
+        if count > crate::crates::MAX_MEMBERSHIPS {
+            return Err(InspectError::Damaged(
+                "Crate membership limit exceeded".into(),
+            ));
+        }
+        let id: i32 = row.get(0)?;
+        let index = indices
+            .get(&id)
+            .ok_or_else(|| InspectError::Damaged("Orphaned crate membership".into()))?;
+        catalog.entries[*index].tracks.insert(row.get(1)?);
+    }
+    Ok(catalog)
+}
+fn create_grid_schema(connection: &Connection) -> Result<(), String> {
+    connection.execute_batch("CREATE TABLE track_grids(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,bpm REAL NOT NULL CHECK(bpm>=40 AND bpm<=240),anchor_ns INTEGER NOT NULL CHECK(anchor_ns>=0 AND anchor_ns<=604800000000000)) STRICT;").map_err(|e|e.to_string())
+}
+fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM track_grids", [])
+        .map_err(|e| e.to_string())?;
+    let mut statement = connection
+        .prepare("INSERT INTO track_grids(track_id,bpm,anchor_ns) VALUES(?1,?2,?3)")
+        .map_err(|e| e.to_string())?;
+    for track in &catalog.tracks {
+        if let Some(grid) = track.grid {
+            statement
+                .execute(rusqlite::params![
+                    track.id,
+                    grid.bpm(),
+                    grid.anchor().as_nanos() as i64
+                ])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+fn create_crate_schema(connection: &Connection) -> Result<(), String> {
+    connection.execute_batch("CREATE TABLE crates(id INTEGER PRIMARY KEY CHECK(id>0 AND id<2147483647),name TEXT NOT NULL CHECK(length(name)>0 AND length(name)<=128),name_key TEXT NOT NULL UNIQUE) STRICT;
+        CREATE TABLE crate_tracks(crate_id INTEGER NOT NULL REFERENCES crates(id) ON DELETE CASCADE,track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,PRIMARY KEY(crate_id,track_id)) STRICT;
+        CREATE INDEX crate_tracks_track ON crate_tracks(track_id);
+        INSERT INTO library_meta(key,value) VALUES('last_crate_id','0');").map_err(|e|e.to_string())
+}
+fn write_crates(
+    connection: &Connection,
+    catalog: &crate::crates::CrateCatalog,
+) -> Result<(), String> {
+    // Replace this bounded relationship snapshot inside the same transaction as track updates.
+    connection
+        .execute_batch("DELETE FROM crate_tracks; DELETE FROM crates;")
+        .map_err(|e| e.to_string())?;
+    let mut crates = connection
+        .prepare("INSERT INTO crates(id,name,name_key) VALUES(?1,?2,?3)")
+        .map_err(|e| e.to_string())?;
+    let mut members = connection
+        .prepare("INSERT INTO crate_tracks(crate_id,track_id) VALUES(?1,?2)")
+        .map_err(|e| e.to_string())?;
+    for entry in &catalog.entries {
+        crates
+            .execute(rusqlite::params![
+                entry.id,
+                entry.name,
+                crate::crates::name_key(&entry.name)
+            ])
+            .map_err(|e| e.to_string())?;
+        for track in &entry.tracks {
+            members
+                .execute(rusqlite::params![entry.id, track])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    connection.execute("INSERT INTO library_meta(key,value) VALUES('last_crate_id',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[catalog.last_id.to_string()]).map_err(|e|e.to_string())?;
+    Ok(())
+}
+fn configure(connection: &Connection) -> Result<(), String> {
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .map_err(|e| e.to_string())?;
+    // One storage connection: rollback journaling avoids unnecessary WAL sidecars.
+    let mode: String = connection
+        .query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if !mode.eq_ignore_ascii_case("delete") {
+        return Err("Cannot enable SQLite rollback journaling".into());
+    }
+    connection
+        .pragma_update(None, "synchronous", "EXTRA")
+        .map_err(|e| e.to_string())
+}
+fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
+    let old = inspect(connection)
+        .map_err(|e| format!("Cannot read catalog before save: {e:?}"))?
+        .map_or_else(Vec::new, |c| c.tracks);
+    let old: HashMap<_, _> = old.into_iter().map(|t| (t.id, t.path)).collect();
+    let new: HashMap<_, _> = catalog.tracks.iter().map(|t| (t.id, &t.path)).collect();
+    // Delete changed/removed identities first so path swaps cannot violate uniqueness midway.
+    let mut remove = connection
+        .prepare("DELETE FROM tracks WHERE id=?1")
+        .map_err(|e| e.to_string())?;
+    for (id, path) in &old {
+        if new.get(id).is_none_or(|new_path| **new_path != *path) {
+            remove.execute([id]).map_err(|e| e.to_string())?;
+        }
+    }
+    let mut insert = connection
+        .prepare("INSERT INTO tracks(id,path,path_key) VALUES (?1,?2,?3)")
+        .map_err(|e| e.to_string())?;
+    for track in &catalog.tracks {
+        if old.get(&track.id) == Some(&track.path) {
+            continue;
+        }
+        let path = track
+            .path
+            .to_str()
+            .ok_or("Library path is not valid UTF-8")?;
+        let key = library::identity(&track.path);
+        insert
+            .execute(rusqlite::params![
+                track.id,
+                path,
+                key.to_str().ok_or("Invalid path identity")?
+            ])
+            .map_err(|e| e.to_string())?;
+    }
+    let mut meta = connection.prepare("INSERT INTO track_metadata(track_id,title,artist,album,duration_ms,scanned,error,duration_exact) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+        ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact").map_err(|e| e.to_string())?;
+    for track in &catalog.tracks {
+        let m = &track.metadata;
+        meta.execute(rusqlite::params![
+            track.id,
+            m.title,
+            m.artist,
+            m.album,
+            m.duration_ms.map(|ms| ms as i64),
+            m.scanned,
+            m.error,
+            m.duration_exact
+        ])
+        .map_err(|e| e.to_string())?;
+    }
+    write_crates(connection, &catalog.crates)?;
+    write_grids(connection, catalog)
+}
+fn create_metadata_schema(connection: &Connection) -> Result<(), String> {
+    connection.execute_batch("CREATE TABLE track_metadata(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+        title TEXT NOT NULL CHECK(length(title)<=512), artist TEXT NOT NULL CHECK(length(artist)<=512), album TEXT NOT NULL CHECK(length(album)<=512),
+        duration_ms INTEGER CHECK(duration_ms>=0 AND duration_ms<=604800000), scanned INTEGER NOT NULL CHECK(scanned IN (0,1)), error TEXT CHECK(length(error)<=512), duration_exact INTEGER NOT NULL CHECK(duration_exact IN (0,1)) CHECK(duration_exact=0 OR duration_ms IS NOT NULL)) STRICT;")
+        .map_err(|e| e.to_string())
+}
+fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> Result<(), String> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    transaction.execute_batch("CREATE TABLE tracks(id INTEGER PRIMARY KEY CHECK(id>0 AND id<2147483647), path TEXT NOT NULL, path_key TEXT NOT NULL UNIQUE) STRICT;
+        CREATE TABLE library_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;").map_err(|e| e.to_string())?;
+    create_metadata_schema(&transaction)?;
+    create_crate_schema(&transaction)?;
+    create_grid_schema(&transaction)?;
+    transaction
+        .pragma_update(None, "application_id", APPLICATION_ID)
+        .map_err(|e| e.to_string())?;
+    transaction
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(|e| e.to_string())?;
+    transaction
+        .execute(
+            "INSERT INTO library_meta(key,value) VALUES ('initial_source',?1)",
+            [source],
+        )
+        .map_err(|e| e.to_string())?;
+    write_tracks(&transaction, catalog)?;
+    transaction.commit().map_err(|e| e.to_string())
+}
+fn stage(path: &Path) -> Result<PathBuf, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let path = side_path(
+        path,
+        &format!(
+            ".stage-{}-{stamp}-{}",
+            std::process::id(),
+            STAGE_ID.fetch_add(1, Ordering::Relaxed)
+        ),
+    );
+    File::options()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    Ok(path)
+}
+fn backup_to(connection: &Connection, path: &Path) -> Result<(), String> {
+    let temp = stage(path)?;
+    let result = (|| {
+        connection
+            .backup(rusqlite::MAIN_DB, &temp, rusqlite::backup::NO_PROGRESS)
+            .map_err(|e| e.to_string())?;
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&temp)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| e.to_string())?;
+        fs::rename(&temp, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+fn recover(path: &Path) -> Result<(), String> {
+    for suffix in ["-journal", "-wal", "-shm"] {
+        if side_path(path, suffix)
+            .try_exists()
+            .map_err(|e| e.to_string())?
+        {
+            return Err("Damaged database has recovery sidecars; original preserved".into());
+        }
+    }
+    let backup = side_path(path, ".bak");
+    let source = Connection::open_with_flags(&backup, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    source
+        .pragma_update(None, "trusted_schema", false)
+        .map_err(|e| e.to_string())?;
+    inspect(&source)
+        .map_err(|e| format!("SQLite backup unavailable: {e:?}"))?
+        .ok_or("SQLite backup is uninitialized")?;
+    if path.try_exists().map_err(|e| e.to_string())? {
+        let preserved = stage(&side_path(path, ".damaged"))?;
+        let mut output = OpenOptions::new()
+            .write(true)
+            .open(&preserved)
+            .map_err(|e| e.to_string())?;
+        io::copy(
+            &mut File::open(path).map_err(|e| e.to_string())?,
+            &mut output,
+        )
+        .map_err(|e| e.to_string())?;
+        output.sync_all().map_err(|e| e.to_string())?;
+    }
+    backup_to(&source, path)
 }
 struct Store {
     path: PathBuf,
-    _lock: File,
-    known_good: Option<Vec<u8>>,
+    connection: Connection,
+    _locks: [File; 2],
 }
 impl Store {
-    fn open(path: PathBuf) -> Result<(Self, Library, String), String> {
-        if !path.is_absolute() {
-            return Err("Library path must be absolute".into());
-        }
+    fn open(requested: PathBuf) -> Result<(Self, Library, String), String> {
+        let (path, legacy) = paths(&requested)?;
         fs::create_dir_all(path.parent().ok_or("Library path has no parent")?)
             .map_err(|e| e.to_string())?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(side_path(&path, ".lock"))
-            .map_err(|e| e.to_string())?;
-        lock.try_lock()
-            .map_err(|e| format!("Library is in use or cannot be locked: {e}"))?;
-        let backup = side_path(&path, ".bak");
-        let primary_exists = path.try_exists().map_err(|e| e.to_string())?;
-        let loaded = if primary_exists {
-            Some(read_catalog(&path))
+        // The second lock also excludes a still-running JSON-era application.
+        let locks = [lock(&path)?, lock(&legacy)?];
+        let exists = path.try_exists().map_err(|e| e.to_string())?;
+        let opened = if exists {
+            connect(&path, false)
+                .map_err(InspectError::Damaged)
+                .and_then(|connection| {
+                    let catalog = inspect(&connection)?;
+                    Ok((connection, catalog))
+                })
+                .map(Some)
         } else {
-            None
+            Ok(None)
         };
-        // Never downgrade an unknown schema to an older backup and overwrite newer data.
-        if loaded.as_ref().is_some_and(|r| {
-            r.as_ref()
-                .err()
-                .is_some_and(|e| e.starts_with("Unsupported library version"))
-        }) {
-            return Err(loaded.unwrap().err().unwrap());
-        }
-        let (catalog, known_good, note) = match loaded {
-            Some(Ok((catalog, bytes))) => (catalog, Some(bytes), "Library restored"),
-            failure => {
-                if backup.try_exists().map_err(|e| e.to_string())? {
-                    let (catalog, bytes) = read_catalog(&backup)
-                        .map_err(|e| format!("Library and backup unavailable: {e}"))?;
-                    (catalog, Some(bytes), "Library recovered from backup")
-                } else if let Some(Err(error)) = failure {
-                    return Err(format!("Library damaged; original preserved: {error}"));
-                } else {
+        let has_backup = side_path(&path, ".bak")
+            .try_exists()
+            .map_err(|e| e.to_string())?;
+        let (mut connection, catalog, note) = match opened {
+            Ok(Some((connection, Some(catalog)))) => {
+                (connection, catalog, "SQLite library restored".to_string())
+            }
+            Err(InspectError::Preserve(error)) => return Err(error),
+            Err(InspectError::Damaged(error)) if !has_backup => {
+                return Err(format!(
+                    "SQLite library damaged; original preserved: {error}"
+                ))
+            }
+            other => {
+                // Drop any empty/uninitialized connection before Windows file replacement.
+                drop(other);
+                if has_backup {
+                    recover(&path)?;
+                    let connection = connect(&path, false)?;
+                    let catalog = inspect(&connection)
+                        .map_err(|e| format!("Recovered database invalid: {e:?}"))?
+                        .ok_or("Recovered database empty")?;
                     (
-                        Catalog {
-                            version: 1,
-                            tracks: Vec::new(),
-                        },
-                        None,
-                        "New library",
+                        connection,
+                        catalog,
+                        "SQLite library recovered from backup".to_string(),
                     )
+                } else {
+                    // Validate legacy input BEFORE creating or modifying the database.
+                    let (catalog, source) = crate::legacy_catalog::load(&legacy)?;
+                    let mut connection = connect(&path, true)?;
+                    configure(&connection)?;
+                    initialize(&mut connection, &catalog, source)?;
+                    let note = if source == "New SQLite library" {
+                        source.into()
+                    } else {
+                        format!("Migrated {source} to SQLite")
+                    };
+                    (connection, catalog, note)
                 }
             }
         };
+        configure(&connection)?;
+        let version: i32 = connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if version < SCHEMA_VERSION {
+            backup_to(&connection, &side_path(&path, ".bak"))?;
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| e.to_string())?;
+            if version == 1 {
+                create_metadata_schema(&tx)?;
+            }
+            if version < 3 {
+                create_crate_schema(&tx)?;
+            }
+            create_grid_schema(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+        let pending: HashSet<_> = catalog
+            .tracks
+            .iter()
+            .filter(|t| !t.metadata.scanned)
+            .map(|t| t.id)
+            .collect();
         let library = Library::restore(catalog)?;
-        Ok((
-            Self {
-                path,
-                _lock: lock,
-                known_good,
-            },
-            library,
-            note.into(),
-        ))
+        let mut store = Self {
+            path,
+            connection,
+            _locks: locks,
+        };
+        let enriched = library.catalog();
+        if enriched
+            .tracks
+            .iter()
+            .any(|t| pending.contains(&t.id) && t.metadata.scanned)
+        {
+            store.save(&enriched)?;
+        }
+        Ok((store, library, note))
     }
+
     fn save(&mut self, catalog: &Catalog) -> Result<(), String> {
         catalog.validate()?;
-        let bytes = serde_json::to_vec(catalog).map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > MAX_BYTES {
-            return Err("Library file exceeds 32 MiB".into());
+        if catalog.tracks.iter().any(|t| t.path.to_str().is_none()) {
+            return Err("Library path is not valid UTF-8".into());
         }
-        if let Some(previous) = &self.known_good {
-            atomic_write(&side_path(&self.path, ".bak"), previous)?;
-        }
-        atomic_write(&self.path, &bytes)?;
-        self.known_good = Some(bytes);
-        Ok(())
+        // A complete SQLite backup of the previous committed state, never a raw live-file copy.
+        inspect(&self.connection)
+            .map_err(|e| format!("Cannot save damaged catalog: {e:?}"))?
+            .ok_or("Catalog not initialized")?;
+        backup_to(&self.connection, &side_path(&self.path, ".bak"))?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        write_tracks(&transaction, catalog)?;
+        transaction.commit().map_err(|e| e.to_string())
     }
 }
 
@@ -217,136 +659,296 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::SavedTrack;
     fn catalog(path: PathBuf, id: i32) -> Catalog {
         Catalog {
             version: 1,
-            tracks: vec![SavedTrack { id, path }],
+            crates: Default::default(),
+            tracks: vec![SavedTrack {
+                id,
+                path,
+                metadata: Default::default(),
+                grid: None,
+            }],
+        }
+    }
+    fn rows(store: &Store) -> Vec<i32> {
+        inspect(&store.connection)
+            .unwrap()
+            .unwrap()
+            .tracks
+            .iter()
+            .map(|t| t.id)
+            .collect()
+    }
+    fn json(path: &Path, catalog: &Catalog) -> Vec<u8> {
+        let bytes = serde_json::to_vec(catalog).unwrap();
+        fs::write(path, &bytes).unwrap();
+        bytes
+    }
+    #[test]
+    fn migrates_unicode_and_missing_paths_with_ids_and_preserves_both_json_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("library.json");
+        let music = dir.path().join("Música 日本.wav");
+        fs::write(&music, b"fixture").unwrap();
+        let mut data = catalog(music.clone(), 27);
+        data.tracks.push(SavedTrack {
+            id: 91,
+            path: dir.path().join("missing.mp3"),
+            metadata: Default::default(),
+            grid: None,
+        });
+        let original = json(&legacy, &data);
+        let backup = json(
+            &side_path(&legacy, ".bak"),
+            &catalog(dir.path().join("old.wav"), 4),
+        );
+        let (store, mut library, note) = Store::open(legacy.clone()).unwrap();
+        assert!(note.contains("Migrated JSON library"));
+        assert_eq!(store.path, legacy.with_extension("sqlite3"));
+        assert_eq!(
+            library.visible().iter().find(|t| t.id == 27).unwrap().path,
+            music
+        );
+        assert_eq!(library.missing_count(), 1);
+        library.insert([dir.path().join("next.wav")]);
+        assert_eq!(library.catalog().tracks.last().unwrap().id, 92);
+        assert_eq!(rows(&store), vec![27, 91]);
+        let source: String = store
+            .connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='initial_source'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(source, "JSON library");
+        assert_eq!(fs::read(&legacy).unwrap(), original);
+        assert_eq!(fs::read(side_path(&legacy, ".bak")).unwrap(), backup);
+        drop(store);
+        // An old file changed by another program must NEVER be imported over initialized SQLite.
+        fs::write(&legacy, b"now invalid").unwrap();
+        let (store, library, note) = Store::open(legacy).unwrap();
+        assert_eq!(note, "SQLite library restored");
+        assert_eq!(rows(&store), vec![27, 91]);
+        assert_eq!(library.len(), 2);
+    }
+    #[test]
+    fn json_backup_migrates_when_primary_is_damaged_or_missing() {
+        for absent in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let legacy = dir.path().join("library.json");
+            if !absent {
+                fs::write(&legacy, b"partial").unwrap();
+            }
+            let bytes = json(
+                &side_path(&legacy, ".bak"),
+                &catalog(dir.path().join("one.wav"), 9),
+            );
+            let (store, _, note) = Store::open(legacy.clone()).unwrap();
+            assert!(note.contains("JSON backup"));
+            assert_eq!(rows(&store), vec![9]);
+            assert_eq!(fs::read(side_path(&legacy, ".bak")).unwrap(), bytes);
+            if !absent {
+                assert_eq!(fs::read(legacy).unwrap(), b"partial");
+            }
         }
     }
     #[test]
-    fn restart_preserves_ids_unicode_and_missing_files_without_reusing_identity() {
+    fn damaged_unknown_or_invalid_json_never_creates_database_or_changes_sources() {
+        for bytes in [
+            b"broken".as_slice(),
+            br#"{"version":2,"tracks":[],"future":true}"#,
+            br#"{"version":1,"tracks":[{"id":0,"path":"relative.wav"}]}"#,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let legacy = dir.path().join("library.json");
+            fs::write(&legacy, bytes).unwrap();
+            if bytes.starts_with(b"{\"version\":2") {
+                json(
+                    &side_path(&legacy, ".bak"),
+                    &catalog(dir.path().join("old.wav"), 1),
+                );
+            }
+            assert!(Store::open(legacy.clone()).is_err());
+            assert_eq!(fs::read(&legacy).unwrap(), bytes);
+            assert!(!legacy.with_extension("sqlite3").exists());
+        }
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
-        let music = dir.path().join("Música 日本.wav");
-        fs::write(&music, b"fixture").unwrap();
-        let (mut store, _, _) = Store::open(path.clone()).unwrap();
-        store.save(&catalog(music.clone(), 27)).unwrap();
+        let legacy = dir.path().join("large.json");
+        File::create(&legacy)
+            .unwrap()
+            .set_len(32 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(crate::legacy_catalog::load(&legacy)
+            .err()
+            .unwrap()
+            .contains("32 MiB"));
+    }
+    #[test]
+    fn fresh_database_and_legacy_override_resolve_to_same_profile_without_losing_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, note) = Store::open(db.clone()).unwrap();
+        assert_eq!(note, "New SQLite library");
+        store
+            .save(&catalog(dir.path().join("one.wav"), 27))
+            .unwrap();
         drop(store);
-        let (_, mut library, note) = Store::open(path.clone()).unwrap();
-        assert_eq!(note, "Library restored");
-        assert_eq!(library.visible()[0].id, 27);
-        assert_eq!(library.visible()[0].path, music);
-        assert!(library.visible()[0].available);
-        library.insert([dir.path().join("second.mp3")]);
+        let (store, mut library, _) = Store::open(db.with_extension("json")).unwrap();
+        assert_eq!(rows(&store), vec![27]);
+        library.insert([dir.path().join("new.mp3")]);
         assert_eq!(library.catalog().tracks[1].id, 28);
-        fs::remove_file(&music).unwrap();
-        let (_, library, _) = Store::open(path).unwrap();
-        assert_eq!(library.missing_count(), 1);
-        assert_eq!(library.visible()[0].id, 27);
-        assert_eq!(library.visible()[0].path, music);
+        assert!(paths(Path::new("relative.sqlite3")).is_err());
     }
     #[test]
-    fn corrupt_primary_recovers_previous_commit_and_does_not_backup_corruption() {
+    fn schema_creation_and_import_are_one_transaction_and_can_be_retried() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
-        let first = catalog(dir.path().join("first.wav"), 11);
-        let second = catalog(dir.path().join("second.mp3"), 12);
-        let (mut store, _, _) = Store::open(path.clone()).unwrap();
-        store.save(&first).unwrap();
-        store.save(&second).unwrap();
-        drop(store);
-        fs::write(&path, b"{partial").unwrap();
-        let (mut store, library, note) = Store::open(path.clone()).unwrap();
-        assert!(note.contains("recovered"));
-        assert_eq!(library.catalog().tracks[0].id, 11);
-        store.save(&library.catalog()).unwrap();
-        assert_eq!(read_catalog(&path).unwrap().0.tracks[0].id, 11);
-        assert_eq!(
-            read_catalog(&side_path(&path, ".bak")).unwrap().0.tracks[0].id,
-            11
-        );
-    }
-    #[test]
-    fn interrupted_temp_is_ignored_and_write_failure_preserves_valid_backup() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
-        let data = catalog(dir.path().join("one.wav"), 1);
-        let (mut store, _, _) = Store::open(path.clone()).unwrap();
-        store.save(&data).unwrap();
-        drop(store);
-        fs::write(side_path(&path, ".tmp"), b"unfinished").unwrap();
-        let (mut store, library, _) = Store::open(path.clone()).unwrap();
-        assert_eq!(library.len(), 1);
-        fs::remove_file(&path).unwrap();
-        fs::create_dir(&path).unwrap(); // Force rename failure independent of filesystem permissions.
-        assert!(store.save(&data).is_err());
-        assert_eq!(
-            read_catalog(&side_path(&path, ".bak")).unwrap().0.tracks[0].id,
-            1
-        );
-        fs::remove_dir(&path).unwrap();
-        drop(store);
-        let (_, restored, note) = Store::open(path).unwrap();
-        assert!(note.contains("recovered"));
-        assert_eq!(restored.len(), 1);
-    }
-    #[test]
-    fn unknown_schema_or_unrecoverable_damage_is_preserved_and_not_silently_reset() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
-        let (mut store, _, _) = Store::open(path.clone()).unwrap();
-        let data = catalog(dir.path().join("one.wav"), 1);
-        store.save(&data).unwrap();
-        store.save(&data).unwrap();
-        drop(store);
-        let future = br#"{"version":2,"tracks":[],"newSchema":true}"#;
-        fs::write(&path, future).unwrap();
-        assert!(Store::open(path.clone())
-            .err()
-            .unwrap()
-            .contains("Unsupported library version"));
-        assert_eq!(fs::read(&path).unwrap(), future);
-        fs::remove_file(side_path(&path, ".bak")).unwrap();
-        fs::write(&path, b"broken").unwrap();
-        assert!(Store::open(path.clone())
-            .err()
-            .unwrap()
-            .contains("original preserved"));
-        assert_eq!(fs::read(path).unwrap(), b"broken");
-    }
-    #[test]
-    fn os_lock_prevents_concurrent_writers_and_is_released_on_close() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
-        let (first, _, _) = Store::open(path.clone()).unwrap();
-        assert!(Store::open(path.clone()).err().unwrap().contains("locked"));
-        drop(first);
-        assert!(Store::open(path).is_ok());
-    }
-    #[test]
-    fn validates_untrusted_catalog_and_bounds_file_reads() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
-        let mut data = catalog(dir.path().join("one.wav"), 1);
-        data.tracks.push(data.tracks[0].clone());
-        assert!(data.validate().is_err());
+        let db = dir.path().join("library.sqlite3");
+        let mut connection = connect(&db, true).unwrap();
+        configure(&connection).unwrap();
+        let mut data = catalog(dir.path().join("first.wav"), 1);
+        data.tracks.push(SavedTrack {
+            id: 0,
+            path: dir.path().join("invalid.wav"),
+            metadata: Default::default(),
+            grid: None,
+        });
+        assert!(initialize(&mut connection, &data, "test fault").is_err());
+        assert!(inspect(&connection).unwrap().is_none());
+        let count: i32 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
         data.tracks.pop();
-        data.tracks[0].id = -1;
-        assert!(data.validate().is_err());
-        data.tracks[0].id = 1;
-        data.tracks[0].path = PathBuf::from("relative.wav");
-        assert!(data.validate().is_err());
-        let file = File::create(&path).unwrap();
-        file.set_len(MAX_BYTES + 1).unwrap();
-        drop(file);
-        assert!(read_catalog(&path).err().unwrap().contains("32 MiB"));
+        initialize(&mut connection, &data, "retry").unwrap();
+        assert_eq!(inspect(&connection).unwrap().unwrap().tracks[0].id, 1);
+    }
+    #[test]
+    fn transaction_failure_rolls_back_prior_deletions_and_partial_inserts_then_retry_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        store
+            .save(&catalog(dir.path().join("first.wav"), 1))
+            .unwrap();
+        store.connection.execute_batch("CREATE TRIGGER fail_insert BEFORE INSERT ON tracks WHEN NEW.id=3 BEGIN SELECT RAISE(ABORT,'injected failure'); END;").unwrap();
+        let mut data = catalog(dir.path().join("second.wav"), 2);
+        data.tracks.push(SavedTrack {
+            id: 3,
+            path: dir.path().join("third.mp3"),
+            metadata: Default::default(),
+            grid: None,
+        });
+        assert!(store
+            .save(&data)
+            .err()
+            .unwrap()
+            .contains("injected failure"));
+        assert_eq!(rows(&store), vec![1]);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_insert")
+            .unwrap();
+        store.save(&data).unwrap();
+        assert_eq!(rows(&store), vec![2, 3]);
+    }
+    #[test]
+    fn future_schema_and_foreign_sqlite_database_are_never_overwritten_from_json_or_backup() {
+        for foreign in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            store.save(&catalog(dir.path().join("one.wav"), 1)).unwrap();
+            if foreign {
+                store
+                    .connection
+                    .pragma_update(None, "application_id", 42)
+                    .unwrap();
+            } else {
+                store
+                    .connection
+                    .pragma_update(None, "user_version", 5)
+                    .unwrap();
+            }
+            drop(store);
+            json(
+                &db.with_extension("json"),
+                &catalog(dir.path().join("old.wav"), 2),
+            );
+            let original = fs::read(&db).unwrap();
+            assert!(Store::open(db.clone())
+                .err()
+                .unwrap()
+                .contains("original preserved"));
+            assert_eq!(fs::read(db).unwrap(), original);
+        }
+    }
+    #[test]
+    fn damaged_sqlite_recovers_previous_good_backup_and_preserves_damaged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        store
+            .save(&catalog(dir.path().join("first.wav"), 11))
+            .unwrap();
+        store
+            .save(&catalog(dir.path().join("second.mp3"), 12))
+            .unwrap();
+        drop(store);
+        fs::write(&db, b"damaged SQLite database").unwrap();
+        let (store, library, note) = Store::open(db).unwrap();
+        assert!(note.contains("recovered from backup"));
+        assert_eq!(library.catalog().tracks[0].id, 11);
+        assert_eq!(rows(&store), vec![11]);
+        let preserved = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .find(|f| f.file_name().to_string_lossy().contains(".damaged.stage-"))
+            .unwrap();
+        assert_eq!(
+            fs::read(preserved.path()).unwrap(),
+            b"damaged SQLite database"
+        );
+    }
+    #[test]
+    fn unrecoverable_database_is_not_recreated_from_stale_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        fs::write(&db, b"broken SQLite").unwrap();
+        json(
+            &db.with_extension("json"),
+            &catalog(dir.path().join("stale.wav"), 1),
+        );
+        assert!(Store::open(db.clone()).is_err());
+        assert_eq!(fs::read(&db).unwrap(), b"broken SQLite");
+        fs::write(side_path(&db, ".bak"), b"broken backup").unwrap();
+        assert!(Store::open(db.clone()).is_err());
+        assert_eq!(fs::read(db).unwrap(), b"broken SQLite");
+    }
+    #[test]
+    fn locks_exclude_current_and_json_era_writers_and_release_on_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let legacy = db.with_extension("json");
+        let old = lock(&legacy).unwrap();
+        assert!(Store::open(db.clone()).err().unwrap().contains("locked"));
+        assert!(!db.exists());
+        drop(old);
+        let (store, _, _) = Store::open(db.clone()).unwrap();
+        assert!(Store::open(db.clone()).is_err());
+        assert!(lock(&legacy).is_err());
+        drop(store);
+        assert!(Store::open(db).is_ok());
     }
     #[test]
     fn worker_close_flushes_latest_snapshot_before_restart() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("library.json");
-        let worker = Worker::start(path.clone()).unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let worker = Worker::start(db.clone()).unwrap();
         assert!(matches!(
             worker.events.recv().unwrap(),
             Event::Loaded(Ok(_))
@@ -354,15 +956,421 @@ mod tests {
         worker
             .save(catalog(dir.path().join("first.wav"), 1))
             .unwrap();
-        // Closing during the outstanding save must persist the final, newer snapshot.
         worker
             .close(Some(catalog(dir.path().join("latest.wav"), 2)))
             .unwrap();
-        let worker = Worker::start(path).unwrap();
+        let worker = Worker::start(db).unwrap();
         let Event::Loaded(Ok((library, _))) = worker.events.recv().unwrap() else {
             panic!("restore failed")
         };
         assert_eq!(library.catalog().tracks[0].id, 2);
         worker.close(None).unwrap();
+    }
+    // Invoked only by the isolated child-process test below; normal suite execution is a no-op.
+    #[test]
+    fn crash_fixture() {
+        let Some(path) = std::env::var_os("DRDJ_SQLITE_CRASH_TEST_PATH") else {
+            return;
+        };
+        let db = PathBuf::from(path);
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        store
+            .save(&catalog(db.with_file_name("committed.wav"), 1))
+            .unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA cache_size=1; BEGIN IMMEDIATE; DELETE FROM tracks;")
+            .unwrap();
+        for id in 2..2002 {
+            let path = db.with_file_name(format!("pending-{id}.wav"));
+            store
+                .connection
+                .execute(
+                    "INSERT INTO tracks(id,path,path_key) VALUES (?1,?2,?2)",
+                    rusqlite::params![id, path.to_str().unwrap()],
+                )
+                .unwrap();
+        }
+        fs::write(
+            side_path(&db, ".ready"),
+            b"uncommitted transaction with cache spills",
+        )
+        .unwrap();
+        loop {
+            thread::park();
+        }
+    }
+    #[test]
+    fn process_termination_recovers_hot_journal_and_releases_os_locks() {
+        use std::process::{Child, Command, Stdio};
+        struct TestChild(Child);
+        impl Drop for TestChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let mut child = TestChild(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "library_store::tests::crash_fixture",
+                    "--nocapture",
+                ])
+                .env("DRDJ_SQLITE_CRASH_TEST_PATH", &db)
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !side_path(&db, ".ready").exists() {
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "child failed before ready"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child did not reach uncommitted transaction"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(side_path(&db, "-journal").exists());
+        assert!(Store::open(db.clone()).err().unwrap().contains("locked"));
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        let (store, _, note) = Store::open(db).unwrap();
+        assert_eq!(note, "SQLite library restored");
+        assert_eq!(rows(&store), vec![1]);
+        let check: String = store
+            .connection
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(check, "ok");
+    }
+    #[test]
+    fn upgrades_version_one_transactionally_and_caches_tags_for_missing_media() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let file = crate::test_support::tagged_wav(
+            "Old catalog title",
+            "Original artist",
+            "Original album",
+        );
+        let connection = connect(&db, true).unwrap();
+        connection.execute_batch("CREATE TABLE tracks(id INTEGER PRIMARY KEY,path TEXT NOT NULL,path_key TEXT NOT NULL UNIQUE) STRICT; CREATE TABLE library_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT;").unwrap();
+        connection
+            .pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+        connection
+            .execute(
+                "INSERT INTO tracks VALUES(73,?1,?2)",
+                rusqlite::params![
+                    file.path().to_str().unwrap(),
+                    library::identity(file.path()).to_str().unwrap()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+        let (store, library, _) = Store::open(db.clone()).unwrap();
+        let version: i32 = store
+            .connection
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        let meta = &library.visible()[0].metadata;
+        assert_eq!(meta.title, "Old catalog title");
+        assert_eq!(meta.artist, "Original artist");
+        assert_eq!(meta.album, "Original album");
+        assert_eq!(meta.duration_ms, Some(1000));
+        assert!(!meta.duration_exact);
+        assert_eq!(rows(&store), vec![73]);
+        assert_eq!(
+            inspect(&store.connection).unwrap().unwrap().tracks[0].metadata,
+            *meta
+        );
+        drop(store);
+        drop(file);
+        let (store, library, _) = Store::open(db).unwrap();
+        assert_eq!(rows(&store), vec![73]);
+        assert_eq!(library.missing_count(), 1);
+        assert_eq!(library.visible()[0].metadata.title, "Old catalog title");
+    }
+    #[test]
+    fn failed_metadata_schema_upgrade_preserves_version_one_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let connection = connect(&db, true).unwrap();
+        connection.execute_batch("CREATE TABLE tracks(id INTEGER PRIMARY KEY,path TEXT NOT NULL,path_key TEXT NOT NULL UNIQUE) STRICT; CREATE TABLE library_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) STRICT; CREATE TABLE track_metadata(block_upgrade INTEGER);").unwrap();
+        connection
+            .pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+        let path = dir.path().join("missing.wav");
+        connection
+            .execute(
+                "INSERT INTO tracks VALUES(9,?1,?2)",
+                rusqlite::params![
+                    path.to_str().unwrap(),
+                    library::identity(&path).to_str().unwrap()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+        assert!(Store::open(db.clone()).is_err());
+        let connection = connect(&db, false).unwrap();
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT id FROM tracks", [], |r| r.get::<_, i32>(0))
+                .unwrap(),
+            9
+        );
+    }
+    #[test]
+    fn crate_memberships_and_deleted_id_high_water_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("one.wav"), 1);
+        let first = data.crates.create("Música 日本").unwrap();
+        let last = data.crates.create("Warmup").unwrap();
+        data.crates.add(first, 1).unwrap();
+        data.crates.add(last, 1).unwrap();
+        store.save(&data).unwrap();
+        drop(store);
+        let (mut store, library, _) = Store::open(db.clone()).unwrap();
+        let mut data = library.catalog();
+        assert_eq!(data.crates.entries.len(), 2);
+        assert_eq!(data.crates.entries[0].tracks, HashSet::from([1]));
+        data.crates.delete(last).unwrap();
+        data.crates.delete(first).unwrap();
+        store.save(&data).unwrap();
+        drop(store);
+        let (_, library, _) = Store::open(db).unwrap();
+        let mut data = library.catalog();
+        assert!(data.crates.entries.is_empty());
+        assert!(data.crates.create("Next").unwrap() > last);
+        assert_eq!(data.tracks[0].id, 1);
+    }
+    #[test]
+    fn crate_snapshot_failure_rolls_back_names_memberships_and_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let mut data = catalog(dir.path().join("one.wav"), 1);
+        data.tracks.push(SavedTrack {
+            id: 2,
+            path: dir.path().join("two.wav"),
+            metadata: Default::default(),
+            grid: None,
+        });
+        let id = data.crates.create("Original").unwrap();
+        data.crates.add(id, 1).unwrap();
+        store.save(&data).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER fail_member BEFORE INSERT ON crate_tracks WHEN NEW.track_id=2 BEGIN SELECT RAISE(ABORT,'membership failure'); END;").unwrap();
+        data.crates.rename(id, "Changed").unwrap();
+        data.crates.remove(id, 1).unwrap();
+        data.crates.add(id, 2).unwrap();
+        data.crates.create("New").unwrap();
+        assert!(store
+            .save(&data)
+            .err()
+            .unwrap()
+            .contains("membership failure"));
+        let old = inspect(&store.connection).unwrap().unwrap();
+        assert_eq!(old.crates.last_id, id);
+        assert_eq!(old.crates.entries[0].name, "Original");
+        assert_eq!(old.crates.entries[0].tracks, HashSet::from([1]));
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_member")
+            .unwrap();
+        store.save(&data).unwrap();
+        assert_eq!(
+            inspect(&store.connection).unwrap().unwrap().crates.entries[0].tracks,
+            HashSet::from([2])
+        );
+    }
+    #[test]
+    fn schema_two_upgrade_and_failed_upgrade_preserve_cached_metadata() {
+        for fail in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            let mut data = catalog(dir.path().join("missing.wav"), 27);
+            data.tracks[0].metadata.title = "Cached title".into();
+            data.tracks[0].metadata.scanned = true;
+            store.save(&data).unwrap();
+            drop(store);
+            let connection = connect(&db, false).unwrap();
+            connection.execute_batch("DROP TABLE track_grids; DROP TABLE crate_tracks; DROP TABLE crates; DELETE FROM library_meta WHERE key='last_crate_id'; PRAGMA user_version=2;").unwrap();
+            if fail {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE crates(preserve INTEGER); INSERT INTO crates VALUES(99);",
+                    )
+                    .unwrap();
+            }
+            drop(connection);
+            if fail {
+                assert!(Store::open(db.clone()).is_err());
+                let connection = connect(&db, false).unwrap();
+                assert_eq!(
+                    connection
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                        .unwrap(),
+                    2
+                );
+                assert_eq!(
+                    connection
+                        .query_row("SELECT title FROM track_metadata", [], |r| r
+                            .get::<_, String>(0))
+                        .unwrap(),
+                    "Cached title"
+                );
+                assert_eq!(
+                    connection
+                        .query_row("SELECT preserve FROM crates", [], |r| r.get::<_, i32>(0))
+                        .unwrap(),
+                    99
+                );
+            } else {
+                let (store, library, _) = Store::open(db).unwrap();
+                assert_eq!(library.visible()[0].id, 27);
+                assert_eq!(library.visible()[0].metadata.title, "Cached title");
+                assert!(library.crates().entries.is_empty());
+                assert_eq!(
+                    store
+                        .connection
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                        .unwrap(),
+                    4
+                );
+            }
+        }
+    }
+    #[test]
+    fn fractional_grid_and_nanosecond_anchor_survive_restart_and_explicit_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        let grid = crate::beatgrid::BeatGrid::new(128.5, Duration::new(1, 123456789)).unwrap();
+        data.tracks[0].grid = Some(grid);
+        let id = data.crates.create("Set").unwrap();
+        data.crates.add(id, 27).unwrap();
+        store.save(&data).unwrap();
+        drop(store);
+        let (mut store, library, _) = Store::open(db.clone()).unwrap();
+        let mut data = library.catalog();
+        assert_eq!(data.tracks[0].grid, Some(grid));
+        assert_eq!(data.crates.entries[0].tracks, HashSet::from([27]));
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(!json.contains("grid"));
+        data.tracks[0].grid = None;
+        store.save(&data).unwrap();
+        drop(store);
+        let (_, library, _) = Store::open(db).unwrap();
+        assert!(library.catalog().tracks[0].grid.is_none());
+    }
+    #[test]
+    fn failed_grid_save_rolls_back_grid_metadata_and_crates_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 1);
+        let old = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+        data.tracks[0].grid = Some(old);
+        let id = data.crates.create("Original").unwrap();
+        data.crates.add(id, 1).unwrap();
+        store.save(&data).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER fail_grid BEFORE INSERT ON track_grids BEGIN SELECT RAISE(ABORT,'grid write failure'); END;").unwrap();
+        data.tracks[0].grid =
+            Some(crate::beatgrid::BeatGrid::new(130., Duration::from_secs(1)).unwrap());
+        data.tracks[0].metadata.title = "New title".into();
+        data.crates.rename(id, "Changed").unwrap();
+        assert!(store
+            .save(&data)
+            .err()
+            .unwrap()
+            .contains("grid write failure"));
+        let restored = inspect(&store.connection).unwrap().unwrap();
+        assert_eq!(restored.tracks[0].grid, Some(old));
+        assert_eq!(restored.tracks[0].metadata.title, "");
+        assert_eq!(restored.crates.entries[0].name, "Original");
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_grid")
+            .unwrap();
+        store.save(&data).unwrap();
+        assert_eq!(
+            inspect(&store.connection).unwrap().unwrap().tracks[0].grid,
+            data.tracks[0].grid
+        );
+    }
+    #[test]
+    fn schema_three_grid_upgrade_or_failure_preserves_metadata_and_memberships() {
+        for fail in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            let mut data = catalog(dir.path().join("missing.wav"), 9);
+            data.tracks[0].metadata.title = "Keep".into();
+            data.tracks[0].metadata.scanned = true;
+            let id = data.crates.create("Keep crate").unwrap();
+            data.crates.add(id, 9).unwrap();
+            store.save(&data).unwrap();
+            drop(store);
+            let connection = connect(&db, false).unwrap();
+            connection
+                .execute_batch("DROP TABLE track_grids; PRAGMA user_version=3;")
+                .unwrap();
+            if fail {
+                connection.execute_batch("CREATE TABLE track_grids(preserve INTEGER); INSERT INTO track_grids VALUES(99);").unwrap();
+            }
+            drop(connection);
+            if fail {
+                assert!(Store::open(db.clone()).is_err());
+                let connection = connect(&db, false).unwrap();
+                assert_eq!(
+                    connection
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                        .unwrap(),
+                    3
+                );
+                assert_eq!(
+                    connection
+                        .query_row("SELECT preserve FROM track_grids", [], |r| r
+                            .get::<_, i32>(0))
+                        .unwrap(),
+                    99
+                );
+                assert_eq!(
+                    connection
+                        .query_row("SELECT name FROM crates", [], |r| r.get::<_, String>(0))
+                        .unwrap(),
+                    "Keep crate"
+                );
+            } else {
+                let (store, library, _) = Store::open(db).unwrap();
+                assert_eq!(library.visible()[0].metadata.title, "Keep");
+                assert_eq!(library.crates().entries[0].tracks, HashSet::from([9]));
+                assert!(library.visible()[0].grid.is_none());
+                assert_eq!(
+                    store
+                        .connection
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                        .unwrap(),
+                    4
+                );
+            }
+        }
     }
 }

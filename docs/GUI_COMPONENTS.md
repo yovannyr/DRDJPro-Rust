@@ -27,13 +27,13 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Track gain/output meters | 14, 43 | Overview sections 14, 43; practice controls manual p. 29 | Channel gain sliders exist; persistent per-track gain and measured output meters do not. |
 | Time/overview playhead | 41, 42 | Manual pp. 25–27 | Overview/seek exist. Current display is elapsed/total; reference asks elapsed/remaining and metadata time. Add clear labels and fractional-time precision in a separate slice. |
 | Detailed waveform/beat matching | 34, 35 | Manual p. 28 | Colored following envelope/zoom/click-seek exist. Shared placement, hold/drag scrubbing, keyboard +/- zoom, beat-matching transient strip and pitch scaling remain open. |
-| Grid editing | 46 | Manual pp. 53–58 | Simple manual constant-BPM anchor exists. Dedicated Edit Grid mode, Save/Cancel, numbered bars, red first downbeat, adjust/slip tools and warp markers remain open. |
+| Grid editing | 46 | Manual pp. 53–58 | Partial: dedicated constant-BPM Edit Grid drafts, Save/Cancel, decimal BPM, numbered bars/red first downbeat, anchor and ±10 ms slip tools, conflict protection and persistence exist. Variable tempo/warp markers, meter changes and native visual/musical acceptance remain open. |
 | Repeat/autoplay | 47, 50 | Manual pp. 26, 28 | Open: repeat the same track versus advance to the next crate track. These are different policies, neither implied by EOF/restart-on-Play. |
 | Cue-point panel | 48, 58 | Overview sections 48, 58 | Open: up to eight stored cue points, names/colors and triggers. Existing Cue-to-zero is not hot-cue parity. |
 | Flip/loop panels | 31, 33, 56 | Overview numbered sections | Open: flip sequences, auto-loop UI and saved loops; require separate engine and persistence slices. |
 | Library actions/search | 36, 37, 38, 39, 40 | Manual p. 30 | Open: Search, History, Prepare, Browse, Files. Native file picker is not a library browser. |
 | Library table/view | 45, 49 | Manual pp. 39–40; overview screenshot | Open: large track table, sort headers, selection and list/art view. Current library footer is a status placeholder. |
-| Crate navigation | 51, 52, 53, 54 | Overview numbered sections | Open: crates, subcrates/smart crates, import and create actions. No iTunes/Serato-format compatibility is implemented. |
+| Crate navigation | 51, 52, 53, 54 | Overview numbered sections | Partial: flat persistent crate navigation/create/rename/delete, set membership and active-crate import are implemented. Subcrates/smart crates and iTunes/Serato-format compatibility remain open. |
 
 ### Concrete behavior to preserve from the manual
 
@@ -116,3 +116,19 @@ Library controls now import real selected MP3/WAV paths in the background, searc
 ## Durable catalog checkpoint (2026-10-24)
 
 Persistence is now implemented for track IDs/paths. The table footer shows restoration/saving/saved or persistent storage-error status, with Retry Save after a write failure. Missing entries retain identity/path and show MISSING. Startup failures visibly enter session-only behavior without overwriting the original data. Headless tests exercise save/restart/restore/load and error/retry; this does not establish native visual acceptance. Tags/crates/history, relocation, folder scans and session/deck state restoration remain open. LIBRARY_STORAGE.md defines the storage boundary.
+
+## SQLite storage checkpoint (2026-10-24)
+
+The same library controls now use SQLite through the background worker; no new display mode or speculative metadata/crate controls were added. The footer distinguishes new/restored/migrated/recovered SQLite catalogs and retains visible save-error/Retry Save behavior. A headless JSON-to-SQLite controller/engine restart test loads the same stable ID into B and then A, paused, while preserving original JSON bytes. Existing Extended geometry, selection, filtering, mixer and waveform regressions remain applicable. Native visual acceptance remains open.
+
+## Metadata table checkpoint (2026-10-24)
+
+The table now displays title (filename fallback), artist, album, duration, type/missing state and full location. Artist/album/duration headers sort the existing stable-ID model; search includes tags and filename/path. Unknown fields display an em dash, header-derived time has a tilde, and a full load replaces it with decoded length. Metadata inspection errors mark TYPE with `?` and add an accessible row description; they do not imply a successful decode. New headless tests exercise tags, artist/album search, numeric duration sorting, retained selection, persistence and paused A/B loading after a fresh engine/controller restart. Existing two-size structural checks remain; no visual/native acceptance is claimed. Crate and tag-editing controls remain open.
+
+## Flat-crate navigation checkpoint (2026-10-24)
+
+A reusable left CratePanel now shows All tracks, sorted crate names/member counts, New/Rename/Delete actions and an independent add-target dropdown. Name editing has Save/Cancel, and deletion has Confirm/Cancel; navigation cancels stale confirmation. The table composes crate membership with tag/path search and sorting, clearing hidden selections and showing scope totals. Import targets the crate captured at start; Add/Remove act on stable track IDs. Headless actions verify duplicate adds, invalid names, rename sorting with target identity retained, cancellation, deletion/file retention, continued A playback and restarted B loading. Bounds checks at 850x740 and 1280x860 remain structural, not visual acceptance. This partially implements overview 51/54; subcrates, smart crates (53), external integration (52), manual order and autoplay (50) stay open.
+
+## Transactional constant-grid editor checkpoint (2026-10-24)
+
+Each detail toolbar now opens Edit Grid rather than immediately changing its deck. Editor controls replace that toolbar while the waveform remains available: decimal BPM, suggestion-to-draft, Set 1 at the current playhead, ±10 ms slip, zoom, Clear, Save and Cancel. GRID OFF also opens a staged removal. DRAFT captions distinguish preview from committed state; first-downbeat/red and numbered-bar data are derived from the anchor. Initial whole-BPM seed controls are disabled for an existing grid, whose decimal value is edited in the dedicated row. Accessible Save/Cancel tests verify invalid input, no active-grid change before Save, no transport/fader changes, same-track conflict protection, stale-draft cancellation and durable restart/reload/deletion. Existing two-size structural/geometry tests stay green; native visual/interaction approval is not inferred. This is constant 4/4 editing only; warp markers, variable tempo/meter and musical acceptance remain open.

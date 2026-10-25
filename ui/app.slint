@@ -1,6 +1,7 @@
-import { Button, Slider, SpinBox, LineEdit, ListView } from "std-widgets.slint";
-export struct BeatLine { position: float, downbeat: bool }
-export struct LibraryRow { id: int, name: string, format: string, path: string, available: bool }
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox } from "std-widgets.slint";
+export struct CrateRow { id: int, name: string, count: int }
+export struct BeatLine { position: float, downbeat: bool, first: bool, bar: int }
+export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
 
 component WaveformStrip inherits Rectangle {
     in property <string> deck-label;
@@ -27,7 +28,12 @@ component WaveformStrip inherits Rectangle {
         accessible-role: image; accessible-label: deck-label + " beat line"; accessible-value: line.position;
         x: clamp(line.position, 0, 100) / 100 * max(0px, parent.width - self.width);
         width: line.downbeat ? 2px : 1px; height: parent.height;
-        background: line.downbeat ? #ffffff99 : #ffffff40;
+        background: line.first ? #ff4444 : (line.downbeat ? #ffffff99 : #ffffff40);
+    }
+    for line in beats : Text {
+        visible: line.downbeat; x: clamp(line.position,0,100)/100*max(0px,parent.width - 14px); y: 1px;
+        text: "" + line.bar; color: line.first ? #ff5555 : #dfe8f5; font-size: 10px;
+        accessible-role: text; accessible-label: deck-label + " bar label"; accessible-description: "Bar " + line.bar;
     }
     Rectangle {
         accessible-role: image;
@@ -91,6 +97,10 @@ component DetailWaveform inherits Rectangle {
     in property <[BeatLine]> beats;
     in property <bool> enabled;
     in property <bool> grid-active;
+    in property <bool> grid-editing;
+    in property <bool> grid-controls-enabled;
+    in-out property <string> grid-draft-bpm;
+    callback edit-bpm(); callback anchor-grid(); callback earlier-grid(); callback later-grid(); callback save-grid(); callback cancel-grid();
     in property <string> grid-caption;
     in-out property <int> grid-bpm: 120;
     in property <int> suggested-bpm;
@@ -103,23 +113,95 @@ component DetailWaveform inherits Rectangle {
     background: #10151d;
     VerticalLayout {
         padding: 3px; spacing: 2px;
-        HorizontalLayout {
+        if !root.grid-editing : HorizontalLayout {
             spacing: 4px;
             Text { text: deck-label; color: accent; width: 62px; font-size: 12px; vertical-alignment: center; }
             Text { text: "≤ " + detail-window + " s"; color: #abb6c6; width: 44px; font-size: 11px; vertical-alignment: center; }
             Button { text: "+"; width: 32px; accessible-label: deck-label + " zoom in"; enabled: root.enabled && detail-window > 2; clicked => { detail-window = max(2, detail-window / 2); root.zoom(); } }
             Button { text: "−"; width: 32px; accessible-label: deck-label + " zoom out"; enabled: root.enabled && detail-window < 32; clicked => { detail-window = min(32, detail-window * 2); root.zoom(); } }
-            Button { text: suggested-bpm > 0 ? "USE ~" + suggested-bpm : "NO EST."; width: 80px; accessible-label: deck-label + " use BPM suggestion"; enabled: root.enabled && suggested-bpm > 0; clicked => { grid-bpm = suggested-bpm; } }
-            SpinBox { minimum: 40; maximum: 240; width: 70px; value <=> grid-bpm; enabled: root.enabled; accessible-label: deck-label + " manual BPM"; }
-            Button { text: "GRID HERE"; width: 88px; accessible-label: deck-label + " set beatgrid"; enabled: root.enabled; clicked => { root.set-grid(); } }
-            Button { text: "GRID OFF"; width: 80px; accessible-label: deck-label + " clear beatgrid"; enabled: grid-active; clicked => { root.clear-grid(); } }
+            Button { text: suggested-bpm > 0 ? "USE ~" + suggested-bpm : "NO EST."; width: 80px; accessible-label: deck-label + " use BPM suggestion"; enabled: root.grid-controls-enabled && !root.grid-active && suggested-bpm > 0; clicked => { grid-bpm = suggested-bpm; } }
+            SpinBox { minimum: 40; maximum: 240; width: 70px; value <=> grid-bpm; enabled: root.grid-controls-enabled && !root.grid-active; accessible-label: deck-label + " manual BPM"; accessible-description: "Initial BPM for a new grid. Use Edit Grid for an existing grid."; }
+            Button { text: "EDIT GRID"; width: 88px; accessible-label: deck-label + " edit beatgrid"; enabled: root.grid-controls-enabled; clicked => { root.set-grid(); } }
+            Button { text: "GRID OFF"; width: 80px; accessible-label: deck-label + " clear beatgrid"; enabled: root.grid-controls-enabled && grid-active; clicked => { root.clear-grid(); } }
             Text { text: grid-caption; color: #a0adbe; font-size: 11px; overflow: elide; vertical-alignment: center; }
+        }
+        if root.grid-editing : HorizontalLayout {
+            spacing: 3px;
+            Text { text: root.deck-label + " GRID"; color: root.accent; width: 78px; font-size: 11px; vertical-alignment: center; }
+            Button { text: "+"; width: 28px; accessible-label: root.deck-label + " zoom in"; enabled: root.enabled && root.detail-window > 2; clicked => { root.detail-window = max(2,root.detail-window/2); root.zoom(); } }
+            Button { text: "−"; width: 28px; accessible-label: root.deck-label + " zoom out"; enabled: root.enabled && root.detail-window < 32; clicked => { root.detail-window = min(32,root.detail-window*2); root.zoom(); } }
+            LineEdit { width: 76px; text <=> root.grid-draft-bpm; accessible-label: root.deck-label + " draft BPM"; enabled: root.grid-controls-enabled; edited => { root.edit-bpm(); } accepted => { root.save-grid(); } }
+            Button { text: "USE ~"; width: 58px; accessible-label: root.deck-label + " use draft BPM suggestion"; enabled: root.grid-controls-enabled && root.suggested-bpm > 0; clicked => { root.grid-draft-bpm = "" + root.suggested-bpm; root.edit-bpm(); } }
+            Button { text: "SET 1"; width: 56px; accessible-label: root.deck-label + " anchor draft at playhead"; enabled: root.grid-controls-enabled; clicked => { root.anchor-grid(); } }
+            Button { text: "−10ms"; width: 60px; accessible-label: root.deck-label + " shift grid earlier"; enabled: root.grid-controls-enabled; clicked => { root.earlier-grid(); } }
+            Button { text: "+10ms"; width: 60px; accessible-label: root.deck-label + " shift grid later"; enabled: root.grid-controls-enabled; clicked => { root.later-grid(); } }
+            Button { text: "CLEAR"; width: 60px; accessible-label: root.deck-label + " clear draft grid"; enabled: root.grid-controls-enabled; clicked => { root.clear-grid(); } }
+            Button { text: "SAVE"; width: 55px; accessible-label: root.deck-label + " save beatgrid"; enabled: root.grid-controls-enabled; clicked => { root.save-grid(); } }
+            Button { text: "CANCEL"; width: 66px; accessible-label: root.deck-label + " cancel beatgrid"; clicked => { root.cancel-grid(); } }
+            Text { text: root.grid-caption; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; }
         }
         WaveformStrip {
             height: 54px; overview: false; deck-label: root.deck-label; accent: root.accent;
             values: root.detail; colors: root.colors; beats: root.beats; enabled: root.enabled;
             position: root.position; marker: root.marker; range-start: root.detail-start; range-end: root.detail-end;
             seek(value) => { root.seek(value); }
+        }
+    }
+}
+
+component CratePanel inherits Rectangle {
+    in property <[CrateRow]> rows;
+    in property <[string]> names;
+    in property <int> selection;
+    in property <bool> busy;
+    in property <bool> has-track;
+    in property <bool> editor-open;
+    in property <bool> delete-pending;
+    in property <string> dialog-title;
+    in-out property <string> edit-name;
+    in-out property <int> target-index;
+    callback select-crate(int); callback target-changed(int);
+    callback new-crate(); callback rename-crate(); callback delete-crate();
+    callback save-name(); callback cancel-dialog(); callback confirm-delete();
+    callback add-track(); callback remove-track();
+    background: #121821; border-color: #303b4b; border-width: 1px;
+    VerticalLayout {
+        padding: 5px; spacing: 3px;
+        Button { text: "ALL TRACKS"; accessible-label: "All library tracks"; enabled: !busy; clicked => { root.select-crate(0); } }
+        ListView {
+            for entry in root.rows : Rectangle {
+                height: 28px; background: root.selection == entry.id ? #194b70 : #1a222e;
+                accessible-role: button; accessible-label: "Crate " + entry.id;
+                accessible-description: entry.name + " (" + entry.count + " tracks)";
+                accessible-action-default => { if !root.busy { root.select-crate(entry.id); } }
+                HorizontalLayout { padding: 4px;
+                    Text { text: entry.name; color: #e4ebf6; overflow: elide; }
+                    Text { text: "" + entry.count; color: #9faec2; horizontal-alignment: right; }
+                }
+                TouchArea { enabled: !root.busy; clicked => { root.select-crate(entry.id); } }
+            }
+        }
+        Button { text: "NEW CRATE"; accessible-label: "New crate"; enabled: !busy; clicked => { root.new-crate(); } }
+        HorizontalLayout {
+            Button { text: "RENAME"; accessible-label: "Rename crate"; enabled: !busy && selection > 0; clicked => { root.rename-crate(); } }
+            Button { text: "DELETE"; accessible-label: "Delete crate"; enabled: !busy && selection > 0; clicked => { root.delete-crate(); } }
+        }
+        ComboBox { model: root.names; current-index <=> root.target-index; accessible-label: "Target crate"; enabled: !busy && root.names.length > 0; selected(value) => { root.target-changed(self.current-index); } }
+        HorizontalLayout {
+            Button { text: "ADD"; accessible-label: "Add selected track to crate"; enabled: !busy && has-track && names.length > 0; clicked => { root.add-track(); } }
+            Button { text: "REMOVE"; accessible-label: "Remove selected track from crate"; enabled: !busy && has-track && selection > 0; clicked => { root.remove-track(); } }
+        }
+    }
+    if editor-open || delete-pending : Rectangle {
+        background: #182331;
+        VerticalLayout { padding: 8px; spacing: 6px;
+            Text { text: root.dialog-title; color: #e4ebf6; wrap: word-wrap; }
+            if root.editor-open : LineEdit { text <=> root.edit-name; accessible-label: "Crate name"; enabled: !root.busy; accepted => { root.save-name(); } }
+            if root.delete-pending : Text { text: "Only this crate and its memberships are removed. Audio files stay in the library."; color: #a5b5ca; wrap: word-wrap; }
+            if root.editor-open : Button { text: "SAVE"; accessible-label: "Save crate name"; enabled: !root.busy; clicked => { root.save-name(); } }
+            if root.delete-pending : Button { text: "CONFIRM DELETE"; accessible-label: "Confirm crate deletion"; enabled: !root.busy; clicked => { root.confirm-delete(); } }
+            Button { text: "CANCEL"; accessible-label: "Cancel crate dialog"; clicked => { root.cancel-dialog(); } }
+            Rectangle { vertical-stretch: 1; }
         }
     }
 }
@@ -144,15 +226,18 @@ component TrackLibrary inherits Rectangle {
         HorizontalLayout {
             Text { text: "LOCAL LIBRARY"; color: #e4ebf6; font-weight: 700; vertical-alignment: center; }
             Button { text: busy ? "WORKING…" : "ADD FILES"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
-            LineEdit { text <=> query; placeholder-text: "Search filename or path"; accessible-label: "Library search"; edited => { root.search(); } }
+            LineEdit { text <=> query; placeholder-text: "Search title, artist, album or path"; accessible-label: "Library search"; edited => { root.search(); } }
             Button { text: "X"; width: 30px; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
             Button { text: "LOAD A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
             Button { text: "LOAD B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
         }
         HorizontalLayout {
-            Button { text: "TRACK ↕"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
+            Button { text: "TITLE ↕"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
+            Button { text: "ARTIST ↕"; horizontal-stretch: 1; accessible-label: "Sort library by artist"; clicked => { root.sort-column(3); } }
+            Button { text: "ALBUM ↕"; horizontal-stretch: 1; accessible-label: "Sort library by album"; clicked => { root.sort-column(4); } }
+            Button { text: "TIME ↕"; width: 70px; accessible-label: "Sort library by duration"; clicked => { root.sort-column(5); } }
             Button { text: "TYPE ↕"; width: 70px; accessible-label: "Sort library by type"; clicked => { root.sort-column(1); } }
-            Button { text: "LOCATION ↕"; horizontal-stretch: 3; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
+            Button { text: "LOCATION ↕"; horizontal-stretch: 2; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
         }
         nav := FocusScope {
             key-pressed(event) => {
@@ -164,13 +249,16 @@ component TrackLibrary inherits Rectangle {
                 for row in root.rows : Rectangle {
                     height: 30px; background: root.selection == row.id ? #194b70 : #1a222e;
                     accessible-role: button; accessible-label: "Library track " + row.id;
-                    accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.path;
+                    accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.artist + " " + row.album + " " + row.duration + " " + row.path + (row.metadata-error == "" ? "" : " Metadata unavailable: " + row.metadata-error);
                     accessible-action-default => { root.select-track(row.id); nav.focus(); }
                     HorizontalLayout {
                         padding-left: 6px;
                         Text { text: row.name; color: #e4ebf6; overflow: elide; horizontal-stretch: 2; }
-                        Text { text: row.available ? row.format : "MISSING"; color: row.available ? #9faec2 : #ffae58; width: 70px; }
-                        Text { text: row.path; color: #9faec2; overflow: elide; horizontal-stretch: 3; }
+                        Text { text: row.artist == "" ? "—" : row.artist; color: #9faec2; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: row.album == "" ? "—" : row.album; color: #9faec2; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: row.duration; color: #9faec2; width: 70px; }
+                        Text { text: row.available ? (row.metadata-error == "" ? row.format : row.format + " ?") : "MISSING"; color: row.available ? #9faec2 : #ffae58; width: 70px; }
+                        Text { text: row.path; color: #9faec2; overflow: elide; horizontal-stretch: 2; }
                     }
                     TouchArea { clicked => { root.select-track(row.id); nav.focus(); } }
                 }
@@ -241,6 +329,16 @@ export component AppWindow inherits Window {
     callback seek-right(float);
     callback zoom-left();
     callback zoom-right();
+    in property <bool> left-grid-editing;
+    in property <bool> right-grid-editing;
+    in-out property <string> left-grid-draft-bpm;
+    in-out property <string> right-grid-draft-bpm;
+    callback edit-grid-bpm-left(); callback edit-grid-bpm-right();
+    callback grid-anchor-left(); callback grid-anchor-right();
+    callback grid-earlier-left(); callback grid-earlier-right();
+    callback grid-later-left(); callback grid-later-right();
+    callback save-grid-left(); callback save-grid-right();
+    callback cancel-grid-left(); callback cancel-grid-right();
     callback grid-left();
     callback grid-right();
     callback clear-grid-left();
@@ -258,6 +356,18 @@ export component AppWindow inherits Window {
     callback import-library(); callback library-search(); callback select-library(int);
     callback move-library-selection(int); callback sort-library(int);
     callback load-library-left(); callback load-library-right();
+    in property <[CrateRow]> crate-rows;
+    in property <[string]> crate-names;
+    in property <int> selected-crate;
+    in-out property <int> target-crate-index;
+    in property <bool> crate-editor-open;
+    in property <bool> crate-delete-pending;
+    in property <string> crate-dialog-title;
+    in-out property <string> crate-edit-name;
+    callback select-crate(int); callback target-crate(int);
+    callback new-crate(); callback rename-crate(); callback delete-crate();
+    callback save-crate-name(); callback confirm-delete-crate(); callback cancel-crate-dialog();
+    callback add-to-crate(); callback remove-from-crate();
     VerticalLayout {
         padding: 8px; spacing: 6px;
         HorizontalLayout {
@@ -304,6 +414,11 @@ export component AppWindow inherits Window {
                     detail-start: root.left-detail-start; detail-end: root.left-detail-end;
                     detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
                     grid-active: root.left-grid-active; grid-caption: root.left-grid-caption;
+                    grid-editing: root.left-grid-editing; grid-draft-bpm <=> root.left-grid-draft-bpm;
+                    grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.loading && !root.library-busy;
+                    edit-bpm => { root.edit-grid-bpm-left(); } anchor-grid => { root.grid-anchor-left(); }
+                    earlier-grid => { root.grid-earlier-left(); } later-grid => { root.grid-later-left(); }
+                    save-grid => { root.save-grid-left(); } cancel-grid => { root.cancel-grid-left(); }
                     suggested-bpm: root.left-suggested-bpm; enabled: root.audio-enabled && root.left-loaded;
                     seek(value) => { root.seek-left(value); } zoom => { root.zoom-left(); }
                     set-grid => { root.grid-left(); } clear-grid => { root.clear-grid-left(); }
@@ -314,14 +429,34 @@ export component AppWindow inherits Window {
                     detail-start: root.right-detail-start; detail-end: root.right-detail-end;
                     detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
                     grid-active: root.right-grid-active; grid-caption: root.right-grid-caption;
+                    grid-editing: root.right-grid-editing; grid-draft-bpm <=> root.right-grid-draft-bpm;
+                    grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.loading && !root.library-busy;
+                    edit-bpm => { root.edit-grid-bpm-right(); } anchor-grid => { root.grid-anchor-right(); }
+                    earlier-grid => { root.grid-earlier-right(); } later-grid => { root.grid-later-right(); }
+                    save-grid => { root.save-grid-right(); } cancel-grid => { root.cancel-grid-right(); }
                     suggested-bpm: root.right-suggested-bpm; enabled: root.audio-enabled && root.right-loaded;
                     seek(value) => { root.seek-right(value); } zoom => { root.zoom-right(); }
                     set-grid => { root.grid-right(); } clear-grid => { root.clear-grid-right(); }
                 }
             }
         }
-        TrackLibrary {
+        Rectangle {
             accessible-role: groupbox; accessible-label: "Track library area"; vertical-stretch: 1; min-height: 160px;
+            HorizontalLayout { spacing: 6px;
+                CratePanel {
+                    accessible-role: groupbox; accessible-label: "Crate navigation"; width: 190px;
+                    rows: root.crate-rows; names: root.crate-names; selection: root.selected-crate;
+                    busy: root.loading || root.library-busy || !root.audio-enabled;
+                    has-track: root.selected-track >= 0; target-index <=> root.target-crate-index;
+                    editor-open: root.crate-editor-open; delete-pending: root.crate-delete-pending;
+                    dialog-title: root.crate-dialog-title; edit-name <=> root.crate-edit-name;
+                    select-crate(id) => { root.select-crate(id); } target-changed(index) => { root.target-crate(index); }
+                    new-crate => { root.new-crate(); } rename-crate => { root.rename-crate(); } delete-crate => { root.delete-crate(); }
+                    save-name => { root.save-crate-name(); } cancel-dialog => { root.cancel-crate-dialog(); } confirm-delete => { root.confirm-delete-crate(); }
+                    add-track => { root.add-to-crate(); } remove-track => { root.remove-from-crate(); }
+                }
+        TrackLibrary {
+            horizontal-stretch: 1; min-width: 0px;
             rows: root.library-rows; count-text: root.library-count; empty-text: root.library-empty;
             storage-text: root.library-storage; save-failed: root.library-save-failed;
             selection: root.selected-track; query <=> root.library-query;
@@ -333,6 +468,8 @@ export component AppWindow inherits Window {
             sort-column(field) => { root.sort-library(field); }
             load-left => { root.load-library-left(); } load-right => { root.load-library-right(); }
             retry-save => { root.retry-library-save(); }
+        }
+            }
         }
         Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
     }

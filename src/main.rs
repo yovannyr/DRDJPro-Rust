@@ -4,12 +4,15 @@ use std::{rc::Rc, time::Duration};
 mod audio;
 mod beatgrid;
 mod controller;
+mod crates;
+mod legacy_catalog;
 mod library;
 mod library_store;
 mod playback;
 mod tempo;
 #[cfg(test)]
 mod test_support;
+mod track_metadata;
 mod transport;
 mod waveform;
 mod waveform_color;
