@@ -166,6 +166,9 @@ pub struct DeckSnapshot {
     pub detail: Option<Arc<crate::waveform::DetailPeaks>>,
     pub grid: Option<crate::beatgrid::BeatGrid>,
     pub tempo: Option<crate::tempo::TempoEstimate>,
+    pub loop_in: Option<Duration>,
+    pub loop_out: Option<Duration>,
+    pub loop_active: bool,
 }
 impl DeckSnapshot {
     pub fn percent(&self) -> f32 {
@@ -301,8 +304,7 @@ impl DualDeckEngine {
         );
         Ok(())
     }
-    // Staged control-plane API: GUI wiring follows in the next reviewed slice.
-    #[allow(dead_code)]
+    // Manual-loop commands run on the control plane.
     pub fn set_loop_in(&self, id: DeckId, position: Duration) -> Result<(), String> {
         let snapshot = self.snapshot(id);
         let rate = self.decks[id.index()]
@@ -323,7 +325,6 @@ impl DualDeckEngine {
         deck.loop_region = None;
         Ok(())
     }
-    #[allow(dead_code)]
     pub fn set_loop_out(&self, id: DeckId, position: Duration) -> Result<(), String> {
         let region = {
             let deck = self.decks[id.index()].borrow();
@@ -349,7 +350,6 @@ impl DualDeckEngine {
         self.decks[id.index()].borrow_mut().loop_region = Some(region);
         Ok(())
     }
-    #[allow(dead_code)]
     pub fn activate_loop(&self, id: DeckId) -> Result<(), String> {
         let (track, region, playing, grid) = {
             let deck = self.decks[id.index()].borrow();
@@ -367,7 +367,6 @@ impl DualDeckEngine {
         self.decks[id.index()].borrow_mut().loop_active = true;
         Ok(())
     }
-    #[allow(dead_code)]
     pub fn exit_loop(&self, id: DeckId) -> Result<(), String> {
         if !self.decks[id.index()].borrow().loop_active {
             return Ok(());
@@ -501,6 +500,15 @@ impl DualDeckEngine {
             detail: deck.track.as_ref().map(|t| Arc::clone(&t.detail)),
             grid: deck.grid,
             tempo: deck.track.as_ref().and_then(|track| track.tempo),
+            loop_in: deck.track.as_ref().and_then(|t| {
+                deck.loop_in
+                    .map(|frame| frame_time(frame, t.samples.sample_rate()))
+            }),
+            loop_out: deck.track.as_ref().and_then(|t| {
+                deck.loop_region
+                    .map(|region| frame_time(region.end, t.samples.sample_rate()))
+            }),
+            loop_active: deck.loop_active,
         }
     }
     #[cfg(test)]

@@ -237,6 +237,7 @@ impl AudioController {
         controller.wire_crates(ui);
         controller.wire_grid_editor(ui);
         controller.wire_hot_cues(ui);
+        controller.wire_loops(ui);
         controller.refresh();
         controller
     }
@@ -448,6 +449,56 @@ impl AudioController {
             DeckId::B => ui.get_right_grid_draft_bpm(),
         }
         .to_string()
+    }
+    fn wire_loops(self: &Rc<Self>, ui: &AppWindow) {
+        for id in [DeckId::A, DeckId::B] {
+            for command in 0..4 {
+                let weak = Rc::downgrade(self);
+                let action = move || {
+                    if let Some(c) = weak.upgrade() {
+                        let result = if !c.can_change_crates() {
+                            Err("Finish loading before changing a loop".into())
+                        } else {
+                            let position = c.engine.snapshot(id).position;
+                            match command {
+                                0 => c.engine.set_loop_in(id, position),
+                                1 => c.engine.set_loop_out(id, position),
+                                2 => c.engine.activate_loop(id),
+                                _ => c.engine.exit_loop(id),
+                            }
+                        };
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(
+                                match result {
+                                    Ok(()) => format!(
+                                        "Deck {id:?}: {}",
+                                        [
+                                            "Loop In set",
+                                            "Loop Out set",
+                                            "Loop active",
+                                            "Loop exited"
+                                        ][command]
+                                    ),
+                                    Err(e) => format!("Deck {id:?}: {e}"),
+                                }
+                                .into(),
+                            );
+                        }
+                        c.refresh();
+                    }
+                };
+                match (id, command) {
+                    (DeckId::A, 0) => ui.on_loop_in_left(action),
+                    (DeckId::B, 0) => ui.on_loop_in_right(action),
+                    (DeckId::A, 1) => ui.on_loop_out_left(action),
+                    (DeckId::B, 1) => ui.on_loop_out_right(action),
+                    (DeckId::A, 2) => ui.on_loop_activate_left(action),
+                    (DeckId::B, 2) => ui.on_loop_activate_right(action),
+                    (DeckId::A, _) => ui.on_loop_exit_left(action),
+                    (DeckId::B, _) => ui.on_loop_exit_right(action),
+                }
+            }
+        }
     }
     fn cancel_cue_editor(&self, id: DeckId) {
         self.cue_editors.borrow_mut()[Self::grid_index(id)].take();
@@ -1234,6 +1285,28 @@ impl AudioController {
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.snapshot(id);
             let index = Self::grid_index(id);
+            let bounds = match (s.loop_in, s.loop_out) {
+                (Some(start), Some(end)) => {
+                    format!("{:.3}–{:.3} s", start.as_secs_f64(), end.as_secs_f64())
+                }
+                (Some(start), None) => format!("IN {:.3} s", start.as_secs_f64()),
+                _ => "No loop".into(),
+            };
+            let caption = format!("{}{}", if s.loop_active { "ACTIVE · " } else { "" }, bounds);
+            match id {
+                DeckId::A => {
+                    ui.set_left_loop_caption(caption.into());
+                    ui.set_left_loop_has_in(s.loop_in.is_some());
+                    ui.set_left_loop_ready(s.loop_out.is_some());
+                    ui.set_left_loop_active(s.loop_active);
+                }
+                DeckId::B => {
+                    ui.set_right_loop_caption(caption.into());
+                    ui.set_right_loop_has_in(s.loop_in.is_some());
+                    ui.set_right_loop_ready(s.loop_out.is_some());
+                    ui.set_right_loop_active(s.loop_active);
+                }
+            }
             let cues = s
                 .path
                 .as_ref()
@@ -1511,6 +1584,106 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn manual_loop_gui_controls_state_transport_and_replacement_are_isolated() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48_000 * 8);
+        let other = wav_file(4096, 48_000 * 8);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        assert!(!control(&ui, "DECK A loop in").accessible_enabled().unwrap());
+        ui.invoke_loop_activate_left();
+        assert!(ui.get_status().contains("Load"));
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        c.tick();
+        ui.set_channel_a(0.6);
+        ui.set_channel_b(0.8);
+        ui.set_crossfader(0.3);
+        ui.invoke_mixer_changed();
+        let volumes = engine.output_volumes();
+        assert!(!control(&ui, "DECK A loop out")
+            .accessible_enabled()
+            .unwrap());
+        engine.seek_percent(DeckId::A, 25.).unwrap();
+        control(&ui, "DECK A loop in").invoke_accessible_default_action();
+        assert!(ui.get_left_loop_has_in());
+        assert!(!ui.get_left_loop_ready());
+        control(&ui, "DECK A loop out").invoke_accessible_default_action();
+        assert!(!ui.get_left_loop_ready());
+        assert!(ui.get_status().contains("In < Out"));
+        engine.seek_percent(DeckId::A, 50.).unwrap();
+        control(&ui, "DECK A loop out").invoke_accessible_default_action();
+        assert!(ui.get_left_loop_ready());
+        assert!(!ui.get_left_loop_active());
+        control(&ui, "DECK A activate loop").invoke_accessible_default_action();
+        assert!(ui.get_left_loop_active());
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(2));
+        assert!(!ui.get_right_loop_has_in());
+        control(&ui, "DECK A play/pause").invoke_accessible_default_action();
+        engine.play(DeckId::B);
+        output.by_ref().take(48_000 * 5).for_each(drop);
+        c.tick();
+        assert!(ui.get_left_loop_active());
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!((Duration::from_secs(2)..Duration::from_secs(4))
+            .contains(&engine.snapshot(DeckId::A).position));
+        assert!(ui.get_left_loop_caption().contains("ACTIVE"));
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(engine.snapshot(DeckId::B).playing);
+        control(&ui, "DECK A play/pause").invoke_accessible_default_action();
+        let paused = engine.snapshot(DeckId::A).position;
+        output.by_ref().take(4096).for_each(drop);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).position, paused);
+        assert!(ui.get_left_loop_active());
+        control(&ui, "DECK A exit loop").invoke_accessible_default_action();
+        assert!(!ui.get_left_loop_active());
+        assert!(ui.get_left_loop_ready());
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, paused);
+        ui.invoke_loop_activate_left();
+        control(&ui, "DECK A position").set_accessible_value("75");
+        assert!(!ui.get_left_loop_active());
+        assert!(ui.get_left_loop_ready());
+        ui.invoke_loop_activate_left();
+        control(&ui, "DECK A cue").invoke_accessible_default_action();
+        assert!(!ui.get_left_loop_active());
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+        assert!(ui.get_left_loop_ready());
+        ui.invoke_loop_activate_left();
+        assert!(engine
+            .load_a(std::path::Path::new("missing-loop-ui.wav"))
+            .is_err());
+        c.tick();
+        assert!(ui.get_left_loop_active());
+        // Simulate a background operation: both callbacks and button states must reject edits.
+        c.storage_ready.set(false);
+        c.publish_library();
+        let original = engine.snapshot(DeckId::A).loop_in;
+        ui.invoke_loop_in_left();
+        assert_eq!(engine.snapshot(DeckId::A).loop_in, original);
+        assert!(ui.get_status().contains("Finish loading"));
+        c.storage_ready.set(true);
+        c.publish_library();
+        engine.load_a(other.path()).unwrap();
+        c.tick();
+        assert!(!ui.get_left_loop_active());
+        assert!(!ui.get_left_loop_has_in());
+        assert!(!ui.get_left_loop_ready());
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(!c.dirty.get());
     }
     #[test]
     fn cue_editor_cancel_conflict_source_lifetime_markers_and_restart() {
@@ -2456,6 +2629,16 @@ mod tests {
                     assert!(pad.absolute_position().x + pad.size().width <= width + 0.1);
                     assert!(
                         pad.absolute_position().y + pad.size().height
+                            <= shared.absolute_position().y
+                    );
+                }
+                for action in ["loop in", "loop out", "activate loop", "exit loop"] {
+                    let button = control(&ui, &format!("{deck} {action}"));
+                    assert!(button.size().width > 0. && button.size().height > 0.);
+                    assert!(button.absolute_position().x >= 0.);
+                    assert!(button.absolute_position().x + button.size().width <= width + 0.1);
+                    assert!(
+                        button.absolute_position().y + button.size().height
                             <= shared.absolute_position().y
                     );
                 }

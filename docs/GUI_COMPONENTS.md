@@ -148,3 +148,9 @@ Overview/detail strips render bounded cue lines and numbered, named labels in ea
 ## Manual loop engine checkpoint (2026-10-25)
 
 Overview 31/33/56 remains open at the GUI boundary. A frame-aligned manual loop engine now supports In/Out, activate/exit and wrapped position reporting, with offline audio tests; no loop buttons or active-state display exist yet. Seek/Cue disables looping while retaining boundaries, and a successful track installation resets them. The next slice must expose the real engine state and test actual controls; saved loops, auto-loop lengths, quantization and native/hardware acceptance remain separate.
+
+## Manual loop GUI checkpoint (2026-10-25)
+
+Overview 31/33/56 now has partial manual-loop GUI behavior: IN, OUT, LOOP/ACTIVE and EXIT per deck with actual engine bounds/active captions. OUT requires an In point, activation requires valid bounds, and EXIT requires an active loop. Loaded/source-operation guards apply, while engine validation handles invalid/reversed/EOF bounds. In/Out only set boundaries; activation is explicit. Seek/hot-cue recall/Cue exits without clearing stored session boundaries; track replacement clears them. These are per-deck transient loops, not durable saved-loop slots.
+
+The deck region increases from 230 to 260 px. Headless geometry confirms all loop buttons remain within window width and above shared waveforms at 850x740 and 1280x860, with the library minimum/status layout retained. Actual accessible actions test the engine wiring and state isolation. This does not establish native visual/usability acceptance. Saved-loop slots, beat-length auto-loops, quantization, loop waveform overlays and controller feedback remain open.

@@ -351,3 +351,22 @@ The test-only thread-local counting allocator recorded zero allocations for one 
 All fixtures were temporary/offline. No visual, listening, device/physical-latency, long-run hardware or cross-platform acceptance is claimed. No personal catalog or reference asset changed. Loop GUI/active-state display and saved-loop persistence remain open; GUI integration is the next proposed reviewed slice. Changes remain local and uncommitted.
 
 Final `cargo build --release` passed in 33.02 s. The rebuilt executable's MP3 analysis passed: 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592. `git diff --check` passed with line-ending notices only. The plan checklist marks the engine slice complete and GUI loops next.
+
+## Manual loop GUI — local verification (2026-10-25)
+
+The user requested commit/push and continuation. Preceding work was published as 9a1c7b7, with remote main verified at that SHA. This bounded follow-up exposes manual loop commands in both decks and actual engine In/Out/active snapshot fields. Controls capture current decoded source position, set boundaries, activate explicitly and exit at current loop phase, preserving Play/Pause. Enabled states and controller guards reject unloaded/loading/restore/import operations; invalid boundaries remain visible errors. No dependency, schema or sample-source callback logic changed. Loop state is transient per deck and is cleared on successful track installation.
+
+After the final source/test change:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 92 passed, 0 failed, 0 ignored; 8.01 s |
+| `cargo build --release` | Passed; 32.36 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; line-ending notices only |
+
+The new headless regression invokes actual accessible IN/OUT/LOOP/EXIT, transport and seek controls. It checks disabled/unloaded states, equal-boundary errors, paused activation, real offline playback wrapping, true snapshot-derived status, pause-position preservation, paused Exit retaining boundaries, seek/Cue deactivation, failed-load retention, successful replacement reset, callback loading guards, unchanged Sink volumes and other-deck playback, and no catalog dirty state from transient loop commands. Existing two-size workspace regression now checks loop control geometry at 850x740 and 1280x860 alongside pads, waveforms and library/status. Existing source-allocation, engine, hot-cue, grid and SQLite rollback/recovery tests remain green.
+
+Tests used temporary/offline media; no personal catalog/reference assets changed. No visual/native-dialog, listening, physical latency, hardware, long-run or cross-platform acceptance is claimed. The 260 px deck allocation is headless-tested structurally; native usability remains open. Saved-loop persistence, beat-length auto-loops/quantization and controller feedback remain open. Plan checkboxes were updated; next proposed reviewed slice is durable saved-loop data, followed by saved-slot GUI integration. The new GUI work remains local and uncommitted.

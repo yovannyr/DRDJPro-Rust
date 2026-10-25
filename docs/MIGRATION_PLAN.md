@@ -28,14 +28,15 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 91 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 92 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Bis einschließlich Hot-Cue-Datenspeicherung ist `29b52f8` gepusht. Deck-Pads, Cue-Editor, Marker und die manuelle Loop-Engine sind lokal implementiert und geprüft, aber noch uncommitted.
+Veröffentlichungsstand: Hot-Cue-Pads, Cue-Editor, Marker und manuelle Loop-Engine sind als `9a1c7b7` gepusht. Die anschließende Loop-GUI ist lokal implementiert und geprüft, aber noch uncommitted.
 
 ### Nächste und offene Arbeitspakete
 
 - [x] ✅ Manuelle Loop-Engine mit framegenauem In/Out, Aktivieren/Verlassen und deterministischen Offline-Tests.
-- [ ] ☐ **Als Nächstes:** Loop-Bedienung in der GUI; anschließend persistente gespeicherte Loops.
+- [x] ✅ Loop-In/Out, Aktivieren/Verlassen und echte Loop-Zustandsanzeige in beiden Decks.
+- [ ] ☐ **Als Nächstes:** persistente gespeicherte Loops.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -184,3 +185,9 @@ Next proposed bounded slice after review: manual loop-in/out, activate/exit and 
 The user authorized the bounded engine-first loop slice. A shared immutable PCM source replaces SamplesBuffer and uses integer frame addressing; active loops repeat [In, Out) without allocation/locks in its next() implementation. The engine can set In/Out, activate from In preserving Play/Pause, and exit at the current wrapped source position. Seek/hot-cue recall and Cue-to-zero deactivate looping while retaining bounds; selecting a new In clears Out; successful track installation resets bounds and failed preparation preserves them. Out may equal EOF; empty/reversed/out-of-source and subframe-empty regions are rejected. Existing mixer/grid/source ownership remains intact. No dependency/schema/GUI was added; the staged loop-control API awaits the next reviewed GUI slice.
 
 Acceptance includes deterministic stereo output over many wraps, one-frame loops, integer frame-time round trips, allocation counting of one million prepared-source samples, real Rodio offline engine looping/exit/EOF, pause, failed/successful replacement and existing regressions. These do not qualify the surrounding Rodio pipeline as lock-free or prove physical real-time/latency or click-free musical transitions. GUI position reporting still uses Rodio's control-plane position timing with wrapped loop phase. Next proposed bounded slice after review: GUI In/Out/activate/exit controls and displayed loop state, with headless workflows; saved-loop persistence/quantization follow separately. All continuation work after 29b52f8 remains local/uncommitted.
+
+## Manual loop GUI checkpoint (2026-10-25)
+
+The user requested commit/push and continuation. All preceding cue/UI/engine/documentation work was committed and pushed as 9a1c7b7; remote main was verified at that SHA. This bounded follow-up adds four manual-loop controls per deck and a caption derived from actual engine In/Out/active state. In/Out capture the current source position; activation preserves Play/Pause, and Exit preserves current loop phase. Controls/callbacks are guarded during loading/restore/import, with errors reported through status. No schema, dependency or audio-source callback behavior changed.
+
+A headless actual-control test covers unloaded/invalid boundaries, paused/playing activation, offline wrap, pause/exit, seek/Cue deactivation with retained bounds, failed/successful replacement, loading guards and other-deck/Sink-volume isolation. Two-size layout regression includes all loop controls. Native usability/visuals, listening and physical latency remain unqualified. Next proposed bounded slice after review: durable per-track saved loop slots and schema migration/restart/rollback tests, followed by saved-loop GUI integration. Auto-loop lengths/beat quantization and hardware feedback remain open. Current GUI changes remain local and uncommitted.

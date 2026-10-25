@@ -76,6 +76,11 @@ component CompactDeck inherits Rectangle {
     in-out property <float> position;
     in property <[HotCueRow]> hot-cues;
     property <int> delete-slot: 1;
+    in property <string> loop-caption;
+    in property <bool> loop-has-in;
+    in property <bool> loop-ready;
+    in property <bool> loop-active;
+    callback loop-in(); callback loop-out(); callback loop-activate(); callback loop-exit();
     in property <bool> cue-editing;
     in-out property <string> cue-name;
     in-out property <string> cue-rgb;
@@ -116,6 +121,14 @@ component CompactDeck inherits Rectangle {
                 }
                 Rectangle { height: 3px; background: pad.occupied ? pad.tint : #394251; }
             }
+        }
+        HorizontalLayout {
+            height: 28px; spacing: 2px;
+            Button { text: "IN"; accessible-label: root.deck-label + " loop in"; enabled: loaded && !loading; clicked => { root.loop-in(); } }
+            Button { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
+            Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " activate loop"; enabled: loaded && !loading && loop-ready && !loop-active; clicked => { root.loop-activate(); } }
+            Button { text: "EXIT"; accessible-label: root.deck-label + " exit loop"; enabled: loaded && !loading && loop-active; clicked => { root.loop-exit(); } }
+            Text { width: 110px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
         }
         if !root.cue-editing : HorizontalLayout {
             height: 26px;
@@ -365,11 +378,21 @@ export component AppWindow inherits Window {
     in-out property <float> left-position: 0;
     in-out property <float> right-position: 0;
     in property <[HotCueRow]> left-hot-cues;
+    in property <string> left-loop-caption;
+    in property <bool> left-loop-has-in;
+    in property <bool> left-loop-ready;
+    in property <bool> left-loop-active;
+    callback loop-in-left(); callback loop-out-left(); callback loop-activate-left(); callback loop-exit-left();
     in property <bool> left-cue-editing;
     in-out property <string> left-cue-name;
     in-out property <string> left-cue-rgb;
     callback edit-hot-cue-left(int); callback save-hot-cue-left(); callback cancel-hot-cue-left();
     in property <[HotCueRow]> right-hot-cues;
+    in property <string> right-loop-caption;
+    in property <bool> right-loop-has-in;
+    in property <bool> right-loop-ready;
+    in property <bool> right-loop-active;
+    callback loop-in-right(); callback loop-out-right(); callback loop-activate-right(); callback loop-exit-right();
     in property <bool> right-cue-editing;
     in-out property <string> right-cue-name;
     in-out property <string> right-cue-rgb;
@@ -434,10 +457,12 @@ export component AppWindow inherits Window {
             Text { text: "EXTENDED / " + (audio-enabled ? "INTERNAL AUDIO" : "SIMULATION · NO AUDIO"); color: #9cacc1; horizontal-alignment: right; vertical-alignment: center; }
         }
         HorizontalLayout {
-            height: 230px; spacing: 8px;
+            height: 260px; spacing: 8px;
             CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
+                loop-caption: root.left-loop-caption; loop-has-in: root.left-loop-has-in; loop-ready: root.left-loop-ready; loop-active: root.left-loop-active;
+                loop-in => { root.loop-in-left(); } loop-out => { root.loop-out-left(); } loop-activate => { root.loop-activate-left(); } loop-exit => { root.loop-exit-left(); }
                 hot-cues: root.left-hot-cues;
                 cue-editing: root.left-cue-editing; cue-name <=> root.left-cue-name; cue-rgb <=> root.left-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-left(slot); }
@@ -451,6 +476,8 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 waveform: root.right-waveform; colors: root.right-waveform-colors;
+                loop-caption: root.right-loop-caption; loop-has-in: root.right-loop-has-in; loop-ready: root.right-loop-ready; loop-active: root.right-loop-active;
+                loop-in => { root.loop-in-right(); } loop-out => { root.loop-out-right(); } loop-activate => { root.loop-activate-right(); } loop-exit => { root.loop-exit-right(); }
                 hot-cues: root.right-hot-cues;
                 cue-editing: root.right-cue-editing; cue-name <=> root.right-cue-name; cue-rgb <=> root.right-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-right(slot); }
