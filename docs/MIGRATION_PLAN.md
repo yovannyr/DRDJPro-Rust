@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 103 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 107 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Bis einschließlich Auto-Loops und Halbieren/Verdoppeln ist `b641c1e` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Die Loop-Bereichsanzeige folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
+Veröffentlichungsstand: Bis einschließlich präziser Loop-Bereichsanzeige ist `fa710ac` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Die optionale Auto-Loop-Beat-Ausrichtung folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
 
 ### Nächste und offene Arbeitspakete
 
@@ -40,7 +40,8 @@ Veröffentlichungsstand: Bis einschließlich Auto-Loops und Halbieren/Verdoppeln
 - [x] ✅ Saved-Loop-Slots in der GUI speichern, abrufen und löschen, mit Quellvalidierung und Neustart-Tests.
 - [x] ✅ Beatbasierte Auto-Loops (⅛–32 Beats) aus bestätigter manueller BPM und Halbieren/Verdoppeln bestehender Loop-Grenzen.
 - [x] ✅ Loop-Bereiche mit In/Out-Markierungen in Übersicht/Detail, präzisem Clipping und Anzeige von Aktiv/Inaktiv.
-- [ ] ☐ **Als Nächstes:** optionale Beat-Ausrichtung beim Erzeugen von Auto-Loops anhand des bestätigten manuellen Grids.
+- [x] ✅ Optionale Beat-Ausrichtung neu erzeugter Auto-Loops anhand des bestätigten manuellen Grids.
+- [ ] ☐ **Als Nächstes:** Playback-Geschwindigkeit/Pitch als Engine-Grundlage mit Offline-Tests; GUI, Keylock und Sync separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -223,3 +224,11 @@ The deck tools switch now cycles CUES/SLOTS/AUTO within the same 260 px deck hei
 This bounded slice adds display-only loop shading and In/Out lines in both overview/detail waveforms from actual per-deck engine snapshots. Complete validated bounds are required. Active and inactive state use distinct colors and accessible source-time descriptions; incomplete In-only state has no interval marker. Overview and detail receive separate viewport-local models. Native Duration comparisons decide overlap and endpoint visibility before f32 conversion; viewport times use the same canonical frame conversion as engine boundaries. Clipped shading stays within the waveform, uses a one-pixel minimum even at EOF, and hides exactly touching non-overlaps. Saved slots alone do not create markers until recalled into deck bounds.
 
 Independent GPT-6 Astra / medium review found an absolute-f32-coordinate defect for final-frame loops on a supported 600-second track. The implementation was corrected before publication, with a synthetic long-track headless regression (no huge PCM fixture). Existing workflow tests verify full/left/right/outside ranges, two sizes, zoom/seek, active/exit state, one-frame EOF, failed/successful load and other-deck/volume isolation. No audio engine/callback, schema or dependency changed; waveform exposes only a read-only sample-rate getter for precise view timing. Visual rendering/contrast/overlap usability remain unqualified. Next proposed bounded slice is explicit optional beat alignment when creating Auto Loops; cue-trigger quantization, tempo/sync and hardware timing remain separate requirements. Publication is gated by follow-up review and final green checks.
+
+## Optional Auto Loop beat alignment checkpoint (2026-10-25)
+
+The reviewed loop-range slice was published as fa710ac before this bounded continuation. Each deck now has a runtime BEAT SNAP checkbox in AUTO, default off. With it off, creation retains the existing playhead-frame start. With it on, only a newly triggered Auto Loop starts at the nearest nonnegative whole beat from the committed grid BPM/anchor, then activates under the same Play/Pause/complete-region rules. Equal-distance ties choose the later beat; if the mathematically nearest beat is negative, the first nonnegative grid beat is used. Beat selection and first-nonnegative/tie decisions use checked integer rational arithmetic for the stored f64 BPM, then round directly to a source frame once; no floating floor/ceil or intermediate nanosecond floor is used. A snapped start/end outside the source fails before any mutation, without fallback to unsnapped/clamped audio.
+
+Changing the checkbox alone never moves or resizes playback. The preference is independent per deck and transient; it is not a stored track/grid setting. Pending grid edits, saved cue/loop data, manual In/Out, half/double and cue recall remain unaffected. No trigger scheduling, global quantization, keylock or sync is implemented. Domain, engine and actual headless checkbox/auto actions cover tie/anchor/preroll/rounding behavior, failures retaining active state, other-deck isolation and draft-versus-committed timing. Existing two-size AUTO geometry includes the new checkbox. No schema/dependency/sample callback code changed.
+
+Next proposed reviewed slice: playback speed/pitch control-plane and PCM source foundation with deterministic offline tests; GUI, keylock and sync remain separate acceptance scopes. Native visual/listening/physical latency, musical grid correctness, cue trigger scheduling and platform qualification remain open. Publication requires the standing independent GPT-6 Astra medium review and final green checks.

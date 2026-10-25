@@ -1,4 +1,4 @@
-import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox } from "std-widgets.slint";
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox } from "std-widgets.slint";
 export struct LoopRange { valid: bool, active: bool, visible: bool, in-visible: bool, out-visible: bool, start: float, end: float, description: string }
 export struct SavedLoopRow { occupied: bool, description: string }
 export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string }
@@ -105,6 +105,7 @@ component CompactDeck inherits Rectangle {
     property <int> tools-panel: 0;
     in property <bool> grid-active;
     in-out property <int> auto-loop-index: 5;
+    in-out property <bool> auto-loop-snap: false;
     callback auto-loop(); callback half-loop(); callback double-loop();
     in property <[SavedLoopRow]> saved-loops;
     in-out property <int> saved-loop-slot: 1;
@@ -181,7 +182,11 @@ component CompactDeck inherits Rectangle {
             Button { text: "½"; accessible-label: root.deck-label + " half loop"; enabled: loaded && !loading && loop-ready; clicked => { root.half-loop(); } }
             Button { text: "×2"; accessible-label: root.deck-label + " double loop"; enabled: loaded && !loading && loop-ready; clicked => { root.double-loop(); } }
         }
-        if root.tools-panel == 2 : Text { height: 14px; text: "Manual BPM · start at playhead · no snap"; color: #a8b3c3; font-size: 10px; }
+        if root.tools-panel == 2 : HorizontalLayout {
+            height: 26px; spacing: 2px;
+            CheckBox { text: "BEAT SNAP"; checked <=> root.auto-loop-snap; accessible-label: root.deck-label + " auto loop beat snap"; enabled: loaded && !loading && grid-active; }
+            Text { text: root.auto-loop-snap ? "Nearest beat · manual grid" : "Start at playhead"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
+        }
         if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 26px;
             Text { text: "SLOT"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
@@ -431,6 +436,7 @@ export component AppWindow inherits Window {
     in-out property <float> left-position: 0;
     in-out property <float> right-position: 0;
     in property <[HotCueRow]> left-hot-cues;
+    in-out property <bool> left-auto-loop-snap: false;
     in-out property <int> left-auto-loop-index: 5;
     callback auto-loop-left(); callback half-loop-left(); callback double-loop-left();
     in property <[SavedLoopRow]> left-saved-loops;
@@ -449,6 +455,7 @@ export component AppWindow inherits Window {
     in-out property <string> left-cue-rgb;
     callback edit-hot-cue-left(int); callback save-hot-cue-left(); callback cancel-hot-cue-left();
     in property <[HotCueRow]> right-hot-cues;
+    in-out property <bool> right-auto-loop-snap: false;
     in-out property <int> right-auto-loop-index: 5;
     callback auto-loop-right(); callback half-loop-right(); callback double-loop-right();
     in property <[SavedLoopRow]> right-saved-loops;
@@ -530,7 +537,7 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
-                grid-active: root.left-grid-active; auto-loop-index <=> root.left-auto-loop-index;
+                grid-active: root.left-grid-active; auto-loop-index <=> root.left-auto-loop-index; auto-loop-snap <=> root.left-auto-loop-snap;
                 auto-loop => { root.auto-loop-left(); } half-loop => { root.half-loop-left(); } double-loop => { root.double-loop-left(); }
                 saved-loops: root.left-saved-loops; saved-loop-slot <=> root.left-saved-loop-slot; saved-loop-name <=> root.left-saved-loop-name;
                 save-loop => { root.save-loop-left(); } recall-loop => { root.recall-loop-left(); } delete-loop => { root.delete-loop-left(); }
@@ -550,7 +557,7 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 waveform: root.right-waveform; colors: root.right-waveform-colors;
-                grid-active: root.right-grid-active; auto-loop-index <=> root.right-auto-loop-index;
+                grid-active: root.right-grid-active; auto-loop-index <=> root.right-auto-loop-index; auto-loop-snap <=> root.right-auto-loop-snap;
                 auto-loop => { root.auto-loop-right(); } half-loop => { root.half-loop-right(); } double-loop => { root.double-loop-right(); }
                 saved-loops: root.right-saved-loops; saved-loop-slot <=> root.right-saved-loop-slot; saved-loop-name <=> root.right-saved-loop-name;
                 save-loop => { root.save-loop-right(); } recall-loop => { root.recall-loop-right(); } delete-loop => { root.delete-loop-right(); }

@@ -565,13 +565,17 @@ impl AudioController {
                                                 DeckId::B => ui.get_right_auto_loop_index(),
                                             })
                                             .unwrap_or(-1);
+                                    let snap = c.ui.upgrade().is_some_and(|ui| match id {
+                                        DeckId::A => ui.get_left_auto_loop_snap(),
+                                        DeckId::B => ui.get_right_auto_loop_snap(),
+                                    });
                                     usize::try_from(index)
                                         .ok()
                                         .and_then(|i| {
                                             [1, 2, 4, 8, 16, 32, 64, 128, 256].get(i).copied()
                                         })
                                         .ok_or_else(|| "Choose a supported beat length".to_string())
-                                        .and_then(|eighths| c.engine.auto_loop(id, eighths))
+                                        .and_then(|eighths| c.engine.auto_loop(id, eighths, snap))
                                 }
                                 5 => c.engine.resize_loop(id, false),
                                 _ => c.engine.resize_loop(id, true),
@@ -1805,6 +1809,78 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn auto_loop_snap_checkbox_is_per_deck_explicit_and_uses_committed_anchor() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        assert!(!ui.get_left_auto_loop_snap());
+        assert!(!control(&ui, "DECK A auto loop beat snap")
+            .accessible_enabled()
+            .unwrap());
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(120., Duration::from_millis(250)).unwrap()),
+            )
+            .unwrap();
+        c.tick();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(850))
+            .unwrap();
+        ui.set_left_auto_loop_index(3);
+        ui.invoke_auto_loop_left();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(850))
+        );
+        control(&ui, "DECK A auto loop beat snap").invoke_accessible_default_action();
+        assert!(ui.get_left_auto_loop_snap());
+        assert!(!ui.get_right_auto_loop_snap());
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(850))
+        ); // A mode toggle alone cannot move playback.
+        ui.invoke_grid_left();
+        ui.set_left_grid_draft_bpm("60".into());
+        ui.invoke_edit_grid_bpm_left();
+        control(&ui, "DECK A auto loop").invoke_accessible_default_action();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(750))
+        );
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(1250))
+        );
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).loop_in.is_none());
+        assert!(!c.dirty.get());
+        ui.invoke_cancel_grid_left();
+        control(&ui, "DECK A auto loop beat snap").invoke_accessible_default_action();
+        assert!(!ui.get_left_auto_loop_snap());
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(850))
+            .unwrap();
+        ui.invoke_auto_loop_left();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(850))
+        );
     }
     #[test]
     fn long_track_final_frame_loop_remains_visible_before_gui_rounding() {
@@ -3315,7 +3391,13 @@ mod tests {
                 }
                 control(&ui, &format!("{deck} deck tools panel"))
                     .invoke_accessible_default_action();
-                for action in ["auto loop length", "auto loop", "half loop", "double loop"] {
+                for action in [
+                    "auto loop length",
+                    "auto loop",
+                    "half loop",
+                    "double loop",
+                    "auto loop beat snap",
+                ] {
                     let button = control(&ui, &format!("{deck} {action}"));
                     assert!(button.absolute_position().x >= 0.);
                     assert!(button.absolute_position().x + button.size().width <= width + 0.1);

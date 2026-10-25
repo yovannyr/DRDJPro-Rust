@@ -32,6 +32,39 @@ impl BeatGrid {
     pub fn anchor(self) -> Duration {
         self.anchor
     }
+    /// Nearest whole-beat source frame; ties choose the later beat. Exclude negative beats.
+    pub fn nearest_beat_frame(self, position: Duration, rate: u32) -> Result<usize, String> {
+        if rate == 0 {
+            return Err("Invalid source sample rate".into());
+        }
+        // BPM is a bounded positive normal f64. Preserve its exact binary rational
+        // value so floor/ceil cannot cross a mathematical beat or nanosecond tie.
+        let bits = self.bpm.to_bits();
+        let mantissa = i128::from((bits & ((1_u64 << 52) - 1)) | (1_u64 << 52));
+        let denominator = 60_000_000_000_i128 << (1075 - ((bits >> 52) & 0x7ff));
+        let anchor = (self.anchor.as_nanos() as i128)
+            .checked_mul(mantissa)
+            .ok_or("Aligned beat arithmetic overflow")?;
+        let delta = (position.as_nanos() as i128 - self.anchor.as_nanos() as i128)
+            .checked_mul(mantissa)
+            .ok_or("Aligned beat arithmetic overflow")?;
+        let lower = delta.div_euclid(denominator);
+        let index = (lower + i128::from(delta.rem_euclid(denominator) * 2 >= denominator))
+            .max(-(anchor / denominator));
+        let time = anchor
+            .checked_add(
+                index
+                    .checked_mul(denominator)
+                    .ok_or("Aligned beat arithmetic overflow")?,
+            )
+            .ok_or("Aligned beat arithmetic overflow")?;
+        let numerator = time
+            .checked_mul(i128::from(rate))
+            .ok_or("Aligned beat arithmetic overflow")?;
+        let divisor = mantissa * 1_000_000_000;
+        let frame = numerator / divisor + i128::from((numerator % divisor) * 2 >= divisor);
+        usize::try_from(frame).map_err(|_| "Aligned beat exceeds source-frame range".into())
+    }
     /// Return only the visible lines. The supported 32 s/240 BPM view has at most 129.
     pub fn lines(self, start: Duration, end: Duration) -> Vec<GridLine> {
         if end <= start {
@@ -143,6 +176,68 @@ impl GridDraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn snap_handles_nonbinary_zero_beats_and_nanosecond_sides_of_midpoint() {
+        for rate in [44100, 48000, 96000] {
+            let zero = BeatGrid::new(150., Duration::from_millis(1200)).unwrap();
+            assert_eq!(zero.nearest_beat_frame(Duration::ZERO, rate).unwrap(), 0);
+            assert_eq!(
+                zero.nearest_beat_frame(Duration::from_nanos(1), rate)
+                    .unwrap(),
+                0
+            );
+            let grid = BeatGrid::new(120., Duration::from_millis(313)).unwrap();
+            for (time, target_ms) in [(562999999_u64, 313_u32), (563000000, 813), (563000001, 813)]
+            {
+                assert_eq!(
+                    grid.nearest_beat_frame(Duration::from_nanos(time), rate)
+                        .unwrap(),
+                    ((u64::from(target_ms) * u64::from(rate) + 500) / 1000) as usize
+                );
+            }
+        }
+    }
+    #[test]
+    fn nearest_beat_uses_anchor_later_ties_valid_first_beat_and_one_frame_rounding() {
+        let grid = BeatGrid::new(120., Duration::from_millis(250)).unwrap();
+        for rate in [44100, 48000, 96000] {
+            for (position, target) in [
+                (Duration::ZERO, 0.25),
+                (Duration::from_nanos(499999999), 0.25),
+                (Duration::from_millis(500), 0.75),
+                (Duration::from_nanos(500000001), 0.75),
+                (Duration::from_millis(1100), 1.25),
+            ] {
+                assert_eq!(
+                    grid.nearest_beat_frame(position, rate).unwrap(),
+                    (target * f64::from(rate)).round() as usize
+                );
+            }
+            let before_anchor = BeatGrid::new(120., Duration::from_secs(2)).unwrap();
+            assert_eq!(
+                before_anchor
+                    .nearest_beat_frame(Duration::ZERO, rate)
+                    .unwrap(),
+                0
+            );
+            let first = BeatGrid::new(120., Duration::from_millis(400)).unwrap();
+            assert_eq!(
+                first.nearest_beat_frame(Duration::ZERO, rate).unwrap(),
+                (0.4 * f64::from(rate)).round() as usize
+            );
+            let thirds = BeatGrid::new(180., Duration::ZERO).unwrap();
+            assert_eq!(
+                thirds
+                    .nearest_beat_frame(Duration::from_millis(300), rate)
+                    .unwrap(),
+                rate as usize / 3
+            );
+        }
+        assert!(grid.nearest_beat_frame(Duration::ZERO, 0).is_err());
+        assert!(grid
+            .nearest_beat_frame(Duration::from_secs(u64::MAX), 48000)
+            .is_err());
+    }
     #[test]
     fn validates_bpm_and_generates_anchored_beats_before_and_after_anchor() {
         for bpm in [0.0, -120.0, 39.9, 240.1, f64::NAN, f64::INFINITY] {
