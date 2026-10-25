@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 113 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 115 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die unabhängig reviewte Geschwindigkeits-/Pitch-Engine ist als `376a174` gepusht. Die Pitch-GUI folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
+Veröffentlichungsstand: Bis einschließlich Pitch-GUI und BPM-Anzeige ist `c366c79` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Pitch-Bereiche und Feinsteuerung folgen demselben Review-/Prüf-/Veröffentlichungsablauf.
 
 ### Nächste und offene Arbeitspakete
 
@@ -43,7 +43,8 @@ Veröffentlichungsstand: Die unabhängig reviewte Geschwindigkeits-/Pitch-Engine
 - [x] ✅ Optionale Beat-Ausrichtung neu erzeugter Auto-Loops anhand des bestätigten manuellen Grids.
 - [x] ✅ Engine-Grundlage für gekoppelte Playback-Geschwindigkeit/Pitch 0,5–2,0×, mit Quellzeit- und Offline-Signaltests.
 - [x] ✅ Pitch-Fader/Reset mit gebündelten, quellgebundenen Anfragen und Anzeige von gewünschtem/effektivem Pitch sowie Quell-/aktuellem BPM.
-- [ ] ☐ **Als Nächstes:** wählbare Pitch-Bereiche und Feinsteuerung; Keylock und Sync separat.
+- [x] ✅ Pitch-Bereiche ±8/±16/±50/Wide und driftfreie 0,01-Prozentpunkt-Feinschritte ohne stillen Rate-Reset beim Bereichswechsel.
+- [ ] ☐ **Als Nächstes:** temporäres Pitch-Nudge mit sicherem Loslassen/Abbruch; Keylock und Sync separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -252,3 +253,11 @@ The engine-first slice passed independent Astra-medium review and final112-test 
 GUI fader/reset events are validated and coalesced into one pending request per deck, retaining only the latest. The existing33ms application timer applies at most one pending setting per deck per tick. Requests capture the installed prepared-source identity and are discarded if loading/restore/import starts or the source is replaced before application. Invalid events clear that deck's pending request and leave the engine unchanged. Play/Pause, position, loop/bounds, grid and mixer are retained by the reviewed engine. GUI bindings display applied engine values after the tick; coalescing does not qualify audible live transitions.
 
 Actual headless slider/reset tests cover bursts, default/unloaded states, final request ownership, manual/current BPM, invalid/loading/stale-source rejection, failure retention and deck isolation. Two-size layout now covers all four tool panels within the existing260px deck. No schema/dependency/sample-source code changed. Next proposed reviewed slice is selectable pitch ranges and fine adjustments. Native visuals/focus/listening, interpolation/anti-alias/transition quality, keylock/Sync, controller hardware and platform gates remain open. Publication requires the standing review/final-check gate.
+
+## Pitch ranges and fine control checkpoint (2026-10-25)
+
+The reviewed GUI baseline is published as c366c79. This bounded slice adds per-deck±8%,±16%,±50% and Wide(-50..+100%) control ranges; Wide remains the default for compatibility. Range selection is a view/control constraint, never an engine-rate command. Changing it cancels that deck's pending pitch gesture. If the applied factor lies outside a new range, the fader is hidden rather than silently clamped; actual requested/effective values remain visible and reset/wider range permit recovery. Range selection persists only for the current deck session and remains on successful track replacement while the speed itself resets1x.
+
+GUI requests quantize to0.01 percentage points before the existing effective-Hz mapping. Fine± actions use integer hundredths of a percent, building from the source-bound pending target if present, so bursts coalesce without accumulated float drift. Range-edge rejection preserves the last valid pending fine target. Reset and all rate changes continue through the reviewed bounded queue. Audio source, engine speed algorithm, storage and dependencies are unchanged.
+
+Domain and actual headless tests cover all bounds/quantization,100-step forward/backward stability, out-of-range current-state display, range-only no-seek/no-rate change, boundaries retaining queued steps, invalid indices, independent decks, new-track reset/session range retention and two-size geometry. Native usability/focus, audible transitions, resampling quality and physical latency remain unqualified. Next proposed reviewed slice is temporary nudge with safe release/cancellation; keylock and Sync remain separate. Publication follows independent Astra-medium review and final green checks.

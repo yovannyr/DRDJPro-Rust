@@ -63,6 +63,7 @@ pub struct AudioController {
     crate_delete: Cell<Option<i32>>,
     crate_target: Cell<i32>,
     import_crate: Cell<i32>,
+    pitch_ranges: Cell<[crate::pitch_control::PitchRange; 2]>,
     pending_pitch: RefCell<[Option<PitchRequest>; 2]>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
@@ -96,6 +97,7 @@ impl AudioController {
             crate_delete: Cell::new(None),
             crate_target: Cell::new(0),
             import_crate: Cell::new(0),
+            pitch_ranges: Cell::new([crate::pitch_control::PitchRange::default(); 2]),
             pending_pitch: RefCell::new([None, None]),
             cue_editors: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
@@ -559,14 +561,81 @@ impl AudioController {
             .snapshot(id)
             .detail
             .ok_or("Load a track first")?;
-        let factor = 1. + f64::from(percent) / 100.;
+        let factor = self.pitch_ranges.get()[Self::grid_index(id)].factor(f64::from(percent))?;
         crate::playback_speed::PlaybackSpeed::new(factor, source.sample_rate())?;
         self.pending_pitch.borrow_mut()[Self::grid_index(id)] =
             Some(PitchRequest { source, factor });
         Ok(())
     }
+    fn change_pitch_range(&self, id: DeckId) -> Result<(), String> {
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let index = match id {
+            DeckId::A => ui.get_left_pitch_range_index(),
+            DeckId::B => ui.get_right_pitch_range_index(),
+        };
+        let range = crate::pitch_control::PitchRange::from_index(index)?;
+        self.pending_pitch.borrow_mut()[Self::grid_index(id)].take();
+        let mut ranges = self.pitch_ranges.get();
+        ranges[Self::grid_index(id)] = range;
+        self.pitch_ranges.set(ranges);
+        Ok(())
+    }
+    fn fine_pitch(&self, id: DeckId, up: bool) -> Result<(), String> {
+        if !self.can_change_crates() {
+            return Err("Finish loading before changing pitch".into());
+        }
+        let snapshot = self.engine.snapshot(id);
+        let source = snapshot.detail.ok_or("Load a track first")?;
+        let factor = self.pending_pitch.borrow()[Self::grid_index(id)]
+            .as_ref()
+            .filter(|request| Arc::ptr_eq(&source, &request.source))
+            .map_or(snapshot.requested_speed, |request| request.factor);
+        let target = self.pitch_ranges.get()[Self::grid_index(id)].step(factor, up)?;
+        self.queue_pitch(id, ((target - 1.) * 100.) as f32)
+    }
     fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let range = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.change_pitch_range(id);
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(
+                            result
+                                .map(|()| "Pitch range changed; playback retained".to_string())
+                                .unwrap_or_else(|error| error)
+                                .into(),
+                        );
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_pitch_range_left(range),
+                DeckId::B => ui.on_pitch_range_right(range),
+            }
+            for up in [false, true] {
+                let weak = Rc::downgrade(self);
+                let action = move || {
+                    if let Some(c) = weak.upgrade() {
+                        let result = c.fine_pitch(id, up);
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(
+                                result
+                                    .map(|()| "Fine pitch queued".to_string())
+                                    .unwrap_or_else(|error| error)
+                                    .into(),
+                            );
+                        }
+                    }
+                };
+                match (id, up) {
+                    (DeckId::A, false) => ui.on_pitch_down_left(action),
+                    (DeckId::B, false) => ui.on_pitch_down_right(action),
+                    (DeckId::A, true) => ui.on_pitch_up_left(action),
+                    (DeckId::B, true) => ui.on_pitch_up_right(action),
+                }
+            }
             let weak = Rc::downgrade(self);
             let change = move |value| {
                 if let Some(c) = weak.upgrade() {
@@ -1498,11 +1567,37 @@ impl AudioController {
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.snapshot(id);
             let index = Self::grid_index(id);
+            let pitch_range = self.pitch_ranges.get()[index];
+            let (pitch_min, pitch_max) = pitch_range.bounds();
+            let pitch_outside = !pitch_range.contains(s.requested_speed);
+            match id {
+                DeckId::A => {
+                    ui.set_left_pitch_range_index(pitch_range.index());
+                    ui.set_left_pitch_min(pitch_min as f32);
+                    ui.set_left_pitch_max(pitch_max as f32);
+                    ui.set_left_pitch_outside(pitch_outside);
+                    ui.set_left_pitch_can_down(pitch_range.step(s.requested_speed, false).is_ok());
+                    ui.set_left_pitch_can_up(pitch_range.step(s.requested_speed, true).is_ok());
+                }
+                DeckId::B => {
+                    ui.set_right_pitch_range_index(pitch_range.index());
+                    ui.set_right_pitch_min(pitch_min as f32);
+                    ui.set_right_pitch_max(pitch_max as f32);
+                    ui.set_right_pitch_outside(pitch_outside);
+                    ui.set_right_pitch_can_down(pitch_range.step(s.requested_speed, false).is_ok());
+                    ui.set_right_pitch_can_up(pitch_range.step(s.requested_speed, true).is_ok());
+                }
+            }
             let pitch = format!(
                 "Requested {:+.2}% · effective {:+.4}% · coupled",
                 (s.requested_speed - 1.) * 100.,
                 (s.effective_speed - 1.) * 100.
             );
+            let pitch = if pitch_outside {
+                format!("Outside range · {pitch}")
+            } else {
+                format!("0.01% steps · {pitch}")
+            };
             let bpm = if let Some(grid) = s.grid {
                 format!(
                     "Manual BPM: {:.2} → {:.2}",
@@ -1931,6 +2026,118 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn pitch_ranges_preserve_audio_outside_values_and_coalesce_integer_fine_steps() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 8);
+        let other = wav_file(4096, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        for _ in 0..3 {
+            control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        }
+        assert_eq!(ui.get_left_pitch_range_index(), 3);
+        control(&ui, "DECK A pitch").set_accessible_value("25");
+        c.tick();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let before = engine.snapshot(DeckId::A);
+        let volumes = engine.output_volumes();
+        ui.set_left_pitch_range_index(0);
+        ui.invoke_pitch_range_left();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.25);
+        assert_eq!(engine.snapshot(DeckId::A).position, before.position);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(ui.get_left_pitch_outside());
+        assert_eq!(ui.get_left_pitch_percent(), 25.);
+        assert!(ui.get_left_pitch_caption().starts_with("Outside range"));
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A pitch").count(),
+            0
+        );
+        ui.invoke_pitch_up_left();
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.25);
+        control(&ui, "DECK A reset pitch").invoke_accessible_default_action();
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        assert!(!ui.get_left_pitch_outside());
+        assert_eq!(
+            control(&ui, "DECK A pitch").accessible_value_minimum(),
+            Some(-8.)
+        );
+        assert_eq!(
+            control(&ui, "DECK A pitch").accessible_value_maximum(),
+            Some(8.)
+        );
+        for _ in 0..100 {
+            control(&ui, "DECK A pitch fine up").invoke_accessible_default_action();
+        }
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.01);
+        for _ in 0..100 {
+            control(&ui, "DECK A pitch fine down").invoke_accessible_default_action();
+        }
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
+        // Reaching the boundary must retain the last valid queued step, not discard it.
+        ui.invoke_pitch_left(7.99);
+        ui.invoke_pitch_up_left();
+        ui.invoke_pitch_up_left();
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.08);
+        assert!(!ui.get_left_pitch_can_up());
+        ui.invoke_pitch_left(8.01);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.08);
+        ui.set_left_pitch_range_index(1);
+        ui.invoke_pitch_range_left();
+        control(&ui, "DECK A pitch").set_accessible_value("16");
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.16);
+        ui.set_left_pitch_range_index(2);
+        ui.invoke_pitch_range_left();
+        control(&ui, "DECK A pitch").set_accessible_value("-50");
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 0.5);
+        ui.invoke_pitch_up_left();
+        ui.set_left_pitch_range_index(3);
+        ui.invoke_pitch_range_left();
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 0.5); // Range changes cancel queued gestures.
+        control(&ui, "DECK A pitch").set_accessible_value("100");
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 2.);
+        ui.set_left_pitch_range_index(-1);
+        ui.invoke_pitch_range_left();
+        assert_eq!(ui.get_left_pitch_range_index(), 3);
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 2.);
+        ui.set_left_pitch_range_index(0);
+        ui.invoke_pitch_range_left();
+        assert!(ui.get_left_pitch_outside());
+        engine.pause(DeckId::A);
+        engine.load_a(other.path()).unwrap();
+        c.tick();
+        assert_eq!(ui.get_left_pitch_range_index(), 0);
+        assert!(!ui.get_left_pitch_outside());
+        assert_eq!(ui.get_left_pitch_percent(), 0.);
+        assert_eq!(ui.get_right_pitch_range_index(), 3);
+        assert_eq!(engine.snapshot(DeckId::B).requested_speed, 1.);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(!c.dirty.get());
     }
     #[test]
     fn pitch_gui_coalesces_source_bound_requests_reset_bpm_and_loading_failures() {
@@ -3633,6 +3840,9 @@ mod tests {
                     "reset pitch",
                     "pitch values",
                     "source and current BPM",
+                    "pitch range",
+                    "pitch fine down",
+                    "pitch fine up",
                 ] {
                     let item = control(&ui, &format!("{deck} {action}"));
                     assert!(item.absolute_position().x >= 0.);

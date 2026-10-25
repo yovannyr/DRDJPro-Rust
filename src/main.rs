@@ -10,6 +10,7 @@ mod legacy_catalog;
 mod library;
 mod library_store;
 mod looping;
+mod pitch_control;
 mod playback;
 mod playback_speed;
 mod saved_loops;

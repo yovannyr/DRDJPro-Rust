@@ -104,6 +104,13 @@ component CompactDeck inherits Rectangle {
     property <int> delete-slot: 1;
     property <int> tools-panel: 0;
     in property <bool> grid-active;
+    in-out property <int> pitch-range-index: 3;
+    in property <float> pitch-min: -50;
+    in property <float> pitch-max: 100;
+    in property <bool> pitch-outside;
+    in property <bool> pitch-can-down;
+    in property <bool> pitch-can-up;
+    callback pitch-range(); callback pitch-down(); callback pitch-up();
     in-out property <float> pitch-percent;
     in property <string> pitch-caption;
     in property <string> bpm-caption;
@@ -195,9 +202,13 @@ component CompactDeck inherits Rectangle {
             spacing: 2px;
             HorizontalLayout {
                 height: 28px;
-                Slider { minimum: -50; maximum: 100; value <=> root.pitch-percent; accessible-label: root.deck-label + " pitch"; enabled: loaded && !loading; changed(value) => { root.pitch(value); } }
-                Text { width: 58px; text: round(root.pitch-percent*100)/100 + "%"; color: #b9c7d9; font-size: 11px; vertical-alignment: center; }
-                Button { width: 48px; text: "1×"; accessible-label: root.deck-label + " reset pitch"; enabled: loaded && !loading; clicked => { root.reset-pitch(); } }
+                ComboBox { width: 76px; model: ["±8%","±16%","±50%","Wide"]; current-index <=> root.pitch-range-index; accessible-label: root.deck-label + " pitch range"; selected => { root.pitch-range(); } }
+                if !root.pitch-outside : Slider { minimum: root.pitch-min; maximum: root.pitch-max; value <=> root.pitch-percent; accessible-label: root.deck-label + " pitch"; enabled: loaded && !loading; changed(value) => { root.pitch(value); } }
+                if root.pitch-outside : Text { text: "Outside range"; color: #ffcc77; font-size: 10px; vertical-alignment: center; }
+                Button { width: 28px; text: "−"; accessible-label: root.deck-label + " pitch fine down"; enabled: loaded && !loading && root.pitch-can-down; clicked => { root.pitch-down(); } }
+                Button { width: 28px; text: "+"; accessible-label: root.deck-label + " pitch fine up"; enabled: loaded && !loading && root.pitch-can-up; clicked => { root.pitch-up(); } }
+                Text { width: 48px; text: round(root.pitch-percent*100)/100 + "%"; color: #b9c7d9; font-size: 11px; vertical-alignment: center; }
+                Button { width: 40px; text: "1×"; accessible-label: root.deck-label + " reset pitch"; enabled: loaded && !loading; clicked => { root.reset-pitch(); } }
             }
             Text { height: 12px; text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " pitch values"; accessible-description: root.pitch-caption; }
             Text { height: 12px; text: root.bpm-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " source and current BPM"; accessible-description: root.bpm-caption; }
@@ -451,6 +462,10 @@ export component AppWindow inherits Window {
     in-out property <float> left-position: 0;
     in-out property <float> right-position: 0;
     in property <[HotCueRow]> left-hot-cues;
+    in-out property <int> left-pitch-range-index: 3;
+    in property <float> left-pitch-min: -50; in property <float> left-pitch-max: 100;
+    in property <bool> left-pitch-outside; in property <bool> left-pitch-can-down; in property <bool> left-pitch-can-up;
+    callback pitch-range-left(); callback pitch-down-left(); callback pitch-up-left();
     in-out property <float> left-pitch-percent;
     in property <string> left-pitch-caption;
     in property <string> left-bpm-caption;
@@ -474,6 +489,10 @@ export component AppWindow inherits Window {
     in-out property <string> left-cue-rgb;
     callback edit-hot-cue-left(int); callback save-hot-cue-left(); callback cancel-hot-cue-left();
     in property <[HotCueRow]> right-hot-cues;
+    in-out property <int> right-pitch-range-index: 3;
+    in property <float> right-pitch-min: -50; in property <float> right-pitch-max: 100;
+    in property <bool> right-pitch-outside; in property <bool> right-pitch-can-down; in property <bool> right-pitch-can-up;
+    callback pitch-range-right(); callback pitch-down-right(); callback pitch-up-right();
     in-out property <float> right-pitch-percent;
     in property <string> right-pitch-caption;
     in property <string> right-bpm-caption;
@@ -560,6 +579,8 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
+                pitch-range-index <=> root.left-pitch-range-index; pitch-min: root.left-pitch-min; pitch-max: root.left-pitch-max; pitch-outside: root.left-pitch-outside; pitch-can-down: root.left-pitch-can-down; pitch-can-up: root.left-pitch-can-up;
+                pitch-range => { root.pitch-range-left(); } pitch-down => { root.pitch-down-left(); } pitch-up => { root.pitch-up-left(); }
                 pitch-percent <=> root.left-pitch-percent; pitch-caption: root.left-pitch-caption; bpm-caption: root.left-bpm-caption;
                 pitch(value) => { root.pitch-left(value); } reset-pitch => { root.reset-pitch-left(); }
                 grid-active: root.left-grid-active; auto-loop-index <=> root.left-auto-loop-index; auto-loop-snap <=> root.left-auto-loop-snap;
@@ -582,6 +603,8 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 waveform: root.right-waveform; colors: root.right-waveform-colors;
+                pitch-range-index <=> root.right-pitch-range-index; pitch-min: root.right-pitch-min; pitch-max: root.right-pitch-max; pitch-outside: root.right-pitch-outside; pitch-can-down: root.right-pitch-can-down; pitch-can-up: root.right-pitch-can-up;
+                pitch-range => { root.pitch-range-right(); } pitch-down => { root.pitch-down-right(); } pitch-up => { root.pitch-up-right(); }
                 pitch-percent <=> root.right-pitch-percent; pitch-caption: root.right-pitch-caption; bpm-caption: root.right-bpm-caption;
                 pitch(value) => { root.pitch-right(value); } reset-pitch => { root.reset-pitch-right(); }
                 grid-active: root.right-grid-active; auto-loop-index <=> root.right-auto-loop-index; auto-loop-snap <=> root.right-auto-loop-snap;
