@@ -21,6 +21,10 @@ struct PitchRequest {
     source: Arc<crate::waveform::DetailPeaks>,
     factor: f64,
 }
+struct NudgeSession {
+    source: Arc<crate::waveform::DetailPeaks>,
+    held: [bool; 2],
+}
 struct CueSession {
     path: Arc<std::path::Path>,
     source: Arc<crate::waveform::DetailPeaks>,
@@ -65,6 +69,7 @@ pub struct AudioController {
     import_crate: Cell<i32>,
     pitch_ranges: Cell<[crate::pitch_control::PitchRange; 2]>,
     pending_pitch: RefCell<[Option<PitchRequest>; 2]>,
+    nudges: RefCell<[Option<NudgeSession>; 2]>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
@@ -99,6 +104,7 @@ impl AudioController {
             import_crate: Cell::new(0),
             pitch_ranges: Cell::new([crate::pitch_control::PitchRange::default(); 2]),
             pending_pitch: RefCell::new([None, None]),
+            nudges: RefCell::new([None, None]),
             cue_editors: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
@@ -114,6 +120,7 @@ impl AudioController {
             let toggle = move || {
                 if let Some(c) = weak.upgrade() {
                     if c.engine.snapshot(id).playing {
+                        c.cancel_nudge(id);
                         c.engine.pause(id);
                     } else {
                         c.engine.play(id);
@@ -128,6 +135,7 @@ impl AudioController {
             let weak = Rc::downgrade(&controller);
             let cue = move || {
                 if let Some(c) = weak.upgrade() {
+                    c.cancel_nudge(id);
                     c.engine.cue(id);
                     c.refresh();
                 }
@@ -153,6 +161,8 @@ impl AudioController {
                         if let Some(ui) = c.ui.upgrade() {
                             ui.set_status(format!("Deck {id:?}: {err}").into());
                         }
+                    } else {
+                        c.cancel_nudge(id);
                     }
                     c.refresh();
                 }
@@ -249,6 +259,7 @@ impl AudioController {
         controller.wire_hot_cues(ui);
         controller.wire_loops(ui);
         controller.wire_pitch(ui);
+        controller.wire_nudge(ui);
         controller.wire_saved_loops(ui);
         controller.refresh();
         controller
@@ -503,6 +514,7 @@ impl AudioController {
                     .as_ref()
                     .ok_or("Saved loop slot is empty")?;
                 self.engine.restore_loop(id, value.start(), value.end())?;
+                self.cancel_nudge(id);
                 return Ok("Saved boundaries loaded; press LOOP to activate".into());
             }
             _ => {
@@ -592,6 +604,104 @@ impl AudioController {
             .map_or(snapshot.requested_speed, |request| request.factor);
         let target = self.pitch_ranges.get()[Self::grid_index(id)].step(factor, up)?;
         self.queue_pitch(id, ((target - 1.) * 100.) as f32)
+    }
+    fn cancel_nudge(&self, id: DeckId) {
+        self.nudges.borrow_mut()[Self::grid_index(id)] = None;
+        // Release bypasses all busy guards and never starts a deck.
+        let _ = self.engine.set_nudge(id, 0);
+    }
+    fn cancel_stale_nudges(&self) {
+        for id in [DeckId::A, DeckId::B] {
+            let snapshot = self.engine.snapshot(id);
+            let stale = self.nudges.borrow()[Self::grid_index(id)]
+                .as_ref()
+                .is_some_and(|session| {
+                    !self.can_change_crates()
+                        || !snapshot.playing
+                        || snapshot
+                            .detail
+                            .as_ref()
+                            .is_none_or(|source| !Arc::ptr_eq(source, &session.source))
+                        || (session.held[0] != session.held[1] && snapshot.nudge_direction == 0)
+                });
+            if stale {
+                self.cancel_nudge(id);
+            }
+        }
+    }
+    fn hold_nudge(&self, id: DeckId, direction: i32, held: bool) -> Result<(), String> {
+        if direction != -1 && direction != 1 {
+            return Err("Invalid nudge direction".into());
+        }
+        self.cancel_stale_nudges();
+        let index = Self::grid_index(id);
+        if held && !self.can_change_crates() {
+            return Err("Nudge unavailable during loading".into());
+        }
+        let snapshot = self.engine.snapshot(id);
+        let mut sessions = self.nudges.borrow_mut();
+        if held && sessions[index].is_none() {
+            if !snapshot.playing {
+                return Err("Play the deck before nudging".into());
+            }
+            sessions[index] = Some(NudgeSession {
+                source: snapshot.detail.ok_or("Load a track first")?,
+                held: [false; 2],
+            });
+        }
+        let Some(session) = sessions[index].as_mut() else {
+            return Ok(());
+        };
+        let button = usize::from(direction > 0);
+        if session.held[button] == held {
+            return Ok(());
+        }
+        let mut next = session.held;
+        next[button] = held;
+        let target = i32::from(next[1]) - i32::from(next[0]);
+        if let Err(error) = self.engine.set_nudge(id, target) {
+            if !held || session.held == [false; 2] {
+                // A failed remaining direction must not retain already released inputs.
+                drop(sessions);
+                self.cancel_nudge(id);
+            }
+            return Err(error);
+        }
+        session.held = next;
+        if next == [false; 2] {
+            sessions[index] = None;
+        }
+        Ok(())
+    }
+    fn wire_nudge(self: &Rc<Self>, ui: &AppWindow) {
+        for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let hold = move |direction, held| {
+                if let Some(c) = weak.upgrade() {
+                    if let Err(error) = c.hold_nudge(id, direction, held) {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_nudge_left(hold),
+                DeckId::B => ui.on_nudge_right(hold),
+            }
+            let weak = Rc::downgrade(self);
+            let cancel = move || {
+                if let Some(c) = weak.upgrade() {
+                    c.cancel_nudge(id);
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_cancel_nudge_left(cancel),
+                DeckId::B => ui.on_cancel_nudge_right(cancel),
+            }
+        }
     }
     fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
@@ -739,6 +849,9 @@ impl AudioController {
                                 _ => c.engine.resize_loop(id, true),
                             }
                         };
+                        if result.is_ok() {
+                            c.cancel_nudge(id);
+                        }
                         if let Some(ui) = c.ui.upgrade() {
                             ui.set_status(
                                 match result {
@@ -885,7 +998,9 @@ impl AudioController {
                 if cue.position() >= source.duration {
                     return Err("Saved cue is outside the loaded track; delete and reset it".into());
                 }
-                return self.engine.seek_position(id, cue.position());
+                self.engine.seek_position(id, cue.position())?;
+                self.cancel_nudge(id);
+                return Ok(());
             }
         } else if cues.slots()[slot].is_none() {
             return Err("Cue slot is empty".into());
@@ -1309,6 +1424,9 @@ impl AudioController {
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
+        for id in [DeckId::A, DeckId::B] {
+            self.cancel_nudge(id);
+        }
         if let Some(worker) = self.persistence.borrow_mut().take() {
             let final_catalog = (self.storage_ready.get()
                 && (self.dirty.get() || self.saving.get()))
@@ -1397,6 +1515,7 @@ impl AudioController {
         self.refresh();
     }
     pub fn tick(&self) {
+        self.cancel_stale_nudges();
         self.apply_pending_pitch();
         self.poll_storage();
         let import = self
@@ -2031,6 +2150,270 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn momentary_nudge_pointer_keys_focus_panel_and_busy_cancellation() {
+        use slint::platform::{Key, PointerEventButton, WindowEvent};
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        for _ in 0..4 {
+            control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        }
+        let pointer = |pressed: bool| {
+            let button = control(&ui, "DECK A nudge up");
+            let p = button.absolute_position();
+            let size = button.size();
+            let position =
+                slint::LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+            ui.window().dispatch_event(if pressed {
+                WindowEvent::PointerPressed {
+                    position,
+                    button: PointerEventButton::Left,
+                }
+            } else {
+                WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                }
+            });
+        };
+        let volumes = engine.output_volumes();
+        pointer(true);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        assert!(ui.get_left_pitch_caption().contains("Nudge +2%"));
+        engine.set_speed(DeckId::A, 1.1).unwrap();
+        pointer(false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert!((engine.snapshot(DeckId::A).effective_speed - 1.1).abs() < 0.0001);
+        // Pointer press establishes focus for held Space/Return and deactivation.
+        for key in [Key::Space, Key::Return] {
+            ui.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+            ui.window()
+                .dispatch_event(WindowEvent::KeyPressRepeated { text: key.into() });
+            assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+            ui.window()
+                .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+            assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        }
+        pointer(true);
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Space.into(),
+        });
+        let item = control(&ui, "DECK A nudge up");
+        let position = item.absolute_position();
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Right,
+        });
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Space.into(),
+        });
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        pointer(false);
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Space.into(),
+        });
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Return.into(),
+        });
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Return.into(),
+        });
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Space.into(),
+        });
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        pointer(true);
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(false));
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        pointer(false);
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        ui.window().dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Space.into(),
+        });
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        pointer(true);
+        control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        // Logical input sessions cannot cross loading, source, transport or shutdown boundaries.
+        ui.invoke_nudge_left(-1, true);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, -1);
+        c.storage_ready.set(false);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        ui.invoke_nudge_left(1, true);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        c.storage_ready.set(true);
+        ui.invoke_nudge_left(-1, false);
+        ui.invoke_nudge_left(1, true);
+        engine.pause(DeckId::A);
+        c.tick();
+        engine.play(DeckId::A);
+        ui.invoke_nudge_left(1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        ui.invoke_nudge_left(1, true);
+        engine.load_a(file.path()).unwrap();
+        c.tick();
+        engine.play(DeckId::A);
+        ui.invoke_nudge_left(1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        ui.invoke_nudge_left(-1, true);
+        ui.invoke_nudge_right(1, true);
+        c.close_library().unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            assert_eq!(engine.snapshot(id).nudge_direction, 0);
+            assert!(engine.snapshot(id).playing);
+        }
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(!c.dirty.get());
+    }
+    #[test]
+    fn nudge_input_conflicts_limits_repeat_and_instant_accessibility_never_latch() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.play(DeckId::A);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        ui.invoke_nudge_left(-1, true);
+        ui.invoke_nudge_left(-1, true);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, -1);
+        ui.invoke_nudge_left(1, true);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        ui.invoke_nudge_left(-1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        ui.invoke_nudge_left(1, false);
+        assert!(c.nudges.borrow()[0].is_none());
+        ui.invoke_nudge_left(-1, true);
+        ui.invoke_nudge_left(1, true);
+        ui.invoke_seek_left(50.);
+        ui.invoke_nudge_left(-1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert!(c.nudges.borrow()[0].is_none());
+        engine.set_speed(DeckId::A, 2.).unwrap();
+        ui.invoke_nudge_left(-1, true);
+        ui.invoke_nudge_left(1, true);
+        // Releasing down would leave an invalid >2x up direction: cancel all.
+        ui.invoke_nudge_left(-1, false);
+        ui.invoke_nudge_left(1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert!(c.nudges.borrow()[0].is_none());
+        ui.invoke_nudge_left(1, true);
+        ui.invoke_nudge_left(1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        engine.set_speed(DeckId::A, 1.).unwrap();
+        for _ in 0..4 {
+            control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        }
+        for label in [
+            "DECK A nudge down",
+            "DECK A nudge up",
+            "DECK A cancel nudge",
+        ] {
+            control(&ui, label).invoke_accessible_default_action();
+            assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        }
+        ui.invoke_nudge_left(-1, true);
+        for _ in 0..48000 * 10 {
+            output.next();
+        }
+        assert!(!engine.snapshot(DeckId::A).playing);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert!(c.nudges.borrow()[0].is_none());
+        ui.invoke_nudge_left(-1, false);
+        engine.play(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+    }
+    #[test]
+    fn opposing_nudge_holds_cancel_after_hot_cue_and_loop_transport_but_not_errors() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.play(DeckId::A);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let press = || {
+            ui.invoke_nudge_left(-1, true);
+            ui.invoke_nudge_left(1, true);
+        };
+        let release = || {
+            ui.invoke_nudge_left(-1, false);
+            assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+            ui.invoke_nudge_left(1, false);
+            assert!(c.nudges.borrow()[0].is_none());
+        };
+        ui.invoke_hot_cue_left(0); // Set, then recall the occupied slot below.
+        press();
+        ui.invoke_hot_cue_left(99); // Rejected: held ownership remains unchanged.
+        assert_eq!(c.nudges.borrow()[0].as_ref().unwrap().held, [true; 2]);
+        ui.invoke_nudge_left(-1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        ui.invoke_nudge_left(1, false);
+        press();
+        ui.invoke_hot_cue_left(0);
+        release();
+        engine
+            .restore_loop(DeckId::A, Duration::from_secs(1), Duration::from_secs(2))
+            .unwrap();
+        ui.invoke_save_loop_left();
+        for command in 0..3 {
+            engine
+                .restore_loop(DeckId::A, Duration::from_secs(1), Duration::from_secs(2))
+                .unwrap();
+            engine.activate_loop(DeckId::A).unwrap();
+            press();
+            match command {
+                0 => ui.invoke_loop_exit_left(),
+                1 => ui.invoke_loop_in_left(),
+                _ => ui.invoke_recall_loop_left(),
+            }
+            assert!(
+                c.nudges.borrow()[0].is_none(),
+                "transport command {command}"
+            );
+            release();
+        }
+        press();
+        ui.invoke_loop_out_left(); // Current position equals In: invalid region.
+        assert_eq!(c.nudges.borrow()[0].as_ref().unwrap().held, [true; 2]);
+        ui.invoke_cancel_nudge_left();
+        release();
     }
     #[test]
     fn pitch_ranges_preserve_audio_outside_values_and_coalesce_integer_fine_steps() {
@@ -3850,6 +4233,18 @@ mod tests {
                     "pitch fine up",
                 ] {
                     let item = control(&ui, &format!("{deck} {action}"));
+                    assert!(item.absolute_position().x >= 0.);
+                    assert!(item.absolute_position().x + item.size().width <= width + 0.1);
+                    assert!(
+                        item.absolute_position().y + item.size().height
+                            <= shared.absolute_position().y
+                    );
+                }
+                control(&ui, &format!("{deck} deck tools panel"))
+                    .invoke_accessible_default_action();
+                for action in ["nudge down", "nudge up", "cancel nudge"] {
+                    let item = control(&ui, &format!("{deck} {action}"));
+                    assert!(item.size().width > 0. && item.size().height > 0.);
                     assert!(item.absolute_position().x >= 0.);
                     assert!(item.absolute_position().x + item.size().width <= width + 0.1);
                     assert!(

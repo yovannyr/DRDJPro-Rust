@@ -338,7 +338,6 @@ impl DualDeckEngine {
         self.set_rate_state(id, factor, nudge)
     }
     // Staged control API; momentary GUI input is a separately reviewed slice.
-    #[allow(dead_code)]
     pub fn set_nudge(&self, id: DeckId, direction: i32) -> Result<(), String> {
         if !(-1..=1).contains(&direction) {
             return Err("Nudge direction must be -1, 0 or 1".into());

@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 118 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 121 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Pitch-Bereiche und Feinsteuerung sind nach unabhängigem Astra-Mittel-Review als `a1d3b3b` gepusht. Der Nudge-Abschnitt folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
+Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Review als `e1371a8` gepusht. Die momentane GUI ist anschließend implementiert, nach Review-Korrekturen erneut unabhängig geprüft und mit 121 Tests sowie Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
 
 ### Nächste und offene Arbeitspakete
 
@@ -45,7 +45,8 @@ Veröffentlichungsstand: Pitch-Bereiche und Feinsteuerung sind nach unabhängige
 - [x] ✅ Pitch-Fader/Reset mit gebündelten, quellgebundenen Anfragen und Anzeige von gewünschtem/effektivem Pitch sowie Quell-/aktuellem BPM.
 - [x] ✅ Pitch-Bereiche ±8/±16/±50/Wide und driftfreie 0,01-Prozentpunkt-Feinschritte ohne stillen Rate-Reset beim Bereichswechsel.
 - [x] ✅ Engine-Zustand für temporäres relatives ±2%-Nudge, Basis-Pitch-Erhalt und sicheren neutralen Release/Transport-Abbruch.
-- [ ] ☐ **Als Nächstes:** momentane Nudge-GUI mit Loslassen/Abbruch/Fokusverlust; Keylock und Sync separat.
+- [x] ✅ Momentane Nudge-GUI mit Pointer-/Tasten-Release, Fokus-/Panel-/Lade-/Transport-/EOF-/Shutdown-Abbruch und Headless-Ereignistests.
+- [ ] ☐ **Als Nächstes:** validiertes Tempo-Matching aus bestätigten manuellen Grids; Phasen-Sync und Keylock separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -270,3 +271,13 @@ The reviewed range/fine baseline is published as a1d3b3b. This bounded engine-fi
 Pause freezes the current original-source phase and cancels nudge; successful explicit seek/Cue cancel it after preparation, while failed operations retain state. Successful new tracks reset base1x/neutral; failed preparation retains the active state. Loop phase/bounds/grid/mixer and other-deck ownership remain intact. Playback snapshots report base requested pitch and actual effective pitch separately, with a nudge-state caption. PlaybackSpeed now stores only validated rate data; the requested permanent factor has a single owner in Deck. No dependency/schema/sample iterator change was needed. The staged engine nudge setter awaits GUI momentary input in the next reviewed slice.
 
 Offline tests cover rate composition, failed limits, paused/unloaded guards, current-base release, transport/new-track/EOF release and steady stereo tone frequency after direction changes. These do not qualify live transitions, native input cancellation, physical latency or musical beat alignment. The following slice must implement robust pointer/key release, focus/panel/loading/shutdown cancellation and headless lifecycle coverage. Publication follows independent Astra-medium review and final green checks.
+
+## Momentary nudge GUI checkpoint (2026-10-25)
+
+The reviewed engine baseline is published as e1371a8. A fifth NUDGE deck-tools panel provides relative hold-to-nudge -2%/+2% and Cancel. Pointer down explicitly focuses a zero-width keyboard scope; pointer up/cancel and held Space/Return releases neutralize. The direct focus-lost callback cancels immediately on focus transfer/window deactivation; repeated key events cannot reactivate canceled input. Instant accessibility actions perform press then release synchronously, never a toggle. Existing source/current BPM and actual nudge captions remain visible. Panel switching cancels before removing controls; disabled controls and controller guards prevent activation while paused/loading.
+
+Controller sessions bind held-direction flags to prepared-source identity. Repeated presses are idempotent, opposing held directions yield neutral, releasing one retains the other if valid. Failed remaining-direction rate validation cancels all rather than preserving already released flags. Neutral cancellation bypasses busy guards. Existing33ms tick discards stale/loading/not-playing/EOF sessions and transport callbacks clear sessions on pause/Cue/successful seek. Shutdown neutralizes both decks before storage flush. Current permanent base, source phase/loops and engine limits remain governed by the reviewed engine. No dependency/schema/sample iterator change was made.
+
+Headless event/state regressions cover actual pointer down/up, Space/Return/repeat, window activation loss, panel removal, busy/paused/source/EOF/shutdown cancellation, conflicting inputs and rate boundaries. Five-panel two-size geometry is checked within existing260px decks. These are headless tests, not native visual/focus, listening/live transition or physical latency acceptance. Next proposed slice is validated manual-grid tempo matching; phase Sync, keylock, smoothing/resampling quality, hardware and full product qualification remain open. Publication requires independent Astra-medium review and final green checks.
+
+Review follow-up: successful occupied hot-cue recall and all successful GUI loop commands/saved-boundary recall now clear held ownership, including neutral opposing holds; rejected actions preserve it. A dedicated regression covers hot-cue/loop Exit/In/saved recall and invalid cue/loop actions. Each NudgeHold uses explicit first-input ownership: the initiating left pointer, Space or Return owns the gesture until its release; additional simultaneous inputs are ignored and require a fresh press. Unrelated key/right-button releases cannot cancel the owner. Mixed-input tests cover this policy. This avoids both premature neutralization and stale aggregate releases after transport cancellation.

@@ -87,6 +87,58 @@ component WaveformStrip inherits Rectangle {
     }
 }
 
+// A temporary rate must always have a matching release, including focus/cancel paths.
+component NudgeHold inherits Rectangle {
+    in property <string> label;
+    in property <string> text;
+    in property <bool> enabled;
+    callback held(bool);
+    callback cancel();
+    // First input owns this gesture; other inputs need a fresh press after release.
+    property <int> active-input: 0;
+    function begin-input(input: int) { if root.active-input == 0 { root.active-input = input; root.held(true); } }
+    function end-input(input: int) { if root.active-input == input { root.active-input = 0; root.held(false); } }
+    function cancel-input() { root.active-input = 0; root.cancel(); }
+    height: 28px;
+    background: root.active-input != 0 ? #365472 : #243448;
+    border-radius: 4px;
+    border-width: keys.has-focus ? 1px : 0px; border-color: #77baff;
+    opacity: enabled ? 1 : 0.4;
+    forward-focus: keys;
+    accessible-role: button; accessible-label: label;
+    accessible-description: "Hold pointer, Space or Return; first input owns the gesture until release";
+    accessible-enabled: enabled;
+    // An accessibility click is instantaneous, so it cannot latch a rate.
+    accessible-action-default => { if root.enabled && root.active-input == 0 { root.begin-input(4); root.end-input(4); } }
+    changed enabled => { if !self.enabled { root.cancel-input(); } }
+    Text { text: root.text; color: #dfe8f5; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                keys.focus(); root.begin-input(1);
+            } else if event.kind == PointerEventKind.cancel {
+                root.end-input(1);
+            } else if event.button == PointerEventButton.left && event.kind == PointerEventKind.up {
+                root.end-input(1);
+            }
+        }
+    }
+    keys := FocusScope {
+        width: 0; // Pointer input belongs to the TouchArea, which explicitly focuses us.
+        enabled: root.enabled;
+        focus-lost(reason) => { root.cancel-input(); }
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return { if !event.repeat { root.begin-input(event.text == Key.Space ? 2 : 3); } return accept; }
+            return reject;
+        }
+        key-released(event) => {
+            if event.text == Key.Space || event.text == Key.Return { root.end-input(event.text == Key.Space ? 2 : 3); return accept; }
+            return reject;
+        }
+    }
+}
+
 component CompactDeck inherits Rectangle {
     in property <string> deck-label;
     in property <brush> accent;
@@ -110,6 +162,7 @@ component CompactDeck inherits Rectangle {
     in property <bool> pitch-outside;
     in property <bool> pitch-can-down;
     in property <bool> pitch-can-up;
+    callback nudge(int, bool); callback cancel-nudge();
     callback pitch-range(); callback pitch-down(); callback pitch-up();
     in-out property <float> pitch-percent;
     in property <string> pitch-caption;
@@ -174,7 +227,7 @@ component CompactDeck inherits Rectangle {
             Button { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
             Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " activate loop"; enabled: loaded && !loading && loop-ready && !loop-active; clicked => { root.loop-activate(); } }
             Button { text: "EXIT"; accessible-label: root.deck-label + " exit loop"; enabled: loaded && !loading && loop-active; clicked => { root.loop-exit(); } }
-            Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : "CUES")); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.tools-panel = root.tools-panel == 3 ? 0 : root.tools-panel + 1; } }
+            Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : (root.tools-panel == 3 ? "NUDGE" : "CUES"))); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.cancel-nudge(); root.tools-panel = root.tools-panel == 4 ? 0 : root.tools-panel + 1; } }
             Text { width: 64px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
         }
         if root.tools-panel == 1 : HorizontalLayout {
@@ -212,6 +265,17 @@ component CompactDeck inherits Rectangle {
             }
             Text { height: 12px; text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " pitch values"; accessible-description: root.pitch-caption; }
             Text { height: 12px; text: root.bpm-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " source and current BPM"; accessible-description: root.bpm-caption; }
+        }
+        if root.tools-panel == 4 : VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                height: 28px; spacing: 4px;
+                NudgeHold { label: root.deck-label + " nudge down"; text: "HOLD −2%"; enabled: root.loaded && root.playing && !root.loading; held(value) => { root.nudge(-1, value); } cancel => { root.cancel-nudge(); } }
+                NudgeHold { label: root.deck-label + " nudge up"; text: "HOLD +2%"; enabled: root.loaded && root.playing && !root.loading; held(value) => { root.nudge(1, value); } cancel => { root.cancel-nudge(); } }
+                Button { text: "CANCEL"; accessible-label: root.deck-label + " cancel nudge"; clicked => { root.cancel-nudge(); } }
+            }
+            Text { height: 12px; text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; }
+            Text { height: 12px; text: root.bpm-caption; color: #b9c7d9; font-size: 10px; overflow: elide; }
         }
         if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 26px;
@@ -469,6 +533,7 @@ export component AppWindow inherits Window {
     in-out property <float> left-pitch-percent;
     in property <string> left-pitch-caption;
     in property <string> left-bpm-caption;
+    callback nudge-left(int, bool); callback cancel-nudge-left();
     callback pitch-left(float); callback reset-pitch-left();
     in-out property <bool> left-auto-loop-snap: false;
     in-out property <int> left-auto-loop-index: 5;
@@ -496,6 +561,7 @@ export component AppWindow inherits Window {
     in-out property <float> right-pitch-percent;
     in property <string> right-pitch-caption;
     in property <string> right-bpm-caption;
+    callback nudge-right(int, bool); callback cancel-nudge-right();
     callback pitch-right(float); callback reset-pitch-right();
     in-out property <bool> right-auto-loop-snap: false;
     in-out property <int> right-auto-loop-index: 5;
@@ -582,6 +648,7 @@ export component AppWindow inherits Window {
                 pitch-range-index <=> root.left-pitch-range-index; pitch-min: root.left-pitch-min; pitch-max: root.left-pitch-max; pitch-outside: root.left-pitch-outside; pitch-can-down: root.left-pitch-can-down; pitch-can-up: root.left-pitch-can-up;
                 pitch-range => { root.pitch-range-left(); } pitch-down => { root.pitch-down-left(); } pitch-up => { root.pitch-up-left(); }
                 pitch-percent <=> root.left-pitch-percent; pitch-caption: root.left-pitch-caption; bpm-caption: root.left-bpm-caption;
+                nudge(direction, held) => { root.nudge-left(direction, held); } cancel-nudge => { root.cancel-nudge-left(); }
                 pitch(value) => { root.pitch-left(value); } reset-pitch => { root.reset-pitch-left(); }
                 grid-active: root.left-grid-active; auto-loop-index <=> root.left-auto-loop-index; auto-loop-snap <=> root.left-auto-loop-snap;
                 auto-loop => { root.auto-loop-left(); } half-loop => { root.half-loop-left(); } double-loop => { root.double-loop-left(); }
@@ -606,6 +673,7 @@ export component AppWindow inherits Window {
                 pitch-range-index <=> root.right-pitch-range-index; pitch-min: root.right-pitch-min; pitch-max: root.right-pitch-max; pitch-outside: root.right-pitch-outside; pitch-can-down: root.right-pitch-can-down; pitch-can-up: root.right-pitch-can-up;
                 pitch-range => { root.pitch-range-right(); } pitch-down => { root.pitch-down-right(); } pitch-up => { root.pitch-up-right(); }
                 pitch-percent <=> root.right-pitch-percent; pitch-caption: root.right-pitch-caption; bpm-caption: root.right-bpm-caption;
+                nudge(direction, held) => { root.nudge-right(direction, held); } cancel-nudge => { root.cancel-nudge-right(); }
                 pitch(value) => { root.pitch-right(value); } reset-pitch => { root.reset-pitch-right(); }
                 grid-active: root.right-grid-active; auto-loop-index <=> root.right-auto-loop-index; auto-loop-snap <=> root.right-auto-loop-snap;
                 auto-loop => { root.auto-loop-right(); } half-loop => { root.half-loop-right(); } double-loop => { root.double-loop-right(); }
