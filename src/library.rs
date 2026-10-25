@@ -23,6 +23,8 @@ pub struct SavedTrack {
     pub metadata: crate::track_metadata::TrackMetadata,
     #[serde(skip)]
     pub grid: Option<crate::beatgrid::BeatGrid>,
+    #[serde(skip)]
+    pub hot_cues: crate::hot_cues::HotCues,
 }
 impl Catalog {
     pub fn validate(&self) -> Result<(), String> {
@@ -90,6 +92,7 @@ pub struct Track {
     pub available: bool,
     pub metadata: crate::track_metadata::TrackMetadata,
     pub grid: Option<crate::beatgrid::BeatGrid>,
+    pub hot_cues: crate::hot_cues::HotCues,
 }
 impl Track {
     pub fn display_title(&self) -> &str {
@@ -116,6 +119,7 @@ impl Track {
             available,
             metadata: Default::default(),
             grid: None,
+            hot_cues: Default::default(),
         }
     }
 }
@@ -231,6 +235,7 @@ impl Library {
             let mut track = Track::new(saved.id, saved.path, available);
             track.metadata = metadata;
             track.grid = saved.grid;
+            track.hot_cues = saved.hot_cues;
             library.tracks.push(track);
             library.last_id = library.last_id.max(saved.id);
         }
@@ -248,6 +253,7 @@ impl Library {
                     path: t.path.clone(),
                     metadata: t.metadata.clone(),
                     grid: t.grid,
+                    hot_cues: t.hot_cues.clone(),
                 })
                 .collect(),
         }

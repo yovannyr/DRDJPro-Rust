@@ -285,3 +285,22 @@ After the final source/UI change, all commands completed with exit code 0:
 Eight additional tests cover pure decimal/comma/range validation with unchanged originals, clear/anchor/clamped slips, bar-0/1/2 phase and first-marker bounds; engine source/position/play/pause/mixer preservation; fractional/nanosecond persistence and explicit deletion; failed grid-write rollback of metadata/crates/grid followed by retry; successful/failed schema-3 upgrade retaining existing metadata/membership; actual headless draft/zoom/invalid/cancel/anchor/save/clear controls during playback; and a two-deck shared-track conflict, failed-load retention, successful reload discard, saved-grid restoration after fresh controller/engine/storage restart and durable clear. Existing migration/process-abort/integrity, crate, metadata, audio, seek and structural waveform checks stay green.
 
 No personal catalog or audio tags were modified by tests; fixtures used temporary files/profiles. No visual/native-dialog, physical listening, device-latency, maximum-size performance or macOS/Linux build acceptance is claimed. Constant 4/4 timing is manually defined, not proven musical beat/downbeat accuracy, variable tempo/meter, Warp, quantization or audio Sync. The accumulated SQLite/metadata/crate/grid work and rebuilt executable remain local and uncommitted for review. The next proposed bounded slice is persistent hot cues, while advanced grid requirements remain in the inventory.
+
+## Hot-cue persistence foundation — local verification (2026-10-25)
+
+Started from published 6412d46 on main. This bounded slice adds only typed eight-slot cue metadata, library restore/snapshot preservation and SQLite schema 5; controller changes only initialize the added field in an existing test fixture. No dependencies, GUI controls, engine or audio callbacks changed. Positions retain nanoseconds, names preserve Unicode up to 128 scalar characters without controls, and colors are 24-bit RGB. All model fields are private and validated at construction. Sparse slot identity survives clear/restart. Legacy JSON still serializes only IDs/paths.
+
+After the final source change:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 84 passed, 0 failed, 0 ignored; 4.36 s |
+| `cargo build --release` | Passed; 40.58 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; Git line-ending notice only |
+
+Four added tests cover model bounds/Unicode/clear identity; sparse cue restart, exact position/name/color preservation, explicit deletion and track removal; an injected cue-write failure rolling back metadata/crates/grid/cues together followed by retry; schema-4 upgrade/failure preserving prior version/grid/metadata/membership; and malformed/orphaned database row rejection. Existing schema-1–3 upgrade tests were adapted to the new current version and remain green, as do process-abort/integrity and headless/audio regressions. An initial run found a legacy assertion still expecting schema 4; the assertion was updated to schema 5 before the final full green run.
+
+All storage fixtures used temporary profiles; the personal catalog was not migrated by tests. No visual, native dialog, listening, hardware/latency or maximum-size performance acceptance is claimed. This is not yet a usable Hot Cue feature: GUI pads, source-duration checks, jump semantics, names/colors editing, waveform markers and controller feedback remain open. The next proposed bounded slice is deck set/jump/delete integration with headless tests. Changes remain local and uncommitted for review.

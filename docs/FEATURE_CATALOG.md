@@ -117,3 +117,10 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | R-TEMPO-01 | Bounded offline 40–240 BPM suggestion (`tempo.rs`, `playback.rs`) | 21 synthetic pulse fixtures at 8/44.1/48 kHz including fractional BPM; rejection of silence, steady tones/MP3, noise, short/invalid input; opposite-phase stereo and exact first-60s cap | Heuristic candidate, not confidence or real-music accuracy; octave/tempo-change ambiguity remains |
 | R-TEMPO-02 | Optional explicit adoption into pending per-deck BPM field | Actual worker WAV decode/estimate and accessible load/use/apply actions; grid/playback unchanged until explicit manual action | Whole-BPM GUI rounding; no auto-anchor, downbeat or audio sync |
 | R-TEMPO-03 | Suggestions follow track lifetime | Headless cancel/error retention and successful reload removal, other-deck isolation | No persistence or corpus qualification |
+
+## Hot-cue data foundation (2026-10-25)
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-CUE-01 | Eight fixed validated per-track slots, nanosecond positions, bounded Unicode names and RGB colors | Domain bounds/Unicode/color tests; sparse-slot clear preserves other identities | Data only; GUI/engine triggers, source-duration checking and quantization open |
+| R-CUE-02 | Schema-5 persistence, library snapshots and migration from schemas 1–4 | Restart with missing media, exact name/color/position round trip, explicit clear/deletion, failed cue-write rollback of metadata/crates/grid and retry; schema-4 upgrade/failure; invalid/orphaned-row rejection | No tag writes, external library compatibility, max-scale benchmark or hardware acceptance |

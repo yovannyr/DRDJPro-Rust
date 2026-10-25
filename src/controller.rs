@@ -1306,6 +1306,7 @@ mod tests {
             version: 1,
             crates: Default::default(),
             tracks: vec![crate::library::SavedTrack {
+                hot_cues: Default::default(),
                 id: 73,
                 path: fixture(),
                 metadata: Default::default(),

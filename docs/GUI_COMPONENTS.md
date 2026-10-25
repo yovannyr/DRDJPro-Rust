@@ -29,7 +29,7 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Detailed waveform/beat matching | 34, 35 | Manual p. 28 | Colored following envelope/zoom/click-seek exist. Shared placement, hold/drag scrubbing, keyboard +/- zoom, beat-matching transient strip and pitch scaling remain open. |
 | Grid editing | 46 | Manual pp. 53–58 | Partial: dedicated constant-BPM Edit Grid drafts, Save/Cancel, decimal BPM, numbered bars/red first downbeat, anchor and ±10 ms slip tools, conflict protection and persistence exist. Variable tempo/warp markers, meter changes and native visual/musical acceptance remain open. |
 | Repeat/autoplay | 47, 50 | Manual pp. 26, 28 | Open: repeat the same track versus advance to the next crate track. These are different policies, neither implied by EOF/restart-on-Play. |
-| Cue-point panel | 48, 58 | Overview sections 48, 58 | Open: up to eight stored cue points, names/colors and triggers. Existing Cue-to-zero is not hot-cue parity. |
+| Cue-point panel | 48, 58 | Overview sections 48, 58 | Partial data foundation: eight fixed per-track positions/names/colors persist in SQLite schema 5. GUI pads, editing, waveform markers and trigger behavior remain open. Existing Cue-to-zero is not hot-cue parity. |
 | Flip/loop panels | 31, 33, 56 | Overview numbered sections | Open: flip sequences, auto-loop UI and saved loops; require separate engine and persistence slices. |
 | Library actions/search | 36, 37, 38, 39, 40 | Manual p. 30 | Open: Search, History, Prepare, Browse, Files. Native file picker is not a library browser. |
 | Library table/view | 45, 49 | Manual pp. 39–40; overview screenshot | Open: large track table, sort headers, selection and list/art view. Current library footer is a status placeholder. |

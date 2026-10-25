@@ -1,6 +1,6 @@
 # Local library storage — SQLite
 
-The current storage backend is SQLite, replacing the published JSON writer. The current catalog persists stable track IDs/paths plus title, artist, album, duration and metadata-inspection state. It also persists flat crates and track membership; constant-BPM beatgrids are also stored, while hot cues, deck/session restoration and SQL-backed table searching remain open. Decks start unloaded/paused unless explicit CLI tracks were supplied.
+The current storage backend is SQLite, replacing the published JSON writer. The current catalog persists stable track IDs/paths plus title, artist, album, duration and metadata-inspection state. It also persists flat crates and track membership; constant-BPM beatgrids are also stored, and schema 5 adds hot-cue data storage. Hot-cue GUI/trigger integration, deck/session restoration and SQL-backed table searching remain open. Decks start unloaded/paused unless explicit CLI tracks were supplied.
 
 ## Location and compatibility
 
@@ -10,7 +10,7 @@ The current storage backend is SQLite, replacing the published JSON writer. The 
 - `DRDJ_LIBRARY_PATH` may specify an absolute database filename. Relative paths are rejected visibly.
 - An existing override ending in `.json` remains supported: that exact file is the legacy source and the database uses the same basename with `.sqlite3`. For other database filenames, the sibling with extension `.json` is the migration source. An arbitrary old JSON filename without `.json` is not guessed or overwritten; choose a distinct database path with the documented sibling convention.
 
-The database uses application ID `0x4452444a` and `PRAGMA user_version=4`. `tracks` is a STRICT table with a positive unique integer ID, Unicode path text and a unique `path_key` computed using the existing platform path-identity rules. `library_meta` records the initial migration source. The separate STRICT `track_metadata` table references track IDs with cascading deletion and stores bounded Unicode tags, nullable millisecond duration, its decoded/header origin, inspection state and errors. Existing track IDs are preserved, and additions receive IDs above the maximum. SQLite schema versions and legacy JSON versions are separate contracts.
+The database uses application ID `0x4452444a` and `PRAGMA user_version=5`. `tracks` is a STRICT table with a positive unique integer ID, Unicode path text and a unique `path_key` computed using the existing platform path-identity rules. `library_meta` records the initial migration source. The separate STRICT `track_metadata` table references track IDs with cascading deletion and stores bounded Unicode tags, nullable millisecond duration, its decoded/header origin, inspection state and errors. Existing track IDs are preserved, and additions receive IDs above the maximum. SQLite schema versions and legacy JSON versions are separate contracts.
 
 The existing 100,000-track and 5,000-path import caps remain safeguards. SQLite rows are bounded/validated on restoration; the legacy reader retains its 32 MiB input limit. SQLite catalogs no longer inherit the old JSON writer's 32 MiB serialized-output limit. These bounds are not scale/performance acceptance.
 
@@ -78,3 +78,11 @@ An isolated child process writes a committed catalog, starts an uncommitted tran
 No visual/native-dialog, physical listening, device-latency, maximum-scale, macOS or Linux acceptance is claimed. Dependency `rusqlite` 0.41.0 uses bundled SQLite and the backup feature, with default optional features disabled; serde/serde_json remain only for legacy migration and tempfile remains test-only.
 
 References: [SQLite pragmas](https://www.sqlite.org/pragma.html), [online backup API](https://www.sqlite.org/backup.html), [rusqlite source](https://github.com/rusqlite/rusqlite).
+
+## Hot-cue storage foundation (2026-10-25)
+
+Schema 5 adds STRICT `track_hot_cues`, keyed by stable track ID and zero-based slot 0–7, with cascading deletion. Each occupied slot stores an integer nanosecond position (0 through seven days), an optional empty Unicode name (at most 128 scalar characters, no controls), and a 24-bit RGB value. Slots are independent; clearing one never compacts or renumbers others. The typed model has private validated fields. Restoration additionally rejects invalid/orphaned/duplicate rows and bounds the total to eight per maximum catalog track count. Names/colors do not modify audio-file tags.
+
+Schema 1–4 upgrades add only missing tables in one transaction, with the existing previous-good backup. Failed schema creation retains the prior version/data. Cue snapshots commit in the same transaction as track metadata, crate membership and grids; explicit removal and track deletion remove cue rows. Library restore/snapshot copies preserve the values, including missing-file entries. Legacy JSON remains ID/path-only and yields empty cue slots.
+
+This is a data-layer foundation, not a usable cue panel: no GUI pads, engine jumps, duration validation against a loaded source, quantization, hardware feedback or session restore is implemented here. Cue positions intentionally remain cached if media changes; the following controller slice must validate against the actual decoded duration before triggering. Storage does not guess duration from approximate header metadata. Full snapshot/backup costs and maximum-size performance remain unqualified.
