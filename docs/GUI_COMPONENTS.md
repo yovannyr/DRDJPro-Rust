@@ -216,3 +216,7 @@ Review follow-up: successful occupied hot-cue recall and all successful GUI loop
 ## Opus1: independent deck busy states (2026-10-25)
 
 Deck controls/grid editors use left-busy/right-busy, derived from restore readiness and the matching load owner. Loading Deck B or merging an import does not disable pitch/nudge/loops/Hot-Cues/grid editing on Deck A, and conversely. LOAD and library/crate workflows retain single-job admission. Controls for the loading deck remain blocked. Direct callbacks retain the same guards and existing source/editor conflict checks. Focus/panel/transport cancellation of momentary input is unchanged; this is headless workflow evidence, not native dialog/focus or listening qualification.
+
+## Opus2: renderer-backed pitch and playhead (2026-10-25)
+
+Pitch/nudge now publish rate commands to a stable renderer without seeking or replacing its Sink. The original-source playhead is published after complete output frames rather than reconstructed from the5ms Sink timer. Requested/effective pitch and BPM captions keep the same contract. Same-track seek/Cue/loop/pause use frame-boundary commands; explicit seek target is visible until acknowledged. Device output format is injected from the actual stream configuration. Existing focus/input/restore/source guards remain. Fifty short-flank ramp regressions measure rendered continuity at supported fixture rates; no native visual/listening/physical latency or DSP anti-alias quality acceptance is inferred.

@@ -2185,7 +2185,7 @@ mod tests {
         ] {
             let ui = AppWindow::new().unwrap();
             let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-            let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
             let file = wav_file(8192, 48000 * 8);
             let next = wav_file(4096, 48000 * 8);
             engine.load_a(file.path()).unwrap();
@@ -2330,7 +2330,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 8);
         engine.load_a(file.path()).unwrap();
         engine.load_b(file.path()).unwrap();
@@ -2465,7 +2465,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 8);
         engine.load_a(file.path()).unwrap();
         engine.play(DeckId::A);
@@ -2531,7 +2531,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 8);
         engine.load_a(file.path()).unwrap();
         engine.play(DeckId::A);
@@ -2593,7 +2593,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 8);
         let other = wav_file(4096, 48000 * 8);
         engine.load_a(file.path()).unwrap();
@@ -2705,7 +2705,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 8);
         let other = wav_file(4096, 48000 * 8);
         let c = AudioController::wire(
@@ -2803,7 +2803,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 8);
         engine.load_a(file.path()).unwrap();
         engine.load_b(file.path()).unwrap();
@@ -2940,7 +2940,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 30);
         let other = wav_file(4096, 48000 * 30);
         engine.load_a(file.path()).unwrap();
@@ -3086,7 +3086,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let file = wav_file(8192, 48000 * 12);
         engine.load_a(file.path()).unwrap();
         engine.load_b(file.path()).unwrap();
@@ -3165,7 +3165,7 @@ mod tests {
         let other = wav_file(4096, 48_000 * 8);
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         engine.load_a(file.path()).unwrap();
         engine.load_b(file.path()).unwrap();
         let c = AudioController::wire(
@@ -3270,7 +3270,7 @@ mod tests {
         drop(c);
         let ui = AppWindow::new().unwrap();
         let (mixer, _output2) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         engine.load_a(file.path()).unwrap();
         let c = AudioController::wire(
             &ui,
@@ -3307,7 +3307,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let file = wav_file(8192, 48_000 * 8);
         let other = wav_file(4096, 48_000 * 8);
         let c = AudioController::wire(
@@ -3412,7 +3412,7 @@ mod tests {
         let bad = TempFile::new("mp3", b"invalid");
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         engine.load_a(file.path()).unwrap();
         engine.load_b(file.path()).unwrap();
         let c = AudioController::wire(
@@ -3534,7 +3534,7 @@ mod tests {
         drop(c);
         let ui = AppWindow::new().unwrap();
         let (mixer, _output2) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         engine.load_a(file.path()).unwrap();
         let c = AudioController::wire(
             &ui,
@@ -3564,7 +3564,7 @@ mod tests {
         let bad = TempFile::new("mp3", b"invalid");
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         engine.load_a(file.path()).unwrap();
         engine.load_b(other.path()).unwrap();
         let c = AudioController::wire(
@@ -3659,7 +3659,7 @@ mod tests {
         drop(c);
         let ui = AppWindow::new().unwrap();
         let (mixer, _output2) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         engine.load_b(file.path()).unwrap();
         let c = AudioController::wire(
             &ui,
@@ -3698,7 +3698,7 @@ mod tests {
         let missing = dir.path().join("will-disappear.wav");
         std::fs::copy(wav.path(), &missing).unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let ui = AppWindow::new().unwrap();
         let c = AudioController::wire(
             &ui,
@@ -3771,7 +3771,7 @@ mod tests {
         std::fs::write(&legacy, &original).unwrap();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -3794,7 +3794,7 @@ mod tests {
         std::fs::write(&legacy, b"stale invalid legacy").unwrap();
         let ui = AppWindow::new().unwrap();
         let (mixer, _restarted_output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
         c.restore_library(Ok(legacy.with_extension("sqlite3")), Vec::new());
         finish_storage(&c);
@@ -3819,7 +3819,7 @@ mod tests {
         let paths = vec![mp3.path().to_owned(), wav.path().to_owned()];
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
         c.restore_library(Ok(db.clone()), paths);
         finish_storage(&c);
@@ -3852,7 +3852,7 @@ mod tests {
         let (mixer, _output2) = rodio::mixer::mixer(1, 48000);
         let c = AudioController::wire(
             &ui,
-            Rc::new(DualDeckEngine::from_mixer(mixer)),
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000)),
             Arc::new(|| None),
             Arc::new(|| None),
         );
@@ -3886,7 +3886,7 @@ mod tests {
         let third = wav_file(4096, 24_000);
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4001,7 +4001,7 @@ mod tests {
         let (mixer, _restarted) = rodio::mixer::mixer(1, 48_000);
         let c = AudioController::wire(
             &ui,
-            Rc::new(DualDeckEngine::from_mixer(mixer)),
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
             Arc::new(|| None),
             Arc::new(|| None),
         );
@@ -4026,7 +4026,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let file = wav_file(8192, 48_000 * 8);
         let other = wav_file(4096, 48_000 * 8);
         engine.load_a(file.path()).unwrap();
@@ -4111,7 +4111,7 @@ mod tests {
         let bad = TempFile::new("mp3", b"invalid");
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4167,7 +4167,7 @@ mod tests {
         drop(c);
         let ui = AppWindow::new().unwrap();
         let (mixer, _new_output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4225,7 +4225,7 @@ mod tests {
         connection.execute_batch("CREATE TRIGGER reject_backfill BEFORE INSERT ON track_metadata WHEN NEW.scanned=1 BEGIN SELECT RAISE(ABORT,'injected backfill failure'); END;").unwrap();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
         let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
         c.restore_library(Ok(db.clone()), Vec::new());
         finish_storage(&c);
@@ -4291,7 +4291,7 @@ mod tests {
         let path = dir.path().join("library.sqlite3");
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4335,7 +4335,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let wav = wav_file(8192, 48_000);
         let bad = TempFile::new("mp3", b"invalid music");
         let unsupported = TempFile::new("txt", b"not music");
@@ -4548,7 +4548,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let pulse = |bpm| {
             let samples: Vec<_> = crate::tempo::pulse_train(bpm, 8000, 12)
                 .iter()
@@ -4645,7 +4645,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4721,7 +4721,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4831,7 +4831,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4908,7 +4908,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(
             &ui,
             Rc::clone(&engine),
@@ -4957,7 +4957,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let wav = wav_file(8192, 48_000);
         let bad = TempFile::new("mp3", b"bad music");
         let paths = Arc::new(Mutex::new(VecDeque::from([

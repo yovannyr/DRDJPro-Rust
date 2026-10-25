@@ -86,8 +86,21 @@ impl PcmSource {
         }
     }
     /// Configure on the control plane; iterator/sample storage stays unchanged.
+    #[cfg(test)]
     pub fn set_playback_rate(&mut self, rate: std::num::NonZeroU32) {
         self.playback_rate = rate.get();
+    }
+    pub(crate) fn cursor_frame(&self) -> usize {
+        self.cursor / usize::from(self.channels)
+    }
+    pub(crate) fn sample_at(&self, frame: usize, channel: u16) -> f32 {
+        self.data
+            .get(frame * usize::from(self.channels) + usize::from(channel))
+            .copied()
+            .unwrap_or(0.)
+    }
+    pub(crate) fn loop_region(&self) -> Option<FrameLoop> {
+        self.region
     }
     #[cfg(test)]
     pub(crate) fn storage_weak(&self) -> std::sync::Weak<[f32]> {
@@ -147,11 +160,23 @@ impl Source for PcmSource {
     }
 }
 #[cfg(test)]
+pub(crate) fn counted_allocations(action: impl FnOnce()) -> usize {
+    tests::count_allocations(action)
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
     thread_local! { static COUNT: Cell<Option<usize>> = const { Cell::new(None) }; }
+    pub(super) fn count_allocations(action: impl FnOnce()) -> usize {
+        COUNT.with(|count| {
+            assert!(count.get().is_none());
+            count.set(Some(0));
+        });
+        action();
+        COUNT.with(|count| count.replace(None).unwrap())
+    }
     struct CountingAllocator;
     unsafe impl GlobalAlloc for CountingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {

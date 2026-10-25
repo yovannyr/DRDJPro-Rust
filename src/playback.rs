@@ -1,4 +1,5 @@
 //! Control-plane loading and two Rodio decks. Rodio itself is not lock-free.
+use crate::deck_render::{DeckRenderer, RenderControl, RenderFormat, SeekFrame};
 use crate::looping::{frame_at, frame_time, FrameLoop, PcmSource};
 use crate::playback_speed::PlaybackSpeed;
 use rodio::{mixer::Mixer, Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
@@ -125,8 +126,8 @@ impl PreparedTrack {
 struct Deck {
     sink: Sink,
     source_retired: Option<Arc<AtomicBool>>,
+    render: Option<Arc<RenderControl>>,
     track: Option<PreparedTrack>,
-    offset: Duration,
     loop_in: Option<usize>,
     loop_region: Option<FrameLoop>,
     loop_active: bool,
@@ -145,11 +146,22 @@ struct RetiredTrack {
     _track: PreparedTrack,
     released: Arc<AtomicBool>,
 }
-// A fresh Rodio queue initially reports mono/44.1 kHz even when stereo PCM is queued.
-// Each replacement sink contains exactly one fixed-format track. Report that format
-// throughout its lifetime so the output converter cannot misinterpret initial samples.
+impl Deck {
+    fn playing(&self) -> bool {
+        !self.sink.is_paused()
+            && self
+                .track
+                .as_ref()
+                .zip(self.render.as_ref())
+                .is_some_and(|(track, render)| render.position() < track.duration())
+    }
+}
+// The queue starts with generic metadata. Expose the renderer's fixed device format
+// for its entire lifetime, including pause/EOF, so the mixer needs no rate conversion.
 struct DeckOutput {
     queue: rodio::queue::SourcesQueueOutput,
+    render: Arc<RenderControl>,
+    channel: u16,
     channels: u16,
     sample_rate: u32,
     // Rust drops fields in declaration order: publish only AFTER the queue's PCM Arc is gone.
@@ -158,7 +170,14 @@ struct DeckOutput {
 impl Iterator for DeckOutput {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
-        self.queue.next()
+        if self.channel == 0 && self.render.stopped.load(Ordering::Acquire) {
+            return None;
+        }
+        let sample = self.queue.next();
+        if sample.is_some() {
+            self.channel = (self.channel + 1) % self.channels;
+        }
+        sample
     }
 }
 impl Source for DeckOutput {
@@ -207,6 +226,8 @@ pub struct DualDeckEngine {
     decks: [RefCell<Deck>; 2],
     levels: Cell<MixerLevels>,
     mixer: Mixer,
+    output_channels: u16,
+    output_rate: u32,
     retired: RefCell<Vec<RetiredTrack>>,
     // Drop explicitly stops the owned device before releasing track-buffer owners.
     _stream: Option<OutputStream>,
@@ -222,20 +243,25 @@ impl Drop for DualDeckEngine {
 impl DualDeckEngine {
     pub fn open_default() -> Result<Self, Box<dyn Error>> {
         let stream = OutputStreamBuilder::open_default_stream()?;
-        let mut engine = Self::from_mixer(stream.mixer().clone());
+        let mut engine = Self::from_mixer(
+            stream.mixer().clone(),
+            stream.config().channel_count(),
+            stream.config().sample_rate(),
+        );
         engine._stream = Some(stream);
         Ok(engine)
     }
     /// An injected renderer on another thread must be stopped/joined before this engine drops.
-    pub(crate) fn from_mixer(mixer: Mixer) -> Self {
+    pub(crate) fn from_mixer(mixer: Mixer, output_channels: u16, output_rate: u32) -> Self {
+        assert!(output_channels > 0 && output_rate > 0);
         let decks = std::array::from_fn(|_| {
             let sink = Sink::connect_new(&mixer);
             sink.pause();
             RefCell::new(Deck {
                 sink,
                 source_retired: None,
+                render: None,
                 track: None,
-                offset: Duration::ZERO,
                 loop_in: None,
                 loop_region: None,
                 loop_active: false,
@@ -249,6 +275,8 @@ impl DualDeckEngine {
             decks,
             levels: Cell::new(MixerLevels::default()),
             mixer,
+            output_channels,
+            output_rate,
             retired: RefCell::new(Vec::new()),
             _stream: None,
         };
@@ -261,7 +289,7 @@ impl DualDeckEngine {
             .borrow_mut()
             .retain(|track| !track.released.load(Ordering::Acquire));
     }
-    /// Replace only after preparation succeeded. Fresh sinks avoid stop/append waiting for audio.
+    /// Install prepared tracks; same-track commands reuse the existing renderer and Sink.
     pub fn install(&self, id: DeckId, track: PreparedTrack) {
         let source = track.samples.clone();
         self.replace_source(id, track, source, Duration::ZERO, false, None);
@@ -270,7 +298,7 @@ impl DualDeckEngine {
         &self,
         id: DeckId,
         track: PreparedTrack,
-        mut source: PcmSource,
+        source: PcmSource,
         offset: Duration,
         playing: bool,
         grid: Option<crate::beatgrid::BeatGrid>,
@@ -300,20 +328,73 @@ impl DualDeckEngine {
                 )
             }
         };
+        let region = source.loop_region();
+        {
+            let mut deck = self.decks[id.index()].borrow_mut();
+            if deck
+                .track
+                .as_ref()
+                .is_some_and(|old| Arc::ptr_eq(&old.detail, &track.detail))
+            {
+                if let Some(render) = &deck.render {
+                    render.publish(
+                        speed.output_rate().get(),
+                        playing,
+                        region,
+                        Some(SeekFrame {
+                            time: offset,
+                            frame: source.cursor_frame(),
+                        }),
+                    );
+                    if playing {
+                        deck.sink.play();
+                    } else {
+                        deck.sink.pause();
+                    }
+                    deck.grid = grid;
+                    deck.loop_active = false;
+                    return;
+                }
+            }
+            if let Some(render) = &deck.render {
+                render.stopped.store(true, Ordering::Release);
+            }
+        }
         self.collect_retired();
-        source.set_playback_rate(speed.output_rate());
+        let render = RenderControl::new(
+            speed.output_rate().get(),
+            playing,
+            region,
+            SeekFrame {
+                time: offset,
+                frame: source.cursor_frame(),
+            },
+            RenderFormat {
+                source_rate: track.samples.sample_rate(),
+                output_rate: self.output_rate,
+                frames: track.samples.frames(),
+            },
+        );
+        let renderer = DeckRenderer::new(
+            source,
+            Arc::clone(&render),
+            self.output_channels,
+            self.output_rate,
+        );
         let source_retired = Arc::new(AtomicBool::new(false));
         let (sink, queue) = Sink::new();
         let output = DeckOutput {
             queue,
-            channels: source.channels(),
-            sample_rate: source.sample_rate(),
+            render: Arc::clone(&render),
+            channel: 0,
+            channels: self.output_channels,
+            sample_rate: self.output_rate,
             _retirement: SourceRetirement(Arc::clone(&source_retired)),
         };
         sink.pause();
         let (a, b) = self.levels.get().volumes();
         sink.set_volume(if id == DeckId::A { a } else { b });
-        sink.append(source);
+        sink.append(renderer);
         if playing {
             sink.play();
         }
@@ -324,8 +405,8 @@ impl DualDeckEngine {
             Deck {
                 sink,
                 source_retired: Some(source_retired),
+                render: Some(render),
                 track: Some(track),
-                offset,
                 loop_in,
                 loop_region,
                 loop_active: false,
@@ -360,7 +441,7 @@ impl DualDeckEngine {
             let deck = self.decks[id.index()].borrow();
             (
                 deck.track.clone().ok_or("No track loaded")?,
-                !deck.sink.is_paused() && !deck.sink.empty(),
+                deck.playing(),
                 deck.grid,
             )
         };
@@ -385,7 +466,6 @@ impl DualDeckEngine {
         let nudge = self.decks[id.index()].borrow().nudge;
         self.set_rate_state(id, factor, nudge)
     }
-    // Staged control API; momentary GUI input is a separately reviewed slice.
     pub fn set_nudge(&self, id: DeckId, direction: i32) -> Result<(), String> {
         if !(-1..=1).contains(&direction) {
             return Err("Nudge direction must be -1, 0 or 1".into());
@@ -395,9 +475,7 @@ impl DualDeckEngine {
             if direction == 0 && deck.track.is_none() {
                 return Ok(());
             }
-            if direction != 0
-                && (deck.track.is_none() || deck.sink.is_paused() || deck.sink.empty())
-            {
+            if direction != 0 && !deck.playing() {
                 return Err("Play the deck before nudging".into());
             }
             deck.base_factor
@@ -415,40 +493,26 @@ impl DualDeckEngine {
         deck.nudge = 0;
     }
     fn set_rate_state(&self, id: DeckId, factor: f64, nudge: i32) -> Result<(), String> {
-        let (track, playing, grid, region, speed) = {
-            let deck = self.decks[id.index()].borrow();
-            let track = deck.track.clone().ok_or("Load a track first")?;
-            let speed = PlaybackSpeed::nudged(factor, nudge, track.samples.sample_rate())?;
-            if deck.base_factor == factor && deck.nudge == nudge {
-                return Ok(());
-            }
-            (
-                track,
-                !deck.sink.is_paused() && !deck.sink.empty(),
-                deck.grid,
-                if deck.loop_active {
-                    deck.loop_region
-                } else {
-                    None
-                },
-                speed,
-            )
+        let mut deck = self.decks[id.index()].borrow_mut();
+        let track = deck.track.as_ref().ok_or("Load a track first")?;
+        let speed = PlaybackSpeed::nudged(factor, nudge, track.samples.sample_rate())?;
+        if deck.base_factor == factor && deck.nudge == nudge {
+            return Ok(());
+        }
+        let region = if deck.loop_active {
+            deck.loop_region
+        } else {
+            None
         };
-        let position = self.snapshot(id).position;
-        let mut source = track.samples.clone();
-        if let Some(region) = region {
-            source.set_loop(region)?;
-        }
-        source.try_seek(position).map_err(|e| e.to_string())?;
-        // Source preparation/validation succeeded. Replacement is synchronous on this control plane.
-        {
-            let mut deck = self.decks[id.index()].borrow_mut();
-            deck.speed = Some(speed);
-            deck.base_factor = factor;
-            deck.nudge = nudge;
-        }
-        self.replace_source(id, track, source, position, playing, grid);
-        self.decks[id.index()].borrow_mut().loop_active = region.is_some();
+        deck.render.as_ref().expect("Loaded deck renderer").publish(
+            speed.output_rate().get(),
+            deck.playing(),
+            region,
+            None,
+        );
+        deck.speed = Some(speed);
+        deck.base_factor = factor;
+        deck.nudge = nudge;
         Ok(())
     }
     // Manual-loop commands run on the control plane.
@@ -533,7 +597,7 @@ impl DualDeckEngine {
             let start = if snap {
                 grid.nearest_beat_frame(position, track.samples.sample_rate())?
             } else {
-                frame_at(position, track.samples.sample_rate())
+                deck.render.as_ref().unwrap().frame()
             };
             FrameLoop::from_beats(
                 start,
@@ -543,17 +607,9 @@ impl DualDeckEngine {
                 track.samples.frames(),
             )?
         };
-        let rate = self.decks[id.index()]
-            .borrow()
-            .track
-            .as_ref()
-            .unwrap()
-            .samples
-            .sample_rate();
-        self.apply_loop_region(id, region, true, frame_time(region.start, rate))
+        self.apply_loop_region(id, region, true, Some(region.start))
     }
     pub fn resize_loop(&self, id: DeckId, double: bool) -> Result<(), String> {
-        let position = self.snapshot(id).position;
         let (region, active) = {
             let deck = self.decks[id.index()].borrow();
             let track = deck.track.as_ref().ok_or("Load a track first")?;
@@ -564,32 +620,29 @@ impl DualDeckEngine {
                 deck.loop_active,
             )
         };
-        self.apply_loop_region(id, region, active, position)
+        self.apply_loop_region(id, region, active, None)
     }
     fn apply_loop_region(
         &self,
         id: DeckId,
         region: FrameLoop,
         active: bool,
-        position: Duration,
+        seek: Option<usize>,
     ) -> Result<(), String> {
-        if active {
-            let (track, playing, grid) = {
-                let deck = self.decks[id.index()].borrow();
-                (
-                    deck.track.clone().ok_or("Load a track first")?,
-                    !deck.sink.is_paused() && !deck.sink.empty(),
-                    deck.grid,
-                )
-            };
-            let mut source = track.samples.clone();
-            source.set_loop(region)?;
-            let frame = region.wrap(frame_at(position, source.sample_rate()));
-            let offset = frame_time(frame, source.sample_rate());
-            source.try_seek(offset).map_err(|e| e.to_string())?;
-            self.replace_source(id, track, source, offset, playing, grid);
-        }
         let mut deck = self.decks[id.index()].borrow_mut();
+        if active {
+            let track = deck.track.as_ref().ok_or("Load a track first")?;
+            let target = seek.map(|frame| SeekFrame {
+                time: frame_time(frame, track.samples.sample_rate()),
+                frame,
+            });
+            deck.render.as_ref().unwrap().publish(
+                deck.speed.unwrap().output_rate().get(),
+                deck.playing(),
+                Some(region),
+                target,
+            );
+        }
         deck.loop_in = Some(region.start);
         deck.loop_region = Some(region);
         deck.loop_active = active;
@@ -601,7 +654,7 @@ impl DualDeckEngine {
             (
                 deck.track.clone().ok_or("Load a track first")?,
                 deck.loop_region.ok_or("Set valid Loop In/Out first")?,
-                !deck.sink.is_paused() && !deck.sink.empty(),
+                deck.playing(),
                 deck.grid,
             )
         };
@@ -613,10 +666,24 @@ impl DualDeckEngine {
         Ok(())
     }
     pub fn exit_loop(&self, id: DeckId) -> Result<(), String> {
-        if !self.decks[id.index()].borrow().loop_active {
+        let mut deck = self.decks[id.index()].borrow_mut();
+        if !deck.loop_active {
             return Ok(());
         }
-        self.seek_position(id, self.snapshot(id).position)
+        let speed = PlaybackSpeed::new(
+            deck.base_factor,
+            deck.track.as_ref().unwrap().samples.sample_rate(),
+        )?;
+        deck.render.as_ref().unwrap().publish(
+            speed.output_rate().get(),
+            deck.playing(),
+            None,
+            None,
+        );
+        deck.loop_active = false;
+        deck.nudge = 0;
+        deck.speed = Some(speed);
+        Ok(())
     }
     pub fn load_a(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         self.install(DeckId::A, PreparedTrack::open(path)?);
@@ -630,56 +697,49 @@ impl DualDeckEngine {
         let restart = {
             let deck = self.decks[id.index()].borrow();
             deck.track.is_some()
-                && (deck.sink.empty()
-                    || deck
-                        .track
+                && deck.track.as_ref().is_some_and(|t| {
+                    deck.render
                         .as_ref()
-                        .is_some_and(|t| deck.offset >= t.duration()))
+                        .is_some_and(|r| r.position() >= t.duration())
+                })
         };
         if restart {
             self.cue(id);
         }
         let deck = self.decks[id.index()].borrow();
-        if deck.track.is_some() {
+        if let Some(render) = &deck.render {
+            render.publish(
+                deck.speed.unwrap().output_rate().get(),
+                true,
+                if deck.loop_active {
+                    deck.loop_region
+                } else {
+                    None
+                },
+                None,
+            );
             deck.sink.play();
         }
     }
     pub fn pause(&self, id: DeckId) {
-        // Freeze the wrapped control-plane position instead of allowing Rodio's pending
-        // periodic position update to move it across a loop boundary after Pause.
-        let freeze = {
-            let deck = self.decks[id.index()].borrow();
-            deck.loop_active || deck.nudge != 0
-        };
-        if freeze {
-            let position = self.snapshot(id).position;
-            let (track, region, grid) = {
-                let deck = self.decks[id.index()].borrow();
-                (
-                    deck.track.clone().unwrap(),
-                    if deck.loop_active {
-                        deck.loop_region
-                    } else {
-                        None
-                    },
-                    deck.grid,
-                )
-            };
-            let mut source = track.samples.clone();
-            if let Some(region) = region {
-                source
-                    .set_loop(region)
-                    .expect("Installed loop was validated");
-            }
-            source
-                .try_seek(position)
-                .expect("In-memory seek cannot fail");
-            self.reset_nudge_for_replacement(id);
-            self.replace_source(id, track, source, position, false, grid);
-            self.decks[id.index()].borrow_mut().loop_active = region.is_some();
-        } else {
-            self.decks[id.index()].borrow().sink.pause();
+        let mut deck = self.decks[id.index()].borrow_mut();
+        if let Some(track) = &deck.track {
+            let speed = PlaybackSpeed::new(deck.base_factor, track.samples.sample_rate())
+                .expect("Validated base rate");
+            deck.render.as_ref().unwrap().publish(
+                speed.output_rate().get(),
+                false,
+                if deck.loop_active {
+                    deck.loop_region
+                } else {
+                    None
+                },
+                None,
+            );
+            deck.speed = Some(speed);
+            deck.nudge = 0;
         }
+        deck.sink.pause();
     }
     pub fn cue(&self, id: DeckId) {
         let (track, grid) = {
@@ -723,27 +783,11 @@ impl DualDeckEngine {
             .track
             .as_ref()
             .map_or(Duration::ZERO, PreparedTrack::duration);
-        let source_elapsed = deck
-            .sink
-            .get_pos()
-            .mul_f64(deck.speed.map_or(1., PlaybackSpeed::effective_factor));
-        let absolute = deck.offset.saturating_add(source_elapsed);
-        let position = if deck.track.is_some() && deck.sink.empty() {
-            duration
-        } else {
-            absolute.min(duration)
-        };
-        let position = if deck.loop_active {
-            let track = deck.track.as_ref().unwrap();
-            frame_time(
-                deck.loop_region
-                    .unwrap()
-                    .wrap(frame_at(absolute, track.samples.sample_rate())),
-                track.samples.sample_rate(),
-            )
-        } else {
-            position
-        };
+        let position = deck
+            .render
+            .as_ref()
+            .map_or(Duration::ZERO, |r| r.position())
+            .min(duration);
         DeckSnapshot {
             path: deck.track.as_ref().map(|t| Arc::clone(&t.path)),
             title: deck
@@ -751,7 +795,7 @@ impl DualDeckEngine {
                 .as_ref()
                 .map_or_else(|| "No track loaded".into(), |t| t.title.clone()),
             loaded: deck.track.is_some(),
-            playing: !deck.sink.is_paused() && !deck.sink.empty(),
+            playing: deck.playing(),
             position,
             duration,
             overview: deck.track.as_ref().map(|t| Arc::clone(&t.overview)),
@@ -786,8 +830,18 @@ impl DualDeckEngine {
         self.decks[1].borrow().sink.set_volume(b);
     }
     pub fn wait_for_end(&self) {
-        for deck in &self.decks {
-            deck.borrow().sink.sleep_until_end();
+        // EOF renderers remain installed for race-free seeks/restart. Their queues never end.
+        // This is a control-thread wait for source frames handed to the output graph;
+        // physical device drain/latency is not inferred from producer completion.
+        while self.decks.iter().any(|deck| {
+            let deck = deck.borrow();
+            deck.track
+                .as_ref()
+                .zip(deck.render.as_ref())
+                .is_some_and(|(track, render)| render.position() < track.duration())
+        }) {
+            self.collect_retired();
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
 }
@@ -818,10 +872,215 @@ mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
     #[test]
+    fn cli_completion_wait_uses_render_eof_while_installed_queues_remain_alive() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        engine.wait_for_end(); // No loaded decks must not block.
+        let a = wav_file(8192, 480);
+        let b = wav_file(4096, 960);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        engine.set_speed(DeckId::A, 2.).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let returned = Arc::new(AtomicBool::new(false));
+        let observe = Arc::clone(&returned);
+        let (done, wait) = std::sync::mpsc::channel();
+        let audio = std::thread::spawn(move || {
+            for _ in 0..240 {
+                output.next();
+            }
+            assert!(!observe.load(Ordering::Acquire), "B is still rendering");
+            for _ in 0..2000 {
+                output.next();
+            }
+            // Keep the output graph alive until wait returns; a Sink EOF wait would time out.
+            let completed = wait.recv_timeout(Duration::from_secs(5)).is_ok();
+            if completed {
+                Some(output)
+            } else {
+                drop(output);
+                None
+            }
+        });
+        engine.wait_for_end();
+        returned.store(true, Ordering::Release);
+        for id in [DeckId::A, DeckId::B] {
+            let state = engine.snapshot(id);
+            assert_eq!(state.position, state.duration);
+            assert!(!state.playing);
+            assert!(!engine.decks[id.index()].borrow().sink.empty());
+        }
+        done.send(()).unwrap();
+        let output = audio.join().unwrap();
+        assert!(output.is_some(), "completion depended on queue destruction");
+        drop(output);
+    }
+    #[test]
+    fn loop_commands_preserve_nonintegral_frame_and_fractional_render_phase() {
+        fn track(rate: u32) -> PreparedTrack {
+            let samples: Vec<_> = (0..1024).map(|i| i as f32 / 1000.).collect();
+            PreparedTrack {
+                path: Arc::from(Path::new("frame-loop.wav")),
+                title: "frame loop".into(),
+                overview: crate::waveform::peak_overview(&samples, 1).into(),
+                detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 1, rate)),
+                tempo: None,
+                samples: PcmSource::new(1, rate, samples),
+            }
+        }
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        engine.install(DeckId::A, track(48000));
+        engine.set_levels(MixerLevels {
+            crossfader: 0.,
+            channel_a: 1.,
+            channel_b: 1.,
+        });
+        engine.play(DeckId::A);
+        output.next();
+        output.next();
+        let at_two = engine.snapshot(DeckId::A).position;
+        assert_eq!(at_two, frame_time(2, 48000));
+        engine.set_loop_in(DeckId::A, at_two).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).loop_in, Some(at_two));
+        output.next();
+        engine
+            .set_loop_out(DeckId::A, engine.snapshot(DeckId::A).position)
+            .unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(frame_time(3, 48000))
+        );
+        engine
+            .restore_loop(DeckId::A, Duration::ZERO, frame_time(8, 48000))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        for _ in 0..2 {
+            output.next();
+        }
+        engine.resize_loop(DeckId::A, false).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, at_two);
+        assert!((output.next().unwrap() - 0.002).abs() < 1e-8);
+        engine.resize_loop(DeckId::A, true).unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        for _ in 0..6 {
+            output.next();
+        }
+        engine.resize_loop(DeckId::A, false).unwrap();
+        engine.resize_loop(DeckId::A, true).unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            at_two,
+            "back-to-back controls retain mapped pending phase"
+        );
+        assert!((output.next().unwrap() - 0.002).abs() < 1e-8);
+        engine.install(DeckId::A, track(44100));
+        engine
+            .restore_loop(DeckId::A, Duration::ZERO, frame_time(128, 44100))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.play(DeckId::A);
+        for _ in 0..37 {
+            output.next();
+        }
+        let fractional = engine.snapshot(DeckId::A).position;
+        engine.resize_loop(DeckId::A, false).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, fractional);
+        let expected = 37. * 44100. / 48000. / 1000.;
+        assert!(
+            (f64::from(output.next().unwrap()) - expected).abs() < 1e-8,
+            "resize must not floor fractional source frame"
+        );
+        let after = engine.snapshot(DeckId::A).position;
+        engine.exit_loop(DeckId::A).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, after);
+        engine.pause(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).position, after);
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert_eq!(engine.snapshot(DeckId::A).position, after);
+    }
+    #[test]
+    fn short_nudge_flanks_preserve_rendered_ramp_and_exact_output_frame_phase() {
+        for (source_rate, output_rate, channels) in
+            [(44100, 48000, 2), (48000, 48000, 1), (96000, 44100, 2)]
+        {
+            let (mixer, mut output) = rodio::mixer::mixer(channels, output_rate);
+            let engine = DualDeckEngine::from_mixer(mixer, channels, output_rate);
+            let samples: Vec<_> = (0..source_rate)
+                .flat_map(|frame| {
+                    let v = frame as f32 / 100000.;
+                    [v, -v]
+                })
+                .collect();
+            engine.install(
+                DeckId::A,
+                PreparedTrack {
+                    path: Arc::from(Path::new("ramp-nudge.wav")),
+                    title: "ramp".into(),
+                    overview: crate::waveform::peak_overview(&samples, 2).into(),
+                    detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, source_rate)),
+                    tempo: None,
+                    samples: PcmSource::new(2, source_rate, samples),
+                },
+            );
+            engine.set_levels(MixerLevels {
+                crossfader: 0.,
+                channel_a: 1.,
+                channel_b: 1.,
+            });
+            engine.play(DeckId::A);
+            let installed = Arc::clone(engine.decks[0].borrow().render.as_ref().unwrap());
+            let mut phase = 0u128;
+            for step in 0..50 {
+                let before = engine.snapshot(DeckId::A).position;
+                engine
+                    .set_nudge(DeckId::A, [1, 0, -1, 0][step % 4])
+                    .unwrap();
+                if step == 25 {
+                    engine.set_speed(DeckId::A, 1.1).unwrap();
+                }
+                assert_eq!(engine.snapshot(DeckId::A).position, before);
+                let rate = engine.decks[0].borrow().speed.unwrap().output_rate().get();
+                for _ in 0..37 {
+                    let expected = (phase as f64 / f64::from(output_rate) / 100000.) as f32;
+                    let left = output.next().unwrap();
+                    assert!(
+                        (left - expected).abs() < 0.0000002,
+                        "source{source_rate} output{output_rate} step{step}: {left} vs {expected}"
+                    );
+                    if channels == 2 {
+                        assert!((output.next().unwrap() + left).abs() < 0.0000002);
+                    }
+                    phase += u128::from(rate);
+                    let expected_ns = (phase * 1_000_000_000)
+                        .div_ceil(u128::from(source_rate) * u128::from(output_rate))
+                        as u64;
+                    assert_eq!(
+                        engine.snapshot(DeckId::A).position,
+                        Duration::from_nanos(expected_ns)
+                    );
+                }
+                assert!(Arc::ptr_eq(
+                    &installed,
+                    engine.decks[0].borrow().render.as_ref().unwrap()
+                ));
+                assert!(
+                    engine.retired.borrow().is_empty(),
+                    "rate gestures must not replace source/sink"
+                );
+            }
+            engine.set_nudge(DeckId::A, 0).unwrap();
+            assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.1);
+        }
+    }
+    #[test]
     fn replaced_pcm_survives_audio_queue_drop_until_control_plane_reclamation() {
         for warmup in [0, 1000] {
             let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
-            let engine = DualDeckEngine::from_mixer(mixer);
+            let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
             let file = wav_file(8192, 48000);
             let next = wav_file(4096, 48000);
             let track = PreparedTrack::open(file.path()).unwrap();
@@ -860,7 +1119,7 @@ mod tests {
     #[test]
     fn nudge_release_tracks_latest_base_and_transport_cancels_without_state_loss() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
         engine.set_nudge(DeckId::A, 0).unwrap();
         assert!(engine.set_nudge(DeckId::A, 1).is_err());
         let file = wav_file(8192, 48000 * 8);
@@ -954,7 +1213,7 @@ mod tests {
     #[test]
     fn nudge_steady_signal_pitch_returns_to_updated_base_on_release() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
         let samples: Vec<_> = (0..96000)
             .flat_map(|frame| {
                 let value = 0.25 * (std::f32::consts::TAU * 440. * frame as f32 / 48000.).sin();
@@ -1006,7 +1265,7 @@ mod tests {
     #[test]
     fn changed_rate_loop_wraps_and_resizes_render_only_region_samples_after_settling() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
         let samples: Vec<_> = (0..48000)
             .flat_map(|frame| {
                 let value = if (12000..24000).contains(&frame) {
@@ -1076,7 +1335,7 @@ mod tests {
         ] {
             let effective = (f64::from(base) * factor).round() / f64::from(base);
             let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
-            let engine = DualDeckEngine::from_mixer(mixer);
+            let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
             let samples: Vec<_> = (0..base)
                 .flat_map(|frame| {
                     let value =
@@ -1163,7 +1422,7 @@ mod tests {
     #[test]
     fn speed_controls_preserve_loop_phase_transport_grid_gains_and_reset_on_new_track() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
         assert!(engine.set_speed(DeckId::A, 1.25).is_err());
         let file = wav_file(8192, 48000 * 8);
         let other = wav_file(4096, 48000 * 8);
@@ -1229,7 +1488,7 @@ mod tests {
     #[test]
     fn aligned_auto_loop_is_optional_and_validated_before_active_state_changes() {
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
         let file = wav_file(8192, 48000 * 8);
         engine.load_a(file.path()).unwrap();
         engine.load_b(file.path()).unwrap();
@@ -1282,7 +1541,7 @@ mod tests {
     #[test]
     fn auto_loop_resize_preserves_play_state_phase_grid_gains_and_other_deck() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
         assert!(engine.auto_loop(DeckId::A, 32, false).is_err());
         let file = wav_file(8192, 48000 * 12);
         engine.load_a(file.path()).unwrap();
@@ -1366,7 +1625,7 @@ mod tests {
     #[test]
     fn saved_bounds_validation_is_atomic_and_frame_aligned_eof_round_trips() {
         let (mixer, _output) = rodio::mixer::mixer(1, 44100);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 44100);
         assert!(engine
             .restore_loop(DeckId::A, Duration::ZERO, Duration::from_secs(1))
             .is_err());
@@ -1397,7 +1656,7 @@ mod tests {
     #[test]
     fn loop_lifecycle_offline_audio_position_exit_seek_and_track_replacement() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48_000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48_000);
         assert!(engine.set_loop_in(DeckId::A, Duration::ZERO).is_err());
         let samples: Vec<_> = (0..48_000)
             .flat_map(|frame| {
@@ -1517,7 +1776,7 @@ mod tests {
     #[test]
     fn absolute_cue_seek_preserves_transport_grid_other_deck_and_rejects_outside_source() {
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48_000);
         assert!(engine.seek_position(DeckId::A, Duration::ZERO).is_err());
         let file = wav_file(8192, 48_000 * 4);
         engine.load_a(file.path()).unwrap();
@@ -1551,7 +1810,7 @@ mod tests {
     #[test]
     fn manual_grid_belongs_to_its_track_and_survives_transport_but_not_reload() {
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48_000);
         assert!(engine.set_grid_here(DeckId::A, 120.0).is_err());
         let wav = wav_file(8192, 48_000);
         engine.load_a(wav.path()).unwrap();
@@ -1584,7 +1843,7 @@ mod tests {
     #[test]
     fn seek_preserves_state_clamps_bounds_and_rejects_nonfinite_input() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48_000);
         assert!(engine.seek_percent(DeckId::A, 25.0).is_err());
         let wav = wav_file(8192, 48_000);
         engine.load_a(wav.path()).unwrap();
@@ -1633,7 +1892,7 @@ mod tests {
     #[test]
     fn seeking_changes_rendered_stereo_samples_and_keeps_gain_and_position_offset() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48_000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48_000);
         let samples: Vec<_> = (0..48_000)
             .flat_map(|frame| {
                 let value = if frame < 24_000 { 0.25 } else { 0.5 };
@@ -1757,7 +2016,7 @@ mod tests {
             (0.5, 0.0, 0.0, 0.0),
         ] {
             let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-            let engine = DualDeckEngine::from_mixer(mixer);
+            let engine = DualDeckEngine::from_mixer(mixer, 1, 48_000);
             let left = wav_file(8192, 4800);
             let right = wav_file(-4096, 4800);
             engine.load_a(left.path()).unwrap();
@@ -1793,7 +2052,7 @@ mod tests {
     #[test]
     fn reload_cue_eof_and_restart_preserve_other_deck_and_gains() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48_000);
         let wav = wav_file(8192, 4800);
         engine.play(DeckId::A);
         assert!(!engine.snapshot(DeckId::A).playing);
@@ -1828,7 +2087,7 @@ mod tests {
     #[test]
     fn explicit_grid_commit_preserves_source_transport_and_mixer_levels() {
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
-        let engine = DualDeckEngine::from_mixer(mixer);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48_000);
         let file = crate::test_support::wav_file(8192, 48_000 * 2);
         engine.load_a(file.path()).unwrap();
         let levels = MixerLevels {

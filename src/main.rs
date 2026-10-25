@@ -5,6 +5,7 @@ mod audio;
 mod beatgrid;
 mod controller;
 mod crates;
+mod deck_render;
 mod hot_cues;
 mod legacy_catalog;
 mod library;
