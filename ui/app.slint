@@ -149,6 +149,7 @@ component CompactDeck inherits Rectangle {
     in property <bool> audio-enabled;
     in property <bool> loaded;
     in property <bool> loading;
+    in property <bool> load-busy;
     in property <bool> playing;
     in-out property <float> position;
     in property <[HotCueRow]> hot-cues;
@@ -191,7 +192,7 @@ component CompactDeck inherits Rectangle {
         padding: 8px; spacing: 4px;
         HorizontalLayout {
             Text { text: deck-label + " / INT"; color: accent; font-weight: 700; font-size: 15px; }
-            Button { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !playing; clicked => { root.load(); } }
+            Button { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !load-busy && !playing; clicked => { root.load(); } }
             Button { text: playing ? "PAUSE" : "PLAY"; accessible-label: deck-label + " play/pause"; enabled: !audio-enabled || loaded; clicked => { root.toggle(); } }
             Button { text: "CUE"; accessible-label: deck-label + " cue"; enabled: !audio-enabled || loaded; clicked => { root.cue(); } }
         }
@@ -511,6 +512,8 @@ export component AppWindow inherits Window {
     in-out property <int> right-detail-window: 8;
     in property <bool> audio-enabled: false;
     in property <bool> loading: false;
+    in property <bool> left-busy: false;
+    in property <bool> right-busy: false;
     in property <bool> left-loaded: false;
     in property <bool> right-loaded: false;
     in property <string> left-title: "DEMO TRACK";
@@ -664,7 +667,7 @@ export component AppWindow inherits Window {
                 hot-cue(slot) => { root.hot-cue-left(slot); }
                 delete-hot-cue(slot) => { root.delete-hot-cue-left(slot); }
                 playing: root.left-playing; position <=> root.left-position;
-                audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.loading || root.library-busy;
+                audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.left-busy; load-busy: root.loading || root.library-busy;
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } seek(value) => { root.seek-left(value); }
             }
             CompactDeck {
@@ -689,7 +692,7 @@ export component AppWindow inherits Window {
                 hot-cue(slot) => { root.hot-cue-right(slot); }
                 delete-hot-cue(slot) => { root.delete-hot-cue-right(slot); }
                 playing: root.right-playing; position <=> root.right-position;
-                audio-enabled: root.audio-enabled; loaded: root.right-loaded; loading: root.loading || root.library-busy;
+                audio-enabled: root.audio-enabled; loaded: root.right-loaded; loading: root.right-busy; load-busy: root.loading || root.library-busy;
                 load => { root.load-right(); } toggle => { root.toggle-right(); } cue => { root.reset-right(); } seek(value) => { root.seek-right(value); }
             }
         }
@@ -717,7 +720,7 @@ export component AppWindow inherits Window {
                     detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
                     grid-active: root.left-grid-active; grid-caption: root.left-grid-caption;
                     grid-editing: root.left-grid-editing; grid-draft-bpm <=> root.left-grid-draft-bpm;
-                    grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.loading && !root.library-busy;
+                    grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.left-busy;
                     edit-bpm => { root.edit-grid-bpm-left(); } anchor-grid => { root.grid-anchor-left(); }
                     earlier-grid => { root.grid-earlier-left(); } later-grid => { root.grid-later-left(); }
                     save-grid => { root.save-grid-left(); } cancel-grid => { root.cancel-grid-left(); }
@@ -733,7 +736,7 @@ export component AppWindow inherits Window {
                     detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
                     grid-active: root.right-grid-active; grid-caption: root.right-grid-caption;
                     grid-editing: root.right-grid-editing; grid-draft-bpm <=> root.right-grid-draft-bpm;
-                    grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.loading && !root.library-busy;
+                    grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.right-busy;
                     edit-bpm => { root.edit-grid-bpm-right(); } anchor-grid => { root.grid-anchor-right(); }
                     earlier-grid => { root.grid-earlier-right(); } later-grid => { root.grid-later-right(); }
                     save-grid => { root.save-grid-right(); } cancel-grid => { root.cancel-grid-right(); }

@@ -264,6 +264,15 @@ impl AudioController {
         controller.refresh();
         controller
     }
+    fn can_control_deck(&self, id: DeckId) -> bool {
+        // Imports merge into the catalog; restore still owns it exclusively.
+        self.storage_ready.get()
+            && self
+                .pending
+                .borrow()
+                .as_ref()
+                .is_none_or(|(loading, _)| *loading != id)
+    }
     fn can_change_crates(&self) -> bool {
         self.storage_ready.get()
             && self.pending.borrow().is_none()
@@ -474,7 +483,7 @@ impl AudioController {
         .to_string()
     }
     fn change_saved_loop(&self, id: DeckId, command: usize) -> Result<String, String> {
-        if !self.can_change_crates() {
+        if !self.can_control_deck(id) {
             return Err("Finish loading before using saved loops".into());
         }
         let ui = self.ui.upgrade().ok_or("Window closed")?;
@@ -565,7 +574,7 @@ impl AudioController {
     }
     fn queue_pitch(&self, id: DeckId, percent: f32) -> Result<(), String> {
         self.pending_pitch.borrow_mut()[Self::grid_index(id)].take();
-        if !self.can_change_crates() {
+        if !self.can_control_deck(id) {
             return Err("Finish loading before changing pitch".into());
         }
         let source = self
@@ -593,7 +602,7 @@ impl AudioController {
         Ok(())
     }
     fn fine_pitch(&self, id: DeckId, up: bool) -> Result<(), String> {
-        if !self.can_change_crates() {
+        if !self.can_control_deck(id) {
             return Err("Finish loading before changing pitch".into());
         }
         let snapshot = self.engine.snapshot(id);
@@ -616,7 +625,7 @@ impl AudioController {
             let stale = self.nudges.borrow()[Self::grid_index(id)]
                 .as_ref()
                 .is_some_and(|session| {
-                    !self.can_change_crates()
+                    !self.can_control_deck(id)
                         || !snapshot.playing
                         || snapshot
                             .detail
@@ -635,7 +644,7 @@ impl AudioController {
         }
         self.cancel_stale_nudges();
         let index = Self::grid_index(id);
-        if held && !self.can_change_crates() {
+        if held && !self.can_control_deck(id) {
             return Err("Nudge unavailable during loading".into());
         }
         let snapshot = self.engine.snapshot(id);
@@ -786,7 +795,7 @@ impl AudioController {
             let Some(request) = self.pending_pitch.borrow_mut()[Self::grid_index(id)].take() else {
                 continue;
             };
-            let result = if !self.can_change_crates() {
+            let result = if !self.can_control_deck(id) {
                 Err("Pending pitch discarded during loading".into())
             } else if self
                 .engine
@@ -816,7 +825,7 @@ impl AudioController {
                 let weak = Rc::downgrade(self);
                 let action = move || {
                     if let Some(c) = weak.upgrade() {
-                        let result = if !c.can_change_crates() {
+                        let result = if !c.can_control_deck(id) {
                             Err("Finish loading before changing a loop".into())
                         } else {
                             let position = c.engine.snapshot(id).position;
@@ -904,7 +913,7 @@ impl AudioController {
         }
     }
     fn begin_cue_editor(&self, id: DeckId, slot: i32) -> Result<(), String> {
-        if !self.can_change_crates() {
+        if !self.can_control_deck(id) {
             return Err("Finish loading before editing a cue".into());
         }
         let index = Self::grid_index(id);
@@ -943,7 +952,7 @@ impl AudioController {
         Ok(())
     }
     fn save_cue_editor(&self, id: DeckId) -> Result<(), String> {
-        if !self.can_change_crates() {
+        if !self.can_control_deck(id) {
             return Err("Finish loading before saving a cue".into());
         }
         let snapshot = self.engine.snapshot(id);
@@ -983,7 +992,7 @@ impl AudioController {
         Ok(())
     }
     fn change_hot_cue(&self, id: DeckId, slot: i32, delete: bool) -> Result<(), String> {
-        if !self.can_change_crates() || self.pending.borrow().is_some() {
+        if !self.can_control_deck(id) {
             return Err("Finish loading before using hot cues".into());
         }
         let slot = usize::try_from(slot)
@@ -1107,7 +1116,7 @@ impl AudioController {
         }
     }
     fn begin_grid_editor(&self, id: DeckId) -> Result<(), String> {
-        if !self.can_change_crates() {
+        if !self.can_control_deck(id) {
             return Err("Finish library loading before editing its grid".into());
         }
         if self.grid_editors.borrow()[Self::grid_index(id)].is_some() {
@@ -1171,7 +1180,7 @@ impl AudioController {
         Ok(())
     }
     fn save_grid_editor(&self, id: DeckId) -> Result<(), String> {
-        if !self.can_change_crates() {
+        if !self.can_control_deck(id) {
             return Err("Finish library loading before saving its grid".into());
         }
         let snapshot = self.engine.snapshot(id);
@@ -1485,6 +1494,7 @@ impl AudioController {
                 ui.set_status(format!("Cannot start loader: {err}").into());
             }
         }
+        self.refresh();
     }
     fn complete_load(&self, id: DeckId, result: LoadResult) {
         let Some(ui) = self.ui.upgrade() else {
@@ -1683,6 +1693,8 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        ui.set_left_busy(!self.can_control_deck(DeckId::A));
+        ui.set_right_busy(!self.can_control_deck(DeckId::B));
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.snapshot(id);
             let index = Self::grid_index(id);
@@ -2149,6 +2161,154 @@ mod tests {
             }
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
+        }
+    }
+    #[test]
+    fn deck_performance_survives_other_deck_picker_decode_and_library_import() {
+        i_slint_backend_testing::init_no_event_loop();
+        for (active, loading, label) in [
+            (DeckId::A, DeckId::B, "DECK A"),
+            (DeckId::B, DeckId::A, "DECK B"),
+        ] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+            let file = wav_file(8192, 48000 * 8);
+            let next = wav_file(4096, 48000 * 8);
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            let (release, wait) = mpsc::channel();
+            let wait = Mutex::new(wait);
+            let (entered, entry) = mpsc::channel();
+            let new_path = next.path().to_path_buf();
+            let picker = Arc::new(move || {
+                entered.send(()).unwrap();
+                wait.lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(15))
+                    .unwrap();
+                Some(new_path.clone())
+            });
+            let c = AudioController::wire(&ui, Rc::clone(&engine), picker, Arc::new(|| None));
+            let profile = tempfile::tempdir().unwrap();
+            c.restore_library(Ok(profile.path().join("library.sqlite")), Vec::new());
+            finish_storage(&c);
+            engine.play(active);
+            c.tick();
+            ui.show().unwrap();
+            let pitch = |value| match active {
+                DeckId::A => ui.invoke_pitch_left(value),
+                DeckId::B => ui.invoke_pitch_right(value),
+            };
+            let nudge = |held| match active {
+                DeckId::A => ui.invoke_nudge_left(1, held),
+                DeckId::B => ui.invoke_nudge_right(1, held),
+            };
+            let hot_cue = || match active {
+                DeckId::A => ui.invoke_hot_cue_left(0),
+                DeckId::B => ui.invoke_hot_cue_right(0),
+            };
+            let volumes = engine.output_volumes();
+            nudge(true);
+            pitch(10.);
+            match loading {
+                DeckId::A => ui.invoke_load_left(),
+                DeckId::B => ui.invoke_load_right(),
+            }
+            entry.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(c.pending.borrow().is_some());
+            assert!(c.can_control_deck(active));
+            assert!(!c.can_control_deck(loading));
+            assert!(!c.can_change_crates());
+            c.tick();
+            assert_eq!(engine.snapshot(active).requested_speed, 1.1);
+            assert_eq!(engine.snapshot(active).nudge_direction, 1);
+            match loading {
+                DeckId::A => ui.invoke_pitch_left(25.),
+                DeckId::B => ui.invoke_pitch_right(25.),
+            }
+            assert!(c.pending_pitch.borrow()[AudioController::grid_index(loading)].is_none());
+            nudge(false);
+            engine
+                .seek_position(active, Duration::from_secs(2))
+                .unwrap();
+            control(&ui, &format!("{label} loop in")).invoke_accessible_default_action();
+            engine
+                .seek_position(active, Duration::from_secs(4))
+                .unwrap();
+            c.tick();
+            control(&ui, &format!("{label} loop out")).invoke_accessible_default_action();
+            control(&ui, &format!("{label} activate loop")).invoke_accessible_default_action();
+            assert!(engine.snapshot(active).loop_active);
+            hot_cue(); // Persist a cue while the other deck is waiting on its picker.
+            let path = engine.snapshot(active).path.unwrap();
+            assert!(c.library.borrow().hot_cues(&path).slots()[0].is_some());
+            // A controlled import result must merge rather than replace cue/grid edits.
+            let (import_tx, import_rx) = mpsc::channel();
+            release.send(()).unwrap();
+            finish(&c);
+            assert!(engine.snapshot(active).playing);
+            assert_eq!(engine.snapshot(active).requested_speed, 1.1);
+            assert_eq!(engine.snapshot(loading).requested_speed, 1.);
+            *c.pending_import.borrow_mut() = Some(import_rx);
+            ui.set_library_busy(true);
+            nudge(true);
+            pitch(12.);
+            c.tick();
+            assert_eq!(engine.snapshot(active).nudge_direction, 1);
+            assert_eq!(engine.snapshot(active).requested_speed, 1.12);
+            nudge(false);
+            hot_cue();
+            assert!(!engine.snapshot(active).loop_active);
+            assert_eq!(engine.snapshot(active).position, Duration::from_secs(2));
+            match active {
+                DeckId::A => {
+                    ui.invoke_grid_left();
+                    ui.set_left_grid_draft_bpm("120".into());
+                    ui.invoke_save_grid_left();
+                    ui.invoke_save_loop_left();
+                }
+                DeckId::B => {
+                    ui.invoke_grid_right();
+                    ui.set_right_grid_draft_bpm("120".into());
+                    ui.invoke_save_grid_right();
+                    ui.invoke_save_loop_right();
+                }
+            }
+            assert_eq!(c.library.borrow().grid(&path).unwrap().bpm(), 120.);
+            assert!(c.library.borrow().saved_loops(&path).slots()[0].is_some());
+            import_tx
+                .send(Some(crate::library::inspect_paths(vec![file
+                    .path()
+                    .to_path_buf()])))
+                .unwrap();
+            finish_import(&c);
+            finish_storage(&c);
+            assert!(c.library.borrow().hot_cues(&path).slots()[0].is_some());
+            assert_eq!(engine.output_volumes(), volumes);
+            // Startup restore ownership remains exclusive even for direct callbacks.
+            c.storage_ready.set(false);
+            nudge(true);
+            pitch(20.);
+            c.tick();
+            assert_eq!(engine.snapshot(active).nudge_direction, 0);
+            assert_eq!(engine.snapshot(active).requested_speed, 1.12);
+            c.storage_ready.set(true);
+            c.close_library().unwrap();
+            c.restore_library(Ok(profile.path().join("library.sqlite")), Vec::new());
+            finish_storage(&c);
+            assert!(c.library.borrow().hot_cues(&path).slots()[0].is_some());
+            assert_eq!(c.library.borrow().grid(&path).unwrap().bpm(), 120.);
+            let loops = c.library.borrow().saved_loops(&path);
+            assert_eq!(
+                loops.slots()[0].as_ref().unwrap().start(),
+                Duration::from_secs(2)
+            );
+            assert_eq!(
+                loops.slots()[0].as_ref().unwrap().end(),
+                Duration::from_secs(4)
+            );
+            c.close_library().unwrap();
         }
     }
     #[test]

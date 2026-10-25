@@ -28,7 +28,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 121 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 122 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Review als `e1371a8` gepusht. Die momentane GUI ist anschließend implementiert, nach Review-Korrekturen erneut unabhängig geprüft und mit 121 Tests sowie Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
 
@@ -46,7 +46,12 @@ Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Re
 - [x] ✅ Pitch-Bereiche ±8/±16/±50/Wide und driftfreie 0,01-Prozentpunkt-Feinschritte ohne stillen Rate-Reset beim Bereichswechsel.
 - [x] ✅ Engine-Zustand für temporäres relatives ±2%-Nudge, Basis-Pitch-Erhalt und sicheren neutralen Release/Transport-Abbruch.
 - [x] ✅ Momentane Nudge-GUI mit Pointer-/Tasten-Release, Fokus-/Panel-/Lade-/Transport-/EOF-/Shutdown-Abbruch und Headless-Ereignistests.
-- [ ] ☐ **Als Nächstes:** validiertes Tempo-Matching aus bestätigten manuellen Grids; Phasen-Sync und Keylock separat.
+- [x] ✅ Opus1: Performance-Steuerung deckweise von Laden/Import entkoppelt; Restore-/Quellschutz und persistente Cue-Änderungen getestet.
+- [ ] ☐ Opus2/3: präzise Quellenwechsel-/Nudge-Flanken und nachgewiesene PCM-Freigabe außerhalb des Audio-Pfads.
+- [ ] ☐ Opus6: lesbaren Katalog bei Metadaten-Backfill-Schreibfehler erhalten und Retry anbieten.
+- [ ] ☐ Opus5/7: Katalog-/Decode-Skalierung messen, Delta-Persistenz und Worker-Abbruch umsetzen.
+- [ ] ☐ Opus4: LOOP/Reloop/OUT-Semantik am Handbuch abgleichen; keine automatische Verhaltensänderung aufgrund des Modellbefunds.
+- [ ] ☐ Danach: validiertes Tempo-Matching aus bestätigten manuellen Grids; Phasen-Sync und Keylock separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -281,3 +286,9 @@ Controller sessions bind held-direction flags to prepared-source identity. Repea
 Headless event/state regressions cover actual pointer down/up, Space/Return/repeat, window activation loss, panel removal, busy/paused/source/EOF/shutdown cancellation, conflicting inputs and rate boundaries. Five-panel two-size geometry is checked within existing260px decks. These are headless tests, not native visual/focus, listening/live transition or physical latency acceptance. Next proposed slice is validated manual-grid tempo matching; phase Sync, keylock, smoothing/resampling quality, hardware and full product qualification remain open. Publication requires independent Astra-medium review and final green checks.
 
 Review follow-up: successful occupied hot-cue recall and all successful GUI loop commands/saved-boundary recall now clear held ownership, including neutral opposing holds; rejected actions preserve it. A dedicated regression covers hot-cue/loop Exit/In/saved recall and invalid cue/loop actions. Each NudgeHold uses explicit first-input ownership: the initiating left pointer, Space or Return owns the gesture until its release; additional simultaneous inputs are ignored and require a fresh press. Unrelated key/right-button releases cannot cancel the owner. Mixed-input tests cover this policy. This avoids both premature neutralization and stale aggregate releases after transport cancellation.
+
+## Opus1: independent deck control checkpoint (2026-10-25)
+
+The user authorized implementing the assessed Opus recommendations. Controller can_control_deck(id) now gates only startup restore and that deck's pending load. Pitch/fine/nudge, loops/saved loops, Hot-Cue editing and grid editing use this ownership check. Library import merges do not replace catalog ownership; global crate mutations and admission of load/import jobs retain their existing guards. Shared-track draft conflict and prepared-source checks remain. Both CompactDecks and grid editors receive per-deck busy state; LOAD admission still reflects the single worker. Native focus loss still cancels nudge independently of any busy state.
+
+A symmetric headless regression holds the other deck's real picker worker via channels, applies a previously queued pitch, retains logical nudge, rejects commands to the loading deck, exercises loops and durable Hot-Cues, then merges a controlled import result and verifies SQLite restart. Restore remains exclusive. No audio/sample-source/schema/dependency change was made. Native dialog/focus/listening/latency acceptance remains open. Review and final checks are recorded in LOCAL_VALIDATION.
