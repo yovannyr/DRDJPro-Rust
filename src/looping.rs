@@ -109,6 +109,7 @@ impl PcmSource {
     pub fn frames(&self) -> usize {
         self.data.len() / usize::from(self.channels)
     }
+    #[cfg(test)]
     pub fn set_loop(&mut self, region: FrameLoop) -> Result<(), String> {
         FrameLoop::new(region.start, region.end, self.frames())?;
         self.cursor = region.start * usize::from(self.channels);

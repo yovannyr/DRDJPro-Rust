@@ -180,7 +180,7 @@ component CompactDeck inherits Rectangle {
     in property <bool> loop-has-in;
     in property <bool> loop-ready;
     in property <bool> loop-active;
-    callback loop-in(); callback loop-out(); callback loop-activate(); callback loop-exit();
+    callback loop-in(); callback loop-out(); callback loop-activate(); callback reloop();
     in property <bool> cue-editing;
     in-out property <string> cue-name;
     in-out property <string> cue-rgb;
@@ -226,8 +226,8 @@ component CompactDeck inherits Rectangle {
             height: 28px; spacing: 2px;
             Button { text: "IN"; accessible-label: root.deck-label + " loop in"; enabled: loaded && !loading; clicked => { root.loop-in(); } }
             Button { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
-            Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " activate loop"; enabled: loaded && !loading && loop-ready && !loop-active; clicked => { root.loop-activate(); } }
-            Button { text: "EXIT"; accessible-label: root.deck-label + " exit loop"; enabled: loaded && !loading && loop-active; clicked => { root.loop-exit(); } }
+            Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " loop on/off"; accessible-description: root.loop-caption; enabled: loaded && !loading && loop-ready; clicked => { root.loop-activate(); } }
+            Button { text: "RELOOP"; accessible-label: root.deck-label + " reloop"; accessible-description: "Restart at Loop In"; enabled: loaded && !loading && loop-ready; clicked => { root.reloop(); } }
             Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : (root.tools-panel == 3 ? "NUDGE" : "CUES"))); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.cancel-nudge(); root.tools-panel = root.tools-panel == 4 ? 0 : root.tools-panel + 1; } }
             Text { width: 64px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
         }
@@ -556,7 +556,7 @@ export component AppWindow inherits Window {
     in property <bool> left-loop-has-in;
     in property <bool> left-loop-ready;
     in property <bool> left-loop-active;
-    callback loop-in-left(); callback loop-out-left(); callback loop-activate-left(); callback loop-exit-left();
+    callback loop-in-left(); callback loop-out-left(); callback loop-activate-left(); callback loop-exit-left(); callback reloop-left();
     in property <bool> left-cue-editing;
     in-out property <string> left-cue-name;
     in-out property <string> left-cue-rgb;
@@ -584,7 +584,7 @@ export component AppWindow inherits Window {
     in property <bool> right-loop-has-in;
     in property <bool> right-loop-ready;
     in property <bool> right-loop-active;
-    callback loop-in-right(); callback loop-out-right(); callback loop-activate-right(); callback loop-exit-right();
+    callback loop-in-right(); callback loop-out-right(); callback loop-activate-right(); callback loop-exit-right(); callback reloop-right();
     in property <bool> right-cue-editing;
     in-out property <string> right-cue-name;
     in-out property <string> right-cue-rgb;
@@ -664,7 +664,7 @@ export component AppWindow inherits Window {
                 save-loop => { root.save-loop-left(); } recall-loop => { root.recall-loop-left(); } delete-loop => { root.delete-loop-left(); }
                 loop-range: root.left-loop-range;
                 loop-caption: root.left-loop-caption; loop-has-in: root.left-loop-has-in; loop-ready: root.left-loop-ready; loop-active: root.left-loop-active;
-                loop-in => { root.loop-in-left(); } loop-out => { root.loop-out-left(); } loop-activate => { root.loop-activate-left(); } loop-exit => { root.loop-exit-left(); }
+                loop-in => { root.loop-in-left(); } loop-out => { root.loop-out-left(); } loop-activate => { root.loop-activate-left(); } reloop => { root.reloop-left(); }
                 hot-cues: root.left-hot-cues;
                 cue-editing: root.left-cue-editing; cue-name <=> root.left-cue-name; cue-rgb <=> root.left-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-left(slot); }
@@ -689,7 +689,7 @@ export component AppWindow inherits Window {
                 save-loop => { root.save-loop-right(); } recall-loop => { root.recall-loop-right(); } delete-loop => { root.delete-loop-right(); }
                 loop-range: root.right-loop-range;
                 loop-caption: root.right-loop-caption; loop-has-in: root.right-loop-has-in; loop-ready: root.right-loop-ready; loop-active: root.right-loop-active;
-                loop-in => { root.loop-in-right(); } loop-out => { root.loop-out-right(); } loop-activate => { root.loop-activate-right(); } loop-exit => { root.loop-exit-right(); }
+                loop-in => { root.loop-in-right(); } loop-out => { root.loop-out-right(); } loop-activate => { root.loop-activate-right(); } reloop => { root.reloop-right(); }
                 hot-cues: root.right-hot-cues;
                 cue-editing: root.right-cue-editing; cue-name <=> root.right-cue-name; cue-rgb <=> root.right-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-right(slot); }

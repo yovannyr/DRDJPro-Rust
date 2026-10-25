@@ -28,7 +28,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 140 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 142 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die Opus-Korrekturen für deckweise Steuerung, Backfill-Fehler, PCM-Retirement und Render-Timing wurden nach Astra-Mittel-Reviews einzeln gepusht. Revisionsgebundene Track-Deltas sind ebenfalls unabhängig geprüft und mit135 Tests/Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
 
@@ -53,7 +53,7 @@ Veröffentlichungsstand: Die Opus-Korrekturen für deckweise Steuerung, Backfill
 - [x] ✅ Opus5: revisionsgebundene Track-Deltas, begrenzte Zeilenänderungen, periodische geprüfte Backups und Retry/Close; Snapshot bei100000 Tracks vermessen.
 - [x] ✅ Opus7: PCM-Puffer ohne Sample-Kopie teilen, fallibel begrenzt reservieren und Lade-/Import-Worker kooperativ abbrechen; späte Ergebnisse verworfen.
 - [ ] ☐ Weitere Skalierung: Crate-Beziehungen granularisieren (aktuell Snapshot nur bei Crate-Änderung), größere Bibliotheksansichten virtualisieren.
-- [ ] ☐ Opus4: LOOP/Reloop/OUT-Semantik am Handbuch abgleichen; keine automatische Verhaltensänderung aufgrund des Modellbefunds.
+- [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [ ] ☐ Danach: validiertes Tempo-Matching aus bestätigten manuellen Grids; Phasen-Sync und Keylock separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
@@ -335,3 +335,10 @@ After reviewed bb06a94, PcmSource privately shares an Arc<Vec<f32>> that takes t
 A small Cancellation token is checked before I/O, every4096 decoded samples and between analysis stages; imports check between metadata files and before returning. Controller retains one global job slot until worker acknowledgement, checks cancellation again before applying even already queued results, and cancels on close/drop. The footer CANCEL action targets load/import only, not a database commit/restore. Native pickers and synchronous OS I/O cannot be forcibly interrupted; cancellation is cooperative and stage boundaries are not a hardware deadline. A completed cancelled load/import preserves old deck/library data, and the next job receives a fresh token.
 
 Headless tests block real picker callbacks through channels, cancel twice, retain admission until acknowledgement, verify successful subsequent loading, cancel import, reject a ready late result, cancel on close and check two-size button geometry. Synthetic decoder cancellation occurs mid-iterator rather than only at EOF; pre-cancelled paths/imports do not inspect files. No schema/dependency change or native visual/dialog/listening acceptance. Full gates/review in LOCAL_VALIDATION.
+
+
+## Opus4: reference-backed LOOP and RELOOP checkpoint (2026-10-26)
+
+The unchanged DRDJ-UserManual-DRDJ.pdf, printed pages50–51, distinguishes Loop On/Off from Slot Reloop. LOOP now toggles the current interval, retaining exact renderer phase when inside it; outside it activation starts at In. RELOOP explicitly activates/restarts at In, including while already active. Both preserve Play/Pause, including EOF remaining stopped. OUT remains boundary capture; the reference does not explicitly require automatic activation on OUT. The deck row exposes IN/OUT/LOOP/RELOOP, with the existing programmatic exit callback retained.
+
+Offline ramp samples verify the distinct start positions; headless controls verify both decks, paused/playing state, readiness guards and geometry. This resolves the assessed Opus4 ambiguity, not full loop parity: active In/Out fine editing, auto-loop same-length toggle/current-loop resize semantics, direct slot controls, media-file loop persistence, quantization and native/hardware acceptance remain separate work. No schema/dependency change. Publication requires independent Astra-medium review and final checks; results are recorded in LOCAL_VALIDATION.md.

@@ -224,3 +224,8 @@ Pitch/nudge now publish rate commands to a stable renderer without seeking or re
 ## Opus7: background-job cancellation (2026-10-26)
 
 The library footer shows CANCEL while a load/import job owns the single slot. Requesting cancellation is idempotent and keeps that slot busy until completion acknowledgement; it does not launch overlapping replacement jobs or cancel storage commits. The worker checks cooperatively and the controller rejects late ready results before deck/library mutation. Closing the controller requests cancellation too. Native file pickers/OS reads cannot be force-closed by this token; no native interaction acceptance is claimed. Headless tests verify active-button geometry at850x740/1280x860, preserved deck/gain/library state and recovery with a fresh job token.
+
+
+## Opus4: distinct LOOP and RELOOP controls (2026-10-26)
+
+The original user manual printed50–51 separates Loop On/Off and Slot Reloop. LOOP toggles activation, preserving source phase inside the interval; activation from outside starts at In. RELOOP replaces the redundant EXIT button and always activates/restarts at In. Both remain available for valid boundaries while active, preserve transport, and use existing per-deck busy/restore guards. The programmatic Exit callback remains available. OUT still captures the boundary; no automatic start is inferred. Saved-loop recall continues to install inactive boundaries. Headless control/ramp/geometry tests do not establish native visuals, focus or listening acceptance. Fine editing, auto-loop toggle/resize parity and direct slot controls remain open.

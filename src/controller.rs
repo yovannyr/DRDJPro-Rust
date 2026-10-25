@@ -846,7 +846,7 @@ impl AudioController {
     }
     fn wire_loops(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
-            for command in 0..7 {
+            for command in 0..8 {
                 let weak = Rc::downgrade(self);
                 let action = move || {
                     if let Some(c) = weak.upgrade() {
@@ -857,7 +857,13 @@ impl AudioController {
                             match command {
                                 0 => c.engine.set_loop_in(id, position),
                                 1 => c.engine.set_loop_out(id, position),
-                                2 => c.engine.activate_loop(id),
+                                2 => {
+                                    if c.engine.snapshot(id).loop_active {
+                                        c.engine.exit_loop(id)
+                                    } else {
+                                        c.engine.activate_loop(id)
+                                    }
+                                }
                                 3 => c.engine.exit_loop(id),
                                 4 => {
                                     let index =
@@ -880,7 +886,8 @@ impl AudioController {
                                         .and_then(|eighths| c.engine.auto_loop(id, eighths, snap))
                                 }
                                 5 => c.engine.resize_loop(id, false),
-                                _ => c.engine.resize_loop(id, true),
+                                6 => c.engine.resize_loop(id, true),
+                                _ => c.engine.reloop(id),
                             }
                         };
                         if result.is_ok() {
@@ -894,11 +901,12 @@ impl AudioController {
                                         [
                                             "Loop In set",
                                             "Loop Out set",
-                                            "Loop active",
+                                            "Loop toggled",
                                             "Loop exited",
                                             "Auto loop active",
                                             "Loop halved",
-                                            "Loop doubled"
+                                            "Loop doubled",
+                                            "Reloop from In"
                                         ][command]
                                     ),
                                     Err(e) => format!("Deck {id:?}: {e}"),
@@ -922,8 +930,10 @@ impl AudioController {
                     (DeckId::B, 4) => ui.on_auto_loop_right(action),
                     (DeckId::A, 5) => ui.on_half_loop_left(action),
                     (DeckId::B, 5) => ui.on_half_loop_right(action),
-                    (DeckId::A, _) => ui.on_double_loop_left(action),
-                    (DeckId::B, _) => ui.on_double_loop_right(action),
+                    (DeckId::A, 6) => ui.on_double_loop_left(action),
+                    (DeckId::B, 6) => ui.on_double_loop_right(action),
+                    (DeckId::A, _) => ui.on_reloop_left(action),
+                    (DeckId::B, _) => ui.on_reloop_right(action),
                 }
             }
         }
@@ -2268,6 +2278,59 @@ mod tests {
         }
     }
     #[test]
+    fn loop_toggle_and_reloop_buttons_follow_distinct_reference_actions_on_both_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .restore_loop(id, Duration::from_secs(1), Duration::from_secs(3))
+                .unwrap();
+            engine
+                .seek_position(id, Duration::from_millis(2500))
+                .unwrap();
+        }
+        engine.play(DeckId::A);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        for (id, label) in [(DeckId::A, "DECK A"), (DeckId::B, "DECK B")] {
+            let playing = engine.snapshot(id).playing;
+            control(&ui, &format!("{label} loop on/off")).invoke_accessible_default_action();
+            assert!(engine.snapshot(id).loop_active);
+            assert_eq!(engine.snapshot(id).position, Duration::from_millis(2500));
+            assert_eq!(engine.snapshot(id).playing, playing);
+            control(&ui, &format!("{label} loop on/off")).invoke_accessible_default_action();
+            assert!(!engine.snapshot(id).loop_active);
+            assert_eq!(engine.snapshot(id).position, Duration::from_millis(2500));
+            control(&ui, &format!("{label} reloop")).invoke_accessible_default_action();
+            assert!(engine.snapshot(id).loop_active);
+            assert_eq!(engine.snapshot(id).position, Duration::from_secs(1));
+            assert_eq!(engine.snapshot(id).playing, playing);
+            assert_eq!(
+                control(&ui, &format!("{label} reloop")).accessible_enabled(),
+                Some(true)
+            );
+        }
+        assert!(!c.dirty.get());
+        c.storage_ready.set(false);
+        c.refresh();
+        assert_eq!(
+            control(&ui, "DECK A reloop").accessible_enabled(),
+            Some(false)
+        );
+        ui.invoke_reloop_left();
+        assert!(ui.get_status().contains("Finish loading"));
+    }
+    #[test]
     fn cancel_background_jobs_preserves_decks_rejects_late_results_and_releases_single_slot() {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
@@ -2458,7 +2521,7 @@ mod tests {
                 .unwrap();
             c.tick();
             control(&ui, &format!("{label} loop out")).invoke_accessible_default_action();
-            control(&ui, &format!("{label} activate loop")).invoke_accessible_default_action();
+            control(&ui, &format!("{label} loop on/off")).invoke_accessible_default_action();
             assert!(engine.snapshot(active).loop_active);
             hot_cue(); // Persist a cue while the other deck is waiting on its picker.
             let path = engine.snapshot(active).path.unwrap();
@@ -3549,7 +3612,7 @@ mod tests {
         control(&ui, "DECK A loop out").invoke_accessible_default_action();
         assert!(ui.get_left_loop_ready());
         assert!(!ui.get_left_loop_active());
-        control(&ui, "DECK A activate loop").invoke_accessible_default_action();
+        control(&ui, "DECK A loop on/off").invoke_accessible_default_action();
         assert!(ui.get_left_loop_active());
         assert!(!engine.snapshot(DeckId::A).playing);
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(2));
@@ -3571,7 +3634,7 @@ mod tests {
         c.tick();
         assert_eq!(engine.snapshot(DeckId::A).position, paused);
         assert!(ui.get_left_loop_active());
-        control(&ui, "DECK A exit loop").invoke_accessible_default_action();
+        control(&ui, "DECK A loop on/off").invoke_accessible_default_action();
         assert!(!ui.get_left_loop_active());
         assert!(ui.get_left_loop_ready());
         assert!(!engine.snapshot(DeckId::A).playing);
@@ -4718,7 +4781,7 @@ mod tests {
                             <= shared.absolute_position().y
                     );
                 }
-                for action in ["loop in", "loop out", "activate loop", "exit loop"] {
+                for action in ["loop in", "loop out", "loop on/off", "reloop"] {
                     let button = control(&ui, &format!("{deck} {action}"));
                     assert!(button.size().width > 0. && button.size().height > 0.);
                     assert!(button.absolute_position().x >= 0.);

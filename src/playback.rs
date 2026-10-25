@@ -202,12 +202,12 @@ struct RetiredTrack {
 }
 impl Deck {
     fn playing(&self) -> bool {
-        !self.sink.is_paused()
-            && self
-                .track
-                .as_ref()
-                .zip(self.render.as_ref())
-                .is_some_and(|(track, render)| render.position() < track.duration())
+        self.track
+            .as_ref()
+            .zip(self.render.as_ref())
+            .is_some_and(|(track, render)| {
+                !render.is_paused() && render.position() < track.duration()
+            })
     }
 }
 // The queue starts with generic metadata. Expose the renderer's fixed device format
@@ -703,20 +703,28 @@ impl DualDeckEngine {
         Ok(())
     }
     pub fn activate_loop(&self, id: DeckId) -> Result<(), String> {
-        let (track, region, playing, grid) = {
-            let deck = self.decks[id.index()].borrow();
-            (
-                deck.track.clone().ok_or("Load a track first")?,
-                deck.loop_region.ok_or("Set valid Loop In/Out first")?,
-                deck.playing(),
-                deck.grid,
-            )
-        };
-        let mut source = track.samples.clone();
-        source.set_loop(region)?;
-        let offset = frame_time(region.start, source.sample_rate());
-        self.replace_source(id, track, source, offset, playing, grid);
-        self.decks[id.index()].borrow_mut().loop_active = true;
+        self.engage_loop(id, false)
+    }
+    pub fn reloop(&self, id: DeckId) -> Result<(), String> {
+        self.engage_loop(id, true)
+    }
+    fn engage_loop(&self, id: DeckId, restart: bool) -> Result<(), String> {
+        let mut deck = self.decks[id.index()].borrow_mut();
+        let track = deck.track.as_ref().ok_or("Load a track first")?;
+        let region = deck.loop_region.ok_or("Set valid Loop In/Out first")?;
+        let render = deck.render.as_ref().unwrap();
+        let frame = render.frame();
+        let target = (restart || frame < region.start || frame >= region.end).then(|| SeekFrame {
+            time: frame_time(region.start, track.samples.sample_rate()),
+            frame: region.start,
+        });
+        render.publish(
+            deck.speed.unwrap().output_rate().get(),
+            deck.playing(),
+            Some(region),
+            target,
+        );
+        deck.loop_active = true;
         Ok(())
     }
     pub fn exit_loop(&self, id: DeckId) -> Result<(), String> {
@@ -926,6 +934,60 @@ mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
     #[test]
+    fn loop_enable_preserves_inside_phase_reloop_restarts_and_both_preserve_transport() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let samples: Vec<i16> = (0..192000).map(|i| (i % 10000) as i16).collect();
+        let a = crate::test_support::wav_samples(&samples, 48000, 1);
+        let b = wav_file(4096, 192000);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            crossfader: 0.,
+            channel_a: 1.,
+            channel_b: 1.,
+        });
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        engine
+            .restore_loop(DeckId::A, Duration::from_secs(1), Duration::from_secs(3))
+            .unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(2))
+            .unwrap();
+        let before = engine.snapshot(DeckId::A).position;
+        let volumes = engine.output_volumes();
+        engine.activate_loop(DeckId::A).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, before);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!((output.next().unwrap() - 6000. / 32768.).abs() < 1e-6);
+        engine.reloop(DeckId::A).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+        assert!((output.next().unwrap() - 8000. / 32768.).abs() < 1e-6);
+        engine.pause(DeckId::A);
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(2250))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(2250)
+        );
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.reloop(DeckId::A).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.seek_percent(DeckId::A, 100.).unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        assert!(
+            !engine.snapshot(DeckId::A).playing,
+            "enabling at EOF must not resume"
+        );
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.output_volumes(), volumes);
+    }
+    #[test]
     fn pcm_decode_reserves_bounded_memory_and_shared_transfer_avoids_a_second_buffer() {
         let cancel = crate::cancellation::Cancellation::default();
         let mut source = None;
@@ -1059,7 +1121,7 @@ mod tests {
         engine
             .restore_loop(DeckId::A, Duration::ZERO, frame_time(8, 48000))
             .unwrap();
-        engine.activate_loop(DeckId::A).unwrap();
+        engine.reloop(DeckId::A).unwrap();
         for _ in 0..2 {
             output.next();
         }
@@ -1067,7 +1129,7 @@ mod tests {
         assert_eq!(engine.snapshot(DeckId::A).position, at_two);
         assert!((output.next().unwrap() - 0.002).abs() < 1e-8);
         engine.resize_loop(DeckId::A, true).unwrap();
-        engine.activate_loop(DeckId::A).unwrap();
+        engine.reloop(DeckId::A).unwrap();
         for _ in 0..6 {
             output.next();
         }
@@ -1083,7 +1145,7 @@ mod tests {
         engine
             .restore_loop(DeckId::A, Duration::ZERO, frame_time(128, 44100))
             .unwrap();
-        engine.activate_loop(DeckId::A).unwrap();
+        engine.reloop(DeckId::A).unwrap();
         engine.play(DeckId::A);
         for _ in 0..37 {
             output.next();

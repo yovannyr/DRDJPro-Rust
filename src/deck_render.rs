@@ -145,6 +145,9 @@ impl RenderControl {
         let region = self.read(None).and_then(|s| s.region);
         wrap_units(phase, region, self.format)
     }
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
     pub fn frame(&self) -> usize {
         (self.current_units() / u128::from(self.format.output_rate)) as usize
     }
