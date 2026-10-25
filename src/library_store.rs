@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 static STAGE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn default_path() -> Result<PathBuf, String> {
@@ -139,6 +139,7 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
         }
         tracks.push(SavedTrack {
             hot_cues: Default::default(),
+            saved_loops: Default::default(),
             grid: None,
             id: row.get(0)?,
             path,
@@ -181,6 +182,9 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     }
     if version >= 5 {
         read_hot_cues(connection, &mut tracks)?;
+    }
+    if version >= 6 {
+        read_saved_loops(connection, &mut tracks)?;
     }
     let crates = if version >= 3 {
         read_crates(connection)?
@@ -241,6 +245,85 @@ fn read_crates(connection: &Connection) -> Result<crate::crates::CrateCatalog, I
         catalog.entries[*index].tracks.insert(row.get(1)?);
     }
     Ok(catalog)
+}
+fn create_saved_loop_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "CREATE TABLE track_saved_loops(
+        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        slot INTEGER NOT NULL CHECK(slot>=0 AND slot<8),
+        start_ns INTEGER NOT NULL CHECK(start_ns>=0),
+        end_ns INTEGER NOT NULL CHECK(end_ns>start_ns AND end_ns<=604800000000000),
+        name TEXT NOT NULL CHECK(length(name)<=128), PRIMARY KEY(track_id,slot)) STRICT;",
+        )
+        .map_err(|e| e.to_string())
+}
+fn read_saved_loops(
+    connection: &Connection,
+    tracks: &mut [SavedTrack],
+) -> Result<(), InspectError> {
+    let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
+    let limit = library::MAX_TRACKS * crate::saved_loops::SLOT_COUNT;
+    let mut statement = connection
+        .prepare("SELECT track_id,slot,start_ns,end_ns,name FROM track_saved_loops LIMIT ?1")?;
+    let mut rows = statement.query([limit as i64 + 1])?;
+    let mut count = 0;
+    while let Some(row) = rows.next()? {
+        count += 1;
+        if count > limit {
+            return Err(InspectError::Damaged("Too many saved loops".into()));
+        }
+        let index = indices
+            .get(&row.get::<_, i32>(0)?)
+            .ok_or_else(|| InspectError::Damaged("Orphaned saved loop".into()))?;
+        let slot = usize::try_from(row.get::<_, i64>(1)?)
+            .map_err(|_| InspectError::Damaged("Negative loop slot".into()))?;
+        if tracks[*index]
+            .saved_loops
+            .slots()
+            .get(slot)
+            .is_some_and(Option::is_some)
+        {
+            return Err(InspectError::Damaged("Duplicate saved loop slot".into()));
+        }
+        let start = u64::try_from(row.get::<_, i64>(2)?)
+            .map_err(|_| InspectError::Damaged("Negative loop start".into()))?;
+        let end = u64::try_from(row.get::<_, i64>(3)?)
+            .map_err(|_| InspectError::Damaged("Negative loop end".into()))?;
+        let value = crate::saved_loops::SavedLoop::new(
+            Duration::from_nanos(start),
+            Duration::from_nanos(end),
+            row.get(4)?,
+        )
+        .map_err(InspectError::Damaged)?;
+        tracks[*index]
+            .saved_loops
+            .set(slot, Some(value))
+            .map_err(InspectError::Damaged)?;
+    }
+    Ok(())
+}
+fn write_saved_loops(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM track_saved_loops", [])
+        .map_err(|e| e.to_string())?;
+    let mut statement=connection.prepare("INSERT INTO track_saved_loops(track_id,slot,start_ns,end_ns,name) VALUES(?1,?2,?3,?4,?5)").map_err(|e|e.to_string())?;
+    for track in &catalog.tracks {
+        for (slot, value) in track.saved_loops.slots().iter().enumerate() {
+            if let Some(value) = value {
+                statement
+                    .execute(rusqlite::params![
+                        track.id,
+                        slot as i64,
+                        value.start().as_nanos() as i64,
+                        value.end().as_nanos() as i64,
+                        value.name()
+                    ])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
 }
 fn create_hot_cue_schema(connection: &Connection) -> Result<(), String> {
     connection
@@ -447,7 +530,8 @@ fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String
     }
     write_crates(connection, &catalog.crates)?;
     write_grids(connection, catalog)?;
-    write_hot_cues(connection, catalog)
+    write_hot_cues(connection, catalog)?;
+    write_saved_loops(connection, catalog)
 }
 fn create_metadata_schema(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("CREATE TABLE track_metadata(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
@@ -465,6 +549,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     create_crate_schema(&transaction)?;
     create_grid_schema(&transaction)?;
     create_hot_cue_schema(&transaction)?;
+    create_saved_loop_schema(&transaction)?;
     transaction
         .pragma_update(None, "application_id", APPLICATION_ID)
         .map_err(|e| e.to_string())?;
@@ -636,7 +721,10 @@ impl Store {
             if version < 4 {
                 create_grid_schema(&tx)?;
             }
-            create_hot_cue_schema(&tx)?;
+            if version < 5 {
+                create_hot_cue_schema(&tx)?;
+            }
+            create_saved_loop_schema(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
@@ -751,6 +839,7 @@ mod tests {
             crates: Default::default(),
             tracks: vec![SavedTrack {
                 hot_cues: Default::default(),
+                saved_loops: Default::default(),
                 id,
                 path,
                 metadata: Default::default(),
@@ -781,6 +870,7 @@ mod tests {
         let mut data = catalog(music.clone(), 27);
         data.tracks.push(SavedTrack {
             hot_cues: Default::default(),
+            saved_loops: Default::default(),
             id: 91,
             path: dir.path().join("missing.mp3"),
             metadata: Default::default(),
@@ -898,6 +988,7 @@ mod tests {
         let mut data = catalog(dir.path().join("first.wav"), 1);
         data.tracks.push(SavedTrack {
             hot_cues: Default::default(),
+            saved_loops: Default::default(),
             id: 0,
             path: dir.path().join("invalid.wav"),
             metadata: Default::default(),
@@ -928,6 +1019,7 @@ mod tests {
         let mut data = catalog(dir.path().join("second.wav"), 2);
         data.tracks.push(SavedTrack {
             hot_cues: Default::default(),
+            saved_loops: Default::default(),
             id: 3,
             path: dir.path().join("third.mp3"),
             metadata: Default::default(),
@@ -961,7 +1053,7 @@ mod tests {
             } else {
                 store
                     .connection
-                    .pragma_update(None, "user_version", 6)
+                    .pragma_update(None, "user_version", 7)
                     .unwrap();
             }
             drop(store);
@@ -1170,7 +1262,7 @@ mod tests {
             .connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         let meta = &library.visible()[0].metadata;
         assert_eq!(meta.title, "Old catalog title");
         assert_eq!(meta.artist, "Original artist");
@@ -1258,6 +1350,7 @@ mod tests {
         let mut data = catalog(dir.path().join("one.wav"), 1);
         data.tracks.push(SavedTrack {
             hot_cues: Default::default(),
+            saved_loops: Default::default(),
             id: 2,
             path: dir.path().join("two.wav"),
             metadata: Default::default(),
@@ -1302,7 +1395,7 @@ mod tests {
             store.save(&data).unwrap();
             drop(store);
             let connection = connect(&db, false).unwrap();
-            connection.execute_batch("DROP TABLE track_hot_cues; DROP TABLE track_grids; DROP TABLE crate_tracks; DROP TABLE crates; DELETE FROM library_meta WHERE key='last_crate_id'; PRAGMA user_version=2;").unwrap();
+            connection.execute_batch("DROP TABLE track_saved_loops; DROP TABLE track_hot_cues; DROP TABLE track_grids; DROP TABLE crate_tracks; DROP TABLE crates; DELETE FROM library_meta WHERE key='last_crate_id'; PRAGMA user_version=2;").unwrap();
             if fail {
                 connection
                     .execute_batch(
@@ -1343,7 +1436,7 @@ mod tests {
                         .connection
                         .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                         .unwrap(),
-                    5
+                    6
                 );
             }
         }
@@ -1422,7 +1515,7 @@ mod tests {
             let connection = connect(&db, false).unwrap();
             connection
                 .execute_batch(
-                    "DROP TABLE track_hot_cues; DROP TABLE track_grids; PRAGMA user_version=3;",
+                    "DROP TABLE track_saved_loops; DROP TABLE track_hot_cues; DROP TABLE track_grids; PRAGMA user_version=3;",
                 )
                 .unwrap();
             if fail {
@@ -1461,7 +1554,7 @@ mod tests {
                         .connection
                         .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                         .unwrap(),
-                    5
+                    6
                 );
             }
         }
@@ -1544,7 +1637,7 @@ mod tests {
             drop(store);
             let connection = connect(&db, false).unwrap();
             connection
-                .execute_batch("DROP TABLE track_hot_cues; PRAGMA user_version=4;")
+                .execute_batch("DROP TABLE track_saved_loops; DROP TABLE track_hot_cues; PRAGMA user_version=4;")
                 .unwrap();
             if fail {
                 connection.execute_batch("CREATE TABLE track_hot_cues(preserve INTEGER); INSERT INTO track_hot_cues VALUES(99);").unwrap();
@@ -1577,7 +1670,7 @@ mod tests {
                         .connection
                         .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                         .unwrap(),
-                    5
+                    6
                 );
                 let saved = library.catalog();
                 assert_eq!(saved.tracks[0].grid, Some(grid));
@@ -1606,6 +1699,188 @@ mod tests {
             store
                 .connection
                 .execute_batch(&format!("INSERT INTO track_hot_cues VALUES({values})"))
+                .unwrap();
+            assert!(matches!(
+                inspect(&store.connection),
+                Err(InspectError::Damaged(_))
+            ));
+        }
+    }
+    #[test]
+    fn saved_loop_restart_clear_and_failed_save_roll_back_all_track_data() {
+        use crate::saved_loops::SavedLoop;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        let value = SavedLoop::new(
+            Duration::new(1, 123456789),
+            Duration::new(4, 987654321),
+            "繰り返し 🎵".into(),
+        )
+        .unwrap();
+        data.tracks[0]
+            .saved_loops
+            .set(0, Some(value.clone()))
+            .unwrap();
+        data.tracks[0]
+            .saved_loops
+            .set(7, Some(value.clone()))
+            .unwrap();
+        let cue =
+            crate::hot_cues::HotCue::new(Duration::ZERO, "Keep cue".into(), 0x123456).unwrap();
+        data.tracks[0].hot_cues.set(1, Some(cue.clone())).unwrap();
+        let grid = crate::beatgrid::BeatGrid::new(123.45, Duration::from_nanos(123)).unwrap();
+        data.tracks[0].grid = Some(grid);
+        let id = data.crates.create("Keep crate").unwrap();
+        data.crates.add(id, 27).unwrap();
+        store.save(&data).unwrap();
+        drop(store);
+        let (mut store, library, _) = Store::open(db.clone()).unwrap();
+        let mut data = library.catalog();
+        assert_eq!(data.tracks[0].id, 27);
+        assert_eq!(data.tracks[0].saved_loops.slots()[0], Some(value.clone()));
+        assert_eq!(data.tracks[0].saved_loops.slots()[7], Some(value.clone()));
+        assert!(data.tracks[0].saved_loops.slots()[1..7]
+            .iter()
+            .all(Option::is_none));
+        assert!(!serde_json::to_string(&data)
+            .unwrap()
+            .contains("saved_loops"));
+        store.connection.execute_batch("CREATE TRIGGER fail_loop BEFORE INSERT ON track_saved_loops BEGIN SELECT RAISE(ABORT,'loop write failure'); END;").unwrap();
+        data.tracks[0].saved_loops.set(0, None).unwrap();
+        data.tracks[0].metadata.title = "Changed".into();
+        data.tracks[0].grid = None;
+        data.tracks[0].hot_cues.set(1, None).unwrap();
+        data.crates.rename(id, "Changed").unwrap();
+        assert!(store
+            .save(&data)
+            .unwrap_err()
+            .contains("loop write failure"));
+        let saved = inspect(&store.connection).unwrap().unwrap();
+        assert_eq!(saved.tracks[0].saved_loops.slots()[0], Some(value.clone()));
+        assert_eq!(saved.tracks[0].metadata.title, "");
+        assert_eq!(saved.tracks[0].grid, Some(grid));
+        assert_eq!(saved.tracks[0].hot_cues.slots()[1], Some(cue));
+        assert_eq!(saved.crates.entries[0].name, "Keep crate");
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_loop")
+            .unwrap();
+        store.save(&data).unwrap();
+        drop(store);
+        let (mut store, library, _) = Store::open(db).unwrap();
+        let mut data = library.catalog();
+        assert!(data.tracks[0].saved_loops.slots()[0].is_none());
+        assert_eq!(data.tracks[0].saved_loops.slots()[7], Some(value));
+        assert_eq!(data.tracks[0].metadata.title, "Changed");
+        assert!(data.tracks[0].grid.is_none());
+        assert!(data.tracks[0].hot_cues.slots()[1].is_none());
+        assert_eq!(data.crates.entries[0].name, "Changed");
+        data.tracks.clear();
+        data.crates.entries[0].tracks.clear();
+        store.save(&data).unwrap();
+        assert_eq!(
+            store
+                .connection
+                .query_row("SELECT count(*) FROM track_saved_loops", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn schema_five_saved_loop_upgrade_and_failure_preserve_cues_grid_and_crates() {
+        for fail in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            let mut data = catalog(dir.path().join("missing.wav"), 9);
+            data.tracks[0].metadata.title = "Keep".into();
+            data.tracks[0].metadata.scanned = true;
+            let cue = crate::hot_cues::HotCue::new(
+                Duration::from_nanos(123),
+                "Keep cue".into(),
+                0x123456,
+            )
+            .unwrap();
+            data.tracks[0].hot_cues.set(7, Some(cue.clone())).unwrap();
+            let grid = crate::beatgrid::BeatGrid::new(123.45, Duration::from_nanos(123)).unwrap();
+            data.tracks[0].grid = Some(grid);
+            let id = data.crates.create("Keep crate").unwrap();
+            data.crates.add(id, 9).unwrap();
+            store.save(&data).unwrap();
+            drop(store);
+            let connection = connect(&db, false).unwrap();
+            connection
+                .execute_batch("DROP TABLE track_saved_loops; PRAGMA user_version=5;")
+                .unwrap();
+            if fail {
+                connection.execute_batch("CREATE TABLE track_saved_loops(preserve INTEGER); INSERT INTO track_saved_loops VALUES(99);").unwrap();
+            }
+            drop(connection);
+            let saved = if fail {
+                assert!(Store::open(db.clone()).is_err());
+                let connection = connect(&db, false).unwrap();
+                assert_eq!(
+                    connection
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                        .unwrap(),
+                    5
+                );
+                assert_eq!(
+                    connection
+                        .query_row("SELECT preserve FROM track_saved_loops", [], |r| r
+                            .get::<_, i32>(0))
+                        .unwrap(),
+                    99
+                );
+                inspect(&connection).unwrap().unwrap()
+            } else {
+                let (store, library, _) = Store::open(db).unwrap();
+                assert_eq!(
+                    store
+                        .connection
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+                        .unwrap(),
+                    6
+                );
+                library.catalog()
+            };
+            assert_eq!(saved.tracks[0].id, 9);
+            assert_eq!(saved.tracks[0].metadata.title, "Keep");
+            assert_eq!(saved.tracks[0].grid, Some(grid));
+            assert_eq!(saved.tracks[0].hot_cues.slots()[7], Some(cue));
+            assert_eq!(saved.crates.entries[0].tracks, HashSet::from([9]));
+            assert!(saved.tracks[0]
+                .saved_loops
+                .slots()
+                .iter()
+                .all(Option::is_none));
+        }
+    }
+    #[test]
+    fn invalid_orphaned_and_duplicate_saved_loop_rows_are_rejected() {
+        for values in [
+            "(99,0,0,1,'')",
+            "(1,8,0,1,'')",
+            "(1,-1,0,1,'')",
+            "(1,0,-1,1,'')",
+            "(1,0,1,1,'')",
+            "(1,0,2,1,'')",
+            "(1,0,0,604800000000001,'')",
+            "(1,0,0,1,'bad'||char(10))",
+            "(1,0,0,1,''),(1,0,0,2,'duplicate')",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+            store
+                .save(&catalog(dir.path().join("missing.wav"), 1))
+                .unwrap();
+            store.connection.execute_batch("DROP TABLE track_saved_loops; CREATE TABLE track_saved_loops(track_id INTEGER,slot INTEGER,start_ns INTEGER,end_ns INTEGER,name TEXT) STRICT;").unwrap();
+            store
+                .connection
+                .execute_batch(&format!("INSERT INTO track_saved_loops VALUES{values}"))
                 .unwrap();
             assert!(matches!(
                 inspect(&store.connection),

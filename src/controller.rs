@@ -63,6 +63,7 @@ pub struct AudioController {
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
+    displayed_loops: RefCell<[Option<crate::saved_loops::SavedLoops>; 2]>,
     displayed_cues: RefCell<[Option<(crate::hot_cues::HotCues, std::time::Duration)>; 2]>,
     displayed_overviews: RefCell<[Option<Arc<[f32]>>; 2]>,
     displayed_details: RefCell<[Option<DetailCache>; 2]>,
@@ -94,6 +95,7 @@ impl AudioController {
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
             pending: RefCell::new(None),
+            displayed_loops: RefCell::new([None, None]),
             displayed_cues: RefCell::new([None, None]),
             displayed_overviews: RefCell::new([None, None]),
             displayed_details: RefCell::new([None, None]),
@@ -238,6 +240,7 @@ impl AudioController {
         controller.wire_grid_editor(ui);
         controller.wire_hot_cues(ui);
         controller.wire_loops(ui);
+        controller.wire_saved_loops(ui);
         controller.refresh();
         controller
     }
@@ -449,6 +452,95 @@ impl AudioController {
             DeckId::B => ui.get_right_grid_draft_bpm(),
         }
         .to_string()
+    }
+    fn change_saved_loop(&self, id: DeckId, command: usize) -> Result<String, String> {
+        if !self.can_change_crates() {
+            return Err("Finish loading before using saved loops".into());
+        }
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let (slot, name) = match id {
+            DeckId::A => (ui.get_left_saved_loop_slot(), ui.get_left_saved_loop_name()),
+            DeckId::B => (
+                ui.get_right_saved_loop_slot(),
+                ui.get_right_saved_loop_name(),
+            ),
+        };
+        let slot = slot
+            .checked_sub(1)
+            .and_then(|slot| usize::try_from(slot).ok())
+            .filter(|slot| *slot < crate::saved_loops::SLOT_COUNT)
+            .ok_or("Loop slot must be 1 through 8")?;
+        let snapshot = self.engine.snapshot(id);
+        let path = snapshot.path.ok_or("Load a track first")?;
+        let saved = self.library.borrow().saved_loops(&path);
+        let value = match command {
+            0 => {
+                if saved.slots()[slot].is_some() {
+                    return Err(
+                        "Slot occupied; delete it explicitly before saving a replacement".into(),
+                    );
+                }
+                let start = snapshot.loop_in.ok_or("Set Loop In first")?;
+                let end = snapshot.loop_out.ok_or("Set Loop Out first")?;
+                let name = if name.is_empty() {
+                    format!("Loop {}", slot + 1)
+                } else {
+                    name.to_string()
+                };
+                Some(crate::saved_loops::SavedLoop::new(start, end, name)?)
+            }
+            1 => {
+                let value = saved.slots()[slot]
+                    .as_ref()
+                    .ok_or("Saved loop slot is empty")?;
+                self.engine.restore_loop(id, value.start(), value.end())?;
+                return Ok("Saved boundaries loaded; press LOOP to activate".into());
+            }
+            _ => {
+                if saved.slots()[slot].is_none() {
+                    return Err("Saved loop slot is empty".into());
+                }
+                None
+            }
+        };
+        self.library.borrow_mut().insert([path.to_path_buf()]);
+        self.library
+            .borrow_mut()
+            .set_saved_loop(&path, slot, value)?;
+        self.library_changed();
+        self.publish_library();
+        Ok(if self.persistence.borrow().is_some() {
+            "Saved loop updated; save queued"
+        } else {
+            "Saved loop updated for this session only"
+        }
+        .into())
+    }
+    fn wire_saved_loops(self: &Rc<Self>, ui: &AppWindow) {
+        for id in [DeckId::A, DeckId::B] {
+            for command in 0..3 {
+                let weak = Rc::downgrade(self);
+                let action = move || {
+                    if let Some(c) = weak.upgrade() {
+                        let result = c.change_saved_loop(id, command);
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(
+                                format!("Deck {id:?}: {}", result.unwrap_or_else(|e| e)).into(),
+                            );
+                        }
+                        c.refresh();
+                    }
+                };
+                match (id, command) {
+                    (DeckId::A, 0) => ui.on_save_loop_left(action),
+                    (DeckId::B, 0) => ui.on_save_loop_right(action),
+                    (DeckId::A, 1) => ui.on_recall_loop_left(action),
+                    (DeckId::B, 1) => ui.on_recall_loop_right(action),
+                    (DeckId::A, _) => ui.on_delete_loop_left(action),
+                    (DeckId::B, _) => ui.on_delete_loop_right(action),
+                }
+            }
+        }
     }
     fn wire_loops(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
@@ -1307,6 +1399,38 @@ impl AudioController {
                     ui.set_right_loop_active(s.loop_active);
                 }
             }
+            let loops = s
+                .path
+                .as_ref()
+                .map(|path| self.library.borrow().saved_loops(path))
+                .unwrap_or_default();
+            if self.displayed_loops.borrow()[index].as_ref() != Some(&loops) {
+                let rows = loops
+                    .slots()
+                    .iter()
+                    .map(|value| crate::SavedLoopRow {
+                        occupied: value.is_some(),
+                        description: value
+                            .as_ref()
+                            .map(|v| {
+                                format!(
+                                    "{} · {:.3}–{:.3} s",
+                                    v.name(),
+                                    v.start().as_secs_f64(),
+                                    v.end().as_secs_f64()
+                                )
+                            })
+                            .unwrap_or_else(|| "Empty slot".into())
+                            .into(),
+                    })
+                    .collect::<Vec<_>>();
+                let model = ModelRc::new(Rc::new(VecModel::from(rows)));
+                match id {
+                    DeckId::A => ui.set_left_saved_loops(model),
+                    DeckId::B => ui.set_right_saved_loops(model),
+                }
+                self.displayed_loops.borrow_mut()[index] = Some(loops);
+            }
             let cues = s
                 .path
                 .as_ref()
@@ -1389,6 +1513,10 @@ impl AudioController {
                 _ => true,
             };
             if changed {
+                match id {
+                    DeckId::A => ui.set_left_saved_loop_name("".into()),
+                    DeckId::B => ui.set_right_saved_loop_name("".into()),
+                }
                 let peaks = s.overview.as_ref().map_or_else(Vec::new, |v| v.to_vec());
                 let model = ModelRc::new(Rc::new(VecModel::from(peaks)));
                 let colors = s
@@ -1584,6 +1712,153 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn saved_loop_gui_save_recall_delete_shared_identity_bounds_and_restart() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let file = wav_file(8192, 48_000 * 8);
+        let other = wav_file(4096, 48_000 * 8);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        ui.show().unwrap();
+        control(&ui, "DECK A saved loops panel").invoke_accessible_default_action();
+        control(&ui, "DECK B saved loops panel").invoke_accessible_default_action();
+        ui.invoke_save_loop_left();
+        assert!(ui.get_status().contains("In"));
+        engine.seek_percent(DeckId::A, 25.).unwrap();
+        ui.invoke_loop_in_left();
+        engine.seek_percent(DeckId::A, 50.).unwrap();
+        ui.invoke_loop_out_left();
+        control(&ui, "DECK A saved loop name").set_accessible_value("繰り返し 🎵");
+        control(&ui, "DECK A save loop slot").invoke_accessible_default_action();
+        finish_storage(&c);
+        assert!(ui.get_right_saved_loops().row_data(0).unwrap().occupied);
+        assert!(ui
+            .get_right_saved_loops()
+            .row_data(0)
+            .unwrap()
+            .description
+            .contains("繰り返し 🎵"));
+        let path = engine.snapshot(DeckId::A).path.unwrap();
+        let saved = c.library.borrow().saved_loops(&path);
+        ui.invoke_save_loop_left();
+        assert!(ui.get_status().contains("occupied"));
+        assert_eq!(c.library.borrow().saved_loops(&path), saved);
+        let volumes = engine.output_volumes();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let position = engine.snapshot(DeckId::B).position;
+        control(&ui, "DECK B recall loop slot").invoke_accessible_default_action();
+        assert_eq!(
+            engine.snapshot(DeckId::B).loop_in,
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            engine.snapshot(DeckId::B).loop_out,
+            Some(Duration::from_secs(4))
+        );
+        assert!(!engine.snapshot(DeckId::B).loop_active);
+        assert_eq!(engine.snapshot(DeckId::B).position, position);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(!c.dirty.get());
+        ui.invoke_loop_activate_right();
+        assert!(engine.snapshot(DeckId::B).loop_active);
+        for (slot, start, end) in [
+            (1, Duration::ZERO, Duration::from_secs(9)),
+            (2, Duration::from_nanos(1), Duration::from_nanos(2)),
+        ] {
+            c.library
+                .borrow_mut()
+                .set_saved_loop(
+                    &path,
+                    slot,
+                    Some(
+                        crate::saved_loops::SavedLoop::new(start, end, "Invalid for source".into())
+                            .unwrap(),
+                    ),
+                )
+                .unwrap();
+            c.library_changed();
+            c.refresh();
+            ui.set_right_saved_loop_slot(slot as i32 + 1);
+            let before = engine.snapshot(DeckId::B);
+            ui.invoke_recall_loop_right();
+            let after = engine.snapshot(DeckId::B);
+            assert_eq!(after.loop_in, before.loop_in);
+            assert_eq!(after.loop_out, before.loop_out);
+            assert_eq!(after.position, before.position);
+            assert!(after.loop_active);
+            assert!(after.playing);
+        }
+        ui.set_right_saved_loop_slot(i32::MIN);
+        assert!(c.change_saved_loop(DeckId::B, 1).is_err());
+        ui.set_right_saved_loop_slot(1);
+        c.storage_ready.set(false);
+        assert!(c.change_saved_loop(DeckId::B, 2).is_err());
+        c.storage_ready.set(true);
+        control(&ui, "DECK B delete loop slot").invoke_accessible_default_action();
+        finish_storage(&c);
+        assert!(!ui.get_left_saved_loops().row_data(0).unwrap().occupied);
+        assert!(engine.snapshot(DeckId::B).loop_active);
+        ui.invoke_save_loop_right();
+        finish_storage(&c);
+        assert!(ui.get_left_saved_loops().row_data(0).unwrap().occupied);
+        engine.pause(DeckId::A);
+        engine.load_a(other.path()).unwrap();
+        c.tick();
+        assert!(!ui.get_left_saved_loops().row_data(0).unwrap().occupied);
+        assert_eq!(ui.get_left_saved_loop_name(), "");
+        assert_eq!(engine.output_volumes(), volumes);
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output2) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        assert!(ui.get_left_saved_loops().row_data(0).unwrap().occupied);
+        assert!(!engine.snapshot(DeckId::A).loop_active);
+        ui.invoke_recall_loop_left();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_secs(2))
+        );
+        ui.invoke_delete_loop_left();
+        c.close_library().unwrap();
+        drop(c);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        assert!(!ui.get_left_saved_loops().row_data(0).unwrap().occupied);
+        c.close_library().unwrap();
     }
     #[test]
     fn manual_loop_gui_controls_state_transport_and_replacement_are_isolated() {
@@ -2043,6 +2318,7 @@ mod tests {
             crates: Default::default(),
             tracks: vec![crate::library::SavedTrack {
                 hot_cues: Default::default(),
+                saved_loops: Default::default(),
                 id: 73,
                 path: fixture(),
                 metadata: Default::default(),
@@ -2642,6 +2918,25 @@ mod tests {
                             <= shared.absolute_position().y
                     );
                 }
+                control(&ui, &format!("{deck} saved loops panel"))
+                    .invoke_accessible_default_action();
+                for action in [
+                    "saved loop slot",
+                    "saved loop name",
+                    "save loop slot",
+                    "recall loop slot",
+                    "delete loop slot",
+                ] {
+                    let button = control(&ui, &format!("{deck} {action}"));
+                    assert!(button.absolute_position().x >= 0.);
+                    assert!(button.absolute_position().x + button.size().width <= width + 0.1);
+                    assert!(
+                        button.absolute_position().y + button.size().height
+                            <= shared.absolute_position().y
+                    );
+                }
+                control(&ui, &format!("{deck} saved loops panel"))
+                    .invoke_accessible_default_action();
                 let delete = control(&ui, &format!("{deck} delete hot cue"));
                 assert!(
                     delete.absolute_position().y + delete.size().height

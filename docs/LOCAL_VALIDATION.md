@@ -370,3 +370,44 @@ After the final source/test change:
 The new headless regression invokes actual accessible IN/OUT/LOOP/EXIT, transport and seek controls. It checks disabled/unloaded states, equal-boundary errors, paused activation, real offline playback wrapping, true snapshot-derived status, pause-position preservation, paused Exit retaining boundaries, seek/Cue deactivation, failed-load retention, successful replacement reset, callback loading guards, unchanged Sink volumes and other-deck playback, and no catalog dirty state from transient loop commands. Existing two-size workspace regression now checks loop control geometry at 850x740 and 1280x860 alongside pads, waveforms and library/status. Existing source-allocation, engine, hot-cue, grid and SQLite rollback/recovery tests remain green.
 
 Tests used temporary/offline media; no personal catalog/reference assets changed. No visual/native-dialog, listening, physical latency, hardware, long-run or cross-platform acceptance is claimed. The 260 px deck allocation is headless-tested structurally; native usability remains open. Saved-loop persistence, beat-length auto-loops/quantization and controller feedback remain open. Plan checkboxes were updated; next proposed reviewed slice is durable saved-loop data, followed by saved-slot GUI integration. The new GUI work remains local and uncommitted.
+
+## Saved-loop data foundation — local verification (2026-10-25)
+
+The user requested commit/push and continuation. Manual-loop GUI work was published as 1fb3e91; remote main was verified at that SHA. This bounded slice adds saved_loops.rs with private validated In/Out/name fields and eight fixed slots, library restore/snapshot preservation and SQLite schema 6. No GUI/audio callback/engine/dependency behavior changed; the only controller edit initializes the new field in an existing fixture. Saved loop data does not activate a deck or persist its session state.
+
+After the final source/test change, cargo fmt --check and cargo clippy --all-targets -- -D warnings passed without warnings; cargo test passed 96 tests (0 failed/ignored) in 10.43 s. Four added tests cover positive bounded interval/name/slot validation and sparse identity; missing-file restart preserving exact nanoseconds/Unicode names, clear and track deletion; injected loop-write failure rolling back metadata/hot cues/grid/crates/loop changes together followed by retry; schema-5 success/failure preserving prior data/version; and invalid/orphaned/duplicate row rejection (restart/rollback are combined in one test). Existing schema-1–4 upgrade fixtures were updated to the new current schema and remain green; future-version preservation now uses schema 7. Existing process-abort/integrity, headless GUI and engine tests remain green.
+
+All storage/media fixtures were temporary; the personal catalog was not migrated by tests. The eight-slot bound is a scoped product choice, not an external compatibility claim or scale benchmark. Stored time intervals are independent of the currently loaded sample rate: the following engine/GUI recall slice must reject positions outside decoded duration or intervals collapsing to zero complete frames, leaving prior playback intact. No visual/listening/device-latency/hardware/cross-platform acceptance is claimed. The next proposed reviewed slice is saved-slot GUI Save/Recall/Delete. Changes remain local and uncommitted; plan checkboxes were updated.
+
+Final cargo build --release passed in 50.82 s. Rebuilt executable MP3 analysis passed: 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592. git diff --check passed with a line-ending notice only.
+
+## Saved-loop GUI — local verification (2026-10-25)
+
+The user authorized continuing from the local 96-test schema-6 data foundation, which was retained. This bounded slice adds a per-deck SLOTS switch to select 1–8, enter an optional name, Save current valid boundaries into an empty slot, Recall stored inactive boundaries, and Delete slot metadata. Stored descriptions show name/In/Out; same-path decks share library changes while active engine loops remain independent. Occupied slots reject overwrite until explicit deletion. Recall does not dirty the catalog and never auto-activates: LOOP is separate. Schema 6 and existing durability/footer/close handling are reused; no dependency or sample callback changed.
+
+The engine restore_loop method validates the entire duration/frame region before mutating anything. Invalid out-of-source or zero-complete-frame saved loops retain prior playback/bounds/active state and cached metadata. Successful recall preserves Play/Pause and position while exiting any previous active loop before installing inactive bounds. EOF snapshot Out is clamped to decoded duration so integer-nanosecond rounding cannot reject its own saved endpoint. Name input resets after prepared-source replacement.
+
+The initial all-visible-row design failed two small-window layout regressions. Reusing the cue-pad/editor region through SLOTS, keeping deck height 260 px, and bounding the name-input width resolved the failures. Tests now switch and inspect both panels at both window sizes. A Slint width/min-width conflict during that correction was removed before the final green run.
+
+After the final source/UI/test change, all commands completed with exit code 0:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 98 passed, 0 failed, 0 ignored; 10.20 s |
+| `cargo build --release` | Passed; 40.35 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; line-ending notices only |
+
+Two added tests cover actual accessible SLOTS/slot/name/Save/Recall/Delete actions, Unicode names and shared-track descriptions, occupied-target protection, playing/paused inactive recall, invalid duration/subframe intervals retaining active state, invalid slot/loading rejection, deletion preserving active engine loops, different-source reset, Sink-volume preservation, fresh controller/engine/storage restart and second restart confirming durable deletion. Engine coverage adds atomic saved-bound validation and fractional-duration EOF round trip. Existing two-size layout regression inspects both panel modes at 850x740 and 1280x860. All existing audio/source-allocation, loop, cue, grid and storage recovery/migration regressions remain green.
+
+Fixtures used temporary media/profiles; no personal catalog/reference assets changed. No native visual/dialog, listening, physical trigger-latency, hardware or cross-platform acceptance is claimed. Rename/replace drafts, auto-loop lengths, quantization and loop waveform overlays remain open. The plan checklist now marks the saved-slot GUI complete; next proposed reviewed slice is beat-based auto-loops and half/double operations using the explicit manual grid. Saved-loop data and GUI work remain local and uncommitted after published 1fb3e91.
+
+## Independent review/publication gate (2026-10-25)
+
+The user explicitly selected reviewer model gpt-6-astra, reasoning effort medium (GPT-6 Astra · Mittel), and requested this workflow for future development tasks. Persisted in global/repository AGENTS.md and user memory: bounded implementation, independent review, fixes/final checks, commit/push, then next planned slice with progress reports.
+
+Independent sub-agent saved_loop_review reviewed the entire saved-loop data/GUI diff against 1fb3e91 read-only and reported no blocking findings. It separately ran cargo test saved (7 passed), cargo test (98 passed) and git diff --check (exit 0). It confirmed atomic invalid recall, EOF round trip, shared library/deck ownership, migration/rollback and loading/overwrite guards. No reviewer edits were made. Native visuals, keyboard/focus, listening/physical latency and scale performance remain outside that review's evidence.
+
+Final author gate after review: cargo fmt --check, cargo clippy --all-targets -- -D warnings, cargo test (98 passed, 0 failed/ignored; 7.89 s) and cargo build --release (0.66 s cached) all passed. The slice is accepted for publication; the next implementation slice is beat-based auto-loops and half/double operations.

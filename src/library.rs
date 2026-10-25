@@ -25,6 +25,8 @@ pub struct SavedTrack {
     pub grid: Option<crate::beatgrid::BeatGrid>,
     #[serde(skip)]
     pub hot_cues: crate::hot_cues::HotCues,
+    #[serde(skip)]
+    pub saved_loops: crate::saved_loops::SavedLoops,
 }
 impl Catalog {
     pub fn validate(&self) -> Result<(), String> {
@@ -93,6 +95,7 @@ pub struct Track {
     pub metadata: crate::track_metadata::TrackMetadata,
     pub grid: Option<crate::beatgrid::BeatGrid>,
     pub hot_cues: crate::hot_cues::HotCues,
+    pub saved_loops: crate::saved_loops::SavedLoops,
 }
 impl Track {
     pub fn display_title(&self) -> &str {
@@ -120,6 +123,7 @@ impl Track {
             metadata: Default::default(),
             grid: None,
             hot_cues: Default::default(),
+            saved_loops: Default::default(),
         }
     }
 }
@@ -146,6 +150,25 @@ pub(crate) fn identity(path: &Path) -> PathBuf {
     }
 }
 impl Library {
+    pub fn saved_loops(&self, path: &Path) -> crate::saved_loops::SavedLoops {
+        self.keys
+            .get(&identity(path))
+            .map(|i| self.tracks[*i].saved_loops.clone())
+            .unwrap_or_default()
+    }
+    pub fn set_saved_loop(
+        &mut self,
+        path: &Path,
+        slot: usize,
+        value: Option<crate::saved_loops::SavedLoop>,
+    ) -> Result<(), String> {
+        let index = self
+            .keys
+            .get(&identity(path))
+            .ok_or("Track is not in the library")?;
+        self.tracks[*index].saved_loops.set(slot, value)
+    }
+
     pub fn hot_cues(&self, path: &Path) -> crate::hot_cues::HotCues {
         self.keys
             .get(&identity(path))
@@ -255,6 +278,7 @@ impl Library {
             track.metadata = metadata;
             track.grid = saved.grid;
             track.hot_cues = saved.hot_cues;
+            track.saved_loops = saved.saved_loops;
             library.tracks.push(track);
             library.last_id = library.last_id.max(saved.id);
         }
@@ -273,6 +297,7 @@ impl Library {
                     metadata: t.metadata.clone(),
                     grid: t.grid,
                     hot_cues: t.hot_cues.clone(),
+                    saved_loops: t.saved_loops.clone(),
                 })
                 .collect(),
         }

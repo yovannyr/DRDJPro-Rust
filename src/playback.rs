@@ -350,6 +350,31 @@ impl DualDeckEngine {
         self.decks[id.index()].borrow_mut().loop_region = Some(region);
         Ok(())
     }
+    /// Load saved boundaries atomically. Activation remains an explicit separate command.
+    pub fn restore_loop(&self, id: DeckId, start: Duration, end: Duration) -> Result<(), String> {
+        let region = {
+            let deck = self.decks[id.index()].borrow();
+            let track = deck.track.as_ref().ok_or("Load a track first")?;
+            if start >= end || start >= track.duration() || end > track.duration() {
+                return Err("Saved loop is outside the loaded track".into());
+            }
+            let end_frame = if end == track.duration() {
+                track.samples.frames()
+            } else {
+                frame_at(end, track.samples.sample_rate())
+            };
+            FrameLoop::new(
+                frame_at(start, track.samples.sample_rate()),
+                end_frame,
+                track.samples.frames(),
+            )?
+        };
+        self.exit_loop(id)?;
+        let mut deck = self.decks[id.index()].borrow_mut();
+        deck.loop_in = Some(region.start);
+        deck.loop_region = Some(region);
+        Ok(())
+    }
     pub fn activate_loop(&self, id: DeckId) -> Result<(), String> {
         let (track, region, playing, grid) = {
             let deck = self.decks[id.index()].borrow();
@@ -506,7 +531,7 @@ impl DualDeckEngine {
             }),
             loop_out: deck.track.as_ref().and_then(|t| {
                 deck.loop_region
-                    .map(|region| frame_time(region.end, t.samples.sample_rate()))
+                    .map(|region| frame_time(region.end, t.samples.sample_rate()).min(t.duration()))
             }),
             loop_active: deck.loop_active,
         }
@@ -556,6 +581,37 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn saved_bounds_validation_is_atomic_and_frame_aligned_eof_round_trips() {
+        let (mixer, _output) = rodio::mixer::mixer(1, 44100);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        assert!(engine
+            .restore_loop(DeckId::A, Duration::ZERO, Duration::from_secs(1))
+            .is_err());
+        let file = wav_file(8192, 44101);
+        engine.load_a(file.path()).unwrap();
+        let end = engine.snapshot(DeckId::A).duration;
+        engine.restore_loop(DeckId::A, Duration::ZERO, end).unwrap();
+        let saved = engine.snapshot(DeckId::A);
+        assert_eq!(saved.loop_out, Some(end));
+        engine
+            .restore_loop(DeckId::A, saved.loop_in.unwrap(), saved.loop_out.unwrap())
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.play(DeckId::A);
+        for (start, end) in [
+            (Duration::ZERO, end + Duration::from_nanos(1)),
+            (Duration::from_nanos(1), Duration::from_nanos(2)),
+            (end, Duration::ZERO),
+        ] {
+            assert!(engine.restore_loop(DeckId::A, start, end).is_err());
+            assert!(engine.snapshot(DeckId::A).loop_active);
+            assert_eq!(engine.snapshot(DeckId::A).loop_in, saved.loop_in);
+        }
+        engine.restore_loop(DeckId::A, Duration::ZERO, end).unwrap();
+        assert!(!engine.snapshot(DeckId::A).loop_active);
+        assert!(engine.snapshot(DeckId::A).playing);
+    }
     #[test]
     fn loop_lifecycle_offline_audio_position_exit_seek_and_track_replacement() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48_000);

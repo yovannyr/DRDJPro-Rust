@@ -11,6 +11,7 @@ mod library;
 mod library_store;
 mod looping;
 mod playback;
+mod saved_loops;
 mod tempo;
 #[cfg(test)]
 mod test_support;

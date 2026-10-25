@@ -1,4 +1,5 @@
 import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox } from "std-widgets.slint";
+export struct SavedLoopRow { occupied: bool, description: string }
 export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string }
 export struct CrateRow { id: int, name: string, count: int }
 export struct BeatLine { position: float, downbeat: bool, first: bool, bar: int }
@@ -76,6 +77,11 @@ component CompactDeck inherits Rectangle {
     in-out property <float> position;
     in property <[HotCueRow]> hot-cues;
     property <int> delete-slot: 1;
+    property <bool> show-saved-loops: false;
+    in property <[SavedLoopRow]> saved-loops;
+    in-out property <int> saved-loop-slot: 1;
+    in-out property <string> saved-loop-name;
+    callback save-loop(); callback recall-loop(); callback delete-loop();
     in property <string> loop-caption;
     in property <bool> loop-has-in;
     in property <bool> loop-ready;
@@ -108,7 +114,7 @@ component CompactDeck inherits Rectangle {
             Text { text: round(position) + "%"; color: accent; font-size: 11px; horizontal-alignment: right; }
         }
         Slider { minimum: 0; maximum: 100; value <=> position; accessible-label: deck-label + " position"; enabled: !audio-enabled || loaded; changed(value) => { if audio-enabled { root.seek(value); } } }
-        HorizontalLayout {
+        if !root.show-saved-loops : HorizontalLayout {
             spacing: 2px; height: 30px;
             for pad[i] in hot-cues : VerticalLayout {
                 spacing: 0px;
@@ -128,16 +134,26 @@ component CompactDeck inherits Rectangle {
             Button { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
             Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " activate loop"; enabled: loaded && !loading && loop-ready && !loop-active; clicked => { root.loop-activate(); } }
             Button { text: "EXIT"; accessible-label: root.deck-label + " exit loop"; enabled: loaded && !loading && loop-active; clicked => { root.loop-exit(); } }
-            Text { width: 110px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
+            Button { text: "SLOTS"; width: 48px; accessible-label: root.deck-label + " saved loops panel"; clicked => { root.show-saved-loops = !root.show-saved-loops; } }
+            Text { width: 64px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
         }
-        if !root.cue-editing : HorizontalLayout {
+        if root.show-saved-loops : HorizontalLayout {
+            height: 28px; spacing: 2px;
+            SpinBox { width: 64px; minimum: 1; maximum: 8; value <=> root.saved-loop-slot; accessible-label: root.deck-label + " saved loop slot"; }
+            LineEdit { width: 68px; text <=> root.saved-loop-name; placeholder-text: "Loop name"; accessible-label: root.deck-label + " saved loop name"; }
+            Button { text: "SAVE"; accessible-label: root.deck-label + " save loop slot"; enabled: loaded && !loading && loop-ready; clicked => { root.save-loop(); } }
+            Button { text: "RECALL"; accessible-label: root.deck-label + " recall loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.recall-loop(); } }
+            Button { text: "DELETE"; accessible-label: root.deck-label + " delete loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.delete-loop(); } }
+        }
+        if root.show-saved-loops : Text { height: 14px; text: root.saved-loop-slot >= 1 && root.saved-loop-slot <= root.saved-loops.length ? root.saved-loops[root.saved-loop-slot - 1].description : "Empty slot"; color: #a8b3c3; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " saved loop description"; }
+        if !root.cue-editing && !root.show-saved-loops : HorizontalLayout {
             height: 26px;
             Text { text: "SLOT"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
             SpinBox { minimum: 1; maximum: 8; value <=> root.delete-slot; accessible-label: deck-label + " delete hot cue slot"; }
             Button { text: "EDIT"; accessible-label: deck-label + " edit hot cue"; enabled: loaded && !loading; clicked => { root.edit-hot-cue(root.delete-slot - 1); } }
             Button { text: "DELETE"; accessible-label: deck-label + " delete hot cue"; enabled: loaded && !loading; clicked => { root.delete-hot-cue(root.delete-slot - 1); } }
         }
-        if root.cue-editing : HorizontalLayout {
+        if root.cue-editing && !root.show-saved-loops : HorizontalLayout {
             height: 26px; spacing: 2px;
             LineEdit { text <=> root.cue-name; accessible-label: root.deck-label + " cue name"; placeholder-text: "Cue name"; }
             LineEdit { width: 74px; text <=> root.cue-rgb; accessible-label: root.deck-label + " cue RGB"; placeholder-text: "RRGGBB"; }
@@ -378,6 +394,10 @@ export component AppWindow inherits Window {
     in-out property <float> left-position: 0;
     in-out property <float> right-position: 0;
     in property <[HotCueRow]> left-hot-cues;
+    in property <[SavedLoopRow]> left-saved-loops;
+    in-out property <int> left-saved-loop-slot: 1;
+    in-out property <string> left-saved-loop-name;
+    callback save-loop-left(); callback recall-loop-left(); callback delete-loop-left();
     in property <string> left-loop-caption;
     in property <bool> left-loop-has-in;
     in property <bool> left-loop-ready;
@@ -388,6 +408,10 @@ export component AppWindow inherits Window {
     in-out property <string> left-cue-rgb;
     callback edit-hot-cue-left(int); callback save-hot-cue-left(); callback cancel-hot-cue-left();
     in property <[HotCueRow]> right-hot-cues;
+    in property <[SavedLoopRow]> right-saved-loops;
+    in-out property <int> right-saved-loop-slot: 1;
+    in-out property <string> right-saved-loop-name;
+    callback save-loop-right(); callback recall-loop-right(); callback delete-loop-right();
     in property <string> right-loop-caption;
     in property <bool> right-loop-has-in;
     in property <bool> right-loop-ready;
@@ -461,6 +485,8 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
+                saved-loops: root.left-saved-loops; saved-loop-slot <=> root.left-saved-loop-slot; saved-loop-name <=> root.left-saved-loop-name;
+                save-loop => { root.save-loop-left(); } recall-loop => { root.recall-loop-left(); } delete-loop => { root.delete-loop-left(); }
                 loop-caption: root.left-loop-caption; loop-has-in: root.left-loop-has-in; loop-ready: root.left-loop-ready; loop-active: root.left-loop-active;
                 loop-in => { root.loop-in-left(); } loop-out => { root.loop-out-left(); } loop-activate => { root.loop-activate-left(); } loop-exit => { root.loop-exit-left(); }
                 hot-cues: root.left-hot-cues;
@@ -476,6 +502,8 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 waveform: root.right-waveform; colors: root.right-waveform-colors;
+                saved-loops: root.right-saved-loops; saved-loop-slot <=> root.right-saved-loop-slot; saved-loop-name <=> root.right-saved-loop-name;
+                save-loop => { root.save-loop-right(); } recall-loop => { root.recall-loop-right(); } delete-loop => { root.delete-loop-right(); }
                 loop-caption: root.right-loop-caption; loop-has-in: root.right-loop-has-in; loop-ready: root.right-loop-ready; loop-active: root.right-loop-active;
                 loop-in => { root.loop-in-right(); } loop-out => { root.loop-out-right(); } loop-activate => { root.loop-activate-right(); } loop-exit => { root.loop-exit-right(); }
                 hot-cues: root.right-hot-cues;

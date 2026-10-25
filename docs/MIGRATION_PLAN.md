@@ -28,15 +28,17 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 92 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 98 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Hot-Cue-Pads, Cue-Editor, Marker und manuelle Loop-Engine sind als `9a1c7b7` gepusht. Die anschließende Loop-GUI ist lokal implementiert und geprüft, aber noch uncommitted.
+Veröffentlichungsstand: Bis einschließlich manueller Loop-GUI ist `1fb3e91` gepusht. Die anschließende Saved-Loop-Datenbasis und Slot-GUI sind lokal implementiert und geprüft, aber noch uncommitted.
 
 ### Nächste und offene Arbeitspakete
 
 - [x] ✅ Manuelle Loop-Engine mit framegenauem In/Out, Aktivieren/Verlassen und deterministischen Offline-Tests.
 - [x] ✅ Loop-In/Out, Aktivieren/Verlassen und echte Loop-Zustandsanzeige in beiden Decks.
-- [ ] ☐ **Als Nächstes:** persistente gespeicherte Loops.
+- [x] ✅ Datenbasis für acht persistente Saved-Loop-Slots je Track mit validierten Grenzen/Namen und SQLite-Migration.
+- [x] ✅ Saved-Loop-Slots in der GUI speichern, abrufen und löschen, mit Quellvalidierung und Neustart-Tests.
+- [ ] ☐ **Als Nächstes:** beatbasierte Auto-Loop-Längen und Halbieren/Verdoppeln auf Basis des manuellen Grids.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -191,3 +193,17 @@ Acceptance includes deterministic stereo output over many wraps, one-frame loops
 The user requested commit/push and continuation. All preceding cue/UI/engine/documentation work was committed and pushed as 9a1c7b7; remote main was verified at that SHA. This bounded follow-up adds four manual-loop controls per deck and a caption derived from actual engine In/Out/active state. In/Out capture the current source position; activation preserves Play/Pause, and Exit preserves current loop phase. Controls/callbacks are guarded during loading/restore/import, with errors reported through status. No schema, dependency or audio-source callback behavior changed.
 
 A headless actual-control test covers unloaded/invalid boundaries, paused/playing activation, offline wrap, pause/exit, seek/Cue deactivation with retained bounds, failed/successful replacement, loading guards and other-deck/Sink-volume isolation. Two-size layout regression includes all loop controls. Native usability/visuals, listening and physical latency remain unqualified. Next proposed bounded slice after review: durable per-track saved loop slots and schema migration/restart/rollback tests, followed by saved-loop GUI integration. Auto-loop lengths/beat quantization and hardware feedback remain open. Current GUI changes remain local and uncommitted.
+
+## Saved-loop data foundation checkpoint (2026-10-25)
+
+The user requested commit/push and continuation. The manual loop GUI was published as 1fb3e91 and remote main verified at that SHA. This bounded slice adds eight fixed saved-loop slots per stable track identity, each with nanosecond In/Out and a Unicode name. The eight-slot limit is the explicit bounded implementation choice for this slice, not proof of external format compatibility. Schema 6 stores these independently of transient per-deck active-loop state. No playback activation, GUI, audio callback, dependency or tag-write behavior changed.
+
+Model validation requires In < Out within seven days, names up to 128 Unicode scalar characters without controls and slots 0–7. Schema 1–5 upgrades, restart/clear, malformed/orphaned/duplicate rows and atomic rollback/retry alongside metadata/cues/grid/crates are tested. Stored duration bounds are intentionally independent of sample rate; loading into the engine in the following slice must revalidate actual decoded duration and reject regions that collapse to zero frames. Next proposed reviewed slice: GUI saved-slot save/recall/delete and headless restart/source-duration tests. Auto-loop lengths, quantization, waveform overlays and hardware/visual/physical-audio acceptance remain open. Current data changes remain local/uncommitted.
+
+## Saved-loop GUI integration checkpoint (2026-10-25)
+
+The user authorized continuing after the 96-test data foundation. Per-deck SLOTS switches the cue-pad area to saved-loop slot/name/Save/Recall/Delete controls and a stored-name/bounds description, keeping the deck at 260 px. Save requires valid current manual boundaries and an empty target; occupied slots reject replacement until explicit deletion. Recall validates loaded duration and nonempty complete frames atomically, then loads inactive boundaries without seeking or starting playback; LOOP remains the activation command. Delete changes only persistent slot metadata, including while a deck loop remains active. Same-path decks share saved data; different tracks retain independent sets. No schema/dependency/audio callback change was needed.
+
+EOF bounds round-trip through snapshots without exceeding the decoded duration by fractional-nanosecond rounding. Tests cover source-invalid/subframe intervals retaining active loop/playback state, playing/paused recall, Unicode names, empty/occupied/invalid/loading cases, shared-track updates, fresh controller/engine/storage restart and deletion, and both panel layouts at 850x740 and 1280x860. Early layout tests caught overflow from adding rows; the switchable panel resolved it. Native visuals/listening/physical latency remain unqualified. Saved-loop data and GUI work remain local/uncommitted after published 1fb3e91.
+
+Next proposed reviewed slice: beat-based auto-loop lengths and half/double operations based on the explicitly defined manual grid, with integer-frame bounds and offline/headless tests. Quantization/beat snapping, loop waveform overlays, saved-slot rename/replace drafts, musical grid correctness and hardware feedback remain separate open requirements.
