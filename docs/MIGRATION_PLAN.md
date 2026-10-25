@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 98 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 101 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Bis einschließlich manueller Loop-GUI ist `1fb3e91` gepusht. Die anschließende Saved-Loop-Datenbasis und Slot-GUI sind lokal implementiert und geprüft, aber noch uncommitted.
+Veröffentlichungsstand: Saved-Loop-Datenbasis und Slot-GUI sind nach unabhängigem GPT-6-Astra-Mittel-Review als `7778eec` gepusht. Auto-Loops und Halbieren/Verdoppeln sind lokal implementiert; Review und Veröffentlichung folgen dem festgelegten Ablauf.
 
 ### Nächste und offene Arbeitspakete
 
@@ -38,7 +38,8 @@ Veröffentlichungsstand: Bis einschließlich manueller Loop-GUI ist `1fb3e91` ge
 - [x] ✅ Loop-In/Out, Aktivieren/Verlassen und echte Loop-Zustandsanzeige in beiden Decks.
 - [x] ✅ Datenbasis für acht persistente Saved-Loop-Slots je Track mit validierten Grenzen/Namen und SQLite-Migration.
 - [x] ✅ Saved-Loop-Slots in der GUI speichern, abrufen und löschen, mit Quellvalidierung und Neustart-Tests.
-- [ ] ☐ **Als Nächstes:** beatbasierte Auto-Loop-Längen und Halbieren/Verdoppeln auf Basis des manuellen Grids.
+- [x] ✅ Beatbasierte Auto-Loops (⅛–32 Beats) aus bestätigter manueller BPM und Halbieren/Verdoppeln bestehender Loop-Grenzen.
+- [ ] ☐ **Als Nächstes:** Loop-Bereichsmarkierungen in Übersicht und Detail-Waveform.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -207,3 +208,11 @@ The user authorized continuing after the 96-test data foundation. Per-deck SLOTS
 EOF bounds round-trip through snapshots without exceeding the decoded duration by fractional-nanosecond rounding. Tests cover source-invalid/subframe intervals retaining active loop/playback state, playing/paused recall, Unicode names, empty/occupied/invalid/loading cases, shared-track updates, fresh controller/engine/storage restart and deletion, and both panel layouts at 850x740 and 1280x860. Early layout tests caught overflow from adding rows; the switchable panel resolved it. Native visuals/listening/physical latency remain unqualified. Saved-loop data and GUI work remain local/uncommitted after published 1fb3e91.
 
 Next proposed reviewed slice: beat-based auto-loop lengths and half/double operations based on the explicitly defined manual grid, with integer-frame bounds and offline/headless tests. Quantization/beat snapping, loop waveform overlays, saved-slot rename/replace drafts, musical grid correctness and hardware feedback remain separate open requirements.
+
+## Auto-loop and resize checkpoint (2026-10-25)
+
+Following the new standing workflow, GPT-6 Astra (gpt-6-astra, medium) independently reviewed the saved-loop data/GUI slice without blocking findings; independent and final author tests passed before commit/push 7778eec. This next bounded slice adds 1/8, 1/4, 1/2, 1, 2, 4, 8, 16 and 32 beat auto-loops using the committed manual grid BPM. Start is the current decoded frame, not a snapped beat. Beat duration is rounded once to whole frames; the immutable source repeats that region without cumulative boundary drift. Creation activates at In preserving Play/Pause. Invalid/missing-grid/out-of-track requests leave playback and bounds unchanged.
+
+Half/double keeps In fixed and scales the existing integer-frame span. Halving uses integer floor (up to one frame discarded); a one-frame loop cannot be halved. Active resizing maps current source phase modulo the new span and preserves Play/Pause; inactive resizing only changes boundaries without seeking or activation. These operations also support manually defined loops and do not require a new grid. Saved slots are not rewritten; explicit Save can capture the resulting region.
+
+The deck tools switch now cycles CUES/SLOTS/AUTO within the same 260 px deck height. AUTO contains beat length, Auto Loop and half/double controls with actual committed-grid/loop/loading guards. Domain/offline/headless and three-panel two-size regressions verify behavior. No schema/dependency/audio callback change was needed. Native visuals/listening, beat snapping/quantization, musical grid correctness and physical timing remain unqualified. Next proposed bounded slice is visible loop ranges in overview/detail waveforms; name/replace drafts and controller feedback remain open. Publication requires the standing independent-review/final-check gate.

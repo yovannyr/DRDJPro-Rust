@@ -375,6 +375,75 @@ impl DualDeckEngine {
         deck.loop_region = Some(region);
         Ok(())
     }
+    pub fn auto_loop(&self, id: DeckId, eighths: u16) -> Result<(), String> {
+        let position = self.snapshot(id).position;
+        let region = {
+            let deck = self.decks[id.index()].borrow();
+            let track = deck.track.as_ref().ok_or("Load a track first")?;
+            let bpm = deck
+                .grid
+                .ok_or("Save a manual beatgrid before using Auto Loop")?
+                .bpm();
+            FrameLoop::from_beats(
+                frame_at(position, track.samples.sample_rate()),
+                eighths,
+                bpm,
+                track.samples.sample_rate(),
+                track.samples.frames(),
+            )?
+        };
+        let rate = self.decks[id.index()]
+            .borrow()
+            .track
+            .as_ref()
+            .unwrap()
+            .samples
+            .sample_rate();
+        self.apply_loop_region(id, region, true, frame_time(region.start, rate))
+    }
+    pub fn resize_loop(&self, id: DeckId, double: bool) -> Result<(), String> {
+        let position = self.snapshot(id).position;
+        let (region, active) = {
+            let deck = self.decks[id.index()].borrow();
+            let track = deck.track.as_ref().ok_or("Load a track first")?;
+            (
+                deck.loop_region
+                    .ok_or("Set Loop In/Out first")?
+                    .resized(double, track.samples.frames())?,
+                deck.loop_active,
+            )
+        };
+        self.apply_loop_region(id, region, active, position)
+    }
+    fn apply_loop_region(
+        &self,
+        id: DeckId,
+        region: FrameLoop,
+        active: bool,
+        position: Duration,
+    ) -> Result<(), String> {
+        if active {
+            let (track, playing, grid) = {
+                let deck = self.decks[id.index()].borrow();
+                (
+                    deck.track.clone().ok_or("Load a track first")?,
+                    !deck.sink.is_paused() && !deck.sink.empty(),
+                    deck.grid,
+                )
+            };
+            let mut source = track.samples.clone();
+            source.set_loop(region)?;
+            let frame = region.wrap(frame_at(position, source.sample_rate()));
+            let offset = frame_time(frame, source.sample_rate());
+            source.try_seek(offset).map_err(|e| e.to_string())?;
+            self.replace_source(id, track, source, offset, playing, grid);
+        }
+        let mut deck = self.decks[id.index()].borrow_mut();
+        deck.loop_in = Some(region.start);
+        deck.loop_region = Some(region);
+        deck.loop_active = active;
+        Ok(())
+    }
     pub fn activate_loop(&self, id: DeckId) -> Result<(), String> {
         let (track, region, playing, grid) = {
             let deck = self.decks[id.index()].borrow();
@@ -581,6 +650,90 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn auto_loop_resize_preserves_play_state_phase_grid_gains_and_other_deck() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        assert!(engine.auto_loop(DeckId::A, 32).is_err());
+        let file = wav_file(8192, 48000 * 12);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        assert!(engine.auto_loop(DeckId::A, 32).is_err());
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::from_millis(250)).unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(1250))
+            .unwrap();
+        engine.auto_loop(DeckId::A, 32).unwrap();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(1250))
+        );
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(3250))
+        );
+        engine.set_levels(MixerLevels {
+            channel_a: 0.6,
+            channel_b: 0.8,
+            crossfader: 0.3,
+        });
+        let volumes = engine.output_volumes();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        output.by_ref().take(48000 * 3 / 2).for_each(drop);
+        let before_half = engine.snapshot(DeckId::A).position;
+        let start = Duration::from_millis(1250);
+        assert!(before_half > Duration::from_millis(2250));
+        let expected =
+            start + Duration::from_nanos(((before_half - start).as_nanos() % 1_000_000_000) as u64);
+        engine.resize_loop(DeckId::A, false).unwrap();
+        let snapshot = engine.snapshot(DeckId::A);
+        assert!(snapshot.playing && snapshot.loop_active);
+        assert!(
+            (Duration::from_millis(1250)..Duration::from_millis(2250)).contains(&snapshot.position)
+        );
+        assert_eq!(
+            snapshot.position, expected,
+            "Halving must wrap phase, not reset to In"
+        );
+        assert_ne!(snapshot.position, start);
+        engine.resize_loop(DeckId::A, true).unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            expected,
+            "Doubling must retain the mapped phase"
+        );
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(3250))
+        );
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(grid));
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(engine.snapshot(DeckId::B).loop_in.is_none());
+        let before = engine.snapshot(DeckId::A);
+        assert!(engine.auto_loop(DeckId::A, 256).is_err());
+        let after = engine.snapshot(DeckId::A);
+        assert_eq!(before.loop_out, after.loop_out);
+        assert_eq!(before.position, after.position);
+        assert!(after.loop_active);
+        engine.exit_loop(DeckId::A).unwrap();
+        let before = engine.snapshot(DeckId::A).position;
+        engine.resize_loop(DeckId::A, false).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, before);
+        assert!(!engine.snapshot(DeckId::A).loop_active);
+        engine.pause(DeckId::A);
+        engine
+            .restore_loop(
+                DeckId::A,
+                Duration::ZERO,
+                crate::looping::frame_time(1, 48000),
+            )
+            .unwrap();
+        assert!(engine.resize_loop(DeckId::A, false).is_err());
+    }
     #[test]
     fn saved_bounds_validation_is_atomic_and_frame_aligned_eof_round_trips() {
         let (mixer, _output) = rodio::mixer::mixer(1, 44100);

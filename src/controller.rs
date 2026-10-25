@@ -544,7 +544,7 @@ impl AudioController {
     }
     fn wire_loops(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
-            for command in 0..4 {
+            for command in 0..7 {
                 let weak = Rc::downgrade(self);
                 let action = move || {
                     if let Some(c) = weak.upgrade() {
@@ -556,7 +556,25 @@ impl AudioController {
                                 0 => c.engine.set_loop_in(id, position),
                                 1 => c.engine.set_loop_out(id, position),
                                 2 => c.engine.activate_loop(id),
-                                _ => c.engine.exit_loop(id),
+                                3 => c.engine.exit_loop(id),
+                                4 => {
+                                    let index =
+                                        c.ui.upgrade()
+                                            .map(|ui| match id {
+                                                DeckId::A => ui.get_left_auto_loop_index(),
+                                                DeckId::B => ui.get_right_auto_loop_index(),
+                                            })
+                                            .unwrap_or(-1);
+                                    usize::try_from(index)
+                                        .ok()
+                                        .and_then(|i| {
+                                            [1, 2, 4, 8, 16, 32, 64, 128, 256].get(i).copied()
+                                        })
+                                        .ok_or_else(|| "Choose a supported beat length".to_string())
+                                        .and_then(|eighths| c.engine.auto_loop(id, eighths))
+                                }
+                                5 => c.engine.resize_loop(id, false),
+                                _ => c.engine.resize_loop(id, true),
                             }
                         };
                         if let Some(ui) = c.ui.upgrade() {
@@ -568,7 +586,10 @@ impl AudioController {
                                             "Loop In set",
                                             "Loop Out set",
                                             "Loop active",
-                                            "Loop exited"
+                                            "Loop exited",
+                                            "Auto loop active",
+                                            "Loop halved",
+                                            "Loop doubled"
                                         ][command]
                                     ),
                                     Err(e) => format!("Deck {id:?}: {e}"),
@@ -586,8 +607,14 @@ impl AudioController {
                     (DeckId::B, 1) => ui.on_loop_out_right(action),
                     (DeckId::A, 2) => ui.on_loop_activate_left(action),
                     (DeckId::B, 2) => ui.on_loop_activate_right(action),
-                    (DeckId::A, _) => ui.on_loop_exit_left(action),
-                    (DeckId::B, _) => ui.on_loop_exit_right(action),
+                    (DeckId::A, 3) => ui.on_loop_exit_left(action),
+                    (DeckId::B, 3) => ui.on_loop_exit_right(action),
+                    (DeckId::A, 4) => ui.on_auto_loop_left(action),
+                    (DeckId::B, 4) => ui.on_auto_loop_right(action),
+                    (DeckId::A, 5) => ui.on_half_loop_left(action),
+                    (DeckId::B, 5) => ui.on_half_loop_right(action),
+                    (DeckId::A, _) => ui.on_double_loop_left(action),
+                    (DeckId::B, _) => ui.on_double_loop_right(action),
                 }
             }
         }
@@ -1714,6 +1741,80 @@ mod tests {
         }
     }
     #[test]
+    fn auto_loop_gui_uses_committed_grid_and_preserves_failures_and_saved_slots() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 12);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        assert!(!control(&ui, "DECK A auto loop")
+            .accessible_enabled()
+            .unwrap());
+        ui.invoke_auto_loop_left();
+        assert!(ui.get_status().contains("manual beatgrid"));
+        assert!(engine.snapshot(DeckId::A).loop_in.is_none());
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        c.tick();
+        // An unsaved grid draft cannot change the BPM used by Auto Loop.
+        ui.invoke_grid_left();
+        ui.set_left_grid_draft_bpm("60".into());
+        ui.invoke_edit_grid_bpm_left();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(1250))
+            .unwrap();
+        ui.set_left_auto_loop_index(5);
+        control(&ui, "DECK A auto loop").invoke_accessible_default_action();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(3250))
+        );
+        assert!(!engine.snapshot(DeckId::A).playing);
+        control(&ui, "DECK A half loop").invoke_accessible_default_action();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(2250))
+        );
+        control(&ui, "DECK A double loop").invoke_accessible_default_action();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(3250))
+        );
+        ui.invoke_cancel_grid_left();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let before = engine.snapshot(DeckId::A);
+        ui.set_left_auto_loop_index(8);
+        ui.invoke_auto_loop_left();
+        assert_eq!(engine.snapshot(DeckId::A).loop_out, before.loop_out);
+        assert_eq!(engine.snapshot(DeckId::A).position, before.position);
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.set_left_auto_loop_index(-1);
+        ui.invoke_auto_loop_left();
+        assert!(ui.get_status().contains("supported"));
+        c.storage_ready.set(false);
+        ui.invoke_half_loop_left();
+        assert_eq!(engine.snapshot(DeckId::A).loop_out, before.loop_out);
+        c.storage_ready.set(true);
+        assert!(engine.snapshot(DeckId::B).loop_in.is_none());
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(!c.dirty.get());
+        // Auto-created regions use the existing saved-slot path without persisting active playback.
+        ui.invoke_save_loop_left();
+        assert!(c.library.borrow().catalog().tracks[0].saved_loops.slots()[0].is_some());
+    }
+    #[test]
     fn saved_loop_gui_save_recall_delete_shared_identity_bounds_and_restart() {
         use slint::Model;
         i_slint_backend_testing::init_no_event_loop();
@@ -1735,8 +1836,8 @@ mod tests {
         c.restore_library(Ok(db.clone()), Vec::new());
         finish_storage(&c);
         ui.show().unwrap();
-        control(&ui, "DECK A saved loops panel").invoke_accessible_default_action();
-        control(&ui, "DECK B saved loops panel").invoke_accessible_default_action();
+        control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        control(&ui, "DECK B deck tools panel").invoke_accessible_default_action();
         ui.invoke_save_loop_left();
         assert!(ui.get_status().contains("In"));
         engine.seek_percent(DeckId::A, 25.).unwrap();
@@ -2918,7 +3019,7 @@ mod tests {
                             <= shared.absolute_position().y
                     );
                 }
-                control(&ui, &format!("{deck} saved loops panel"))
+                control(&ui, &format!("{deck} deck tools panel"))
                     .invoke_accessible_default_action();
                 for action in [
                     "saved loop slot",
@@ -2935,7 +3036,18 @@ mod tests {
                             <= shared.absolute_position().y
                     );
                 }
-                control(&ui, &format!("{deck} saved loops panel"))
+                control(&ui, &format!("{deck} deck tools panel"))
+                    .invoke_accessible_default_action();
+                for action in ["auto loop length", "auto loop", "half loop", "double loop"] {
+                    let button = control(&ui, &format!("{deck} {action}"));
+                    assert!(button.absolute_position().x >= 0.);
+                    assert!(button.absolute_position().x + button.size().width <= width + 0.1);
+                    assert!(
+                        button.absolute_position().y + button.size().height
+                            <= shared.absolute_position().y
+                    );
+                }
+                control(&ui, &format!("{deck} deck tools panel"))
                     .invoke_accessible_default_action();
                 let delete = control(&ui, &format!("{deck} delete hot cue"));
                 assert!(

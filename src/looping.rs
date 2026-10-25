@@ -14,6 +14,42 @@ impl FrameLoop {
         }
         Ok(Self { start, end })
     }
+    /// Supported lengths are powers of two from 1/8 to 32 beats. No beat snapping.
+    pub fn from_beats(
+        start: usize,
+        eighths: u16,
+        bpm: f64,
+        rate: u32,
+        frames: usize,
+    ) -> Result<Self, String> {
+        if !matches!(eighths, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256)
+            || !bpm.is_finite()
+            || !(40.0..=240.0).contains(&bpm)
+            || rate == 0
+        {
+            return Err("Choose 1/8–32 beats and a valid manual BPM".into());
+        }
+        let length = (f64::from(rate) * 60.0 * f64::from(eighths) / (bpm * 8.0)).round() as usize;
+        let end = start
+            .checked_add(length)
+            .ok_or("Loop frame range overflow")?;
+        Self::new(start, end, frames)
+    }
+    pub fn resized(self, double: bool, frames: usize) -> Result<Self, String> {
+        let length = self.end - self.start;
+        let length = if double {
+            length.checked_mul(2).ok_or("Loop frame range overflow")?
+        } else {
+            length / 2
+        };
+        Self::new(
+            self.start,
+            self.start
+                .checked_add(length)
+                .ok_or("Loop frame range overflow")?,
+            frames,
+        )
+    }
     pub fn wrap(self, frame: usize) -> usize {
         if frame < self.end {
             frame
@@ -132,6 +168,56 @@ mod tests {
     }
     #[global_allocator]
     static ALLOCATOR: CountingAllocator = CountingAllocator;
+    #[test]
+    fn beat_lengths_round_once_and_resize_validates_before_mutation() {
+        for rate in [44100, 48000, 96000] {
+            for bpm in [40., 123.45, 240.] {
+                for eighths in [1, 2, 4, 8, 16, 32, 64, 128, 256] {
+                    let region =
+                        FrameLoop::from_beats(17, eighths, bpm, rate, rate as usize * 60).unwrap();
+                    let ideal = f64::from(rate) * 60. * f64::from(eighths) / (bpm * 8.);
+                    assert!(((region.end - region.start) as f64 - ideal).abs() <= 0.5 + 1e-8);
+                    assert_eq!(region.start, 17);
+                }
+            }
+        }
+        for (units, bpm, rate) in [
+            (3, 120., 48000),
+            (1, f64::NAN, 48000),
+            (1, 39., 48000),
+            (1, 120., 0),
+        ] {
+            assert!(FrameLoop::from_beats(0, units, bpm, rate, 48000).is_err());
+        }
+        assert!(FrameLoop::from_beats(47000, 8, 120., 48000, 48000).is_err());
+        let region = FrameLoop::new(2, 7, 16).unwrap();
+        assert_eq!(
+            region.resized(false, 16).unwrap(),
+            FrameLoop { start: 2, end: 4 }
+        );
+        assert_eq!(
+            region.resized(true, 16).unwrap(),
+            FrameLoop { start: 2, end: 12 }
+        );
+        assert!(region.resized(true, 8).is_err());
+        assert!(FrameLoop::new(0, 1, 1).unwrap().resized(false, 1).is_err());
+        // A fractional beat length repeats the identical rounded frame interval, with no accumulated drift.
+        let region = FrameLoop::from_beats(3, 1, 120., 1000, 1000).unwrap();
+        assert_eq!(region.end - region.start, 63);
+        let mut source = PcmSource::new(
+            2,
+            1000,
+            (0..1000)
+                .flat_map(|frame| [frame as f32, -(frame as f32)])
+                .collect(),
+        );
+        source.set_loop(region).unwrap();
+        for i in 0..6300 {
+            let value = (3 + i % 63) as f32;
+            assert_eq!(source.next(), Some(value));
+            assert_eq!(source.next(), Some(-value));
+        }
+    }
     #[test]
     fn repeated_loop_output_allocates_nothing_after_preparation() {
         let mut source = PcmSource::new(2, 48_000, vec![0.25, -0.25, 0.5, -0.5]);
