@@ -28,7 +28,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 122 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 123 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Review als `e1371a8` gepusht. Die momentane GUI ist anschließend implementiert, nach Review-Korrekturen erneut unabhängig geprüft und mit 121 Tests sowie Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
 
@@ -48,7 +48,7 @@ Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Re
 - [x] ✅ Momentane Nudge-GUI mit Pointer-/Tasten-Release, Fokus-/Panel-/Lade-/Transport-/EOF-/Shutdown-Abbruch und Headless-Ereignistests.
 - [x] ✅ Opus1: Performance-Steuerung deckweise von Laden/Import entkoppelt; Restore-/Quellschutz und persistente Cue-Änderungen getestet.
 - [ ] ☐ Opus2/3: präzise Quellenwechsel-/Nudge-Flanken und nachgewiesene PCM-Freigabe außerhalb des Audio-Pfads.
-- [ ] ☐ Opus6: lesbaren Katalog bei Metadaten-Backfill-Schreibfehler erhalten und Retry anbieten.
+- [x] ✅ Opus6: lesbaren Katalog bei Metadaten-Backfill-Schreibfehler erhalten; Retry und Neustart mit injiziertem Schreibfehler getestet.
 - [ ] ☐ Opus5/7: Katalog-/Decode-Skalierung messen, Delta-Persistenz und Worker-Abbruch umsetzen.
 - [ ] ☐ Opus4: LOOP/Reloop/OUT-Semantik am Handbuch abgleichen; keine automatische Verhaltensänderung aufgrund des Modellbefunds.
 - [ ] ☐ Danach: validiertes Tempo-Matching aus bestätigten manuellen Grids; Phasen-Sync und Keylock separat.
@@ -292,3 +292,9 @@ Review follow-up: successful occupied hot-cue recall and all successful GUI loop
 The user authorized implementing the assessed Opus recommendations. Controller can_control_deck(id) now gates only startup restore and that deck's pending load. Pitch/fine/nudge, loops/saved loops, Hot-Cue editing and grid editing use this ownership check. Library import merges do not replace catalog ownership; global crate mutations and admission of load/import jobs retain their existing guards. Shared-track draft conflict and prepared-source checks remain. Both CompactDecks and grid editors receive per-deck busy state; LOAD admission still reflects the single worker. Native focus loss still cancels nudge independently of any busy state.
 
 A symmetric headless regression holds the other deck's real picker worker via channels, applies a previously queued pitch, retains logical nudge, rejects commands to the loading deck, exercises loops and durable Hot-Cues, then merges a controlled import result and verifies SQLite restart. Restore remains exclusive. No audio/sample-source/schema/dependency change was made. Native dialog/focus/listening/latency acceptance remains open. Review and final checks are recorded in LOCAL_VALIDATION.
+
+## Opus6: optional metadata backfill failure checkpoint (2026-10-25)
+
+After reviewed3034f92, Store::open retains successfully restored/enriched catalog data when its optional backfill save fails. Worker LoadedLibrary carries that warning together with the library and startup note in one event, so no fake save completion can race command accounting. Controller publishes the catalog, retains the worker, marks dirty/save_failed and exposes the existing Retry Save path. Fatal inspect/schema/migration failures retain their existing preservation/error behavior. No schema/dependency/audio/UI-source change.
+
+A headless regression seeds a real unscanned WAV record, injects a SQLite metadata INSERT abort trigger, verifies the visible enriched title and stable ID with DB scanned still0, loads the track, removes the trigger, retries, checks scanned1 and restarts successfully. This proves this optional write-failure path; it is not a new physical power-loss/platform qualification. Final review and checks are recorded in LOCAL_VALIDATION.

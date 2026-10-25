@@ -638,6 +638,7 @@ fn recover(path: &Path) -> Result<(), String> {
     backup_to(&source, path)
 }
 struct Store {
+    backfill_error: Option<String>,
     path: PathBuf,
     connection: Connection,
     _locks: [File; 2],
@@ -737,6 +738,7 @@ impl Store {
             .collect();
         let library = Library::restore(catalog)?;
         let mut store = Self {
+            backfill_error: None,
             path,
             connection,
             _locks: locks,
@@ -747,7 +749,8 @@ impl Store {
             .iter()
             .any(|t| pending.contains(&t.id) && t.metadata.scanned)
         {
-            store.save(&enriched)?;
+            // Reading succeeded. Optional enrichment persistence must not hide that catalog.
+            store.backfill_error = store.save(&enriched).err();
         }
         Ok((store, library, note))
     }
@@ -771,8 +774,13 @@ impl Store {
     }
 }
 
+pub struct LoadedLibrary {
+    pub library: Library,
+    pub note: String,
+    pub backfill_error: Option<String>,
+}
 pub enum Event {
-    Loaded(Result<(Library, String), String>),
+    Loaded(Result<LoadedLibrary, String>),
     Saved(Result<(), String>),
 }
 enum Command {
@@ -798,7 +806,12 @@ impl Worker {
                         return Err(error);
                     }
                 };
-                if events_tx.send(Event::Loaded(Ok((library, note)))).is_err() {
+                let loaded = LoadedLibrary {
+                    library,
+                    note,
+                    backfill_error: store.backfill_error.take(),
+                };
+                if events_tx.send(Event::Loaded(Ok(loaded))).is_err() {
                     return Ok(());
                 }
                 while let Ok(command) = rx.recv() {
@@ -1142,10 +1155,10 @@ mod tests {
             .close(Some(catalog(dir.path().join("latest.wav"), 2)))
             .unwrap();
         let worker = Worker::start(db).unwrap();
-        let Event::Loaded(Ok((library, _))) = worker.events.recv().unwrap() else {
+        let Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
             panic!("restore failed")
         };
-        assert_eq!(library.catalog().tracks[0].id, 2);
+        assert_eq!(loaded.library.catalog().tracks[0].id, 2);
         worker.close(None).unwrap();
     }
     // Invoked only by the isolated child-process test below; normal suite execution is a no-op.

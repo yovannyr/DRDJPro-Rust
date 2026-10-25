@@ -1355,7 +1355,12 @@ impl AudioController {
                     ui.set_library_busy(false);
                 }
                 match result {
-                    Ok((library, note)) => {
+                    Ok(loaded) => {
+                        let crate::library_store::LoadedLibrary {
+                            library,
+                            note,
+                            backfill_error,
+                        } = loaded;
                         *self.library.borrow_mut() = library;
                         self.publish_library();
                         for id in [DeckId::A, DeckId::B] {
@@ -1363,7 +1368,14 @@ impl AudioController {
                                 self.grid_feedback(Err(error), "");
                             }
                         }
-                        if let Some(ui) = self.ui.upgrade() {
+                        if let Some(error) = backfill_error {
+                            self.dirty.set(true);
+                            self.save_failed.set(true);
+                            self.storage_error(
+                                &format!("Metadata backfill: {error}; catalog remains available"),
+                                true,
+                            );
+                        } else if let Some(ui) = self.ui.upgrade() {
                             ui.set_library_storage(note.into());
                         }
                     }
@@ -4176,6 +4188,99 @@ mod tests {
         ui.invoke_load_library_right();
         finish(&c);
         assert!(engine.snapshot(DeckId::B).grid.is_none());
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn backfill_write_failure_keeps_loaded_catalog_and_retry_persists_enrichment() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let profile = tempfile::tempdir().unwrap();
+        let db = profile.path().join("library.sqlite3");
+        let file = crate::test_support::tagged_wav("Retained title", "Artist", "Album");
+        let seed = crate::library::Catalog {
+            version: 1,
+            crates: Default::default(),
+            tracks: vec![crate::library::SavedTrack {
+                id: 17,
+                path: file.path().to_path_buf(),
+                metadata: Default::default(),
+                grid: None,
+                hot_cues: Default::default(),
+                saved_loops: Default::default(),
+            }],
+        };
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Loaded(Ok(_))
+        ));
+        worker.save(seed).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Saved(Ok(()))
+        ));
+        worker.close(None).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_backfill BEFORE INSERT ON track_metadata WHEN NEW.scanned=1 BEGIN SELECT RAISE(ABORT,'injected backfill failure'); END;").unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        assert!(c.storage_ready.get());
+        assert!(c.persistence.borrow().is_some());
+        assert!(c.dirty.get() && c.save_failed.get());
+        assert!(ui.get_library_save_failed());
+        assert!(ui
+            .get_library_storage()
+            .contains("catalog remains available"));
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 17);
+        assert_eq!(
+            ui.get_library_rows().row_data(0).unwrap().name,
+            "Retained title"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT scanned FROM track_metadata WHERE track_id=17",
+                    [],
+                    |r| r.get::<_, i32>(0)
+                )
+                .unwrap(),
+            0
+        );
+        // Failed optional writes must not prevent loading or subsequent retry.
+        ui.invoke_select_library(17);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(ui.get_left_loaded());
+        finish_storage(&c);
+        connection
+            .execute_batch("DROP TRIGGER reject_backfill")
+            .unwrap();
+        ui.invoke_retry_library_save();
+        finish_storage(&c);
+        assert!(!c.dirty.get() && !c.save_failed.get());
+        assert!(!ui.get_library_save_failed());
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT scanned FROM track_metadata WHERE track_id=17",
+                    [],
+                    |r| r.get::<_, i32>(0)
+                )
+                .unwrap(),
+            1
+        );
+        c.close_library().unwrap();
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        assert_eq!(
+            ui.get_library_rows().row_data(0).unwrap().name,
+            "Retained title"
+        );
+        assert!(!ui.get_library_save_failed());
         c.close_library().unwrap();
     }
     #[test]
