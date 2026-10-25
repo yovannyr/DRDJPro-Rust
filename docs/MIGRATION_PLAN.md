@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 101 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 103 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Saved-Loop-Datenbasis und Slot-GUI sind nach unabhängigem GPT-6-Astra-Mittel-Review als `7778eec` gepusht. Auto-Loops und Halbieren/Verdoppeln sind lokal implementiert; Review und Veröffentlichung folgen dem festgelegten Ablauf.
+Veröffentlichungsstand: Bis einschließlich Auto-Loops und Halbieren/Verdoppeln ist `b641c1e` nach unabhängigem GPT-6-Astra-Mittel-Review gepusht. Die Loop-Bereichsanzeige folgt demselben Review-/Prüf-/Veröffentlichungsablauf.
 
 ### Nächste und offene Arbeitspakete
 
@@ -39,7 +39,8 @@ Veröffentlichungsstand: Saved-Loop-Datenbasis und Slot-GUI sind nach unabhängi
 - [x] ✅ Datenbasis für acht persistente Saved-Loop-Slots je Track mit validierten Grenzen/Namen und SQLite-Migration.
 - [x] ✅ Saved-Loop-Slots in der GUI speichern, abrufen und löschen, mit Quellvalidierung und Neustart-Tests.
 - [x] ✅ Beatbasierte Auto-Loops (⅛–32 Beats) aus bestätigter manueller BPM und Halbieren/Verdoppeln bestehender Loop-Grenzen.
-- [ ] ☐ **Als Nächstes:** Loop-Bereichsmarkierungen in Übersicht und Detail-Waveform.
+- [x] ✅ Loop-Bereiche mit In/Out-Markierungen in Übersicht/Detail, präzisem Clipping und Anzeige von Aktiv/Inaktiv.
+- [ ] ☐ **Als Nächstes:** optionale Beat-Ausrichtung beim Erzeugen von Auto-Loops anhand des bestätigten manuellen Grids.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -216,3 +217,9 @@ Following the new standing workflow, GPT-6 Astra (gpt-6-astra, medium) independe
 Half/double keeps In fixed and scales the existing integer-frame span. Halving uses integer floor (up to one frame discarded); a one-frame loop cannot be halved. Active resizing maps current source phase modulo the new span and preserves Play/Pause; inactive resizing only changes boundaries without seeking or activation. These operations also support manually defined loops and do not require a new grid. Saved slots are not rewritten; explicit Save can capture the resulting region.
 
 The deck tools switch now cycles CUES/SLOTS/AUTO within the same 260 px deck height. AUTO contains beat length, Auto Loop and half/double controls with actual committed-grid/loop/loading guards. Domain/offline/headless and three-panel two-size regressions verify behavior. No schema/dependency/audio callback change was needed. Native visuals/listening, beat snapping/quantization, musical grid correctness and physical timing remain unqualified. Next proposed bounded slice is visible loop ranges in overview/detail waveforms; name/replace drafts and controller feedback remain open. Publication requires the standing independent-review/final-check gate.
+
+## Loop-range waveform overlays checkpoint (2026-10-25)
+
+This bounded slice adds display-only loop shading and In/Out lines in both overview/detail waveforms from actual per-deck engine snapshots. Complete validated bounds are required. Active and inactive state use distinct colors and accessible source-time descriptions; incomplete In-only state has no interval marker. Overview and detail receive separate viewport-local models. Native Duration comparisons decide overlap and endpoint visibility before f32 conversion; viewport times use the same canonical frame conversion as engine boundaries. Clipped shading stays within the waveform, uses a one-pixel minimum even at EOF, and hides exactly touching non-overlaps. Saved slots alone do not create markers until recalled into deck bounds.
+
+Independent GPT-6 Astra / medium review found an absolute-f32-coordinate defect for final-frame loops on a supported 600-second track. The implementation was corrected before publication, with a synthetic long-track headless regression (no huge PCM fixture). Existing workflow tests verify full/left/right/outside ranges, two sizes, zoom/seek, active/exit state, one-frame EOF, failed/successful load and other-deck/volume isolation. No audio engine/callback, schema or dependency changed; waveform exposes only a read-only sample-rate getter for precise view timing. Visual rendering/contrast/overlap usability remain unqualified. Next proposed bounded slice is explicit optional beat alignment when creating Auto Loops; cue-trigger quantization, tempo/sync and hardware timing remain separate requirements. Publication is gated by follow-up review and final green checks.

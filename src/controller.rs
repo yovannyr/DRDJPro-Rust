@@ -1412,14 +1412,30 @@ impl AudioController {
                 _ => "No loop".into(),
             };
             let caption = format!("{}{}", if s.loop_active { "ACTIVE · " } else { "" }, bounds);
+            let loop_range = loop_overlay(
+                s.loop_in,
+                s.loop_out,
+                s.duration,
+                std::time::Duration::ZERO,
+                s.duration,
+                s.loop_active,
+            );
+            if s.detail.is_none() {
+                match id {
+                    DeckId::A => ui.set_left_detail_loop_range(crate::LoopRange::default()),
+                    DeckId::B => ui.set_right_detail_loop_range(crate::LoopRange::default()),
+                }
+            }
             match id {
                 DeckId::A => {
+                    ui.set_left_loop_range(loop_range);
                     ui.set_left_loop_caption(caption.into());
                     ui.set_left_loop_has_in(s.loop_in.is_some());
                     ui.set_left_loop_ready(s.loop_out.is_some());
                     ui.set_left_loop_active(s.loop_active);
                 }
                 DeckId::B => {
+                    ui.set_right_loop_range(loop_range);
                     ui.set_right_loop_caption(caption.into());
                     ui.set_right_loop_has_in(s.loop_in.is_some());
                     ui.set_right_loop_ready(s.loop_out.is_some());
@@ -1571,6 +1587,19 @@ impl AudioController {
                 }
                 .clamp(2, 32) as u32;
                 let range = detail.range(s.position, seconds);
+                let overlay = loop_overlay(
+                    s.loop_in,
+                    s.loop_out,
+                    s.duration,
+                    crate::looping::frame_time(range.start_frame, detail.sample_rate()),
+                    crate::looping::frame_time(range.end_frame, detail.sample_rate())
+                        .min(s.duration),
+                    s.loop_active,
+                );
+                match id {
+                    DeckId::A => ui.set_left_detail_loop_range(overlay),
+                    DeckId::B => ui.set_right_detail_loop_range(overlay),
+                }
                 let start = detail.percent(range.start_frame);
                 let end = detail.percent(range.end_frame);
                 let marker = if end > start {
@@ -1686,6 +1715,43 @@ fn color_model(colors: &[crate::waveform_color::Rgb]) -> ModelRc<slint::Color> {
         .collect();
     ModelRc::new(Rc::new(VecModel::from(colors)))
 }
+/// Decide visibility before reducing precise source times to viewport-local GUI coordinates.
+fn loop_overlay(
+    start: Option<std::time::Duration>,
+    end: Option<std::time::Duration>,
+    duration: std::time::Duration,
+    view_start: std::time::Duration,
+    view_end: std::time::Duration,
+    active: bool,
+) -> crate::LoopRange {
+    let (Some(start), Some(end)) = (start, end) else {
+        return crate::LoopRange::default();
+    };
+    if start >= end || end > duration || view_start >= view_end || view_end > duration {
+        return crate::LoopRange::default();
+    }
+    let fraction = |time: std::time::Duration| {
+        (100. * (time.clamp(view_start, view_end) - view_start).as_secs_f64()
+            / (view_end - view_start).as_secs_f64()) as f32
+    };
+    crate::LoopRange {
+        valid: true,
+        active,
+        visible: start < view_end && end > view_start,
+        in_visible: start >= view_start && start < view_end,
+        out_visible: end > view_start && end <= view_end,
+        start: fraction(start),
+        end: fraction(end),
+        description: format!(
+            "{} loop · In {:.6} s · Out {:.6} s",
+            if active { "Active" } else { "Inactive" },
+            start.as_secs_f64(),
+            end.as_secs_f64()
+        )
+        .into(),
+    }
+}
+
 fn clock(time: std::time::Duration) -> String {
     let secs = time.as_secs();
     format!("{:02}:{:02}", secs / 60, secs % 60)
@@ -1739,6 +1805,217 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn long_track_final_frame_loop_remains_visible_before_gui_rounding() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.show().unwrap();
+        let end = Duration::from_secs(600);
+        let start = crate::looping::frame_time(600 * 48000 - 1, 48000);
+        let overview = loop_overlay(Some(start), Some(end), end, Duration::ZERO, end, true);
+        assert_eq!(overview.start, overview.end); // Both absolute percentages round to 100 in f32.
+        assert!(overview.visible && overview.in_visible && overview.out_visible);
+        let detail = loop_overlay(
+            Some(start),
+            Some(end),
+            end,
+            Duration::from_secs(568),
+            end,
+            true,
+        );
+        assert!(detail.visible && detail.start < detail.end);
+        ui.set_left_loop_range(overview);
+        ui.set_left_detail_loop_range(detail);
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for (view, label) in [
+                ("DECK A waveform overview", "DECK A overview loop range"),
+                ("DECK A detailed waveform", "DECK A detail loop range"),
+            ] {
+                let view = control(&ui, view);
+                let shade = control(&ui, label);
+                assert!(shade.size().width >= 0.99);
+                assert!(
+                    shade.absolute_position().x + shade.size().width
+                        <= view.absolute_position().x + view.size().width + 0.1
+                );
+            }
+            assert_eq!(
+                ElementHandle::find_by_accessible_label(&ui, "DECK A overview loop in").count(),
+                1
+            );
+        }
+        for (view_start, view_end) in [(Duration::ZERO, start), (end, Duration::from_secs(601))] {
+            let overlay = loop_overlay(
+                Some(start),
+                Some(end),
+                Duration::from_secs(601),
+                view_start,
+                view_end,
+                false,
+            );
+            assert!(!overlay.visible);
+            assert!(!overlay.in_visible);
+            assert!(!overlay.out_visible);
+        }
+        assert!(
+            !loop_overlay(
+                Some(start),
+                Some(end),
+                Duration::from_secs(599),
+                Duration::ZERO,
+                Duration::from_secs(599),
+                false
+            )
+            .valid
+        );
+    }
+    #[test]
+    fn loop_overlays_clip_zoom_follow_state_and_preserve_other_deck() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        let file = wav_file(8192, 48000 * 30);
+        let other = wav_file(4096, 48000 * 30);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        let count = |label: &str| ElementHandle::find_by_accessible_label(&ui, label).count();
+        assert_eq!(count("DECK A overview loop range"), 0);
+        assert!(!ui.get_left_loop_range().valid);
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(10))
+            .unwrap();
+        ui.invoke_loop_in_left();
+        assert_eq!(count("DECK A overview loop in"), 0); // No complete interval yet.
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(20))
+            .unwrap();
+        ui.invoke_loop_out_left();
+        assert!(ui.get_left_loop_range().valid);
+        assert!(!ui.get_left_loop_range().active);
+        assert!((ui.get_left_loop_range().start - 100. / 3.).abs() < 0.001);
+        assert!((ui.get_left_loop_range().end - 200. / 3.).abs() < 0.001);
+        assert_eq!(count("DECK B overview loop range"), 0);
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            engine
+                .seek_position(DeckId::A, Duration::from_secs(15))
+                .unwrap();
+            c.tick();
+            let view = control(&ui, "DECK A waveform overview");
+            let shade = control(&ui, "DECK A overview loop range");
+            assert!(
+                (shade.absolute_position().x - view.absolute_position().x - view.size().width / 3.)
+                    .abs()
+                    < 0.1
+            );
+            assert!((shade.size().width - view.size().width / 3.).abs() < 0.1);
+            for (label, part) in [
+                ("DECK A overview loop in", 1. / 3.),
+                ("DECK A overview loop out", 2. / 3.),
+            ] {
+                let marker = control(&ui, label);
+                assert!(
+                    (marker.absolute_position().x
+                        - view.absolute_position().x
+                        - part * (view.size().width - marker.size().width))
+                        .abs()
+                        < 0.1
+                );
+            }
+            let detail = control(&ui, "DECK A detailed waveform");
+            let shade = control(&ui, "DECK A detail loop range");
+            assert!((shade.absolute_position().x - detail.absolute_position().x).abs() < 0.1);
+            assert!((shade.size().width - detail.size().width).abs() < 0.1);
+            assert_eq!(count("DECK A detail loop in"), 0);
+            assert_eq!(count("DECK A detail loop out"), 0);
+            // Right- and left-clipped ranges expose just the endpoint inside the viewport.
+            engine
+                .seek_position(DeckId::A, Duration::from_secs(10))
+                .unwrap();
+            c.tick();
+            let shade = control(&ui, "DECK A detail loop range");
+            assert!(shade.absolute_position().x > detail.absolute_position().x);
+            assert!((shade.size().width - detail.size().width / 2.).abs() < 0.1);
+            assert_eq!(count("DECK A detail loop in"), 1);
+            assert_eq!(count("DECK A detail loop out"), 0);
+            engine
+                .seek_position(DeckId::A, Duration::from_secs(20))
+                .unwrap();
+            c.tick();
+            let shade = control(&ui, "DECK A detail loop range");
+            assert!((shade.absolute_position().x - detail.absolute_position().x).abs() < 0.1);
+            assert!((shade.size().width - detail.size().width / 2.).abs() < 0.1);
+            assert_eq!(count("DECK A detail loop in"), 0);
+            assert_eq!(count("DECK A detail loop out"), 1);
+        }
+        // A touching exclusive Out boundary is not an overlapping region.
+        engine
+            .restore_loop(DeckId::A, Duration::from_secs(2), Duration::from_secs(4))
+            .unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(8))
+            .unwrap();
+        c.tick();
+        assert_eq!(count("DECK A detail loop range"), 0);
+        engine.seek_position(DeckId::A, Duration::ZERO).unwrap();
+        c.tick();
+        assert_eq!(count("DECK A detail loop range"), 1);
+        ui.set_left_detail_window(32);
+        ui.invoke_zoom_left();
+        assert_eq!(count("DECK A detail loop in"), 1);
+        assert_eq!(count("DECK A detail loop out"), 1);
+        let position = engine.snapshot(DeckId::A).position;
+        engine.play(DeckId::B);
+        let volumes = engine.output_volumes();
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.output_volumes(), volumes);
+        ui.invoke_loop_activate_left();
+        assert!(ui.get_left_loop_range().active);
+        assert!(ui.get_left_loop_range().description.contains("Active"));
+        ui.invoke_loop_exit_left();
+        assert!(!ui.get_left_loop_range().active);
+        assert!(ui.get_left_loop_range().valid);
+        assert_eq!(count("DECK A overview loop range"), 1);
+        // One complete frame at EOF remains visible without extending beyond the waveform.
+        let end = engine.snapshot(DeckId::A).duration;
+        let start = end - Duration::from_nanos(20833);
+        engine.restore_loop(DeckId::A, start, end).unwrap();
+        c.tick();
+        for (view, label) in [
+            ("DECK A waveform overview", "DECK A overview loop range"),
+            ("DECK A detailed waveform", "DECK A detail loop range"),
+        ] {
+            let view = control(&ui, view);
+            let shade = control(&ui, label);
+            assert!(shade.size().width >= 0.99);
+            assert!(
+                shade.absolute_position().x + shade.size().width
+                    <= view.absolute_position().x + view.size().width + 0.1
+            );
+        }
+        assert!(engine
+            .load_a(std::path::Path::new("missing-loop-overlay.wav"))
+            .is_err());
+        c.tick();
+        assert!(ui.get_left_loop_range().valid);
+        engine.load_a(other.path()).unwrap();
+        c.tick();
+        assert!(!ui.get_left_loop_range().valid);
+        assert_eq!(count("DECK A overview loop range"), 0);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(!c.dirty.get());
     }
     #[test]
     fn auto_loop_gui_uses_committed_grid_and_preserves_failures_and_saved_slots() {

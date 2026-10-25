@@ -58,6 +58,9 @@ impl DetailPeaks {
         }
     }
 
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
     pub fn percent(&self, frame: usize) -> f32 {
         if self.frames == 0 {
             0.0

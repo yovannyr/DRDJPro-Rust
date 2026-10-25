@@ -1,4 +1,5 @@
 import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox } from "std-widgets.slint";
+export struct LoopRange { valid: bool, active: bool, visible: bool, in-visible: bool, out-visible: bool, start: float, end: float, description: string }
 export struct SavedLoopRow { occupied: bool, description: string }
 export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string }
 export struct CrateRow { id: int, name: string, count: int }
@@ -13,6 +14,7 @@ component WaveformStrip inherits Rectangle {
     in property <[color]> colors;
     in property <[BeatLine]> beats;
     in property <[HotCueRow]> hot-cues;
+    in property <LoopRange> loop-range;
     in property <bool> enabled;
     in property <float> position;
     in property <float> marker;
@@ -20,6 +22,14 @@ component WaveformStrip inherits Rectangle {
     in property <float> range-end: 100;
     callback seek(float);
     background: #070b11; clip: true;
+    Rectangle {
+        visible: root.loop-range.visible;
+        accessible-role: image; accessible-label: root.deck-label + (root.overview ? " overview loop range" : " detail loop range");
+        accessible-description: root.loop-range.description;
+        x: min(clamp(root.loop-range.start / 100, 0, 1) * parent.width, max(0px,parent.width - 1px));
+        width: min(max(1px, max(0, root.loop-range.end - root.loop-range.start) / 100 * parent.width), max(0px,parent.width - self.x));
+        height: parent.height; background: root.loop-range.active ? #36dfa333 : #a8b3c31c;
+    }
     for value[i] in values : Rectangle {
         x: i * parent.width / max(1, values.length);
         y: (parent.height - self.height) / 2;
@@ -37,6 +47,20 @@ component WaveformStrip inherits Rectangle {
         visible: line.downbeat; x: clamp(line.position,0,100)/100*max(0px,parent.width - 14px); y: 1px;
         text: "" + line.bar; color: line.first ? #ff5555 : #dfe8f5; font-size: 10px;
         accessible-role: text; accessible-label: deck-label + " bar label"; accessible-description: "Bar " + line.bar;
+    }
+    Rectangle {
+        visible: root.loop-range.in-visible;
+        accessible-role: image; accessible-label: root.deck-label + (root.overview ? " overview loop in" : " detail loop in"); accessible-value: root.loop-range.start;
+        x: clamp(root.loop-range.start / 100,0,1)*max(0px,parent.width - self.width);
+        width: 2px; height: parent.height; background: root.loop-range.active ? #36dfa3 : #a8b3c3;
+        Text { x: 3px; y: 14px; text: "IN"; color: parent.background; font-size: 9px; }
+    }
+    Rectangle {
+        visible: root.loop-range.out-visible;
+        accessible-role: image; accessible-label: root.deck-label + (root.overview ? " overview loop out" : " detail loop out"); accessible-value: root.loop-range.end;
+        x: clamp(root.loop-range.end / 100,0,1)*max(0px,parent.width - self.width);
+        width: 2px; height: parent.height; background: root.loop-range.active ? #36dfa3 : #a8b3c3;
+        Text { x: -22px; y: 14px; text: "OUT"; color: parent.background; font-size: 9px; }
     }
     for cue[i] in hot-cues : Rectangle {
         visible: cue.valid && range-end > range-start && cue.position >= range-start && cue.position <= range-end;
@@ -76,6 +100,7 @@ component CompactDeck inherits Rectangle {
     in property <bool> playing;
     in-out property <float> position;
     in property <[HotCueRow]> hot-cues;
+    in property <LoopRange> loop-range;
     property <int> delete-slot: 1;
     property <int> tools-panel: 0;
     in property <bool> grid-active;
@@ -108,7 +133,7 @@ component CompactDeck inherits Rectangle {
         Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
         WaveformStrip {
             height: 42px; overview: true; deck-label: root.deck-label; accent: root.accent;
-            values: root.waveform; colors: root.colors; hot-cues: root.hot-cues; position: root.position; marker: root.position;
+            values: root.waveform; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; position: root.position; marker: root.position;
             enabled: !audio-enabled || loaded;
             seek(value) => { if audio-enabled { root.seek(value); } else { root.position = value; } }
         }
@@ -181,6 +206,7 @@ component DetailWaveform inherits Rectangle {
     in property <[color]> colors;
     in property <[BeatLine]> beats;
     in property <[HotCueRow]> hot-cues;
+    in property <LoopRange> loop-range;
     in property <bool> enabled;
     in property <bool> grid-active;
     in property <bool> grid-editing;
@@ -228,7 +254,7 @@ component DetailWaveform inherits Rectangle {
         }
         WaveformStrip {
             height: 54px; overview: false; deck-label: root.deck-label; accent: root.accent;
-            values: root.detail; colors: root.colors; hot-cues: root.hot-cues; beats: root.beats; enabled: root.enabled;
+            values: root.detail; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; beats: root.beats; enabled: root.enabled;
             position: root.position; marker: root.marker; range-start: root.detail-start; range-end: root.detail-end;
             seek(value) => { root.seek(value); }
         }
@@ -411,6 +437,8 @@ export component AppWindow inherits Window {
     in-out property <int> left-saved-loop-slot: 1;
     in-out property <string> left-saved-loop-name;
     callback save-loop-left(); callback recall-loop-left(); callback delete-loop-left();
+    in property <LoopRange> left-loop-range;
+    in property <LoopRange> left-detail-loop-range;
     in property <string> left-loop-caption;
     in property <bool> left-loop-has-in;
     in property <bool> left-loop-ready;
@@ -427,6 +455,8 @@ export component AppWindow inherits Window {
     in-out property <int> right-saved-loop-slot: 1;
     in-out property <string> right-saved-loop-name;
     callback save-loop-right(); callback recall-loop-right(); callback delete-loop-right();
+    in property <LoopRange> right-loop-range;
+    in property <LoopRange> right-detail-loop-range;
     in property <string> right-loop-caption;
     in property <bool> right-loop-has-in;
     in property <bool> right-loop-ready;
@@ -504,6 +534,7 @@ export component AppWindow inherits Window {
                 auto-loop => { root.auto-loop-left(); } half-loop => { root.half-loop-left(); } double-loop => { root.double-loop-left(); }
                 saved-loops: root.left-saved-loops; saved-loop-slot <=> root.left-saved-loop-slot; saved-loop-name <=> root.left-saved-loop-name;
                 save-loop => { root.save-loop-left(); } recall-loop => { root.recall-loop-left(); } delete-loop => { root.delete-loop-left(); }
+                loop-range: root.left-loop-range;
                 loop-caption: root.left-loop-caption; loop-has-in: root.left-loop-has-in; loop-ready: root.left-loop-ready; loop-active: root.left-loop-active;
                 loop-in => { root.loop-in-left(); } loop-out => { root.loop-out-left(); } loop-activate => { root.loop-activate-left(); } loop-exit => { root.loop-exit-left(); }
                 hot-cues: root.left-hot-cues;
@@ -523,6 +554,7 @@ export component AppWindow inherits Window {
                 auto-loop => { root.auto-loop-right(); } half-loop => { root.half-loop-right(); } double-loop => { root.double-loop-right(); }
                 saved-loops: root.right-saved-loops; saved-loop-slot <=> root.right-saved-loop-slot; saved-loop-name <=> root.right-saved-loop-name;
                 save-loop => { root.save-loop-right(); } recall-loop => { root.recall-loop-right(); } delete-loop => { root.delete-loop-right(); }
+                loop-range: root.right-loop-range;
                 loop-caption: root.right-loop-caption; loop-has-in: root.right-loop-has-in; loop-ready: root.right-loop-ready; loop-active: root.right-loop-active;
                 loop-in => { root.loop-in-right(); } loop-out => { root.loop-out-right(); } loop-activate => { root.loop-activate-right(); } loop-exit => { root.loop-exit-right(); }
                 hot-cues: root.right-hot-cues;
@@ -554,6 +586,7 @@ export component AppWindow inherits Window {
             VerticalLayout { spacing: 2px;
                 DetailWaveform {
                     deck-label: "DECK A"; accent: #36c9ef; detail: root.left-detail; colors: root.left-detail-colors;
+                    loop-range: root.left-detail-loop-range;
                     hot-cues: root.left-hot-cues; beats: root.left-beats; position: root.left-position; marker: root.left-detail-marker;
                     detail-start: root.left-detail-start; detail-end: root.left-detail-end;
                     detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
@@ -569,6 +602,7 @@ export component AppWindow inherits Window {
                 }
                 DetailWaveform {
                     deck-label: "DECK B"; accent: #ffae58; detail: root.right-detail; colors: root.right-detail-colors;
+                    loop-range: root.right-detail-loop-range;
                     hot-cues: root.right-hot-cues; beats: root.right-beats; position: root.right-position; marker: root.right-detail-marker;
                     detail-start: root.right-detail-start; detail-end: root.right-detail-end;
                     detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
