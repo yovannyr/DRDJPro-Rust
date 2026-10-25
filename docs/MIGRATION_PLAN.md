@@ -8,6 +8,47 @@ Release requires a traceable disposition and acceptance evidence for every FEATU
 
 Deliver in reviewed, bounded slices with working behavior and regression evidence. Keep the existing executable name during development for CI/command compatibility; its historical name does not define the product scope.
 
+## Fortschritt auf einen Blick (2026-10-25)
+
+✅ = im beschriebenen Umfang implementiert und lokal geprüft. ☐ = noch offen. Die Häkchen kennzeichnen einzelne Arbeitspakete; keine der sechs Gesamtphasen ist bereits vollständig abgenommen. Historische Checkpoints weiter unten dokumentieren den damaligen Stand.
+
+### Erledigte Arbeitspakete
+
+- [x] ✅ Alle 59 nummerierten UI-Referenzpunkte im Komponenten-Inventar erfasst; vollständiger Code-/Referenztest-Abgleich bleibt offen.
+- [x] ✅ Reale MP3/WAV-Auswahl und Hintergrund-Loading für Deck A/B.
+- [x] ✅ Play/Pause, Cue-to-zero, Positionsanzeige und Seek; Schutz vor Ersetzen eines spielenden Decks.
+- [x] ✅ Channel-Fader und Crossfader mit der Rodio-Engine verbunden.
+- [x] ✅ Extended-Workspace-Struktur mit gemeinsamen Detail-Waveforms und Bibliotheksbereich.
+- [x] ✅ PCM-Waveform-Übersicht, folgende Detailansicht, Zoom und approximative Frequenzfarben.
+- [x] ✅ Experimenteller BPM-Vorschlag mit begrenzter Offline-Analyse; keine automatische musikalische Ausrichtung.
+- [x] ✅ Manueller konstanter 4/4-Beatgrid-Editor mit Vorschau, Save/Cancel, Anker, Slip und SQLite-Speicherung.
+- [x] ✅ SQLite-Bibliothek mit stabilen Track-IDs, JSON-Migration, Transaktionen, Backup/Recovery und Speichern beim Beenden.
+- [x] ✅ Metadaten für Titel/Artist/Album/Dauer sowie Suche und Sortierung.
+- [x] ✅ Flache Crates erstellen, umbenennen, löschen und Tracks zuordnen.
+- [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
+- [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
+- [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
+- [x] ✅ Aktuellen lokalen Stand geprüft: 91 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+
+Veröffentlichungsstand: Bis einschließlich Hot-Cue-Datenspeicherung ist `29b52f8` gepusht. Deck-Pads, Cue-Editor, Marker und die manuelle Loop-Engine sind lokal implementiert und geprüft, aber noch uncommitted.
+
+### Nächste und offene Arbeitspakete
+
+- [x] ✅ Manuelle Loop-Engine mit framegenauem In/Out, Aktivieren/Verlassen und deterministischen Offline-Tests.
+- [ ] ☐ **Als Nächstes:** Loop-Bedienung in der GUI; anschließend persistente gespeicherte Loops.
+- [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
+- [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
+- [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
+- [ ] ☐ MIDI/HID-Controller und Hardware-Feedback.
+- [ ] ☐ Erweiterte Bibliothek: Sub-/Smart-Crates, History, Relocation und Session-Wiederherstellung.
+- [ ] ☐ Erweiterte Grid-Funktionen: variable Tempi, Warp-Marker und Taktartwechsel.
+- [ ] ☐ Cue-Tastatur-/Hold-Verhalten und Prüfung überlappender Marker.
+- [ ] ☐ Vollständiger .NET-Code-/Referenztest-Abgleich und Feature-Paritätsnachweis.
+- [ ] ☐ Unterstützten Umfang optionaler Streaming-/Video-Integrationen festlegen und umsetzen.
+- [ ] ☐ Slint-/Audio-Backend-Auswahl durch Rendering- und Echtzeitmessungen abschließen.
+- [ ] ☐ Native visuelle/Usability-Abnahme, Musik-Korpusprüfung und reale Audio-/Latenz-/Langzeittests.
+- [ ] ☐ Windows/macOS-Plattformqualifikation und abschließende Produktabnahme.
+
 ## Reference
 .NET repository: https://github.com/yovannyr/DRDJ
 
@@ -123,3 +164,23 @@ SQLite schema 4 stores optional grids by stable track ID, preserving fractional 
 The accumulated SQLite/metadata/crate/grid work is published on main as 6412d46; local/remote equality and a clean worktree were verified. The next authorized bounded slice adds eight fixed per-track cue slots with validated position/name/color metadata, library snapshot preservation and transactional SQLite schema 5. It deliberately ends at the data boundary. Migration/restart, sparse-slot identity, explicit removal, invalid/orphaned rows, rollback and retry are automated acceptance targets. No dependency, GUI or audio callback change is needed.
 
 Next proposed slice after review: connect deck hot-cue pads to set/jump/delete operations using actual decoded source positions and duration checks, retaining transport and other-deck isolation, with headless tests. Names/colors editing, waveform cue markers and hardware feedback require explicit acceptance in those UI slices. Overview 48/58 remains partial; a stored model alone does not establish professional cue behavior.
+
+## Hot-cue deck integration checkpoint (2026-10-25)
+
+Hot-cue storage was committed/pushed as 29b52f8 before this user-authorized continuation. This bounded slice connects eight per-deck pads to set/recall and explicit slot deletion. Absolute source-time seeks preserve Play/Pause, grid and sink volumes. Cached cues are shared by canonical track identity and restored with the library. Invalid slot/EOF/out-of-duration actions fail without changing playback; changes persist through the existing worker. No schema/dependency/audio-callback change was required.
+
+Acceptance uses actual headless controls, engine tests and temporary-profile restart/deletion tests, retaining all prior audio/storage regressions. Native visuals/listening/physical latency remain unqualified. Next proposed slice after review: cue name/color editing and waveform cue markers, with reference-backed interaction and headless tests. Quantization, controller feedback and the full professional release gates remain open.
+
+## Cue metadata editor and waveform markers checkpoint (2026-10-25)
+
+The user authorized the next bounded slice after the 86-test deck-pad checkpoint. Per-deck Edit now opens isolated name/RGB fields with explicit Save/Cancel, validated six-digit hex colors and existing Unicode name bounds. Saved positions are immutable in this editor. Source identity and original cue values prevent stale drafts overwriting same-track edits/deletion. Successful source replacement discards a draft; failed replacement retains it. Committed updates propagate to both same-path decks and persist through existing schema 5.
+
+Numbered, named/color-coded markers appear in overview and visible detail ranges; cues outside loaded duration or viewport are hidden. Marker placement follows zoom/seek, and unchanged cue models are reused. Headless workflow/geometry/restart coverage is recorded in LOCAL_VALIDATION.md. No schema/dependency/audio-callback change was needed. The preceding deck integration and this editor/marker slice remain local and uncommitted; 29b52f8 is the latest published checkpoint.
+
+Next proposed bounded slice after review: manual loop-in/out, activate/exit and deterministic offline engine behavior, then GUI controls and persistent saved loops in separately reviewed slices. Cue keyboard/hold behavior, quantization, controller feedback, marker overlap/usability and all native visual/physical-audio gates remain open.
+
+## Manual loop engine checkpoint (2026-10-25)
+
+The user authorized the bounded engine-first loop slice. A shared immutable PCM source replaces SamplesBuffer and uses integer frame addressing; active loops repeat [In, Out) without allocation/locks in its next() implementation. The engine can set In/Out, activate from In preserving Play/Pause, and exit at the current wrapped source position. Seek/hot-cue recall and Cue-to-zero deactivate looping while retaining bounds; selecting a new In clears Out; successful track installation resets bounds and failed preparation preserves them. Out may equal EOF; empty/reversed/out-of-source and subframe-empty regions are rejected. Existing mixer/grid/source ownership remains intact. No dependency/schema/GUI was added; the staged loop-control API awaits the next reviewed GUI slice.
+
+Acceptance includes deterministic stereo output over many wraps, one-frame loops, integer frame-time round trips, allocation counting of one million prepared-source samples, real Rodio offline engine looping/exit/EOF, pause, failed/successful replacement and existing regressions. These do not qualify the surrounding Rodio pipeline as lock-free or prove physical real-time/latency or click-free musical transitions. GUI position reporting still uses Rodio's control-plane position timing with wrapped loop phase. Next proposed bounded slice after review: GUI In/Out/activate/exit controls and displayed loop state, with headless workflows; saved-loop persistence/quantization follow separately. All continuation work after 29b52f8 remains local/uncommitted.

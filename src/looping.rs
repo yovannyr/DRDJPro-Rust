@@ -1,0 +1,181 @@
+//! Frame-aligned manual loops and immutable shared PCM. No locks or allocation in next().
+use rodio::Source;
+use std::{sync::Arc, time::Duration};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameLoop {
+    pub start: usize,
+    pub end: usize,
+}
+impl FrameLoop {
+    pub fn new(start: usize, end: usize, frames: usize) -> Result<Self, String> {
+        if start >= end || end > frames {
+            return Err("Loop needs In < Out within complete track frames".into());
+        }
+        Ok(Self { start, end })
+    }
+    pub fn wrap(self, frame: usize) -> usize {
+        if frame < self.end {
+            frame
+        } else {
+            self.start + (frame - self.start) % (self.end - self.start)
+        }
+    }
+}
+pub fn frame_at(time: Duration, rate: u32) -> usize {
+    (time.as_nanos().saturating_mul(u128::from(rate)) / 1_000_000_000).min(usize::MAX as u128)
+        as usize
+}
+/// Round up fractional nanoseconds so converting this frame time back never loses a frame.
+pub fn frame_time(frame: usize, rate: u32) -> Duration {
+    Duration::from_nanos(((frame as u128 * 1_000_000_000).div_ceil(u128::from(rate))) as u64)
+}
+#[derive(Clone)]
+pub struct PcmSource {
+    data: Arc<[f32]>,
+    channels: u16,
+    rate: u32,
+    cursor: usize,
+    region: Option<FrameLoop>,
+}
+impl PcmSource {
+    pub fn new(channels: u16, rate: u32, data: Vec<f32>) -> Self {
+        assert!(channels > 0 && rate > 0 && data.len().is_multiple_of(usize::from(channels)));
+        Self {
+            data: data.into(),
+            channels,
+            rate,
+            cursor: 0,
+            region: None,
+        }
+    }
+    pub fn frames(&self) -> usize {
+        self.data.len() / usize::from(self.channels)
+    }
+    pub fn set_loop(&mut self, region: FrameLoop) -> Result<(), String> {
+        FrameLoop::new(region.start, region.end, self.frames())?;
+        self.cursor = region.start * usize::from(self.channels);
+        self.region = Some(region);
+        Ok(())
+    }
+}
+impl Iterator for PcmSource {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if let Some(region) = self.region {
+            if self.cursor >= region.end * usize::from(self.channels) {
+                self.cursor = region.start * usize::from(self.channels);
+            }
+        }
+        let sample = self.data.get(self.cursor).copied()?;
+        self.cursor += 1;
+        Some(sample)
+    }
+}
+impl Source for PcmSource {
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+    fn sample_rate(&self) -> u32 {
+        self.rate
+    }
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        if self.region.is_some() {
+            None
+        } else {
+            Some(Duration::from_nanos(
+                (self.frames() as u128 * 1_000_000_000 / u128::from(self.rate)) as u64,
+            ))
+        }
+    }
+    fn try_seek(&mut self, time: Duration) -> Result<(), rodio::source::SeekError> {
+        let frame = if self.region.is_none() && self.total_duration().is_some_and(|end| time >= end)
+        {
+            self.frames()
+        } else {
+            frame_at(time, self.rate).min(self.frames())
+        };
+        self.cursor = self.region.map_or(frame, |r| r.wrap(frame)) * usize::from(self.channels);
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    thread_local! { static COUNT: Cell<Option<usize>> = const { Cell::new(None) }; }
+    struct CountingAllocator;
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = COUNT.try_with(|count| {
+                if let Some(n) = count.get() {
+                    count.set(Some(n + 1));
+                }
+            });
+            System.alloc(layout)
+        }
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            System.dealloc(pointer, layout);
+        }
+        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let _ = COUNT.try_with(|count| {
+                if let Some(n) = count.get() {
+                    count.set(Some(n + 1));
+                }
+            });
+            System.realloc(pointer, layout, size)
+        }
+    }
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+    #[test]
+    fn repeated_loop_output_allocates_nothing_after_preparation() {
+        let mut source = PcmSource::new(2, 48_000, vec![0.25, -0.25, 0.5, -0.5]);
+        source.set_loop(FrameLoop::new(0, 2, 2).unwrap()).unwrap();
+        COUNT.with(|c| c.set(Some(0)));
+        let started = std::time::Instant::now();
+        for _ in 0..1_000_000 {
+            std::hint::black_box(source.next());
+        }
+        let elapsed = started.elapsed();
+        let allocations = COUNT.with(|c| c.replace(None).unwrap());
+        assert_eq!(allocations, 0);
+        eprintln!("LoopSource: 1000000 samples in {elapsed:?}, {allocations} allocations (diagnostic, not a real-time deadline)");
+    }
+    #[test]
+    fn stereo_one_frame_loop_and_many_wraps_have_exact_channel_order() {
+        let mut source = PcmSource::new(2, 48_000, vec![0., 1., 2., 3., 4., 5., 6., 7.]);
+        assert!(FrameLoop::new(1, 1, 4).is_err());
+        assert!(FrameLoop::new(0, 5, 4).is_err());
+        source.set_loop(FrameLoop::new(1, 3, 4).unwrap()).unwrap();
+        assert!(source.total_duration().is_none());
+        for i in 0..100_000 {
+            assert_eq!(source.next(), Some([2., 3., 4., 5.][i % 4]));
+        }
+        source.set_loop(FrameLoop::new(3, 4, 4).unwrap()).unwrap();
+        for _ in 0..1000 {
+            assert_eq!(source.next(), Some(6.));
+            assert_eq!(source.next(), Some(7.));
+        }
+    }
+    #[test]
+    fn integer_frame_times_do_not_drift_and_eof_is_finite_without_loop() {
+        for rate in [44100, 48000, 96000] {
+            for frame in [0, 1, 17, rate as usize, rate as usize * 3600 + 1] {
+                assert_eq!(frame_at(frame_time(frame, rate), rate), frame);
+            }
+        }
+        let mut fractional = PcmSource::new(2, 44100, vec![1., -1., 2., -2.]);
+        fractional
+            .try_seek(fractional.total_duration().unwrap())
+            .unwrap();
+        assert_eq!(fractional.next(), None);
+        let mut source = PcmSource::new(1, 2, vec![1., 2., 3., 4.]);
+        source.try_seek(Duration::from_secs(1)).unwrap();
+        assert_eq!(source.collect::<Vec<_>>(), vec![3., 4.]);
+    }
+}

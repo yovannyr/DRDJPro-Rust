@@ -9,6 +9,7 @@ mod hot_cues;
 mod legacy_catalog;
 mod library;
 mod library_store;
+mod looping;
 mod playback;
 mod tempo;
 #[cfg(test)]

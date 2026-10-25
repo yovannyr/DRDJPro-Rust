@@ -304,3 +304,50 @@ After the final source change:
 Four added tests cover model bounds/Unicode/clear identity; sparse cue restart, exact position/name/color preservation, explicit deletion and track removal; an injected cue-write failure rolling back metadata/crates/grid/cues together followed by retry; schema-4 upgrade/failure preserving prior version/grid/metadata/membership; and malformed/orphaned database row rejection. Existing schema-1–3 upgrade tests were adapted to the new current version and remain green, as do process-abort/integrity and headless/audio regressions. An initial run found a legacy assertion still expecting schema 4; the assertion was updated to schema 5 before the final full green run.
 
 All storage fixtures used temporary profiles; the personal catalog was not migrated by tests. No visual, native dialog, listening, hardware/latency or maximum-size performance acceptance is claimed. This is not yet a usable Hot Cue feature: GUI pads, source-duration checks, jump semantics, names/colors editing, waveform markers and controller feedback remain open. The next proposed bounded slice is deck set/jump/delete integration with headless tests. Changes remain local and uncommitted for review.
+
+## Hot-cue deck set/recall/delete — local verification (2026-10-25)
+
+The preceding data foundation was committed/pushed to origin/main as 29b52f8. This user-authorized continuation adds eight occupied/empty cue pads per deck, accessible name/time descriptions and color strips, plus explicit slot-selected deletion. Empty-pad activation stores the current decoded position with a default name/color; occupied-pad activation recalls it without changing Play/Pause. GUI changes use the existing background durability/footer flow. Shared canonical-path decks use one library-owned cue set; different tracks remain independent. Unchanged cue models are reused. No schema, dependency or audio callback code changed.
+
+The engine now exposes absolute Duration seeking on the existing control-plane source-replacement path; percentage seeking delegates to it. This avoids rounding a stored cue through an f32 percentage. Bounds are validated against actual decoded duration; the controller rejects setting at EOF and recalling at/beyond EOF, preserving invalid cached data for explicit deletion/repair. Loading/import/restore guards prevent cue edits during source/catalog replacement. The compact deck area grows to 230 px, retaining existing shared-waveform/library layout.
+
+After the final source/test change, cargo fmt --check and cargo clippy --all-targets -- -D warnings passed without warnings; cargo test passed all 86 tests (0 failed/ignored) in 5.40 s. The two added tests cover absolute seek validation and paused/playing/grid/other-deck/sink-volume preservation; actual headless pad/delete-selector actions; sparse slots/shared-track updates; different-track and failed/replaced-source lifetime; EOF/stale-cue/invalid-slot rejection; recall avoiding catalog writes; fresh controller/engine/store restoration; and a second restart confirming deletion. Existing layout regression also checks all pad and delete controls remain above shared waveforms and within the window at 850x740 and 1280x860. These are headless structural checks, not visual approval.
+
+All persistence fixtures used temporary profiles. No personal catalog, tags or reference assets were changed. No visual/native-dialog, listening, physical trigger latency, hardware feedback, maximum-scale or cross-platform acceptance is claimed. Quantization, hold-to-play, cue-name/color editing and waveform cue markers remain open. The next proposed reviewed slice is name/color editing and waveform markers. This continuation remains local and uncommitted.
+
+Final release compilation passed (29.47 s). The rebuilt executable's MP3 analysis passed: 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592. git diff --check passed with line-ending notices only.
+
+## Cue name/color editor and waveform markers — local verification (2026-10-25)
+
+The user authorized continuing the plan from the local 86-test deck-pad checkpoint. That work was preserved. This bounded slice adds per-deck occupied-slot Edit, isolated Unicode name and RGB hex fields, explicit Save/Cancel and optimistic source/cue conflict checks. Names/colors are committed through the existing validated domain model and schema-5 transaction without changing cue position, audio samples or callback code. Successful prepared-source replacement cancels drafts; failed replacement retains them. No new dependency/schema was needed.
+
+Overview and detail strips now display saved-color cue lines with slot/name labels. Detail transforms full-track percentages by viewport start/end and hides offscreen positions. Cues at/beyond actual decoded duration are suppressed while cached metadata remains repairable. Same-path decks share committed metadata; unchanged cue/duration models are reused. Marker labels are display-only and clipped to waveform bounds; overlap/contrast/native rendering are not qualified.
+
+After the final source/test change, all commands completed with exit code 0:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --check` | Passed |
+| `cargo clippy --all-targets -- -D warnings` | Passed, no warnings |
+| `cargo test` | 87 passed, 0 failed, 0 ignored; 8.66 s |
+| `cargo build --release` | Passed; 34.31 s |
+| `target/release/drdjpro-ui-spike.exe --analyze tests/fixtures/tone-9s.mp3` | 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592 |
+| `git diff --check` | Passed; line-ending notices only |
+
+The added headless regression uses actual Edit/name/RGB/Save/Cancel controls to cover Unicode, invalid color and oversized name rejection, unchanged committed data on Cancel, shared-track concurrent-edit and deletion conflicts, preserved source position/playback/Sink volumes, failed/successful track replacement and fresh controller/engine/storage restart preserving names/colors. It verifies overview/detail marker line geometry at 850x740 and 1280x860, visibility after seek/zoom, and model RGB values. Existing stale-position test now additionally checks invalid cues produce no overview marker. Existing audio, transport, storage rollback/crash recovery and GUI regressions remain green.
+
+Tests used temporary profiles/media; no personal catalog or reference assets were modified. No visual, native-dialog, listening, physical cue-latency, controller hardware or cross-platform acceptance is claimed. Cue keyboard/hold behavior, quantization and overlapping-marker usability remain open. The preceding deck-pad work and this slice remain local/uncommitted for review. Next proposed bounded slice: manual loop engine in/out, activation/exit and deterministic offline tests; GUI/persistent saved loops follow separately.
+
+## Manual loop engine — local verification (2026-10-25)
+
+The user authorized the engine-first manual-loop slice; preceding cue/UI/documentation work was preserved. Added looping.rs with immutable Arc PCM, integer frame addressing and validated [In, Out) regions. PreparedTrack now owns that source instead of Rodio SamplesBuffer, preserving one shared PCM allocation on clones. The new next() uses only an optional boundary branch and indexed sample read. No new dependency, schema or GUI was added. The staged engine-only control methods intentionally await GUI wiring in the following slice.
+
+Engine behavior: set In clears Out; Out must follow In within the source and may equal EOF; activate starts at In preserving Play/Pause; exit continues from wrapped source position. Seek/hot-cue recall/Cue disable the loop and retain boundaries; a successful track installation clears loop ownership, failed preparation retains it. Active-loop Pause now freezes a fresh paused source at its current wrapped position, preventing a pending Rodio periodic-position update from shifting the paused display across a loop boundary. This issue was exposed by the added pause/output regression and fixed before the final green run. Replacing/activating/exiting sources remains a control-plane allocation/queue operation; no lock-free claim is made for Rodio or the full pipeline.
+
+After the final source/test change, cargo fmt --check and cargo clippy --all-targets -- -D warnings passed; cargo test passed 91 tests, 0 failed/ignored, in 8.23 s. Four new tests cover stereo channel order across 100,000 repeated samples, one-frame loops/EOF, integer frame-time conversion at 44.1/48/96 kHz, finite source EOF including fractional-nanosecond truncation, real offline Rodio repeated samples/phase, pause/resume/exit/EOF, invalid bounds, failed/successful replacement, seek/Cue and grid/Sink-volume/other-deck preservation. Existing UI/hot-cue/storage/audio regressions stay green.
+
+The test-only thread-local counting allocator recorded zero allocations for one million prepared PcmSource::next calls. A diagnostic rerun of that exact test measured 17.8778 ms in the debug test executable on this host; this is not a real-time deadline, device measurement or production benchmark. Source inspection has no locking in next(); surrounding Rodio/backend behavior remains unqualified. PCM boundary continuity depends on chosen samples: no smoothing/crossfade/quantization or click-free listening claim is made. Output position uses Rodio control-plane timing and is not hardware-latency compensated.
+
+All fixtures were temporary/offline. No visual, listening, device/physical-latency, long-run hardware or cross-platform acceptance is claimed. No personal catalog or reference asset changed. Loop GUI/active-state display and saved-loop persistence remain open; GUI integration is the next proposed reviewed slice. Changes remain local and uncommitted.
+
+Final `cargo build --release` passed in 33.02 s. The rebuilt executable's MP3 analysis passed: 44100 Hz, 2 channels, 398592 frames, 9.038 s, peak 0.0883, RMS 0.0592. `git diff --check` passed with line-ending notices only. The plan checklist marks the engine slice complete and GUI loops next.

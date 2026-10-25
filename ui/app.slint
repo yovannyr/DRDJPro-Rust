@@ -1,4 +1,5 @@
 import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox } from "std-widgets.slint";
+export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string }
 export struct CrateRow { id: int, name: string, count: int }
 export struct BeatLine { position: float, downbeat: bool, first: bool, bar: int }
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
@@ -10,6 +11,7 @@ component WaveformStrip inherits Rectangle {
     in property <[float]> values;
     in property <[color]> colors;
     in property <[BeatLine]> beats;
+    in property <[HotCueRow]> hot-cues;
     in property <bool> enabled;
     in property <float> position;
     in property <float> marker;
@@ -34,6 +36,14 @@ component WaveformStrip inherits Rectangle {
         visible: line.downbeat; x: clamp(line.position,0,100)/100*max(0px,parent.width - 14px); y: 1px;
         text: "" + line.bar; color: line.first ? #ff5555 : #dfe8f5; font-size: 10px;
         accessible-role: text; accessible-label: deck-label + " bar label"; accessible-description: "Bar " + line.bar;
+    }
+    for cue[i] in hot-cues : Rectangle {
+        visible: cue.valid && range-end > range-start && cue.position >= range-start && cue.position <= range-end;
+        accessible-role: image; accessible-label: deck-label + (overview ? " overview cue marker " : " detail cue marker ") + (i + 1);
+        accessible-description: cue.description; accessible-value: cue.position;
+        x: clamp((cue.position - range-start) / max(0.000001, range-end - range-start), 0, 1) * max(0px, parent.width - self.width);
+        width: 2px; height: parent.height; background: cue.tint;
+        Text { x: 3px; y: max(0px, parent.height - 14px); width: 110px; text: "" + (i + 1) + " " + cue.name; color: cue.tint; font-size: 10px; overflow: elide; }
     }
     Rectangle {
         accessible-role: image;
@@ -64,6 +74,13 @@ component CompactDeck inherits Rectangle {
     in property <bool> loading;
     in property <bool> playing;
     in-out property <float> position;
+    in property <[HotCueRow]> hot-cues;
+    property <int> delete-slot: 1;
+    in property <bool> cue-editing;
+    in-out property <string> cue-name;
+    in-out property <string> cue-rgb;
+    callback edit-hot-cue(int); callback save-hot-cue(); callback cancel-hot-cue();
+    callback hot-cue(int); callback delete-hot-cue(int);
     callback load(); callback toggle(); callback cue(); callback seek(float);
     background: #171c24; border-width: 1px; border-color: #303b4b;
     VerticalLayout {
@@ -77,7 +94,7 @@ component CompactDeck inherits Rectangle {
         Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
         WaveformStrip {
             height: 42px; overview: true; deck-label: root.deck-label; accent: root.accent;
-            values: root.waveform; colors: root.colors; position: root.position; marker: root.position;
+            values: root.waveform; colors: root.colors; hot-cues: root.hot-cues; position: root.position; marker: root.position;
             enabled: !audio-enabled || loaded;
             seek(value) => { if audio-enabled { root.seek(value); } else { root.position = value; } }
         }
@@ -86,6 +103,34 @@ component CompactDeck inherits Rectangle {
             Text { text: round(position) + "%"; color: accent; font-size: 11px; horizontal-alignment: right; }
         }
         Slider { minimum: 0; maximum: 100; value <=> position; accessible-label: deck-label + " position"; enabled: !audio-enabled || loaded; changed(value) => { if audio-enabled { root.seek(value); } } }
+        HorizontalLayout {
+            spacing: 2px; height: 30px;
+            for pad[i] in hot-cues : VerticalLayout {
+                spacing: 0px;
+                Button {
+                    text: "" + (i + 1) + (pad.occupied ? " ●" : " +");
+                    accessible-label: deck-label + " hot cue " + (i + 1);
+                    accessible-description: pad.description;
+                    enabled: loaded && !loading;
+                    clicked => { root.hot-cue(i); }
+                }
+                Rectangle { height: 3px; background: pad.occupied ? pad.tint : #394251; }
+            }
+        }
+        if !root.cue-editing : HorizontalLayout {
+            height: 26px;
+            Text { text: "SLOT"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
+            SpinBox { minimum: 1; maximum: 8; value <=> root.delete-slot; accessible-label: deck-label + " delete hot cue slot"; }
+            Button { text: "EDIT"; accessible-label: deck-label + " edit hot cue"; enabled: loaded && !loading; clicked => { root.edit-hot-cue(root.delete-slot - 1); } }
+            Button { text: "DELETE"; accessible-label: deck-label + " delete hot cue"; enabled: loaded && !loading; clicked => { root.delete-hot-cue(root.delete-slot - 1); } }
+        }
+        if root.cue-editing : HorizontalLayout {
+            height: 26px; spacing: 2px;
+            LineEdit { text <=> root.cue-name; accessible-label: root.deck-label + " cue name"; placeholder-text: "Cue name"; }
+            LineEdit { width: 74px; text <=> root.cue-rgb; accessible-label: root.deck-label + " cue RGB"; placeholder-text: "RRGGBB"; }
+            Button { text: "SAVE"; accessible-label: root.deck-label + " save hot cue"; enabled: !loading; clicked => { root.save-hot-cue(); } }
+            Button { text: "CANCEL"; accessible-label: root.deck-label + " cancel hot cue"; clicked => { root.cancel-hot-cue(); } }
+        }
     }
 }
 
@@ -95,6 +140,7 @@ component DetailWaveform inherits Rectangle {
     in property <[float]> detail;
     in property <[color]> colors;
     in property <[BeatLine]> beats;
+    in property <[HotCueRow]> hot-cues;
     in property <bool> enabled;
     in property <bool> grid-active;
     in property <bool> grid-editing;
@@ -142,7 +188,7 @@ component DetailWaveform inherits Rectangle {
         }
         WaveformStrip {
             height: 54px; overview: false; deck-label: root.deck-label; accent: root.accent;
-            values: root.detail; colors: root.colors; beats: root.beats; enabled: root.enabled;
+            values: root.detail; colors: root.colors; hot-cues: root.hot-cues; beats: root.beats; enabled: root.enabled;
             position: root.position; marker: root.marker; range-start: root.detail-start; range-end: root.detail-end;
             seek(value) => { root.seek(value); }
         }
@@ -318,6 +364,18 @@ export component AppWindow inherits Window {
     in-out property <bool> right-playing: false;
     in-out property <float> left-position: 0;
     in-out property <float> right-position: 0;
+    in property <[HotCueRow]> left-hot-cues;
+    in property <bool> left-cue-editing;
+    in-out property <string> left-cue-name;
+    in-out property <string> left-cue-rgb;
+    callback edit-hot-cue-left(int); callback save-hot-cue-left(); callback cancel-hot-cue-left();
+    in property <[HotCueRow]> right-hot-cues;
+    in property <bool> right-cue-editing;
+    in-out property <string> right-cue-name;
+    in-out property <string> right-cue-rgb;
+    callback edit-hot-cue-right(int); callback save-hot-cue-right(); callback cancel-hot-cue-right();
+    callback hot-cue-left(int); callback hot-cue-right(int);
+    callback delete-hot-cue-left(int); callback delete-hot-cue-right(int);
     callback toggle-left();
     callback toggle-right();
     callback reset-left();
@@ -376,10 +434,16 @@ export component AppWindow inherits Window {
             Text { text: "EXTENDED / " + (audio-enabled ? "INTERNAL AUDIO" : "SIMULATION · NO AUDIO"); color: #9cacc1; horizontal-alignment: right; vertical-alignment: center; }
         }
         HorizontalLayout {
-            height: 166px; spacing: 8px;
+            height: 230px; spacing: 8px;
             CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
+                hot-cues: root.left-hot-cues;
+                cue-editing: root.left-cue-editing; cue-name <=> root.left-cue-name; cue-rgb <=> root.left-cue-rgb;
+                edit-hot-cue(slot) => { root.edit-hot-cue-left(slot); }
+                save-hot-cue => { root.save-hot-cue-left(); } cancel-hot-cue => { root.cancel-hot-cue-left(); }
+                hot-cue(slot) => { root.hot-cue-left(slot); }
+                delete-hot-cue(slot) => { root.delete-hot-cue-left(slot); }
                 playing: root.left-playing; position <=> root.left-position;
                 audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.loading || root.library-busy;
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } seek(value) => { root.seek-left(value); }
@@ -387,6 +451,12 @@ export component AppWindow inherits Window {
             CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 waveform: root.right-waveform; colors: root.right-waveform-colors;
+                hot-cues: root.right-hot-cues;
+                cue-editing: root.right-cue-editing; cue-name <=> root.right-cue-name; cue-rgb <=> root.right-cue-rgb;
+                edit-hot-cue(slot) => { root.edit-hot-cue-right(slot); }
+                save-hot-cue => { root.save-hot-cue-right(); } cancel-hot-cue => { root.cancel-hot-cue-right(); }
+                hot-cue(slot) => { root.hot-cue-right(slot); }
+                delete-hot-cue(slot) => { root.delete-hot-cue-right(slot); }
                 playing: root.right-playing; position <=> root.right-position;
                 audio-enabled: root.audio-enabled; loaded: root.right-loaded; loading: root.loading || root.library-busy;
                 load => { root.load-right(); } toggle => { root.toggle-right(); } cue => { root.reset-right(); } seek(value) => { root.seek-right(value); }
@@ -410,7 +480,7 @@ export component AppWindow inherits Window {
             VerticalLayout { spacing: 2px;
                 DetailWaveform {
                     deck-label: "DECK A"; accent: #36c9ef; detail: root.left-detail; colors: root.left-detail-colors;
-                    beats: root.left-beats; position: root.left-position; marker: root.left-detail-marker;
+                    hot-cues: root.left-hot-cues; beats: root.left-beats; position: root.left-position; marker: root.left-detail-marker;
                     detail-start: root.left-detail-start; detail-end: root.left-detail-end;
                     detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
                     grid-active: root.left-grid-active; grid-caption: root.left-grid-caption;
@@ -425,7 +495,7 @@ export component AppWindow inherits Window {
                 }
                 DetailWaveform {
                     deck-label: "DECK B"; accent: #ffae58; detail: root.right-detail; colors: root.right-detail-colors;
-                    beats: root.right-beats; position: root.right-position; marker: root.right-detail-marker;
+                    hot-cues: root.right-hot-cues; beats: root.right-beats; position: root.right-position; marker: root.right-detail-marker;
                     detail-start: root.right-detail-start; detail-end: root.right-detail-end;
                     detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
                     grid-active: root.right-grid-active; grid-caption: root.right-grid-caption;

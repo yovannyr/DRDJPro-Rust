@@ -124,3 +124,15 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | --- | --- | --- | --- |
 | R-CUE-01 | Eight fixed validated per-track slots, nanosecond positions, bounded Unicode names and RGB colors | Domain bounds/Unicode/color tests; sparse-slot clear preserves other identities | Data only; GUI/engine triggers, source-duration checking and quantization open |
 | R-CUE-02 | Schema-5 persistence, library snapshots and migration from schemas 1–4 | Restart with missing media, exact name/color/position round trip, explicit clear/deletion, failed cue-write rollback of metadata/crates/grid and retry; schema-4 upgrade/failure; invalid/orphaned-row rejection | No tag writes, external library compatibility, max-scale benchmark or hardware acceptance |
+| R-CUE-03 | Eight GUI pads per deck: empty set, occupied recall, explicit slot deletion | Headless accessible pad/select/delete actions, same-track sharing, different-track isolation, failed/successful replacement and two fresh-controller restoration checks | Name/color editor and waveform markers are covered by R-CUE-05/06; keyboard/hardware feedback and quantization remain open |
+| R-CUE-04 | Absolute source-time recall with transport/grid/mixer preservation | Engine nanosecond-offset/paused/playing/bounds tests; headless EOF/stale-cue rejection and Sink-volume assertions | Source offset is preserved; sample-grid audible timing and physical latency are not qualified |
+| R-CUE-05 | Per-deck cue name/RGB drafts, Save/Cancel and source/value conflict protection | Headless Unicode/invalid/cancel/save, simultaneous same-track drafts, deletion conflict, successful/failed source replacement, transport/volume preservation and restart | No keyboard shortcuts or physical/hardware acceptance |
+| R-CUE-06 | Numbered/named/color overview and detail markers | Two-size line geometry; seek/zoom viewport visibility; invalid duration suppression and persisted RGB/name round trip | Display-only; overlapping labels/contrast/native rendering performance await acceptance |
+
+## Manual loop engine (2026-10-25)
+
+| ID | Capability / target | Acceptance evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| R-LOOP-01 | Integer-frame [In, Out) repetition from shared immutable PCM | Stereo channel order over 100,000 samples, one-frame/EOF bounds, 44.1/48/96 kHz frame-time round trips | No smoothing/quantization or musical alignment |
+| R-LOOP-02 | Manual per-deck In/Out/activate/exit lifecycle | Real Rodio offline sample assertions across many wraps, wrapped position, pause/resume/exit/EOF, validation, seek/Cue and failed/successful replacement, grid/sink-volume and other-deck isolation | Engine-only; GUI and saved-loop persistence follow separately |
+| R-LOOP-03 | Prepared PCM next() has no allocations or locks | Test allocator records zero allocations for one million calls; diagnostic timing; source inspection has only index/branch/read operations | Does not qualify Rodio/backend queues, source replacement, deallocation, hardware latency or hard real-time deadlines |

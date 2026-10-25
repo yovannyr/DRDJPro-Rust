@@ -1,7 +1,6 @@
 //! Control-plane loading and two Rodio decks. Rodio itself is not lock-free.
-use rodio::{
-    buffer::SamplesBuffer, mixer::Mixer, Decoder, OutputStream, OutputStreamBuilder, Sink, Source,
-};
+use crate::looping::{frame_at, frame_time, FrameLoop, PcmSource};
+use rodio::{mixer::Mixer, Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use std::{
     cell::{Cell, RefCell},
     error::Error,
@@ -59,7 +58,7 @@ impl MixerLevels {
 pub struct PreparedTrack {
     pub title: String,
     path: Arc<Path>,
-    samples: SamplesBuffer,
+    samples: PcmSource,
     overview: Arc<[f32]>,
     detail: Arc<crate::waveform::DetailPeaks>,
     tempo: Option<crate::tempo::TempoEstimate>,
@@ -108,7 +107,7 @@ impl PreparedTrack {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned(),
-            samples: SamplesBuffer::new(channels, rate, samples),
+            samples: PcmSource::new(channels, rate, samples),
             overview,
             detail,
             tempo,
@@ -123,6 +122,9 @@ struct Deck {
     sink: Sink,
     track: Option<PreparedTrack>,
     offset: Duration,
+    loop_in: Option<usize>,
+    loop_region: Option<FrameLoop>,
+    loop_active: bool,
     grid: Option<crate::beatgrid::BeatGrid>,
 }
 // A fresh Rodio queue initially reports mono/44.1 kHz even when stereo PCM is queued.
@@ -197,6 +199,9 @@ impl DualDeckEngine {
                 sink,
                 track: None,
                 offset: Duration::ZERO,
+                loop_in: None,
+                loop_region: None,
+                loop_active: false,
                 grid: None,
             })
         });
@@ -218,7 +223,7 @@ impl DualDeckEngine {
         &self,
         id: DeckId,
         track: PreparedTrack,
-        source: SamplesBuffer,
+        source: PcmSource,
         offset: Duration,
         playing: bool,
         grid: Option<crate::beatgrid::BeatGrid>,
@@ -237,10 +242,25 @@ impl DualDeckEngine {
             sink.play();
         }
         self.mixer.add(output);
+        let (loop_in, loop_region) = {
+            let deck = self.decks[id.index()].borrow();
+            if deck
+                .track
+                .as_ref()
+                .is_some_and(|old| Arc::ptr_eq(&old.detail, &track.detail))
+            {
+                (deck.loop_in, deck.loop_region)
+            } else {
+                (None, None)
+            }
+        };
         *self.decks[id.index()].borrow_mut() = Deck {
             sink,
             track: Some(track),
             offset,
+            loop_in,
+            loop_region,
+            loop_active: false,
             grid,
         };
     }
@@ -249,6 +269,14 @@ impl DualDeckEngine {
         if !percent.is_finite() {
             return Err("Invalid seek position".into());
         }
+        let duration = self.snapshot(id).duration;
+        self.seek_position(
+            id,
+            duration.mul_f64(f64::from(percent.clamp(0.0, 100.0)) / 100.0),
+        )
+    }
+    /// Absolute source-time seek. Hot cues must not be rounded through a GUI percentage.
+    pub fn seek_position(&self, id: DeckId, offset: Duration) -> Result<(), String> {
         let (track, playing, grid) = {
             let deck = self.decks[id.index()].borrow();
             (
@@ -258,7 +286,9 @@ impl DualDeckEngine {
             )
         };
         let duration = track.duration();
-        let offset = duration.mul_f64(f64::from(percent.clamp(0.0, 100.0)) / 100.0);
+        if offset > duration {
+            return Err("Position is outside the loaded track".into());
+        }
         let mut source = track.samples.clone();
         source.try_seek(offset).map_err(|e| e.to_string())?;
         self.replace_source(
@@ -270,6 +300,79 @@ impl DualDeckEngine {
             grid,
         );
         Ok(())
+    }
+    // Staged control-plane API: GUI wiring follows in the next reviewed slice.
+    #[allow(dead_code)]
+    pub fn set_loop_in(&self, id: DeckId, position: Duration) -> Result<(), String> {
+        let snapshot = self.snapshot(id);
+        let rate = self.decks[id.index()]
+            .borrow()
+            .track
+            .as_ref()
+            .ok_or("Load a track first")?
+            .samples
+            .sample_rate();
+        if position >= snapshot.duration {
+            return Err("Loop In must be before track end".into());
+        }
+        if self.decks[id.index()].borrow().loop_active {
+            self.exit_loop(id)?;
+        }
+        let mut deck = self.decks[id.index()].borrow_mut();
+        deck.loop_in = Some(frame_at(position, rate));
+        deck.loop_region = None;
+        Ok(())
+    }
+    #[allow(dead_code)]
+    pub fn set_loop_out(&self, id: DeckId, position: Duration) -> Result<(), String> {
+        let region = {
+            let deck = self.decks[id.index()].borrow();
+            let track = deck.track.as_ref().ok_or("Load a track first")?;
+            if position > track.duration() {
+                return Err("Loop Out exceeds track end".into());
+            }
+            // Duration can truncate a fractional nanosecond at EOF; map that exact end to all frames.
+            let end = if position == track.duration() {
+                track.samples.frames()
+            } else {
+                frame_at(position, track.samples.sample_rate())
+            };
+            FrameLoop::new(
+                deck.loop_in.ok_or("Set Loop In first")?,
+                end,
+                track.samples.frames(),
+            )?
+        };
+        if self.decks[id.index()].borrow().loop_active {
+            self.exit_loop(id)?;
+        }
+        self.decks[id.index()].borrow_mut().loop_region = Some(region);
+        Ok(())
+    }
+    #[allow(dead_code)]
+    pub fn activate_loop(&self, id: DeckId) -> Result<(), String> {
+        let (track, region, playing, grid) = {
+            let deck = self.decks[id.index()].borrow();
+            (
+                deck.track.clone().ok_or("Load a track first")?,
+                deck.loop_region.ok_or("Set valid Loop In/Out first")?,
+                !deck.sink.is_paused() && !deck.sink.empty(),
+                deck.grid,
+            )
+        };
+        let mut source = track.samples.clone();
+        source.set_loop(region)?;
+        let offset = frame_time(region.start, source.sample_rate());
+        self.replace_source(id, track, source, offset, playing, grid);
+        self.decks[id.index()].borrow_mut().loop_active = true;
+        Ok(())
+    }
+    #[allow(dead_code)]
+    pub fn exit_loop(&self, id: DeckId) -> Result<(), String> {
+        if !self.decks[id.index()].borrow().loop_active {
+            return Ok(());
+        }
+        self.seek_position(id, self.snapshot(id).position)
     }
     pub fn load_a(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         self.install(DeckId::A, PreparedTrack::open(path)?);
@@ -298,7 +401,31 @@ impl DualDeckEngine {
         }
     }
     pub fn pause(&self, id: DeckId) {
-        self.decks[id.index()].borrow().sink.pause();
+        // Freeze the wrapped control-plane position instead of allowing Rodio's pending
+        // periodic position update to move it across a loop boundary after Pause.
+        let active = self.decks[id.index()].borrow().loop_active;
+        if active {
+            let position = self.snapshot(id).position;
+            let (track, region, grid) = {
+                let deck = self.decks[id.index()].borrow();
+                (
+                    deck.track.clone().unwrap(),
+                    deck.loop_region.unwrap(),
+                    deck.grid,
+                )
+            };
+            let mut source = track.samples.clone();
+            source
+                .set_loop(region)
+                .expect("Installed loop was validated");
+            source
+                .try_seek(position)
+                .expect("In-memory seek cannot fail");
+            self.replace_source(id, track, source, position, false, grid);
+            self.decks[id.index()].borrow_mut().loop_active = true;
+        } else {
+            self.decks[id.index()].borrow().sink.pause();
+        }
     }
     pub fn cue(&self, id: DeckId) {
         let (track, grid) = {
@@ -348,6 +475,18 @@ impl DualDeckEngine {
                 .saturating_add(deck.sink.get_pos())
                 .min(duration)
         };
+        let position = if deck.loop_active {
+            let track = deck.track.as_ref().unwrap();
+            frame_time(
+                deck.loop_region.unwrap().wrap(frame_at(
+                    deck.offset.saturating_add(deck.sink.get_pos()),
+                    track.samples.sample_rate(),
+                )),
+                track.samples.sample_rate(),
+            )
+        } else {
+            position
+        };
         DeckSnapshot {
             path: deck.track.as_ref().map(|t| Arc::clone(&t.path)),
             title: deck
@@ -363,6 +502,13 @@ impl DualDeckEngine {
             grid: deck.grid,
             tempo: deck.track.as_ref().and_then(|track| track.tempo),
         }
+    }
+    #[cfg(test)]
+    pub fn output_volumes(&self) -> (f32, f32) {
+        (
+            self.decks[0].borrow().sink.volume(),
+            self.decks[1].borrow().sink.volume(),
+        )
     }
     pub fn set_levels(&self, levels: MixerLevels) {
         self.levels.set(levels);
@@ -402,6 +548,160 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn loop_lifecycle_offline_audio_position_exit_seek_and_track_replacement() {
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48_000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        assert!(engine.set_loop_in(DeckId::A, Duration::ZERO).is_err());
+        let samples: Vec<_> = (0..48_000)
+            .flat_map(|frame| {
+                let v = if frame < 12_000 {
+                    0.1
+                } else if frame < 24_000 {
+                    0.4
+                } else {
+                    0.8
+                };
+                [v, -v]
+            })
+            .collect();
+        engine.install(
+            DeckId::A,
+            PreparedTrack {
+                path: Arc::from(Path::new("loop-test.wav")),
+                title: "loop test".into(),
+                overview: crate::waveform::peak_overview(&samples, 2).into(),
+                detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48_000)),
+                tempo: None,
+                samples: PcmSource::new(2, 48_000, samples),
+            },
+        );
+        let other = wav_file(4096, 48_000 * 4);
+        engine.load_b(other.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            crossfader: 0.,
+            channel_a: 0.5,
+            channel_b: 0.8,
+        });
+        let volumes = engine.output_volumes();
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        assert!(engine.activate_loop(DeckId::A).is_err());
+        assert!(engine
+            .set_loop_out(DeckId::A, Duration::from_millis(500))
+            .is_err());
+        engine
+            .set_loop_in(DeckId::A, Duration::from_millis(250))
+            .unwrap();
+        assert!(engine
+            .set_loop_out(DeckId::A, Duration::from_millis(250))
+            .is_err());
+        assert!(engine
+            .set_loop_out(DeckId::A, Duration::from_secs(2))
+            .is_err());
+        engine
+            .set_loop_out(DeckId::A, Duration::from_millis(500))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(250)
+        );
+        engine.play(DeckId::A);
+        for _ in 0..5 {
+            // More than the entire one-second track: every emitted frame must stay in the loop.
+            for frame in output
+                .by_ref()
+                .take(48_000)
+                .collect::<Vec<_>>()
+                .as_chunks::<2>()
+                .0
+            {
+                assert!((frame[0] - 0.2).abs() < 1e-6);
+                assert!((frame[1] + 0.2).abs() < 1e-6);
+            }
+            let position = engine.snapshot(DeckId::A).position;
+            assert!((Duration::from_millis(250)..Duration::from_millis(500)).contains(&position));
+        }
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(grid));
+        assert_eq!(engine.output_volumes(), volumes);
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::ZERO);
+        engine.pause(DeckId::A);
+        let paused = engine.snapshot(DeckId::A).position;
+        output.by_ref().take(4096).for_each(drop);
+        assert_eq!(engine.snapshot(DeckId::A).position, paused);
+        assert!(engine
+            .load_a(Path::new("missing-loop-fixture.wav"))
+            .is_err());
+        assert!(engine.decks[0].borrow().loop_active);
+        engine.play(DeckId::A);
+        let before = engine.snapshot(DeckId::A).position;
+        engine.exit_loop(DeckId::A).unwrap();
+        assert!(!engine.decks[0].borrow().loop_active);
+        assert_eq!(engine.snapshot(DeckId::A).position, before);
+        assert!(engine.snapshot(DeckId::A).playing);
+        output.by_ref().take(96_000).for_each(drop);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.activate_loop(DeckId::A).unwrap();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.seek_percent(DeckId::A, 75.).unwrap();
+        assert!(!engine.decks[0].borrow().loop_active);
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.cue(DeckId::A);
+        assert!(!engine.decks[0].borrow().loop_active);
+        assert!(engine.decks[0].borrow().loop_region.is_some());
+        engine.activate_loop(DeckId::A).unwrap();
+        let original = engine.decks[0].borrow().loop_region;
+        assert!(engine
+            .set_loop_in(DeckId::A, Duration::from_secs(1))
+            .is_err());
+        assert_eq!(engine.decks[0].borrow().loop_region, original);
+        assert!(engine.decks[0].borrow().loop_active);
+        engine.set_loop_in(DeckId::A, Duration::ZERO).unwrap();
+        assert!(engine.decks[0].borrow().loop_region.is_none());
+        engine
+            .set_loop_out(DeckId::A, Duration::from_secs(1))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        engine.load_a(other.path()).unwrap();
+        assert!(engine.decks[0].borrow().loop_region.is_none());
+        assert!(!engine.decks[0].borrow().loop_active);
+    }
+    #[test]
+    fn absolute_cue_seek_preserves_transport_grid_other_deck_and_rejects_outside_source() {
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = DualDeckEngine::from_mixer(mixer);
+        assert!(engine.seek_position(DeckId::A, Duration::ZERO).is_err());
+        let file = wav_file(8192, 48_000 * 4);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            crossfader: 0.3,
+            channel_a: 0.6,
+            channel_b: 0.8,
+        });
+        let gains = engine.output_volumes();
+        let grid = crate::beatgrid::BeatGrid::new(128.5, Duration::ZERO).unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        let target = Duration::new(1, 123456789);
+        engine.seek_position(DeckId::A, target).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).position, target);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        engine.seek_position(DeckId::A, target).unwrap();
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::ZERO);
+        assert_eq!(engine.snapshot(DeckId::A).grid, Some(grid));
+        assert_eq!(engine.output_volumes(), gains);
+        assert!(engine
+            .seek_position(DeckId::A, Duration::from_secs(5))
+            .is_err());
+        assert_eq!(engine.snapshot(DeckId::A).position, target);
+        assert!(engine.snapshot(DeckId::A).playing);
+    }
     #[test]
     fn manual_grid_belongs_to_its_track_and_survives_transport_but_not_reload() {
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
@@ -502,7 +802,7 @@ mod tests {
                 overview: crate::waveform::peak_overview(&samples, 2).into(),
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48_000)),
                 tempo: None,
-                samples: SamplesBuffer::new(2, 48_000, samples),
+                samples: PcmSource::new(2, 48_000, samples),
             },
         );
         engine.set_levels(MixerLevels {

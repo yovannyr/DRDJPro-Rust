@@ -17,6 +17,12 @@ use std::{
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<crate::library::ImportBatch>;
+struct CueSession {
+    path: Arc<std::path::Path>,
+    source: Arc<crate::waveform::DetailPeaks>,
+    slot: usize,
+    original: crate::hot_cues::HotCue,
+}
 struct GridSession {
     path: Arc<std::path::Path>,
     source: Arc<crate::waveform::DetailPeaks>,
@@ -53,9 +59,11 @@ pub struct AudioController {
     crate_delete: Cell<Option<i32>>,
     crate_target: Cell<i32>,
     import_crate: Cell<i32>,
+    cue_editors: RefCell<[Option<CueSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
+    displayed_cues: RefCell<[Option<(crate::hot_cues::HotCues, std::time::Duration)>; 2]>,
     displayed_overviews: RefCell<[Option<Arc<[f32]>>; 2]>,
     displayed_details: RefCell<[Option<DetailCache>; 2]>,
 }
@@ -82,9 +90,11 @@ impl AudioController {
             crate_delete: Cell::new(None),
             crate_target: Cell::new(0),
             import_crate: Cell::new(0),
+            cue_editors: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
             pending: RefCell::new(None),
+            displayed_cues: RefCell::new([None, None]),
             displayed_overviews: RefCell::new([None, None]),
             displayed_details: RefCell::new([None, None]),
         });
@@ -226,6 +236,7 @@ impl AudioController {
         controller.apply_levels();
         controller.wire_crates(ui);
         controller.wire_grid_editor(ui);
+        controller.wire_hot_cues(ui);
         controller.refresh();
         controller
     }
@@ -437,6 +448,216 @@ impl AudioController {
             DeckId::B => ui.get_right_grid_draft_bpm(),
         }
         .to_string()
+    }
+    fn cancel_cue_editor(&self, id: DeckId) {
+        self.cue_editors.borrow_mut()[Self::grid_index(id)].take();
+        if let Some(ui) = self.ui.upgrade() {
+            match id {
+                DeckId::A => ui.set_left_cue_editing(false),
+                DeckId::B => ui.set_right_cue_editing(false),
+            }
+        }
+    }
+    fn begin_cue_editor(&self, id: DeckId, slot: i32) -> Result<(), String> {
+        if !self.can_change_crates() {
+            return Err("Finish loading before editing a cue".into());
+        }
+        let index = Self::grid_index(id);
+        if self.cue_editors.borrow()[index].is_some() {
+            return Err("Save or cancel the existing cue draft".into());
+        }
+        let slot = usize::try_from(slot)
+            .ok()
+            .filter(|s| *s < crate::hot_cues::SLOT_COUNT)
+            .ok_or("Invalid cue slot")?;
+        let snapshot = self.engine.snapshot(id);
+        let path = snapshot.path.ok_or("Load a track first")?;
+        let source = snapshot.detail.ok_or("Track source unavailable")?;
+        let cue = self.library.borrow().hot_cues(&path).slots()[slot]
+            .clone()
+            .ok_or("Set a cue before editing it")?;
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        match id {
+            DeckId::A => {
+                ui.set_left_cue_name(cue.name().into());
+                ui.set_left_cue_rgb(format!("{:06X}", cue.rgb()).into());
+                ui.set_left_cue_editing(true);
+            }
+            DeckId::B => {
+                ui.set_right_cue_name(cue.name().into());
+                ui.set_right_cue_rgb(format!("{:06X}", cue.rgb()).into());
+                ui.set_right_cue_editing(true);
+            }
+        }
+        self.cue_editors.borrow_mut()[index] = Some(CueSession {
+            path,
+            source,
+            slot,
+            original: cue,
+        });
+        Ok(())
+    }
+    fn save_cue_editor(&self, id: DeckId) -> Result<(), String> {
+        if !self.can_change_crates() {
+            return Err("Finish loading before saving a cue".into());
+        }
+        let snapshot = self.engine.snapshot(id);
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let (name, rgb) = match id {
+            DeckId::A => (ui.get_left_cue_name(), ui.get_left_cue_rgb()),
+            DeckId::B => (ui.get_right_cue_name(), ui.get_right_cue_rgb()),
+        };
+        let rgb = rgb.strip_prefix('#').unwrap_or(&rgb);
+        if rgb.len() != 6 || !rgb.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("Color must be six RGB hex digits, optionally prefixed by #".into());
+        }
+        let rgb = u32::from_str_radix(rgb, 16).map_err(|e| e.to_string())?;
+        {
+            let editors = self.cue_editors.borrow();
+            let edit = editors[Self::grid_index(id)]
+                .as_ref()
+                .ok_or("Open a cue editor first")?;
+            if snapshot
+                .detail
+                .as_ref()
+                .is_none_or(|source| !Arc::ptr_eq(source, &edit.source))
+                || self.library.borrow().hot_cues(&edit.path).slots()[edit.slot].as_ref()
+                    != Some(&edit.original)
+            {
+                return Err("Cue or source changed; cancel and reopen the editor".into());
+            }
+            let value =
+                crate::hot_cues::HotCue::new(edit.original.position(), name.to_string(), rgb)?;
+            self.library
+                .borrow_mut()
+                .set_hot_cue(&edit.path, edit.slot, Some(value))?;
+        }
+        self.library_changed();
+        self.cancel_cue_editor(id);
+        self.publish_library();
+        Ok(())
+    }
+    fn change_hot_cue(&self, id: DeckId, slot: i32, delete: bool) -> Result<(), String> {
+        if !self.can_change_crates() || self.pending.borrow().is_some() {
+            return Err("Finish loading before using hot cues".into());
+        }
+        let slot = usize::try_from(slot)
+            .ok()
+            .filter(|s| *s < crate::hot_cues::SLOT_COUNT)
+            .ok_or("Cue slot must be 1 through 8")?;
+        let source = self.engine.snapshot(id);
+        let path = source.path.ok_or("Load a track first")?;
+        let cues = self.library.borrow().hot_cues(&path);
+        if !delete {
+            if let Some(cue) = &cues.slots()[slot] {
+                if cue.position() >= source.duration {
+                    return Err("Saved cue is outside the loaded track; delete and reset it".into());
+                }
+                return self.engine.seek_position(id, cue.position());
+            }
+        } else if cues.slots()[slot].is_none() {
+            return Err("Cue slot is empty".into());
+        }
+        let value = if delete {
+            None
+        } else {
+            if source.position >= source.duration {
+                return Err("A cue needs a playable position before the end of the track".into());
+            }
+            const COLORS: [u32; 8] = [
+                0xe74c3c, 0xf39c12, 0xf1c40f, 0x2ecc71, 0x1abc9c, 0x3498db, 0x9b59b6, 0xe84393,
+            ];
+            Some(crate::hot_cues::HotCue::new(
+                source.position,
+                format!("Cue {}", slot + 1),
+                COLORS[slot],
+            )?)
+        };
+        self.library.borrow_mut().insert([path.to_path_buf()]);
+        self.library.borrow_mut().set_hot_cue(&path, slot, value)?;
+        self.library_changed();
+        self.publish_library();
+        Ok(())
+    }
+    fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
+        for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let edit = move |slot| {
+                if let Some(c) = weak.upgrade() {
+                    if let Err(error) = c.begin_cue_editor(id, slot) {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_edit_hot_cue_left(edit),
+                DeckId::B => ui.on_edit_hot_cue_right(edit),
+            }
+            let weak = Rc::downgrade(self);
+            let save = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.save_cue_editor(id);
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(match result {
+                            Ok(()) => if c.persistence.borrow().is_some() {
+                                "Cue updated; save queued"
+                            } else {
+                                "Cue updated for this session only"
+                            }
+                            .into(),
+                            Err(e) => e.into(),
+                        });
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_save_hot_cue_left(save),
+                DeckId::B => ui.on_save_hot_cue_right(save),
+            }
+            let weak = Rc::downgrade(self);
+            let cancel = move || {
+                if let Some(c) = weak.upgrade() {
+                    c.cancel_cue_editor(id);
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_cancel_hot_cue_left(cancel),
+                DeckId::B => ui.on_cancel_hot_cue_right(cancel),
+            }
+            for delete in [false, true] {
+                let weak = Rc::downgrade(self);
+                let action = move |slot| {
+                    if let Some(c) = weak.upgrade() {
+                        let result = c.change_hot_cue(id, slot, delete);
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(
+                                match result {
+                                    Ok(()) => format!(
+                                        "Deck {id:?}: hot cue {} {}",
+                                        slot + 1,
+                                        if delete { "deleted" } else { "set / recalled" }
+                                    ),
+                                    Err(error) => format!("Deck {id:?}: {error}"),
+                                }
+                                .into(),
+                            );
+                        }
+                        c.refresh();
+                    }
+                };
+                match (id, delete) {
+                    (DeckId::A, false) => ui.on_hot_cue_left(action),
+                    (DeckId::B, false) => ui.on_hot_cue_right(action),
+                    (DeckId::A, true) => ui.on_delete_hot_cue_left(action),
+                    (DeckId::B, true) => ui.on_delete_hot_cue_right(action),
+                }
+            }
+        }
     }
     fn begin_grid_editor(&self, id: DeckId) -> Result<(), String> {
         if !self.can_change_crates() {
@@ -1013,6 +1234,62 @@ impl AudioController {
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.snapshot(id);
             let index = Self::grid_index(id);
+            let cues = s
+                .path
+                .as_ref()
+                .map(|p| self.library.borrow().hot_cues(p))
+                .unwrap_or_default();
+            if self.displayed_cues.borrow()[index]
+                .as_ref()
+                .is_none_or(|(previous, duration)| previous != &cues || *duration != s.duration)
+            {
+                let rows = cues
+                    .slots()
+                    .iter()
+                    .map(|cue| crate::HotCueRow {
+                        name: cue.as_ref().map_or("", |c| c.name()).into(),
+                        valid: cue.as_ref().is_some_and(|c| c.position() < s.duration),
+                        position: cue.as_ref().map_or(0., |c| {
+                            if s.duration.is_zero() {
+                                0.
+                            } else {
+                                (100. * c.position().as_secs_f64() / s.duration.as_secs_f64())
+                                    as f32
+                            }
+                        }),
+                        occupied: cue.is_some(),
+                        description: cue
+                            .as_ref()
+                            .map(|c| format!("{} · {:.3} s", c.name(), c.position().as_secs_f64()))
+                            .unwrap_or_else(|| "Set at current position".into())
+                            .into(),
+                        tint: slint::Color::from_rgb_u8(
+                            cue.as_ref().map_or(0, |c| (c.rgb() >> 16) as u8),
+                            cue.as_ref().map_or(0, |c| (c.rgb() >> 8) as u8),
+                            cue.as_ref().map_or(0, |c| c.rgb() as u8),
+                        ),
+                    })
+                    .collect::<Vec<_>>();
+                let model = ModelRc::new(Rc::new(VecModel::from(rows)));
+                match id {
+                    DeckId::A => ui.set_left_hot_cues(model),
+                    DeckId::B => ui.set_right_hot_cues(model),
+                }
+                self.displayed_cues.borrow_mut()[index] = Some((cues, s.duration));
+            }
+            let cue_replaced = self.cue_editors.borrow()[index]
+                .as_ref()
+                .is_some_and(|edit| {
+                    s.detail
+                        .as_ref()
+                        .is_none_or(|source| !Arc::ptr_eq(source, &edit.source))
+                });
+            if cue_replaced {
+                self.cancel_cue_editor(id);
+                ui.set_status(
+                    format!("Deck {id:?}: cue draft discarded after track replacement").into(),
+                );
+            }
             let changed_track = self.grid_editors.borrow()[index]
                 .as_ref()
                 .is_some_and(|editor| {
@@ -1234,6 +1511,292 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn cue_editor_cancel_conflict_source_lifetime_markers_and_restart() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let file = wav_file(8192, 48_000 * 30);
+        let bad = TempFile::new("mp3", b"invalid");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        ui.show().unwrap();
+        engine.seek_percent(DeckId::A, 50.).unwrap();
+        ui.invoke_hot_cue_left(0);
+        finish_storage(&c);
+        let path = engine.snapshot(DeckId::A).path.unwrap();
+        let original = c.library.borrow().hot_cues(&path);
+        control(&ui, "DECK A edit hot cue").invoke_accessible_default_action();
+        control(&ui, "DECK A cue name").set_accessible_value("入り口 🎵");
+        control(&ui, "DECK A cue RGB").set_accessible_value("#12abef");
+        assert_eq!(c.library.borrow().hot_cues(&path), original);
+        control(&ui, "DECK A cancel hot cue").invoke_accessible_default_action();
+        assert_eq!(c.library.borrow().hot_cues(&path), original);
+        assert!(!c.dirty.get());
+        ui.invoke_edit_hot_cue_left(0);
+        ui.invoke_edit_hot_cue_right(0);
+        control(&ui, "DECK A cue RGB").set_accessible_value("GGGGGG");
+        ui.invoke_save_hot_cue_left();
+        assert!(ui.get_left_cue_editing());
+        assert_eq!(c.library.borrow().hot_cues(&path), original);
+        control(&ui, "DECK A cue RGB").set_accessible_value("#12abef");
+        ui.set_left_cue_name("x".repeat(129).into());
+        ui.invoke_save_hot_cue_left();
+        assert!(ui.get_left_cue_editing());
+        assert_eq!(c.library.borrow().hot_cues(&path), original);
+        control(&ui, "DECK A cue name").set_accessible_value("入り口 🎵");
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let volumes = engine.output_volumes();
+        let position = engine.snapshot(DeckId::A).position;
+        control(&ui, "DECK A save hot cue").invoke_accessible_default_action();
+        finish_storage(&c);
+        assert!(!ui.get_left_cue_editing());
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.output_volumes(), volumes);
+        let cue = c.library.borrow().hot_cues(&path).slots()[0]
+            .clone()
+            .unwrap();
+        assert_eq!(cue.position(), Duration::from_secs(15));
+        assert_eq!(cue.name(), "入り口 🎵");
+        assert_eq!(cue.rgb(), 0x12abef);
+        assert_eq!(
+            ui.get_right_hot_cues().row_data(0).unwrap().name,
+            "入り口 🎵"
+        );
+        ui.invoke_save_hot_cue_right();
+        assert!(ui.get_status().contains("changed"));
+        assert!(ui.get_right_cue_editing());
+        ui.invoke_cancel_hot_cue_right();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for (view, label, start, end) in [
+                (
+                    "DECK A waveform overview",
+                    "DECK A overview cue marker 1",
+                    0.,
+                    100.,
+                ),
+                (
+                    "DECK A detailed waveform",
+                    "DECK A detail cue marker 1",
+                    ui.get_left_detail_start(),
+                    ui.get_left_detail_end(),
+                ),
+            ] {
+                let view = control(&ui, view);
+                let marker = control(&ui, label);
+                let expected = view.absolute_position().x
+                    + (50. - start) / (end - start) * (view.size().width - marker.size().width);
+                assert!((marker.absolute_position().x - expected).abs() < 0.1);
+            }
+        }
+        engine.seek_percent(DeckId::A, 0.).unwrap();
+        c.tick();
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A detail cue marker 1").count(),
+            0
+        );
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A overview cue marker 1").count(),
+            1
+        );
+        ui.set_left_detail_window(32);
+        ui.invoke_zoom_left();
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A detail cue marker 1").count(),
+            1
+        );
+        ui.invoke_edit_hot_cue_left(0);
+        engine.pause(DeckId::A);
+        assert!(engine.load_a(bad.path()).is_err());
+        c.tick();
+        assert!(ui.get_left_cue_editing());
+        engine.load_a(file.path()).unwrap();
+        c.tick();
+        assert!(!ui.get_left_cue_editing());
+        ui.invoke_edit_hot_cue_left(0);
+        ui.invoke_delete_hot_cue_right(0);
+        ui.invoke_save_hot_cue_left();
+        assert!(ui.get_status().contains("changed"));
+        ui.invoke_cancel_hot_cue_left();
+        ui.invoke_hot_cue_right(0);
+        ui.invoke_edit_hot_cue_right(0);
+        ui.set_right_cue_name("Restored 🎵".into());
+        ui.set_right_cue_rgb("ABCDEF".into());
+        ui.invoke_save_hot_cue_right();
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output2) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        let row = ui.get_left_hot_cues().row_data(0).unwrap();
+        assert_eq!(row.name, "Restored 🎵");
+        assert_eq!(row.tint, slint::Color::from_rgb_u8(0xab, 0xcd, 0xef));
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A overview cue marker 1").count(),
+            1
+        );
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn hot_cue_pads_set_recall_delete_share_and_restore_without_transport_changes() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let file = wav_file(8192, 48_000 * 8);
+        let other = wav_file(4096, 48_000 * 8);
+        let bad = TempFile::new("mp3", b"invalid");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        ui.show().unwrap();
+        ui.set_channel_a(0.6);
+        ui.set_channel_b(0.8);
+        ui.set_crossfader(0.3);
+        ui.invoke_mixer_changed();
+        let gains = engine.output_volumes();
+        engine
+            .seek_position(DeckId::A, Duration::new(2, 123456789))
+            .unwrap();
+        let position = engine.snapshot(DeckId::A).position;
+        control(&ui, "DECK A hot cue 1").invoke_accessible_default_action();
+        finish_storage(&c);
+        assert!(ui.get_left_hot_cues().row_data(0).unwrap().occupied);
+        assert!(!ui.get_right_hot_cues().row_data(0).unwrap().occupied);
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.seek_percent(DeckId::A, 70.).unwrap();
+        control(&ui, "DECK A hot cue 1").invoke_accessible_default_action();
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        engine.seek_percent(DeckId::A, 80.).unwrap();
+        control(&ui, "DECK A hot cue 1").invoke_accessible_default_action();
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::ZERO);
+        assert_eq!(engine.output_volumes(), gains);
+        assert!(!c.dirty.get()); // Recalling does not write the catalog.
+        engine.pause(DeckId::B);
+        engine.load_b(file.path()).unwrap();
+        c.tick();
+        assert!(ui.get_right_hot_cues().row_data(0).unwrap().occupied);
+        control(&ui, "DECK B hot cue 8").invoke_accessible_default_action();
+        finish_storage(&c);
+        assert!(ui.get_left_hot_cues().row_data(7).unwrap().occupied);
+        control(&ui, "DECK A delete hot cue slot").set_accessible_value("8");
+        control(&ui, "DECK A delete hot cue").invoke_accessible_default_action();
+        finish_storage(&c);
+        assert!(!ui.get_right_hot_cues().row_data(7).unwrap().occupied);
+        assert!(ui.get_right_hot_cues().row_data(0).unwrap().occupied);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.output_volumes(), gains);
+        engine.pause(DeckId::A);
+        assert!(engine.load_a(bad.path()).is_err());
+        c.tick();
+        assert!(ui.get_left_hot_cues().row_data(0).unwrap().occupied);
+        engine.load_a(other.path()).unwrap();
+        c.tick();
+        assert!(!ui.get_left_hot_cues().row_data(0).unwrap().occupied);
+        assert!(c.change_hot_cue(DeckId::A, -1, false).is_err());
+        assert!(c.change_hot_cue(DeckId::A, 8, false).is_err());
+        engine.seek_percent(DeckId::A, 100.).unwrap();
+        assert!(c.change_hot_cue(DeckId::A, 0, false).is_err());
+        let path = engine.snapshot(DeckId::A).path.unwrap();
+        c.library.borrow_mut().insert([path.to_path_buf()]);
+        c.library
+            .borrow_mut()
+            .set_hot_cue(
+                &path,
+                0,
+                Some(
+                    crate::hot_cues::HotCue::new(Duration::from_secs(9), "Old file".into(), 0)
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        let before = engine.snapshot(DeckId::A).position;
+        assert!(c
+            .change_hot_cue(DeckId::A, 0, false)
+            .unwrap_err()
+            .contains("outside"));
+        assert_eq!(engine.snapshot(DeckId::A).position, before);
+        c.tick();
+        assert!(!ui.get_left_hot_cues().row_data(0).unwrap().valid);
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A overview cue marker 1").count(),
+            0
+        );
+        c.library_changed();
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output2) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer));
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        assert!(ui.get_right_hot_cues().row_data(0).unwrap().occupied);
+        assert!(!ui.get_right_hot_cues().row_data(7).unwrap().occupied);
+        control(&ui, "DECK B hot cue 1").invoke_accessible_default_action();
+        assert_eq!(engine.snapshot(DeckId::B).position, position);
+        assert!(!engine.snapshot(DeckId::B).playing);
+        control(&ui, "DECK B delete hot cue").invoke_accessible_default_action();
+        c.close_library().unwrap();
+        drop(c);
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(dir.path().join("library.sqlite3")), Vec::new());
+        finish_storage(&c);
+        assert!(!ui.get_right_hot_cues().row_data(0).unwrap().occupied);
+        c.close_library().unwrap();
     }
     #[test]
     fn durable_library_restores_real_track_ids_missing_rows_and_loads_after_restart() {
@@ -1885,6 +2448,23 @@ mod tests {
             let right = control(&ui, "DECK B detailed waveform");
             let overview = control(&ui, "DECK A waveform overview");
             assert!(overview.absolute_position().y < shared.absolute_position().y);
+            for deck in ["DECK A", "DECK B"] {
+                for slot in 1..=8 {
+                    let pad = control(&ui, &format!("{deck} hot cue {slot}"));
+                    assert!(pad.size().width > 0. && pad.size().height > 0.);
+                    assert!(pad.absolute_position().x >= 0.);
+                    assert!(pad.absolute_position().x + pad.size().width <= width + 0.1);
+                    assert!(
+                        pad.absolute_position().y + pad.size().height
+                            <= shared.absolute_position().y
+                    );
+                }
+                let delete = control(&ui, &format!("{deck} delete hot cue"));
+                assert!(
+                    delete.absolute_position().y + delete.size().height
+                        <= shared.absolute_position().y
+                );
+            }
             assert!((left.absolute_position().x - right.absolute_position().x).abs() < 0.1);
             assert!((left.size().width - right.size().width).abs() < 0.1);
             assert!(left.size().width > overview.size().width * 1.5);

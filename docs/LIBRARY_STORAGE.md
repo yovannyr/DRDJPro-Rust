@@ -1,6 +1,6 @@
 # Local library storage — SQLite
 
-The current storage backend is SQLite, replacing the published JSON writer. The current catalog persists stable track IDs/paths plus title, artist, album, duration and metadata-inspection state. It also persists flat crates and track membership; constant-BPM beatgrids are also stored, and schema 5 adds hot-cue data storage. Hot-cue GUI/trigger integration, deck/session restoration and SQL-backed table searching remain open. Decks start unloaded/paused unless explicit CLI tracks were supplied.
+The current storage backend is SQLite, replacing the published JSON writer. The current catalog persists stable track IDs/paths plus title, artist, album, duration and metadata-inspection state. It also persists flat crates and track membership; constant-BPM beatgrids are also stored, and schema 5 adds hot-cue data storage. Basic hot-cue GUI set/recall/delete integration exists; deck/session restoration and SQL-backed table searching remain open. Decks start unloaded/paused unless explicit CLI tracks were supplied.
 
 ## Location and compatibility
 
@@ -86,3 +86,13 @@ Schema 5 adds STRICT `track_hot_cues`, keyed by stable track ID and zero-based s
 Schema 1–4 upgrades add only missing tables in one transaction, with the existing previous-good backup. Failed schema creation retains the prior version/data. Cue snapshots commit in the same transaction as track metadata, crate membership and grids; explicit removal and track deletion remove cue rows. Library restore/snapshot copies preserve the values, including missing-file entries. Legacy JSON remains ID/path-only and yields empty cue slots.
 
 This is a data-layer foundation, not a usable cue panel: no GUI pads, engine jumps, duration validation against a loaded source, quantization, hardware feedback or session restore is implemented here. Cue positions intentionally remain cached if media changes; the following controller slice must validate against the actual decoded duration before triggering. Storage does not guess duration from approximate header metadata. Full snapshot/backup costs and maximum-size performance remain unqualified.
+
+## Hot-cue deck integration (2026-10-25)
+
+The controller reads and edits the library-owned cue set by the installed source's canonical path. Setting an empty pad snapshots the engine source position and assigns a stable default name/color. Recalling an occupied pad does not dirty/save the library. Deletion clears only the selected slot. Both loaded decks immediately observe shared-path edits through refreshed models; no duplicated per-deck cue store exists. Unchanged cue models are reused. Changes use the existing asynchronous save/footer and final-close flush; applying a cue edit in the GUI is not a durability acknowledgement.
+
+Cue actions are guarded during load/import/restore. Set/recall require a position strictly before actual decoded duration. Out-of-range cached cues are preserved, reported and can be deleted; approximate header duration is never used to clamp them. Absolute engine seeking avoids conversion through the percentage slider and preserves the prior transport/grid/mixer state. This remains Rodio control-plane source replacement, with no sample-accurate audible-trigger or physical latency guarantee. No audio callback code changed.
+
+## Cue name/color edits (2026-10-25)
+
+The GUI editor updates an existing cue through the validated HotCue constructor, preserving its source position and slot. Drafts capture original cue metadata plus the installed prepared-source identity. Save rejects a changed/deleted cue or replaced source; Cancel has no persistence side effect. Changes use the existing worker/snapshot transaction and footer durability feedback. Schema 5 already stores these values, so no migration/dependency was added. Cached positions outside a changed media file remain repairable metadata; they are not clamped or rendered as valid markers. Unicode names and RGB colors survive fresh controller/storage restart.

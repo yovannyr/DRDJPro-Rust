@@ -146,6 +146,25 @@ pub(crate) fn identity(path: &Path) -> PathBuf {
     }
 }
 impl Library {
+    pub fn hot_cues(&self, path: &Path) -> crate::hot_cues::HotCues {
+        self.keys
+            .get(&identity(path))
+            .map(|i| self.tracks[*i].hot_cues.clone())
+            .unwrap_or_default()
+    }
+    pub fn set_hot_cue(
+        &mut self,
+        path: &Path,
+        slot: usize,
+        cue: Option<crate::hot_cues::HotCue>,
+    ) -> Result<(), String> {
+        let index = self
+            .keys
+            .get(&identity(path))
+            .ok_or("Track is not in the library")?;
+        self.tracks[*index].hot_cues.set(slot, cue)
+    }
+
     pub fn grid(&self, path: &Path) -> Option<crate::beatgrid::BeatGrid> {
         self.keys
             .get(&identity(path))
