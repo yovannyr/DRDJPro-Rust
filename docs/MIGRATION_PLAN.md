@@ -8,7 +8,7 @@ Release requires a traceable disposition and acceptance evidence for every FEATU
 
 Deliver in reviewed, bounded slices with working behavior and regression evidence. Keep the existing executable name during development for CI/command compatibility; its historical name does not define the product scope.
 
-## Fortschritt auf einen Blick (2026-10-25)
+## Fortschritt auf einen Blick (2026-10-26)
 
 ✅ = im beschriebenen Umfang implementiert und lokal geprüft. ☐ = noch offen. Die Häkchen kennzeichnen einzelne Arbeitspakete; keine der sechs Gesamtphasen ist bereits vollständig abgenommen. Historische Checkpoints weiter unten dokumentieren den damaligen Stand.
 
@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 130 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 135 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Review als `e1371a8` gepusht. Die momentane GUI ist anschließend implementiert, nach Review-Korrekturen erneut unabhängig geprüft und mit 121 Tests sowie Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
+Veröffentlichungsstand: Die Opus-Korrekturen für deckweise Steuerung, Backfill-Fehler, PCM-Retirement und Render-Timing wurden nach Astra-Mittel-Reviews einzeln gepusht. Revisionsgebundene Track-Deltas sind ebenfalls unabhängig geprüft und mit135 Tests/Release-Build grün; Commit-Zuordnung siehe Git-Historie und Prüfnachweise.
 
 ### Nächste und offene Arbeitspakete
 
@@ -50,7 +50,9 @@ Veröffentlichungsstand: Die Nudge-Engine ist nach unabhängigem Astra-Mittel-Re
 - [x] ✅ Opus3: alte PCM-Besitzer bis zum tatsächlichen Queue-Retirement halten; Freigabe im Kontrollthread mit separatem Pull-Thread getestet.
 - [x] ✅ Opus2: feste Ausgabeformate, frameweise Render-Position und Pitch/Nudge ohne Sink-Neustart;50 kurze Flanken gegen PCM-Rampe geprüft.
 - [x] ✅ Opus6: lesbaren Katalog bei Metadaten-Backfill-Schreibfehler erhalten; Retry und Neustart mit injiziertem Schreibfehler getestet.
-- [ ] ☐ Opus5/7: Katalog-/Decode-Skalierung messen, Delta-Persistenz und Worker-Abbruch umsetzen.
+- [x] ✅ Opus5: revisionsgebundene Track-Deltas, begrenzte Zeilenänderungen, periodische geprüfte Backups und Retry/Close; Snapshot bei100000 Tracks vermessen.
+- [ ] ☐ Opus7: Decode-Speicherspitzen vermeiden und Lade-/Import-Worker kooperativ abbrechen.
+- [ ] ☐ Weitere Skalierung: Crate-Beziehungen granularisieren (aktuell Snapshot nur bei Crate-Änderung), größere Bibliotheksansichten virtualisieren.
 - [ ] ☐ Opus4: LOOP/Reloop/OUT-Semantik am Handbuch abgleichen; keine automatische Verhaltensänderung aufgrund des Modellbefunds.
 - [ ] ☐ Danach: validiertes Tempo-Matching aus bestätigten manuellen Grids; Phasen-Sync und Keylock separat.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
@@ -317,3 +319,11 @@ All existing124 tests passed after initial integration. Three added regressions 
 Opus2 review correction (2026-10-26): initial127-test review found double nanosecond/frame-flooring at non-integral frame boundaries. Commands now carry explicit frame coordinates and the renderer/control publication retains exact integer source-phase units, not a rounded nanosecond clock. Canonical display timestamps use ceil only at the Duration boundary. Loop resize/exit/pause preserve fractional phase; a wrap-changing loop command composes a pending exact rational phase so back-to-back half/double without an intervening render cannot undo its mapping. New regressions directly assert frame1/2/7/8 seeks at44.1/48/96kHz, actual48kHz loop-resize samples at frame2, manual In/Out boundaries, composed pending half/double and44.1→48kHz fractional phase through resize/exit/pause. The new two tests passed(.00s). This is a coordinate/phase fix, not merely a changed ramp expectation. Final full gates and follow-up review apply to this corrected state.
 
 Opus2 EOF follow-up (2026-10-26): independent129-test review accepted the frame-coordinate correction but found CLI wait_for_end still waiting on finite Sink queues. It now polls renderer source completion on the control thread instead. An offline two-deck regression keeps the output queues alive at EOF until that wait returns, checks the longer deck is not cut off, and acknowledges completion via a bounded channel timeout. This does not prove physical device-buffer drain; producer EOF and hardware output completion remain distinct. No live hearing/device test was performed.
+
+## Opus5: revision-bound track delta persistence checkpoint (2026-10-26)
+
+After reviewed e91319e, Library marks changed track indexes and crate state with monotonic revisions. Regular saves/close clone only changed SavedTracks plus a crate snapshot only when crates changed. Controller records the in-flight revision and acknowledges only that revision after success; newer edits and failures remain pending. Optional metadata backfill acknowledgements clear already persisted enrichment. Cue/grid/saved-loop-only edits to existing records no longer rebuild unchanged metadata table rows in the GUI. Track vector indexes remain stable; global deletion/relocation is not introduced.
+
+Worker applies deltas in one Immediate SQLite transaction with lightweight application/schema checks, stable identity/path checks, bounded per-track cue/loop/grid writes and conditional metadata upserts. Full writes retain migration/recovery/test responsibilities. Integrity-checked online backups occur before the first delta, after an empty backup can be superseded, on dirty60s checkpoint opportunities (including idle timeout), and on clean close. Normal cue saves do not inspect/backup/rewrite the whole catalog. Failed checkpoints use bounded retry delay and a distinct warning event, leaving save accounting intact; an empty delta can explicitly retry backup. Backups can lag recent commits until checkpoint/clean close, and I/O failures can extend that lag. SQLite synchronous=EXTRA transactions remain; this is not a new physical power-loss guarantee. Crate mutation still carries/replaces its relationship snapshot; finer crate deltas and large view virtualization remain separate optimization work.
+
+Measured debug-test snapshot for100000 records: a single-cue delta used3 allocations/~20.1us versus100002/~162.25ms for full catalog cloning. SQL tests at1000/10000 tracks changed2 rows for one cue (~3.98/~4.50ms in the focused run), preserved unrelated rows, rolled back an injected trigger failure and retried latest data. Additional tests cover revision acknowledgement/newer edits, failed delta retry, due-backup fault/retry and an idle timed checkpoint. These are local sample measurements, not production latency bounds. Review/final evidence in LOCAL_VALIDATION.

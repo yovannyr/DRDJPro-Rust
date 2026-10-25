@@ -1,6 +1,6 @@
 //! SQLite catalog storage. The worker owns every database/file operation.
 use crate::library::{self, Catalog, Library, SavedTrack};
-use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
@@ -11,10 +11,11 @@ use std::{
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
 const SCHEMA_VERSION: i32 = 6;
+const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 static STAGE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn default_path() -> Result<PathBuf, String> {
@@ -307,8 +308,11 @@ fn write_saved_loops(connection: &Connection, catalog: &Catalog) -> Result<(), S
     connection
         .execute("DELETE FROM track_saved_loops", [])
         .map_err(|e| e.to_string())?;
+    write_saved_loops_rows(connection, &catalog.tracks)
+}
+fn write_saved_loops_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement=connection.prepare("INSERT INTO track_saved_loops(track_id,slot,start_ns,end_ns,name) VALUES(?1,?2,?3,?4,?5)").map_err(|e|e.to_string())?;
-    for track in &catalog.tracks {
+    for track in tracks {
         for (slot, value) in track.saved_loops.slots().iter().enumerate() {
             if let Some(value) = value {
                 statement
@@ -380,12 +384,15 @@ fn write_hot_cues(connection: &Connection, catalog: &Catalog) -> Result<(), Stri
     connection
         .execute("DELETE FROM track_hot_cues", [])
         .map_err(|e| e.to_string())?;
+    write_hot_cues_rows(connection, &catalog.tracks)
+}
+fn write_hot_cues_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement = connection
         .prepare(
             "INSERT INTO track_hot_cues(track_id,slot,position_ns,name,rgb) VALUES(?1,?2,?3,?4,?5)",
         )
         .map_err(|e| e.to_string())?;
-    for track in &catalog.tracks {
+    for track in tracks {
         for (slot, cue) in track.hot_cues.slots().iter().enumerate() {
             if let Some(cue) = cue {
                 statement
@@ -409,10 +416,13 @@ fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String>
     connection
         .execute("DELETE FROM track_grids", [])
         .map_err(|e| e.to_string())?;
+    write_grids_rows(connection, &catalog.tracks)
+}
+fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement = connection
         .prepare("INSERT INTO track_grids(track_id,bpm,anchor_ns) VALUES(?1,?2,?3)")
         .map_err(|e| e.to_string())?;
-    for track in &catalog.tracks {
+    for track in tracks {
         if let Some(grid) = track.grid {
             statement
                 .execute(rusqlite::params![
@@ -638,6 +648,10 @@ fn recover(path: &Path) -> Result<(), String> {
     backup_to(&source, path)
 }
 struct Store {
+    last_checkpoint: Option<Instant>,
+    checkpoint_empty: bool,
+    backup_pending: bool,
+    has_tracks: bool,
     backfill_error: Option<String>,
     path: PathBuf,
     connection: Connection,
@@ -736,8 +750,12 @@ impl Store {
             .filter(|t| !t.metadata.scanned)
             .map(|t| t.id)
             .collect();
-        let library = Library::restore(catalog)?;
+        let mut library = Library::restore(catalog)?;
         let mut store = Self {
+            last_checkpoint: None,
+            checkpoint_empty: true,
+            backup_pending: false,
+            has_tracks: library.len() > 0,
             backfill_error: None,
             path,
             connection,
@@ -751,10 +769,123 @@ impl Store {
         {
             // Reading succeeded. Optional enrichment persistence must not hide that catalog.
             store.backfill_error = store.save(&enriched).err();
+            if store.backfill_error.is_none() {
+                library.acknowledge(library.revision());
+            }
         }
         Ok((store, library, note))
     }
 
+    fn checkpoint(&mut self, force: bool) -> Result<(), String> {
+        let due = force
+            || self.last_checkpoint.is_none()
+            || (self.backup_pending
+                && (self
+                    .last_checkpoint
+                    .is_some_and(|t| t.elapsed() >= CHECKPOINT_INTERVAL)
+                    || (self.checkpoint_empty && self.has_tracks)));
+        if !due {
+            return Ok(());
+        }
+        let catalog = inspect(&self.connection)
+            .map_err(|e| format!("Cannot checkpoint damaged catalog: {e:?}"))?
+            .ok_or("Catalog not initialized")?;
+        backup_to(&self.connection, &side_path(&self.path, ".bak"))?;
+        self.checkpoint_empty = catalog.tracks.is_empty();
+        self.last_checkpoint = Some(Instant::now());
+        self.backup_pending = false;
+        Ok(())
+    }
+    fn save_delta(&mut self, delta: &crate::library::CatalogDelta) -> Result<(), String> {
+        if delta.tracks.is_empty() && delta.crates.is_none() {
+            return self.checkpoint(true);
+        }
+        Catalog {
+            version: 1,
+            tracks: delta.tracks.clone(),
+            crates: Default::default(),
+        }
+        .validate()?;
+        self.checkpoint(false)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let app: i32 = tx
+            .pragma_query_value(None, "application_id", |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let version: i32 = tx
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if app != APPLICATION_ID || version != SCHEMA_VERSION {
+            return Err("Library schema changed; original preserved".into());
+        }
+        let mut added = 0;
+        for track in &delta.tracks {
+            let path = track
+                .path
+                .to_str()
+                .ok_or("Library path is not valid UTF-8")?;
+            let existing: Option<String> = tx
+                .query_row("SELECT path FROM tracks WHERE id=?1", [track.id], |r| {
+                    r.get(0)
+                })
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if existing.as_ref().is_some_and(|old| old != path) {
+                return Err("Delta cannot change track identity/path".into());
+            }
+            if existing.is_none() {
+                added += 1;
+            }
+            let key = library::identity(&track.path);
+            tx.execute(
+                "INSERT INTO tracks(id,path,path_key) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING",
+                rusqlite::params![track.id, path, key.to_str().ok_or("Invalid path identity")?],
+            )
+            .map_err(|e| e.to_string())?;
+            let m = &track.metadata;
+            tx.execute("INSERT INTO track_metadata(track_id,title,artist,album,duration_ms,scanned,error,duration_exact) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+                ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact
+                WHERE track_metadata.title IS NOT excluded.title OR track_metadata.artist IS NOT excluded.artist OR track_metadata.album IS NOT excluded.album OR track_metadata.duration_ms IS NOT excluded.duration_ms OR track_metadata.scanned IS NOT excluded.scanned OR track_metadata.error IS NOT excluded.error OR track_metadata.duration_exact IS NOT excluded.duration_exact",
+                rusqlite::params![track.id,m.title,m.artist,m.album,m.duration_ms.map(|v|v as i64),m.scanned,m.error,m.duration_exact]).map_err(|e|e.to_string())?;
+            // Fixed-size cue/loop sets keep per-track writes bounded, independent of catalog size.
+            for sql in [
+                "DELETE FROM track_grids WHERE track_id=?1",
+                "DELETE FROM track_hot_cues WHERE track_id=?1",
+                "DELETE FROM track_saved_loops WHERE track_id=?1",
+            ] {
+                tx.execute(sql, [track.id]).map_err(|e| e.to_string())?;
+            }
+        }
+        if added > 0 {
+            let count: i64 = tx
+                .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            if count > library::MAX_TRACKS as i64 {
+                return Err("Library track limit exceeded".into());
+            }
+        }
+        write_grids_rows(&tx, &delta.tracks)?;
+        write_hot_cues_rows(&tx, &delta.tracks)?;
+        write_saved_loops_rows(&tx, &delta.tracks)?;
+        if let Some(crates) = &delta.crates {
+            let mut statement = tx
+                .prepare("SELECT id FROM tracks")
+                .map_err(|e| e.to_string())?;
+            let ids = statement
+                .query_map([], |r| r.get::<_, i32>(0))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<HashSet<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            crates.validate(&ids)?;
+            write_crates(&tx, crates)?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.has_tracks = self.has_tracks || added > 0;
+        self.backup_pending = true;
+        Ok(())
+    }
     fn save(&mut self, catalog: &Catalog) -> Result<(), String> {
         catalog.validate()?;
         if catalog.tracks.iter().any(|t| t.path.to_str().is_none()) {
@@ -770,7 +901,11 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         write_tracks(&transaction, catalog)?;
-        transaction.commit().map_err(|e| e.to_string())
+        transaction.commit().map_err(|e| e.to_string())?;
+        self.has_tracks = !catalog.tracks.is_empty();
+        self.last_checkpoint = None;
+        self.backup_pending = true;
+        Ok(())
     }
 }
 
@@ -780,12 +915,17 @@ pub struct LoadedLibrary {
     pub backfill_error: Option<String>,
 }
 pub enum Event {
-    Loaded(Result<LoadedLibrary, String>),
+    Loaded(Result<Box<LoadedLibrary>, String>),
     Saved(Result<(), String>),
+    CheckpointFailed(String),
 }
 enum Command {
+    #[cfg(test)]
     Save(Catalog),
+    #[cfg(test)]
     Close(Option<Catalog>),
+    SaveDelta(crate::library::CatalogDelta),
+    CloseDelta(Option<crate::library::CatalogDelta>),
 }
 pub struct Worker {
     tx: SyncSender<Command>,
@@ -794,6 +934,9 @@ pub struct Worker {
 }
 impl Worker {
     pub fn start(path: PathBuf) -> Result<Self, String> {
+        Self::start_with_checkpoint_interval(path, CHECKPOINT_INTERVAL)
+    }
+    fn start_with_checkpoint_interval(path: PathBuf, interval: Duration) -> Result<Self, String> {
         let (tx, rx) = mpsc::sync_channel(1);
         let (events_tx, events) = mpsc::channel();
         let join = thread::Builder::new()
@@ -811,30 +954,79 @@ impl Worker {
                     note,
                     backfill_error: store.backfill_error.take(),
                 };
-                if events_tx.send(Event::Loaded(Ok(loaded))).is_err() {
+                if events_tx.send(Event::Loaded(Ok(Box::new(loaded)))).is_err() {
                     return Ok(());
                 }
-                while let Ok(command) = rx.recv() {
-                    match command {
-                        Command::Save(catalog) => {
-                            let _ = events_tx.send(Event::Saved(store.save(&catalog)));
+                let mut retry_wait = false;
+                loop {
+                    let timeout = if !retry_wait && store.backup_pending {
+                        store
+                            .last_checkpoint
+                            .map_or(interval, |time| interval.saturating_sub(time.elapsed()))
+                    } else {
+                        interval
+                    };
+                    let command = match rx.recv_timeout(timeout) {
+                        Ok(command) => command,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if store.backup_pending {
+                                let result = store.checkpoint(true);
+                                retry_wait = result.is_err();
+                                if let Err(error) = result {
+                                    let _ = events_tx.send(Event::CheckpointFailed(error));
+                                }
+                            }
+                            continue;
                         }
+                    };
+                    match command {
+                        Command::SaveDelta(delta) => {
+                            let result = store.save_delta(&delta);
+                            retry_wait = result.is_err();
+                            let _ = events_tx.send(Event::Saved(result));
+                        }
+                        Command::CloseDelta(delta) => {
+                            if let Some(delta) = delta {
+                                store.save_delta(&delta)?;
+                            }
+                            return store.checkpoint(true);
+                        }
+                        #[cfg(test)]
+                        Command::Save(catalog) => {
+                            let result = store.save(&catalog);
+                            retry_wait = result.is_err();
+                            let _ = events_tx.send(Event::Saved(result));
+                        }
+                        #[cfg(test)]
                         Command::Close(catalog) => {
                             return catalog.map_or(Ok(()), |catalog| store.save(&catalog))
                         }
                     }
                 }
-                Ok(())
             })
             .map_err(|e| e.to_string())?;
         Ok(Self { tx, events, join })
     }
+    pub fn save_delta(&self, delta: crate::library::CatalogDelta) -> Result<(), String> {
+        self.tx
+            .try_send(Command::SaveDelta(delta))
+            .map_err(|e| e.to_string())
+    }
+    pub fn close_delta(self, delta: Option<crate::library::CatalogDelta>) -> Result<(), String> {
+        let _ = self.tx.send(Command::CloseDelta(delta));
+        self.join
+            .join()
+            .map_err(|_| "Library worker panicked".to_string())?
+    }
+    #[cfg(test)]
     pub fn save(&self, catalog: Catalog) -> Result<(), String> {
         self.tx
             .try_send(Command::Save(catalog))
             .map_err(|e| e.to_string())
     }
     /// Called after the GUI event loop exits; final flush stays on the storage thread.
+    #[cfg(test)]
     pub fn close(self, catalog: Option<Catalog>) -> Result<(), String> {
         let _ = self.tx.send(Command::Close(catalog));
         self.join
@@ -873,6 +1065,178 @@ mod tests {
         let bytes = serde_json::to_vec(catalog).unwrap();
         fs::write(path, &bytes).unwrap();
         bytes
+    }
+    #[test]
+    fn due_checkpoint_failure_retains_pending_backup_and_empty_delta_retries_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let data = catalog(dir.path().join("checkpoint-marker.wav"), 1);
+        store
+            .save_delta(&library::CatalogDelta {
+                revision: 1,
+                tracks: data.tracks,
+                crates: None,
+            })
+            .unwrap();
+        let backup = side_path(&db, ".bak");
+        fs::remove_file(&backup).unwrap();
+        fs::create_dir(&backup).unwrap();
+        store.last_checkpoint = Some(Instant::now() - Duration::from_secs(61));
+        assert!(store.checkpoint(false).is_err());
+        assert!(store.backup_pending);
+        assert_eq!(rows(&store), vec![1]);
+        fs::remove_dir(&backup).unwrap();
+        store
+            .save_delta(&library::CatalogDelta {
+                revision: 1,
+                tracks: Vec::new(),
+                crates: None,
+            })
+            .unwrap();
+        assert!(backup.is_file());
+        assert!(!store.backup_pending);
+    }
+    #[test]
+    fn timed_checkpoint_updates_backup_while_worker_is_idle() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let worker =
+            Worker::start_with_checkpoint_interval(db.clone(), Duration::from_millis(20)).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            Event::Loaded(Ok(_))
+        ));
+        let data = catalog(dir.path().join("checkpoint-marker.wav"), 1);
+        worker
+            .save_delta(library::CatalogDelta {
+                revision: 1,
+                tracks: data.tracks,
+                crates: None,
+            })
+            .unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            Event::Saved(Ok(()))
+        ));
+        let needle = b"checkpoint-marker.wav";
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            let bytes = fs::read(side_path(&db, ".bak")).unwrap();
+            if bytes.windows(needle.len()).any(|s| s == needle) {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "idle checkpoint did not refresh backup"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        worker.close_delta(None).unwrap();
+        let (_store, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.len(), 1);
+    }
+    #[test]
+    fn delta_saves_bound_row_writes_preserve_other_tracks_and_roll_back_failed_cues() {
+        for size in [1000, 10000] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            let mut data = catalog(dir.path().join("1.wav"), 1);
+            let template = data.tracks[0].clone();
+            for id in 2..=size {
+                let mut record = template.clone();
+                record.id = id;
+                record.path = dir.path().join(format!("{id}.wav"));
+                data.tracks.push(record);
+            }
+            let cue = |position, name| {
+                crate::hot_cues::HotCue::new(Duration::from_secs(position), name, 0x112233).unwrap()
+            };
+            data.tracks[42]
+                .hot_cues
+                .set(0, Some(cue(1, "Unrelated".into())))
+                .unwrap();
+            store.save(&data).unwrap();
+            let mut target = data.tracks[41].clone();
+            target
+                .hot_cues
+                .set(0, Some(cue(1, "First".into())))
+                .unwrap();
+            let mut delta = library::CatalogDelta {
+                revision: 1,
+                tracks: vec![target],
+                crates: None,
+            };
+            store.save_delta(&delta).unwrap();
+            let checkpoint = store.last_checkpoint;
+            let backup = fs::read(side_path(&db, ".bak")).unwrap();
+            let before = store.connection.total_changes();
+            delta.tracks[0]
+                .hot_cues
+                .set(0, Some(cue(2, "Second".into())))
+                .unwrap();
+            let start = Instant::now();
+            store.save_delta(&delta).unwrap();
+            let elapsed = start.elapsed();
+            let writes = store.connection.total_changes() - before;
+            assert!(
+                (1..=20).contains(&writes),
+                "{size} tracks changed {writes} rows"
+            );
+            assert_eq!(checkpoint, store.last_checkpoint);
+            assert_eq!(fs::read(side_path(&db, ".bak")).unwrap(), backup);
+            store.connection.execute_batch("CREATE TRIGGER reject_delta BEFORE INSERT ON track_hot_cues WHEN NEW.track_id=42 BEGIN SELECT RAISE(ABORT,'injected delta failure'); END;").unwrap();
+            delta.tracks[0]
+                .hot_cues
+                .set(0, Some(cue(3, "Latest".into())))
+                .unwrap();
+            assert!(store.save_delta(&delta).is_err());
+            let restored = inspect(&store.connection).unwrap().unwrap();
+            assert_eq!(
+                restored
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == 42)
+                    .unwrap()
+                    .hot_cues
+                    .slots()[0]
+                    .as_ref()
+                    .unwrap()
+                    .name(),
+                "Second"
+            );
+            assert_eq!(
+                restored
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == 43)
+                    .unwrap()
+                    .hot_cues
+                    .slots()[0]
+                    .as_ref()
+                    .unwrap()
+                    .name(),
+                "Unrelated"
+            );
+            store
+                .connection
+                .execute_batch("DROP TRIGGER reject_delta")
+                .unwrap();
+            store.save_delta(&delta).unwrap();
+            store.checkpoint(true).unwrap();
+            drop(store);
+            let (_store, restored, _) = Store::open(db).unwrap();
+            assert_eq!(restored.len(), size as usize);
+            assert_eq!(
+                restored.hot_cues(&delta.tracks[0].path).slots()[0]
+                    .as_ref()
+                    .unwrap()
+                    .name(),
+                "Latest"
+            );
+            println!("delta SQL: {size} tracks, {writes} changed rows, {elapsed:?}");
+        }
     }
     #[test]
     fn migrates_unicode_and_missing_paths_with_ids_and_preserves_both_json_files() {

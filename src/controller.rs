@@ -61,6 +61,7 @@ pub struct AudioController {
     storage_ready: Cell<bool>,
     dirty: Cell<bool>,
     saving: Cell<bool>,
+    inflight_revision: Cell<Option<u64>>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
     crate_editor: Cell<Option<i32>>,
@@ -96,6 +97,7 @@ impl AudioController {
             storage_ready: Cell::new(true),
             dirty: Cell::new(false),
             saving: Cell::new(false),
+            inflight_revision: Cell::new(None),
             save_failed: Cell::new(false),
             initial_paths: RefCell::new(Vec::new()),
             crate_editor: Cell::new(None),
@@ -533,12 +535,14 @@ impl AudioController {
                 None
             }
         };
-        self.library.borrow_mut().insert([path.to_path_buf()]);
+        let inserted = self.library.borrow_mut().insert([path.to_path_buf()]);
         self.library
             .borrow_mut()
             .set_saved_loop(&path, slot, value)?;
         self.library_changed();
-        self.publish_library();
+        if inserted > 0 {
+            self.publish_library();
+        }
         Ok(if self.persistence.borrow().is_some() {
             "Saved loop updated; save queued"
         } else {
@@ -988,7 +992,6 @@ impl AudioController {
         }
         self.library_changed();
         self.cancel_cue_editor(id);
-        self.publish_library();
         Ok(())
     }
     fn change_hot_cue(&self, id: DeckId, slot: i32, delete: bool) -> Result<(), String> {
@@ -1029,10 +1032,12 @@ impl AudioController {
                 COLORS[slot],
             )?)
         };
-        self.library.borrow_mut().insert([path.to_path_buf()]);
+        let inserted = self.library.borrow_mut().insert([path.to_path_buf()]);
         self.library.borrow_mut().set_hot_cue(&path, slot, value)?;
         self.library_changed();
-        self.publish_library();
+        if inserted > 0 {
+            self.publish_library();
+        }
         Ok(())
     }
     fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
@@ -1206,12 +1211,14 @@ impl AudioController {
             ))?;
             (Arc::clone(&editor.path), editor.draft.value())
         };
-        self.library.borrow_mut().insert([path.to_path_buf()]);
+        let inserted = self.library.borrow_mut().insert([path.to_path_buf()]);
         self.library.borrow_mut().set_grid(&path, value)?;
         self.engine.set_grid(id, value)?;
         self.library_changed();
         self.cancel_grid_editor(id);
-        self.publish_library();
+        if inserted > 0 {
+            self.publish_library();
+        }
         let other = if id == DeckId::A {
             DeckId::B
         } else {
@@ -1360,7 +1367,7 @@ impl AudioController {
                             library,
                             note,
                             backfill_error,
-                        } = loaded;
+                        } = *loaded;
                         *self.library.borrow_mut() = library;
                         self.publish_library();
                         for id in [DeckId::A, DeckId::B] {
@@ -1391,8 +1398,15 @@ impl AudioController {
             }
             Some(Ok(crate::library_store::Event::Saved(result))) => {
                 self.saving.set(false);
+                let revision = self.inflight_revision.take();
                 match result {
                     Ok(()) => {
+                        if let Some(revision) = revision {
+                            self.library.borrow_mut().acknowledge(revision);
+                        }
+                        self.dirty.set(self.library.borrow().has_changes());
+                        self.save_failed.set(false);
+
                         if let Some(ui) = self.ui.upgrade() {
                             ui.set_library_storage("Library saved".into());
                             ui.set_library_save_failed(false);
@@ -1404,6 +1418,12 @@ impl AudioController {
                         self.storage_error(&error, true);
                     }
                 }
+            }
+            Some(Ok(crate::library_store::Event::CheckpointFailed(error))) => {
+                // A backup warning is not completion of any queued save command.
+                self.dirty.set(true);
+                self.save_failed.set(true);
+                self.storage_error(&format!("Backup checkpoint: {error}"), true);
             }
             Some(Err(TryRecvError::Disconnected)) => {
                 self.persistence.borrow_mut().take();
@@ -1429,8 +1449,11 @@ impl AudioController {
         let Some(worker) = storage.as_ref() else {
             return;
         };
-        match worker.save(self.library.borrow().catalog()) {
+        let delta = self.library.borrow().changes();
+        let revision = delta.revision;
+        match worker.save_delta(delta) {
             Ok(()) => {
+                self.inflight_revision.set(Some(revision));
                 self.dirty.set(false);
                 self.saving.set(true);
                 if let Some(ui) = self.ui.upgrade() {
@@ -1449,10 +1472,17 @@ impl AudioController {
             self.cancel_nudge(id);
         }
         if let Some(worker) = self.persistence.borrow_mut().take() {
-            let final_catalog = (self.storage_ready.get()
-                && (self.dirty.get() || self.saving.get()))
-            .then(|| self.library.borrow().catalog());
-            worker.close(final_catalog)?;
+            let final_delta = (self.storage_ready.get()
+                && (self.dirty.get() || self.saving.get() || self.library.borrow().has_changes()))
+            .then(|| self.library.borrow().changes());
+            let revision = final_delta.as_ref().map(|d| d.revision);
+            worker.close_delta(final_delta)?;
+            if let Some(revision) = revision {
+                self.library.borrow_mut().acknowledge(revision);
+            }
+            self.inflight_revision.set(None);
+            self.saving.set(false);
+            self.dirty.set(false);
         }
         Ok(())
     }
@@ -4189,6 +4219,74 @@ mod tests {
         ui.invoke_load_library_right();
         finish(&c);
         assert!(engine.snapshot(DeckId::B).grid.is_none());
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn delta_save_ack_keeps_newer_edits_and_failed_delta_retries_latest_state() {
+        i_slint_backend_testing::init_no_event_loop();
+        let profile = tempfile::tempdir().unwrap();
+        let db = profile.path().join("library.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        let file = wav_file(8192, 48000);
+        c.library.borrow_mut().insert([file.path().to_path_buf()]);
+        c.library_changed();
+        c.save_library();
+        assert!(c.saving.get());
+        let first = c.inflight_revision.get().unwrap();
+        let cue =
+            |name| crate::hot_cues::HotCue::new(Duration::from_millis(50), name, 0x112233).unwrap();
+        c.library
+            .borrow_mut()
+            .set_hot_cue(file.path(), 0, Some(cue("Newer".into())))
+            .unwrap();
+        c.library_changed();
+        let until = Instant::now() + Duration::from_secs(15);
+        while c.saving.get() {
+            c.poll_storage();
+            assert!(Instant::now() < until);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(c.dirty.get());
+        let changed = c.library.borrow().changes();
+        assert!(changed.revision > first);
+        assert_eq!(changed.tracks.len(), 1);
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_delta BEFORE INSERT ON track_hot_cues BEGIN SELECT RAISE(ABORT,'injected delta failure'); END;").unwrap();
+        c.save_library();
+        finish_storage(&c);
+        assert!(c.save_failed.get() && c.dirty.get());
+        assert_eq!(c.library.borrow().changes().tracks.len(), 1);
+        c.library
+            .borrow_mut()
+            .set_hot_cue(file.path(), 0, Some(cue("Latest".into())))
+            .unwrap();
+        c.library_changed();
+        connection
+            .execute_batch("DROP TRIGGER reject_delta")
+            .unwrap();
+        ui.invoke_retry_library_save();
+        finish_storage(&c);
+        assert!(!c.library.borrow().has_changes());
+        assert!(!c.save_failed.get());
+        c.close_library().unwrap();
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        assert_eq!(
+            c.library.borrow().hot_cues(file.path()).slots()[0]
+                .as_ref()
+                .unwrap()
+                .name(),
+            "Latest"
+        );
         c.close_library().unwrap();
     }
     #[test]

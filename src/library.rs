@@ -1,6 +1,6 @@
 //! Session library state. File inspection runs on the control worker, not the UI/audio thread.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -27,6 +27,11 @@ pub struct SavedTrack {
     pub hot_cues: crate::hot_cues::HotCues,
     #[serde(skip)]
     pub saved_loops: crate::saved_loops::SavedLoops,
+}
+pub struct CatalogDelta {
+    pub revision: u64,
+    pub tracks: Vec<SavedTrack>,
+    pub crates: Option<crate::crates::CrateCatalog>,
 }
 impl Catalog {
     pub fn validate(&self) -> Result<(), String> {
@@ -98,6 +103,17 @@ pub struct Track {
     pub saved_loops: crate::saved_loops::SavedLoops,
 }
 impl Track {
+    fn saved(&self) -> SavedTrack {
+        SavedTrack {
+            id: self.id,
+            path: self.path.clone(),
+            metadata: self.metadata.clone(),
+            grid: self.grid,
+            hot_cues: self.hot_cues.clone(),
+            saved_loops: self.saved_loops.clone(),
+        }
+    }
+
     pub fn display_title(&self) -> &str {
         if self.metadata.title.is_empty() {
             &self.name
@@ -129,6 +145,9 @@ impl Track {
 }
 #[derive(Default)]
 pub struct Library {
+    revision: u64,
+    changed_tracks: BTreeMap<usize, u64>,
+    changed_crates: Option<u64>,
     tracks: Vec<Track>,
     last_id: i32,
     keys: HashMap<PathBuf, usize>,
@@ -150,6 +169,44 @@ pub(crate) fn identity(path: &Path) -> PathBuf {
     }
 }
 impl Library {
+    fn mark_track(&mut self, index: usize) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("Library revision overflow");
+        self.changed_tracks.insert(index, self.revision);
+    }
+    fn mark_crates(&mut self) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("Library revision overflow");
+        self.changed_crates = Some(self.revision);
+    }
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub fn has_changes(&self) -> bool {
+        !self.changed_tracks.is_empty() || self.changed_crates.is_some()
+    }
+    pub fn acknowledge(&mut self, revision: u64) {
+        self.changed_tracks.retain(|_, changed| *changed > revision);
+        if self.changed_crates.is_some_and(|r| r <= revision) {
+            self.changed_crates = None;
+        }
+    }
+    pub fn changes(&self) -> CatalogDelta {
+        CatalogDelta {
+            revision: self.revision,
+            tracks: self
+                .changed_tracks
+                .keys()
+                .map(|index| self.tracks[*index].saved())
+                .collect(),
+            crates: self.changed_crates.map(|_| self.crates.clone()),
+        }
+    }
+
     pub fn saved_loops(&self, path: &Path) -> crate::saved_loops::SavedLoops {
         self.keys
             .get(&identity(path))
@@ -166,7 +223,10 @@ impl Library {
             .keys
             .get(&identity(path))
             .ok_or("Track is not in the library")?;
-        self.tracks[*index].saved_loops.set(slot, value)
+        let index = *index;
+        self.tracks[index].saved_loops.set(slot, value)?;
+        self.mark_track(index);
+        Ok(())
     }
 
     pub fn hot_cues(&self, path: &Path) -> crate::hot_cues::HotCues {
@@ -185,7 +245,10 @@ impl Library {
             .keys
             .get(&identity(path))
             .ok_or("Track is not in the library")?;
-        self.tracks[*index].hot_cues.set(slot, cue)
+        let index = *index;
+        self.tracks[index].hot_cues.set(slot, cue)?;
+        self.mark_track(index);
+        Ok(())
     }
 
     pub fn grid(&self, path: &Path) -> Option<crate::beatgrid::BeatGrid> {
@@ -202,7 +265,9 @@ impl Library {
             .keys
             .get(&identity(path))
             .ok_or("Track is not in the library")?;
-        self.tracks[*index].grid = grid;
+        let index = *index;
+        self.tracks[index].grid = grid;
+        self.mark_track(index);
         Ok(())
     }
     pub fn crates(&self) -> &crate::crates::CrateCatalog {
@@ -220,13 +285,18 @@ impl Library {
         Ok(())
     }
     pub fn create_crate(&mut self, name: &str) -> Result<i32, String> {
-        self.crates.create(name)
+        let id = self.crates.create(name)?;
+        self.mark_crates();
+        Ok(id)
     }
     pub fn rename_crate(&mut self, id: i32, name: &str) -> Result<(), String> {
-        self.crates.rename(id, name)
+        self.crates.rename(id, name)?;
+        self.mark_crates();
+        Ok(())
     }
     pub fn delete_crate(&mut self, id: i32) -> Result<(), String> {
         self.crates.delete(id)?;
+        self.mark_crates();
         if self.active_crate == id {
             self.select_crate(0)?;
         }
@@ -234,7 +304,11 @@ impl Library {
     }
     pub fn add_selected_to_crate(&mut self, id: i32) -> Result<bool, String> {
         let track = self.selected.ok_or("Select a track first")?;
-        self.crates.add(id, track)
+        let changed = self.crates.add(id, track)?;
+        if changed {
+            self.mark_crates();
+        }
+        Ok(changed)
     }
     pub fn add_paths_to_crate(&mut self, id: i32, paths: &[PathBuf]) -> Result<usize, String> {
         if id == 0 {
@@ -244,17 +318,28 @@ impl Library {
             .iter()
             .filter_map(|p| self.keys.get(&identity(p)).map(|i| self.tracks[*i].id))
             .collect();
-        self.crates.add_many(id, &tracks)
+        let changed = self.crates.add_many(id, &tracks)?;
+        if changed > 0 {
+            self.mark_crates();
+        }
+        Ok(changed)
     }
     pub fn remove_selected_from_crate(&mut self) -> Result<bool, String> {
         let track = self.selected.ok_or("Select a track first")?;
         let removed = self.crates.remove(self.active_crate, track)?;
+        if removed {
+            self.mark_crates();
+        }
         self.set_query(self.query.clone());
         Ok(removed)
     }
     pub fn set_metadata(&mut self, path: &Path, metadata: crate::track_metadata::TrackMetadata) {
         if let Some(index) = self.keys.get(&identity(path)) {
-            self.tracks[*index].metadata = metadata;
+            let index = *index;
+            if self.tracks[index].metadata != metadata {
+                self.tracks[index].metadata = metadata;
+                self.mark_track(index);
+            }
         }
     }
     /// Called by the storage worker: availability checks never run in the UI tick.
@@ -269,17 +354,22 @@ impl Library {
             library
                 .keys
                 .insert(identity(&saved.path), library.tracks.len());
-            let metadata = if available && !saved.metadata.scanned {
+            let enriched = available && !saved.metadata.scanned;
+            let metadata = if enriched {
                 crate::track_metadata::read(&saved.path)
             } else {
                 saved.metadata
             };
             let mut track = Track::new(saved.id, saved.path, available);
+            let changed = enriched && metadata.scanned;
             track.metadata = metadata;
             track.grid = saved.grid;
             track.hot_cues = saved.hot_cues;
             track.saved_loops = saved.saved_loops;
             library.tracks.push(track);
+            if changed {
+                library.mark_track(library.tracks.len() - 1);
+            }
             library.last_id = library.last_id.max(saved.id);
         }
         Ok(library)
@@ -288,18 +378,7 @@ impl Library {
         Catalog {
             version: 1,
             crates: self.crates.clone(),
-            tracks: self
-                .tracks
-                .iter()
-                .map(|t| SavedTrack {
-                    id: t.id,
-                    path: t.path.clone(),
-                    metadata: t.metadata.clone(),
-                    grid: t.grid,
-                    hot_cues: t.hot_cues.clone(),
-                    saved_loops: t.saved_loops.clone(),
-                })
-                .collect(),
+            tracks: self.tracks.iter().map(Track::saved).collect(),
         }
     }
     pub fn missing_count(&self) -> usize {
@@ -343,6 +422,7 @@ impl Library {
             self.last_id = id;
             self.keys.insert(identity(&path), self.tracks.len());
             self.tracks.push(Track::new(id, path, true));
+            self.mark_track(self.tracks.len() - 1);
         }
         self.tracks.len() - before
     }
@@ -447,6 +527,57 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delta_snapshot_at_100000_tracks_only_clones_changed_records_and_acks_exact_revision() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+        library.insert((0..MAX_TRACKS).map(|i| profile.path().join(format!("{i}.wav"))));
+        library.acknowledge(library.revision());
+        assert!(!library.has_changes());
+        let path = profile.path().join("0.wav");
+        library
+            .set_hot_cue(
+                &path,
+                0,
+                Some(
+                    crate::hot_cues::HotCue::new(
+                        std::time::Duration::from_secs(1),
+                        "Cue".into(),
+                        0,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+        let mut patch = None;
+        let start = std::time::Instant::now();
+        let delta_alloc = crate::looping::counted_allocations(|| patch = Some(library.changes()));
+        let delta_time = start.elapsed();
+        let mut full = None;
+        let start = std::time::Instant::now();
+        let full_alloc = crate::looping::counted_allocations(|| full = Some(library.catalog()));
+        let full_time = start.elapsed();
+        let patch = patch.unwrap();
+        assert_eq!(patch.tracks.len(), 1);
+        assert!(patch.crates.is_none());
+        assert!(full_alloc > 10000 && delta_alloc < 20);
+        assert_eq!(full.unwrap().tracks.len(), MAX_TRACKS);
+        let grid = crate::beatgrid::BeatGrid::new(120., std::time::Duration::ZERO).unwrap();
+        library.set_grid(&path, Some(grid)).unwrap();
+        library.acknowledge(patch.revision);
+        let latest = library.changes();
+        assert_eq!(latest.tracks.len(), 1);
+        assert_eq!(latest.tracks[0].grid, Some(grid));
+        assert!(latest.tracks[0].hot_cues.slots()[0].is_some());
+        let crate_id = library.create_crate("New crate").unwrap();
+        library.acknowledge(latest.revision);
+        let remaining = library.changes();
+        assert!(remaining.tracks.is_empty());
+        assert_eq!(remaining.crates.unwrap().entries[0].id, crate_id);
+        library.acknowledge(library.revision());
+        assert!(!library.has_changes());
+        println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
+    }
     #[test]
     fn stable_identity_survives_sort_and_filter_never_loads_a_hidden_selection() {
         let mut library = Library::default();
