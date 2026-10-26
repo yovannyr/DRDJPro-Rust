@@ -78,6 +78,7 @@ pub struct AudioController {
     crate_target: Cell<i32>,
     import_crate: Cell<i32>,
     pitch_ranges: Cell<[crate::pitch_control::PitchRange; 2]>,
+    alignments: Cell<[crate::phase_sync::Alignment; 2]>,
     pending_pitch: RefCell<[Option<PitchRequest>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
     sync_session: RefCell<Option<SyncSession>>,
@@ -126,6 +127,7 @@ impl AudioController {
             crate_target: Cell::new(0),
             import_crate: Cell::new(0),
             pitch_ranges: Cell::new([crate::pitch_control::PitchRange::default(); 2]),
+            alignments: Cell::new([crate::phase_sync::Alignment::Beat; 2]),
             pending_pitch: RefCell::new([None, None]),
             nudges: RefCell::new([None, None]),
             sync_session: RefCell::new(None),
@@ -630,6 +632,25 @@ impl AudioController {
         }
         Ok(factor)
     }
+    fn change_alignment(&self, id: DeckId) -> Result<(), String> {
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let index = match id {
+            DeckId::A => ui.get_left_alignment_index(),
+            DeckId::B => ui.get_right_alignment_index(),
+        };
+        let alignment = crate::phase_sync::Alignment::from_index(index)?;
+        let mut choices = self.alignments.get();
+        if choices[Self::grid_index(id)] == alignment {
+            return Ok(());
+        }
+        let follower = self.sync_session.borrow().as_ref().map(|s| s.target);
+        if follower == Some(id) {
+            self.stop_sync();
+        }
+        choices[Self::grid_index(id)] = alignment;
+        self.alignments.set(choices);
+        Ok(())
+    }
     fn stop_sync(&self) {
         if let Some(session) = self.sync_session.borrow_mut().take() {
             let _ = self.engine.apply_sync_factor(session.target, 1.);
@@ -649,7 +670,8 @@ impl AudioController {
             .engine
             .sync_observation(id)
             .ok_or("Wait for fresh playing deck frames before Sync")?;
-        self.engine.phase_sync_once(id)?;
+        self.engine
+            .phase_sync_once(id, self.alignments.get()[Self::grid_index(id)])?;
         let snapshots = [
             self.engine.snapshot(DeckId::A),
             self.engine.snapshot(DeckId::B),
@@ -747,7 +769,8 @@ impl AudioController {
     }
     fn phase_sync_ready(&self, id: DeckId) -> Result<(), String> {
         self.tempo_match_target(id)?;
-        self.engine.phase_sync_frame(id)?;
+        self.engine
+            .phase_sync_frame(id, self.alignments.get()[Self::grid_index(id)])?;
         Ok(())
     }
     fn match_tempo(&self, id: DeckId) -> Result<(), String> {
@@ -898,6 +921,29 @@ impl AudioController {
     fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
             let weak = Rc::downgrade(self);
+            let alignment = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.change_alignment(id);
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(
+                            result
+                                .map(|()| {
+                                    "Alignment mode selected; start PHASE or SYNC explicitly"
+                                        .to_string()
+                                })
+                                .unwrap_or_else(|e| e)
+                                .into(),
+                        );
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_alignment_mode_left(alignment),
+                DeckId::B => ui.on_alignment_mode_right(alignment),
+            }
+
+            let weak = Rc::downgrade(self);
             let follow = move || {
                 if let Some(c) = weak.upgrade() {
                     let result = c.toggle_sync(id);
@@ -920,9 +966,10 @@ impl AudioController {
             let weak = Rc::downgrade(self);
             let sync = move || {
                 if let Some(c) = weak.upgrade() {
-                    let result = c
-                        .phase_sync_ready(id)
-                        .and_then(|()| c.engine.phase_sync_once(id));
+                    let result = c.phase_sync_ready(id).and_then(|()| {
+                        c.engine
+                            .phase_sync_once(id, c.alignments.get()[Self::grid_index(id)])
+                    });
                     if let Some(ui) = c.ui.upgrade() {
                         ui.set_status(
                             result
@@ -2027,6 +2074,8 @@ impl AudioController {
         ui.set_background_job_active(
             self.pending.borrow().is_some() || self.pending_import.borrow().is_some(),
         );
+        ui.set_left_alignment_index(self.alignments.get()[0].index());
+        ui.set_right_alignment_index(self.alignments.get()[1].index());
         let follower = self.sync_session.borrow().as_ref().map(|s| s.target);
         ui.set_left_sync_active(follower == Some(DeckId::A));
         ui.set_right_sync_active(follower == Some(DeckId::B));
@@ -2516,6 +2565,93 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn alignment_choice_wires_both_phase_actions_and_releases_only_its_sync_follower() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let clock = Rc::new(Cell::new(Instant::now()));
+        let source_clock = Rc::clone(&clock);
+        let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            1,
+            48000,
+            Box::new(move || source_clock.get()),
+        ));
+        let file = wav_file(4096, 384000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            engine.play(id);
+        }
+        let levels = engine.output_volumes();
+        for (id, label, other) in [
+            (DeckId::A, "DECK A", DeckId::B),
+            (DeckId::B, "DECK B", DeckId::A),
+        ] {
+            for _ in 0..4 {
+                control(&ui, &format!("{label} deck tools panel"))
+                    .invoke_accessible_default_action();
+            }
+            engine.seek_position(id, Duration::from_secs(1)).unwrap();
+            engine.seek_position(other, Duration::ZERO).unwrap();
+            match id {
+                DeckId::A => {
+                    ui.set_left_alignment_index(1);
+                    ui.invoke_alignment_mode_left();
+                }
+                DeckId::B => {
+                    ui.set_right_alignment_index(1);
+                    ui.invoke_alignment_mode_right();
+                }
+            }
+            assert_eq!(engine.snapshot(id).position, Duration::from_secs(1));
+            control(&ui, &format!("{label} phase sync")).invoke_accessible_default_action();
+            assert_eq!(engine.snapshot(id).position, Duration::from_secs(2));
+            assert_eq!(engine.snapshot(other).position, Duration::ZERO);
+        }
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(1))
+            .unwrap();
+        engine.seek_position(DeckId::B, Duration::ZERO).unwrap();
+        c.refresh();
+        for _ in 0..1000 {
+            output.next();
+        }
+        clock.set(clock.get() + Duration::from_millis(1));
+        c.refresh();
+        let acquisition_before = engine.snapshot(DeckId::A).position;
+        c.toggle_sync(DeckId::A).unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            acquisition_before + Duration::from_secs(1)
+        );
+        ui.set_left_alignment_index(-1);
+        ui.invoke_alignment_mode_left();
+        assert!(c.sync_session.borrow().is_some());
+        assert_eq!(ui.get_left_alignment_index(), 1);
+        ui.set_right_alignment_index(0);
+        ui.invoke_alignment_mode_right();
+        assert!(
+            c.sync_session.borrow().is_some(),
+            "reference view choice must not change the follower"
+        );
+        let before = engine.snapshot(DeckId::A).position;
+        ui.set_left_alignment_index(0);
+        ui.invoke_alignment_mode_left();
+        assert!(c.sync_session.borrow().is_none());
+        assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+        assert_eq!(engine.snapshot(DeckId::A).position, before);
+        assert_eq!(engine.output_volumes(), levels);
+        assert!(!c.dirty.get());
     }
     #[test]
     fn continuous_sync_cancels_on_grid_source_pause_loop_busy_and_held_input() {
@@ -5474,6 +5610,7 @@ mod tests {
                     "cancel nudge",
                     "phase sync",
                     "continuous sync",
+                    "phase alignment mode",
                 ] {
                     let item = control(&ui, &format!("{deck} {action}"));
                     assert!(item.size().width > 0. && item.size().height > 0.);

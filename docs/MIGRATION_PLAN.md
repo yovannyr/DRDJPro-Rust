@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 162 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 166 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der anschließende begrenzte kontinuierliche SYNC-Follower ist mit162 Tests, Release-Build und akzeptiertem Astra-Mittel-Follow-up geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Die anschließende Beat-/4/4-Takt-Auswahl ist mit166 Tests, Release-Build und akzeptiertem Astra-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -60,7 +60,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Kohärente Quellphase/Bus-Frame-Paare mit begrenztem Lesen, Befehls-/Wechsel-Validierung und parallelen Tests; einmaliger Sync nutzt passende Paare.
 - [x] ✅ Frischeprüfung für gleiche Render-Frames mit Alters-/Lesefenster, beobachtetem Bus-Fortschritt, Stillstandsablauf und Wiederanlauf-Tests.
 - [x] ✅ Begrenzter kontinuierlicher SYNC-Follower für bestätigte konstante Grids: getrennte Korrektur, Frische-/Eingabeschutz und Render-Deadline, beide Deck-Richtungen getestet.
-- [ ] ☐ Musikalische/Hardware-Langzeitqualifikation von Sync, hörbare Übergänge, Takt-/Downbeat-Sync, Keylock und Quantisierung.
+- [x] ✅ Beat-/4/4-Takt-Auswahl für PHASE und initiale SYNC-Ausrichtung, mit exakten Halbperioden-Entscheidungen und Modus-/Abbruchtests.
+- [ ] ☐ Musikalische/Hardware-Langzeitqualifikation von Sync, hörbare Übergänge, fortlaufende Taktphasenregelung, Keylock und Quantisierung.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -396,3 +397,12 @@ Sync correction is separate from requested base pitch and manual nudge. The cont
 Each control tick checks both prepared-source identities, saved grids, renderer command generations, playing/loop/loading/restore state and pending pitch/grid/held-nudge ownership. Render-affecting manual input/master pitch/seek changes invalidate the session; source replacement/pause/rate paths neutralize transient state. Missing fresh observations immediately neutralize correction while waiting up to100ms for valid samples, then stop. Long control/render intervals also stop. Ordinary fixed-frame correction publishes rate, neutral rate and a100ms-produced-frame deadline coherently. If the control loop stops renewing, the renderer returns to neutral at that deadline without a wall-clock call/allocation/lock. A stopped renderer consumes no new frames; the watchdog is not a100ms wall/device guarantee. Snapshot captions reflect renderer-reported expiry. Close/drop and explicit Sync off neutralize.
 
 This is a bounded initial continuous-following feature for constant manually confirmed grids, not completed Sync parity or physical/musical acceptance. Synthetic convergence, actual offline PCM/deadline behavior, both-deck multi-tick controls with an injected control-only clock, and cancellation tests are recorded in LOCAL_VALIDATION.md. Native focus/listening, audible transition quality, real devices/deadlines, music corpus, downbeat/bar Sync, controller mappings and broader feature parity remain open. No dependency/schema change.
+
+
+## Beat / 4-beat bar acquisition choice (2026-10-26)
+
+Each deck now has Beat(default) and Bar4/4 acquisition modes in NUDGE. PHASE and initial SYNC acquisition use the selected period; ongoing bounded correction remains beat-phase based. Bar4 aligns the nearest matching position within the four-beat period defined by each confirmed grid's downbeat anchor. It is immediate alignment, not scheduling a future action on the next downbeat. It can move up to half a bar; if the nearest rounded frame lies outside the decoded track it rejects without clamping or choosing a farther bar.
+
+Both periods use exact binary-BPM phase remainders/common-denominator arithmetic for the discrete decision; exact half-period ties choose later. Different manual anchors, pre-anchor beat indices and fractional BPM remain supported within the existing seven-day bound. Defaults retain previous Beat behavior. The per-deck choice lasts for the current app session and survives track replacement, but is not stored in SQLite/media tags. A changed target choice stops its active follower and neutralizes correction without seeking; changing only the reference deck's view choice does not change the follower. Invalid selections preserve the current state and restore the authoritative displayed index. Valid selection alone never seeks or starts playback.
+
+Tests cover half-bar±1ns, distinct whole-beat ambiguity, manual anchors/fractional tempos, endpoint rejection, actual PCM after Bar4 seek, both deck controls, invalid selection and active-follower release. The existing freshness, loop, loading, grid and nudge guards apply. Full bar-phase regulation, variable meters, quantization, artifact-free transitions, music/hardware/native qualification and full reference parity remain open. No dependency/schema change. Final review/checks are recorded in LOCAL_VALIDATION.md.
