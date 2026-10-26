@@ -271,3 +271,8 @@ The NUDGE Sync row adds an accessible `DECK A/B phase alignment mode` selector f
 ## Continuous alignment-period feedback (2026-10-26)
 
 The existing selector now determines continuous SYNC feedback too. The target mode is captured at activation; the existing target mode-change cancellation/reacquisition behavior remains. No new controls or layout changes. Beat remains default. Error correction is still bounded and rate-only after initial acquisition; no claim of native visual/listening or physical synchronization acceptance follows from headless tests.
+
+
+## QUANT for new cue placement (2026-10-26)
+
+The non-editing CUE tools row contains QUANT (`DECK A/B quantize new cues`). It snaps only newly set empty slots to the nearest confirmed manual beat; an exact halfway position chooses later. Existing cues recall their exact saved timestamp even with QUANT enabled or the grid unavailable. A grid draft must be saved/cancelled before quantized placement. Endpoint/guard failures retain library and transport. The checkbox has session-only bidirectional bindings; enabling requires loaded/not-busy/grid-active, while turning an already checked option off is always allowed. This prevents a checked but unusable option becoming stuck after a gridless load. Headless geometry includes the checkbox at850x740/1280x860; no native visual or focus acceptance is inferred. Scheduled cue triggering is not implemented by this toggle.

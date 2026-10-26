@@ -1325,11 +1325,37 @@ impl AudioController {
             if source.position >= source.duration {
                 return Err("A cue needs a playable position before the end of the track".into());
             }
+            let ui = self.ui.upgrade().ok_or("Window closed")?;
+            let quantize = match id {
+                DeckId::A => ui.get_left_quantize_cues(),
+                DeckId::B => ui.get_right_quantize_cues(),
+            };
+            let position = if quantize {
+                if self.grid_editors.borrow()[Self::grid_index(id)].is_some() {
+                    return Err("Save or cancel the grid draft first".into());
+                }
+                let grid = source
+                    .grid
+                    .ok_or("Save a manual grid before quantizing cues")?;
+                let rate = source
+                    .detail
+                    .as_ref()
+                    .ok_or("Missing source details")?
+                    .sample_rate();
+                let frame = grid.nearest_beat_frame(source.position, rate)?;
+                let time = crate::looping::frame_time(frame, rate);
+                if time >= source.duration {
+                    return Err("Nearest beat is outside the playable track".into());
+                }
+                time
+            } else {
+                source.position
+            };
             const COLORS: [u32; 8] = [
                 0xe74c3c, 0xf39c12, 0xf1c40f, 0x2ecc71, 0x1abc9c, 0x3498db, 0x9b59b6, 0xe84393,
             ];
             Some(crate::hot_cues::HotCue::new(
-                source.position,
+                position,
                 format!("Cue {}", slot + 1),
                 COLORS[slot],
             )?)
@@ -4598,6 +4624,213 @@ mod tests {
         c.close_library().unwrap();
     }
     #[test]
+    fn quantized_new_cues_preserve_transport_recall_exactly_and_survive_sqlite_restart() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let a = wav_file(8192, 384000);
+        let b = wav_file(4096, 384000);
+        let a_path = std::fs::canonicalize(a.path()).unwrap();
+        let b_path = std::fs::canonicalize(b.path()).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        engine.load_a(a_path.as_path()).unwrap();
+        engine.load_b(b_path.as_path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+        c.library.borrow_mut().insert([
+            a_path.as_path().to_path_buf(),
+            b_path.as_path().to_path_buf(),
+        ]);
+        for path in [a_path.as_path(), b_path.as_path()] {
+            c.library.borrow_mut().set_grid(path, Some(grid)).unwrap();
+        }
+        c.library_changed();
+        finish_storage(&c);
+        for (id, label, path) in [
+            (DeckId::A, "DECK A", a_path.as_path()),
+            (DeckId::B, "DECK B", b_path.as_path()),
+        ] {
+            engine.set_grid(id, Some(grid)).unwrap();
+            engine
+                .seek_position(id, Duration::from_millis(1250))
+                .unwrap();
+            engine
+                .restore_loop(id, Duration::from_secs(1), Duration::from_secs(3))
+                .unwrap();
+            engine.activate_loop(id).unwrap();
+            if id == DeckId::A {
+                engine.play(id);
+                engine.set_nudge(id, 1).unwrap();
+            }
+            c.refresh();
+            control(&ui, &format!("{label} quantize new cues")).invoke_accessible_default_action();
+            let before = engine.snapshot(id);
+            let gains = engine.output_volumes();
+            control(&ui, &format!("{label} hot cue 1")).invoke_accessible_default_action();
+            assert!(
+                c.library.borrow().hot_cues(path).slots()[0].is_some(),
+                "{label}: {}; quantA={} quantB={} enabled={:?}",
+                ui.get_status(),
+                ui.get_left_quantize_cues(),
+                ui.get_right_quantize_cues(),
+                control(&ui, &format!("{label} hot cue 1")).accessible_enabled()
+            );
+            assert_eq!(
+                c.library.borrow().hot_cues(path).slots()[0]
+                    .as_ref()
+                    .unwrap()
+                    .position(),
+                Duration::from_millis(1500)
+            );
+            let after = engine.snapshot(id);
+            assert_eq!(after.position, before.position);
+            assert_eq!(after.playing, before.playing);
+            assert_eq!(after.nudge_direction, before.nudge_direction);
+            assert_eq!(after.loop_active, before.loop_active);
+            assert_eq!(engine.output_volumes(), gains);
+            engine.set_grid(id, None).unwrap();
+            engine
+                .seek_position(id, Duration::from_millis(2200))
+                .unwrap();
+            c.refresh();
+            assert_eq!(
+                control(&ui, &format!("{label} quantize new cues")).accessible_enabled(),
+                Some(true)
+            );
+            control(&ui, &format!("{label} hot cue 1")).invoke_accessible_default_action();
+            assert_eq!(engine.snapshot(id).position, Duration::from_millis(1500));
+            control(&ui, &format!("{label} quantize new cues")).invoke_accessible_default_action();
+        }
+        engine
+            .seek_position(DeckId::A, Duration::new(1, 234567890))
+            .unwrap();
+        let exact = engine.snapshot(DeckId::A).position;
+        ui.invoke_hot_cue_left(1);
+        assert_eq!(
+            c.library.borrow().hot_cues(a_path.as_path()).slots()[1]
+                .as_ref()
+                .unwrap()
+                .position(),
+            exact
+        );
+        finish_storage(&c);
+        c.close_library().unwrap();
+        let ui2 = AppWindow::new().unwrap();
+        let (mixer, _output2) = rodio::mixer::mixer(1, 48000);
+        let engine2 = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        engine2.load_a(a_path.as_path()).unwrap();
+        engine2.load_b(b_path.as_path()).unwrap();
+        let restored =
+            AudioController::wire(&ui2, engine2.clone(), Arc::new(|| None), Arc::new(|| None));
+        restored.restore_library(Ok(db), Vec::new());
+        finish_storage(&restored);
+        for path in [a_path.as_path(), b_path.as_path()] {
+            assert_eq!(
+                restored.library.borrow().hot_cues(path).slots()[0]
+                    .as_ref()
+                    .unwrap()
+                    .position(),
+                Duration::from_millis(1500)
+            );
+        }
+        assert_eq!(
+            restored.library.borrow().hot_cues(a_path.as_path()).slots()[1]
+                .as_ref()
+                .unwrap()
+                .position(),
+            exact
+        );
+        assert!(!ui2.get_left_quantize_cues() && !ui2.get_right_quantize_cues());
+        restored.close_library().unwrap();
+    }
+    #[test]
+    fn quantized_cue_fractional_bpm_at_44100hz_recalls_the_exact_source_frame() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = crate::test_support::wav_samples(&vec![4096; 88200], 44100, 1);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(123.45, Duration::ZERO).unwrap()),
+            )
+            .unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(730))
+            .unwrap();
+        ui.set_left_quantize_cues(true);
+        c.change_hot_cue(DeckId::A, 0, false).unwrap();
+        let path = engine.snapshot(DeckId::A).path.unwrap();
+        let cue = c.library.borrow().hot_cues(&path).slots()[0]
+            .clone()
+            .unwrap();
+        assert_eq!(cue.position(), Duration::from_nanos(972063493));
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(1500))
+            .unwrap();
+        c.change_hot_cue(DeckId::A, 0, false).unwrap();
+        assert_eq!(
+            crate::looping::frame_at(engine.snapshot(DeckId::A).position, 44100),
+            42868
+        );
+    }
+    #[test]
+    fn quantized_cue_rejections_do_not_insert_or_dirty_library() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(4096, 96000);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.set_left_quantize_cues(true);
+        assert!(c
+            .change_hot_cue(DeckId::A, 0, false)
+            .unwrap_err()
+            .contains("manual grid"));
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+            )
+            .unwrap();
+        c.begin_grid_editor(DeckId::A).unwrap();
+        assert!(c
+            .change_hot_cue(DeckId::A, 0, false)
+            .unwrap_err()
+            .contains("draft"));
+        c.cancel_grid_editor(DeckId::A);
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+            )
+            .unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(1900))
+            .unwrap();
+        let position = engine.snapshot(DeckId::A).position;
+        assert!(c
+            .change_hot_cue(DeckId::A, 0, false)
+            .unwrap_err()
+            .contains("outside"));
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        engine.seek_percent(DeckId::A, 100.).unwrap();
+        assert!(c.change_hot_cue(DeckId::A, 0, false).is_err());
+        c.storage_ready.set(false);
+        assert!(c.change_hot_cue(DeckId::A, 0, false).is_err());
+        assert_eq!(c.library.borrow().len(), 0);
+        assert_eq!(c.library.borrow().revision(), 0);
+        assert!(!c.dirty.get());
+    }
+    #[test]
     fn hot_cue_pads_set_recall_delete_share_and_restore_without_transport_changes() {
         use slint::Model;
         i_slint_backend_testing::init_no_event_loop();
@@ -5640,6 +5873,14 @@ mod tests {
                 }
                 control(&ui, &format!("{deck} deck tools panel"))
                     .invoke_accessible_default_action();
+                let quantize = control(&ui, &format!("{deck} quantize new cues"));
+                assert!(quantize.size().width > 0. && quantize.size().height > 0.);
+                assert!(quantize.absolute_position().x >= 0.);
+                assert!(quantize.absolute_position().x + quantize.size().width <= width + 0.1);
+                assert!(
+                    quantize.absolute_position().y + quantize.size().height
+                        <= shared.absolute_position().y
+                );
                 let delete = control(&ui, &format!("{deck} delete hot cue"));
                 assert!(
                     delete.absolute_position().y + delete.size().height

@@ -153,6 +153,7 @@ component CompactDeck inherits Rectangle {
     in property <bool> playing;
     in-out property <float> position;
     in property <[HotCueRow]> hot-cues;
+    in-out property <bool> quantize-cues: false;
     in property <LoopRange> loop-range;
     property <int> delete-slot: 1;
     property <int> tools-panel: 0;
@@ -294,6 +295,7 @@ component CompactDeck inherits Rectangle {
             SpinBox { minimum: 1; maximum: 8; value <=> root.delete-slot; accessible-label: deck-label + " delete hot cue slot"; }
             Button { text: "EDIT"; accessible-label: deck-label + " edit hot cue"; enabled: loaded && !loading; clicked => { root.edit-hot-cue(root.delete-slot - 1); } }
             Button { text: "DELETE"; accessible-label: deck-label + " delete hot cue"; enabled: loaded && !loading; clicked => { root.delete-hot-cue(root.delete-slot - 1); } }
+            CheckBox { text:"QUANT"; accessible-label:root.deck-label+" quantize new cues"; accessible-description:"Set new cues on nearest confirmed manual beat"; checked <=> root.quantize-cues; enabled:root.quantize-cues || (root.loaded && !root.loading && root.grid-active); }
         }
         if root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 26px; spacing: 2px;
@@ -544,6 +546,7 @@ export component AppWindow inherits Window {
     in-out property <float> left-position: 0;
     in-out property <float> right-position: 0;
     in property <[HotCueRow]> left-hot-cues;
+    in-out property <bool> left-quantize-cues: false;
     in-out property <int> left-pitch-range-index: 3;
     in property <float> left-pitch-min: -50; in property <float> left-pitch-max: 100;
     in property <bool> left-pitch-outside; in property <bool> left-pitch-can-down; in property <bool> left-pitch-can-up;
@@ -576,6 +579,7 @@ export component AppWindow inherits Window {
     in-out property <string> left-cue-rgb;
     callback edit-hot-cue-left(int); callback save-hot-cue-left(); callback cancel-hot-cue-left();
     in property <[HotCueRow]> right-hot-cues;
+    in-out property <bool> right-quantize-cues: false;
     in-out property <int> right-pitch-range-index: 3;
     in property <float> right-pitch-min: -50; in property <float> right-pitch-max: 100;
     in property <bool> right-pitch-outside; in property <bool> right-pitch-can-down; in property <bool> right-pitch-can-up;
@@ -688,6 +692,7 @@ export component AppWindow inherits Window {
                 loop-caption: root.left-loop-caption; loop-has-in: root.left-loop-has-in; loop-ready: root.left-loop-ready; loop-active: root.left-loop-active;
                 loop-in => { root.loop-in-left(); } loop-out => { root.loop-out-left(); } loop-activate => { root.loop-activate-left(); } reloop => { root.reloop-left(); }
                 hot-cues: root.left-hot-cues;
+                quantize-cues <=> root.left-quantize-cues;
                 cue-editing: root.left-cue-editing; cue-name <=> root.left-cue-name; cue-rgb <=> root.left-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-left(slot); }
                 save-hot-cue => { root.save-hot-cue-left(); } cancel-hot-cue => { root.cancel-hot-cue-left(); }
@@ -717,6 +722,7 @@ export component AppWindow inherits Window {
                 loop-caption: root.right-loop-caption; loop-has-in: root.right-loop-has-in; loop-ready: root.right-loop-ready; loop-active: root.right-loop-active;
                 loop-in => { root.loop-in-right(); } loop-out => { root.loop-out-right(); } loop-activate => { root.loop-activate-right(); } reloop => { root.reloop-right(); }
                 hot-cues: root.right-hot-cues;
+                quantize-cues <=> root.right-quantize-cues;
                 cue-editing: root.right-cue-editing; cue-name <=> root.right-cue-name; cue-rgb <=> root.right-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-right(slot); }
                 save-hot-cue => { root.save-hot-cue-right(); } cancel-hot-cue => { root.cancel-hot-cue-right(); }
