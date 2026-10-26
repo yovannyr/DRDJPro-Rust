@@ -254,3 +254,10 @@ No new control or continuous Sync mode. PHASE can use coherent source-phase pair
 ## Freshness gate for rendered phase inputs (2026-10-26)
 
 No new control or latched Sync mode. One-shot PHASE uses same-frame rendered inputs only when the5ms render-frame/read-window and100ms observed-progress policies pass; absent fresh inputs retain the existing explicit control-position behavior. Continuous regulation will require strict freshness rather than this fallback. Long control polling gaps force liveness reacquisition. These are producer-side checks, not proof of physical output timing or hardware continuity. Native visual/listening qualification remains open.
+
+
+## Continuous SYNC follower control (2026-10-26)
+
+A second row in NUDGE contains SYNC/SYNC ON with accessible action `DECK A/B continuous sync`. Only one follower is allowed; the other deck remains the reference. Initial activation requires a fresh eligible pair and performs one-shot tempo/phase alignment; continued operation changes rate only. Toggle off releases correction; another follower must wait until the current one stops. Temporary correction is distinct from base pitch and nudge and displayed with requested/effective values. The additional row remains within headless two-size layout bounds.
+
+Pending/manual render commands, source/grid changes, active loops, not-playing/loading/restore, open grid edits and held nudge ownership stop following on the next control check. Transient missing fresh samples neutralize immediately and wait at most100ms before stopping. The audio-side100ms-produced-frame watchdog also neutralizes if the controller stops renewing. This is not proof of device timing, artifact-free transitions or musical Sync quality. Native usability/focus/listening/device acceptance remains open.

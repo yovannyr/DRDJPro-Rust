@@ -188,6 +188,7 @@ struct Deck {
     speed: Option<PlaybackSpeed>,
     base_factor: f64,
     nudge: i32,
+    sync_factor: f64,
     grid: Option<crate::beatgrid::BeatGrid>,
 }
 struct SourceRetirement(Arc<AtomicBool>);
@@ -201,6 +202,17 @@ struct RetiredTrack {
     released: Arc<AtomicBool>,
 }
 impl Deck {
+    fn actual_speed(&self) -> f64 {
+        if self.render.as_ref().is_some_and(|r| r.sync_expired()) {
+            self.track.as_ref().map_or(1., |track| {
+                PlaybackSpeed::nudged(self.base_factor, self.nudge, track.samples.sample_rate())
+                    .unwrap()
+                    .effective_factor()
+            })
+        } else {
+            self.speed.map_or(1., PlaybackSpeed::effective_factor)
+        }
+    }
     fn playing(&self) -> bool {
         self.track
             .as_ref()
@@ -265,6 +277,7 @@ pub struct DeckSnapshot {
     pub nudge_direction: i32,
     pub requested_speed: f64,
     pub effective_speed: f64,
+    pub sync_factor: f64,
 }
 impl DeckSnapshot {
     pub fn percent(&self) -> f32 {
@@ -286,6 +299,7 @@ pub struct DualDeckEngine {
     // Shared producer timeline; completed-frame stamps are consumed by one-shot sync.
     render_clock: Arc<crate::render_bus::RenderClock>,
     clock_observer: RefCell<crate::render_bus::ClockObserver>,
+    control_clock: Box<dyn Fn() -> std::time::Instant>,
     // Drop explicitly stops the owned device before releasing track-buffer owners.
     _stream: Option<OutputStream>,
 }
@@ -310,6 +324,19 @@ impl DualDeckEngine {
     }
     /// An injected renderer on another thread must be stopped/joined before this engine drops.
     pub(crate) fn from_mixer(mixer: Mixer, output_channels: u16, output_rate: u32) -> Self {
+        Self::from_mixer_with_clock(
+            mixer,
+            output_channels,
+            output_rate,
+            Box::new(std::time::Instant::now),
+        )
+    }
+    pub(crate) fn from_mixer_with_clock(
+        mixer: Mixer,
+        output_channels: u16,
+        output_rate: u32,
+        control_clock: Box<dyn Fn() -> std::time::Instant>,
+    ) -> Self {
         assert!(output_channels > 0 && output_rate > 0);
         // Both deck queues enter one fixed-format bus before the device/injected mixer.
         let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
@@ -330,6 +357,7 @@ impl DualDeckEngine {
                 speed: None,
                 base_factor: 1.,
                 nudge: 0,
+                sync_factor: 1.,
                 grid: None,
             })
         });
@@ -342,6 +370,7 @@ impl DualDeckEngine {
             retired: RefCell::new(Vec::new()),
             render_clock,
             clock_observer: RefCell::new(crate::render_bus::ClockObserver::default()),
+            control_clock,
             _stream: None,
         };
         engine.set_levels(MixerLevels::default());
@@ -367,6 +396,7 @@ impl DualDeckEngine {
         playing: bool,
         grid: Option<crate::beatgrid::BeatGrid>,
     ) {
+        let _ = self.apply_sync_factor(id, 1.);
         let (loop_in, loop_region, speed, base_factor, nudge) = {
             let deck = self.decks[id.index()].borrow();
             if deck
@@ -478,6 +508,7 @@ impl DualDeckEngine {
                 speed: Some(speed),
                 base_factor,
                 nudge,
+                sync_factor: 1.,
                 grid,
             },
         );
@@ -548,21 +579,13 @@ impl DualDeckEngine {
         if target.nudge != 0 || reference.nudge != 0 {
             return Err("Release nudge on both decks before matching tempo".into());
         }
-        let reference_speed = reference
-            .speed
-            .expect("Loaded deck speed")
-            .effective_factor();
+        let reference_speed = reference.actual_speed();
         let factor = reference_grid.bpm() * reference_speed / own_grid.bpm();
         PlaybackSpeed::new(factor, track.samples.sample_rate())?;
         Ok(factor)
     }
     fn fresh_phase_positions(&self, own: &Deck, reference: &Deck) -> Option<(Duration, Duration)> {
-        self.fresh_phase_positions_at(
-            own,
-            reference,
-            std::time::Instant::now(),
-            std::time::Instant::now,
-        )
+        self.fresh_phase_positions_at(own, reference, self.control_now(), || self.control_now())
     }
     fn fresh_phase_positions_at(
         &self,
@@ -642,7 +665,80 @@ impl DualDeckEngine {
             }),
         );
         deck.base_factor = factor;
+        deck.sync_factor = 1.;
         deck.speed = Some(speed);
+        Ok(())
+    }
+    pub fn command_version(&self, id: DeckId) -> Option<u64> {
+        self.decks[id.index()]
+            .borrow()
+            .render
+            .as_ref()
+            .map(|r| r.command_version())
+    }
+    pub fn control_now(&self) -> std::time::Instant {
+        (self.control_clock)()
+    }
+    pub fn output_rate(&self) -> u32 {
+        self.output_rate
+    }
+    pub fn rendered_frames(&self) -> u64 {
+        self.render_clock.completed.load(Ordering::Acquire)
+    }
+    pub fn sync_observation(&self, id: DeckId) -> Option<(f64, u64, f64)> {
+        let nominal = self.tempo_match_factor(id).ok()?;
+        let own = self.decks[id.index()].borrow();
+        let reference = self.decks[1 - id.index()].borrow();
+        if !own.playing() || !reference.playing() || own.loop_active || reference.loop_active {
+            return None;
+        }
+        let (a, b) = self.fresh_phase_positions(&own, &reference)?;
+        let error = crate::phase_sync::beat_displacement(own.grid?, a, reference.grid?, b).ok()?;
+        Some((error, self.rendered_frames(), nominal))
+    }
+    pub fn apply_sync_factor(&self, id: DeckId, factor: f64) -> Result<(), String> {
+        if !factor.is_finite() || !(0.98..=1.02).contains(&factor) {
+            return Err("Sync correction exceeds two percent".into());
+        }
+        let mut deck = self.decks[id.index()].borrow_mut();
+        let track = deck.track.as_ref().ok_or("Load a track first")?;
+        if factor != 1. && (!deck.playing() || deck.loop_active || deck.nudge != 0) {
+            return Err("Sync correction requires playing without loops or nudge".into());
+        }
+        let rate = track.samples.sample_rate();
+        let requested = deck.base_factor * (1. + f64::from(deck.nudge) * 0.02) * factor;
+        let speed = PlaybackSpeed::new(requested, rate)?;
+        if deck.sync_factor == factor && factor == 1. {
+            return Ok(());
+        }
+        let region = if deck.loop_active {
+            deck.loop_region
+        } else {
+            None
+        };
+        if factor == 1. {
+            deck.render.as_ref().unwrap().publish(
+                speed.output_rate().get(),
+                deck.playing(),
+                region,
+                None,
+            );
+        } else {
+            let neutral = PlaybackSpeed::nudged(deck.base_factor, deck.nudge, rate)?;
+            let until = self
+                .rendered_frames()
+                .checked_add(u64::from(self.output_rate).div_ceil(10))
+                .ok_or("Sync clock deadline overflow")?;
+            deck.render.as_ref().unwrap().publish_sync(
+                speed.output_rate().get(),
+                neutral.output_rate().get(),
+                until,
+                deck.playing(),
+                region,
+            );
+        }
+        deck.speed = Some(speed);
+        deck.sync_factor = factor;
         Ok(())
     }
     pub fn set_speed(&self, id: DeckId, factor: f64) -> Result<(), String> {
@@ -674,12 +770,13 @@ impl DualDeckEngine {
             );
         }
         deck.nudge = 0;
+        deck.sync_factor = 1.;
     }
     fn set_rate_state(&self, id: DeckId, factor: f64, nudge: i32) -> Result<(), String> {
         let mut deck = self.decks[id.index()].borrow_mut();
         let track = deck.track.as_ref().ok_or("Load a track first")?;
         let speed = PlaybackSpeed::nudged(factor, nudge, track.samples.sample_rate())?;
-        if deck.base_factor == factor && deck.nudge == nudge {
+        if deck.base_factor == factor && deck.nudge == nudge && deck.sync_factor == 1. {
             return Ok(());
         }
         let region = if deck.loop_active {
@@ -696,6 +793,7 @@ impl DualDeckEngine {
         deck.speed = Some(speed);
         deck.base_factor = factor;
         deck.nudge = nudge;
+        deck.sync_factor = 1.;
         Ok(())
     }
     // Manual-loop commands run on the control plane.
@@ -819,12 +917,16 @@ impl DualDeckEngine {
                 time: frame_time(frame, track.samples.sample_rate()),
                 frame,
             });
+            let speed =
+                PlaybackSpeed::nudged(deck.base_factor, deck.nudge, track.samples.sample_rate())?;
             deck.render.as_ref().unwrap().publish(
-                deck.speed.unwrap().output_rate().get(),
+                speed.output_rate().get(),
                 deck.playing(),
                 Some(region),
                 target,
             );
+            deck.speed = Some(speed);
+            deck.sync_factor = 1.;
         }
         deck.loop_in = Some(region.start);
         deck.loop_region = Some(region);
@@ -847,12 +949,16 @@ impl DualDeckEngine {
             time: frame_time(region.start, track.samples.sample_rate()),
             frame: region.start,
         });
+        let speed =
+            PlaybackSpeed::nudged(deck.base_factor, deck.nudge, track.samples.sample_rate())?;
         render.publish(
-            deck.speed.unwrap().output_rate().get(),
+            speed.output_rate().get(),
             deck.playing(),
             Some(region),
             target,
         );
+        deck.speed = Some(speed);
+        deck.sync_factor = 1.;
         deck.loop_active = true;
         Ok(())
     }
@@ -873,6 +979,7 @@ impl DualDeckEngine {
         );
         deck.loop_active = false;
         deck.nudge = 0;
+        deck.sync_factor = 1.;
         deck.speed = Some(speed);
         Ok(())
     }
@@ -885,6 +992,7 @@ impl DualDeckEngine {
         Ok(())
     }
     pub fn play(&self, id: DeckId) {
+        let _ = self.apply_sync_factor(id, 1.);
         let restart = {
             let deck = self.decks[id.index()].borrow();
             deck.track.is_some()
@@ -929,6 +1037,7 @@ impl DualDeckEngine {
             );
             deck.speed = Some(speed);
             deck.nudge = 0;
+            deck.sync_factor = 1.;
         }
         deck.sink.pause();
     }
@@ -1004,7 +1113,12 @@ impl DualDeckEngine {
             loop_active: deck.loop_active,
             nudge_direction: deck.nudge,
             requested_speed: deck.base_factor,
-            effective_speed: deck.speed.map_or(1., PlaybackSpeed::effective_factor),
+            effective_speed: deck.actual_speed(),
+            sync_factor: if deck.render.as_ref().is_some_and(|r| r.sync_expired()) {
+                1.
+            } else {
+                deck.sync_factor
+            },
         }
     }
     #[cfg(test)]
@@ -1062,6 +1176,53 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn sync_correction_is_separate_bounded_and_expires_without_control_ticks() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let file = wav_file(8192, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.set_speed(DeckId::A, 1.1).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let position = engine.snapshot(DeckId::A).position;
+        engine.apply_sync_factor(DeckId::A, 1.02).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.1);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        assert!((engine.snapshot(DeckId::A).effective_speed - 1.122).abs() < 1e-9);
+        assert_eq!(engine.snapshot(DeckId::B).effective_speed, 1.);
+        assert!(engine.apply_sync_factor(DeckId::A, 1.021).is_err());
+        for _ in 0..4800 {
+            output.next();
+        }
+        assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.02);
+        output.next();
+        assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+        assert!((engine.snapshot(DeckId::A).effective_speed - 1.1).abs() < 1e-9);
+        let render = engine.decks[0].borrow().render.as_ref().unwrap().clone();
+        let before = render.rendered_stamp().unwrap().phase_units;
+        output.next();
+        assert_eq!(render.rendered_stamp().unwrap().phase_units - before, 52800);
+        engine.apply_sync_factor(DeckId::A, 0.99).unwrap();
+        engine.set_speed(DeckId::A, 1.1).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+        engine.apply_sync_factor(DeckId::A, 1.01).unwrap();
+        engine.pause(DeckId::A);
+        assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        engine.play(DeckId::A);
+        engine.apply_sync_factor(DeckId::A, 1.01).unwrap();
+        engine.set_nudge(DeckId::A, 1).unwrap();
+        assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        engine.set_nudge(DeckId::A, 0).unwrap();
+        engine.set_speed(DeckId::A, 2.).unwrap();
+        assert!(engine.apply_sync_factor(DeckId::A, 1.02).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 2.);
+        assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+    }
     #[test]
     fn fresh_pair_rechecks_wall_time_after_a_suspended_read_with_stalled_bus() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);

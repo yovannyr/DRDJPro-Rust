@@ -29,6 +29,8 @@ impl RenderFormat {
 struct Settings {
     sequence: u64,
     rate: u32,
+    neutral_rate: u32,
+    sync_until: u64,
     paused: bool,
     region: Option<FrameLoop>,
     seek_serial: u64,
@@ -44,6 +46,9 @@ pub(crate) struct RenderControl {
     format: RenderFormat,
     sequence: AtomicU64,
     rate: AtomicU32,
+    neutral_rate: AtomicU32,
+    sync_until: AtomicU64,
+    expired_command: AtomicU64,
     paused: AtomicBool,
     start: AtomicUsize,
     end: AtomicUsize,
@@ -72,6 +77,9 @@ impl RenderControl {
             format,
             sequence: AtomicU64::new(0),
             rate: AtomicU32::new(rate),
+            neutral_rate: AtomicU32::new(rate),
+            sync_until: AtomicU64::new(0),
+            expired_command: AtomicU64::new(u64::MAX),
             paused: AtomicBool::new(!playing),
             start: AtomicUsize::new(region.map_or(0, |r| r.start)),
             end: AtomicUsize::new(region.map_or(0, |r| r.end)),
@@ -97,6 +105,26 @@ impl RenderControl {
         region: Option<FrameLoop>,
         seek: Option<SeekFrame>,
     ) {
+        self.publish_guarded(rate, playing, region, seek, None);
+    }
+    pub fn publish_sync(
+        &self,
+        rate: u32,
+        neutral_rate: u32,
+        until: u64,
+        playing: bool,
+        region: Option<FrameLoop>,
+    ) {
+        self.publish_guarded(rate, playing, region, None, Some((neutral_rate, until)));
+    }
+    fn publish_guarded(
+        &self,
+        rate: u32,
+        playing: bool,
+        region: Option<FrameLoop>,
+        seek: Option<SeekFrame>,
+        expiry: Option<(u32, u64)>,
+    ) {
         let target = seek
             .map(|s| {
                 (
@@ -115,6 +143,10 @@ impl RenderControl {
             });
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.rate.store(rate, Ordering::SeqCst);
+        self.neutral_rate
+            .store(expiry.map_or(rate, |e| e.0), Ordering::SeqCst);
+        self.sync_until
+            .store(expiry.map_or(0, |e| e.1), Ordering::SeqCst);
         self.paused.store(!playing, Ordering::SeqCst);
         self.start
             .store(region.map_or(0, |r| r.start), Ordering::SeqCst);
@@ -136,6 +168,8 @@ impl RenderControl {
         let settings = Settings {
             sequence: first,
             rate: self.rate.load(Ordering::SeqCst),
+            neutral_rate: self.neutral_rate.load(Ordering::SeqCst),
+            sync_until: self.sync_until.load(Ordering::SeqCst),
             paused: self.paused.load(Ordering::SeqCst),
             region: (end != 0).then(|| FrameLoop {
                 start: self.start.load(Ordering::SeqCst),
@@ -175,6 +209,13 @@ impl RenderControl {
         };
         let region = self.read(None).and_then(|s| s.region);
         wrap_units(phase, region, self.format)
+    }
+    pub fn sync_expired(&self) -> bool {
+        self.sync_until.load(Ordering::SeqCst) != 0
+            && self.expired_command.load(Ordering::SeqCst) == self.sequence.load(Ordering::SeqCst)
+    }
+    pub fn command_version(&self) -> u64 {
+        self.sequence.load(Ordering::SeqCst)
     }
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
@@ -297,6 +338,18 @@ impl Iterator for DeckRenderer {
         if self.channel == 0 {
             self.prepare_frame();
         }
+        let expired = self.settings.sync_until != 0
+            && self.clock.as_ref().is_some_and(|clock| {
+                clock.completed.load(Ordering::Acquire) >= self.settings.sync_until
+            });
+        let applied_rate = if expired {
+            self.control
+                .expired_command
+                .store(self.settings.sequence, Ordering::SeqCst);
+            self.settings.neutral_rate
+        } else {
+            self.settings.rate
+        };
         let end = self.samples.frames() as u128 * u128::from(self.output_rate);
         let finished = self.settings.region.is_none() && self.phase >= end;
         let value = if self.settings.paused || finished {
@@ -334,7 +387,7 @@ impl Iterator for DeckRenderer {
         if self.channel == self.output_channels {
             self.channel = 0;
             if !self.settings.paused && !finished {
-                self.phase = self.wrap(self.phase + u128::from(self.settings.rate));
+                self.phase = self.wrap(self.phase + u128::from(applied_rate));
                 self.publish_position();
             }
             self.publish_stamp();

@@ -14,17 +14,12 @@ fn phase_fraction(grid: BeatGrid, position: Duration) -> Result<(i128, i128), St
     Ok((delta.rem_euclid(denominator), denominator))
 }
 
-pub fn target_frame(
+pub fn beat_displacement(
     own: BeatGrid,
     position: Duration,
     reference: BeatGrid,
     reference_position: Duration,
-    rate: u32,
-    frames: usize,
-) -> Result<usize, String> {
-    if rate == 0 || frames == 0 || position > MAX_ANCHOR {
-        return Err("Invalid track coordinates for phase sync".into());
-    }
+) -> Result<f64, String> {
     let (own_phase, own_denominator) = phase_fraction(own, position)?;
     let (reference_phase, reference_denominator) = phase_fraction(reference, reference_position)?;
     // Both divisors are 60e9 times a power of two: exact common-denominator scaling.
@@ -37,7 +32,22 @@ pub fn target_frame(
     } else if delta * 2 > denominator {
         delta -= denominator;
     }
-    let seconds = position.as_secs_f64() + delta as f64 / denominator as f64 * 60. / own.bpm();
+    Ok(delta as f64 / denominator as f64)
+}
+
+pub fn target_frame(
+    own: BeatGrid,
+    position: Duration,
+    reference: BeatGrid,
+    reference_position: Duration,
+    rate: u32,
+    frames: usize,
+) -> Result<usize, String> {
+    if rate == 0 || frames == 0 || position > MAX_ANCHOR {
+        return Err("Invalid track coordinates for phase sync".into());
+    }
+    let delta = beat_displacement(own, position, reference, reference_position)?;
+    let seconds = position.as_secs_f64() + delta * 60. / own.bpm();
     let frame = (seconds * f64::from(rate)).round();
     if frame < 0. || frame >= frames as f64 {
         return Err("Nearest phase alignment is outside the loaded track".into());

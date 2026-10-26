@@ -21,6 +21,15 @@ struct PitchRequest {
     source: Arc<crate::waveform::DetailPeaks>,
     factor: f64,
 }
+struct SyncSession {
+    target: DeckId,
+    sources: [Arc<crate::waveform::DetailPeaks>; 2],
+    grids: [crate::beatgrid::BeatGrid; 2],
+    versions: [u64; 2],
+    factor: f64,
+    last_frame: u64,
+    last_good: std::time::Instant,
+}
 struct NudgeSession {
     source: Arc<crate::waveform::DetailPeaks>,
     held: [bool; 2],
@@ -71,6 +80,7 @@ pub struct AudioController {
     pitch_ranges: Cell<[crate::pitch_control::PitchRange; 2]>,
     pending_pitch: RefCell<[Option<PitchRequest>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
+    sync_session: RefCell<Option<SyncSession>>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
@@ -83,6 +93,9 @@ pub struct AudioController {
 }
 impl Drop for AudioController {
     fn drop(&mut self) {
+        if let Some(session) = self.sync_session.get_mut().take() {
+            let _ = self.engine.apply_sync_factor(session.target, 1.);
+        }
         if let Some(cancel) = self.pending_cancel.get_mut().as_ref() {
             cancel.request();
         }
@@ -115,6 +128,7 @@ impl AudioController {
             pitch_ranges: Cell::new([crate::pitch_control::PitchRange::default(); 2]),
             pending_pitch: RefCell::new([None, None]),
             nudges: RefCell::new([None, None]),
+            sync_session: RefCell::new(None),
             cue_editors: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
@@ -616,6 +630,121 @@ impl AudioController {
         }
         Ok(factor)
     }
+    fn stop_sync(&self) {
+        if let Some(session) = self.sync_session.borrow_mut().take() {
+            let _ = self.engine.apply_sync_factor(session.target, 1.);
+        }
+    }
+    fn toggle_sync(&self, id: DeckId) -> Result<(), String> {
+        let existing = self.sync_session.borrow().as_ref().map(|s| s.target);
+        if let Some(target) = existing {
+            if target != id {
+                return Err("Stop the existing Sync follower first".into());
+            }
+            self.stop_sync();
+            return Ok(());
+        }
+        self.phase_sync_ready(id)?;
+        let (_, frame, _) = self
+            .engine
+            .sync_observation(id)
+            .ok_or("Wait for fresh playing deck frames before Sync")?;
+        self.engine.phase_sync_once(id)?;
+        let snapshots = [
+            self.engine.snapshot(DeckId::A),
+            self.engine.snapshot(DeckId::B),
+        ];
+        *self.sync_session.borrow_mut() = Some(SyncSession {
+            target: id,
+            sources: [
+                snapshots[0].detail.clone().unwrap(),
+                snapshots[1].detail.clone().unwrap(),
+            ],
+            grids: [snapshots[0].grid.unwrap(), snapshots[1].grid.unwrap()],
+            versions: [
+                self.engine.command_version(DeckId::A).unwrap(),
+                self.engine.command_version(DeckId::B).unwrap(),
+            ],
+            factor: 1.,
+            last_frame: frame,
+            last_good: self.engine.control_now(),
+        });
+        Ok(())
+    }
+    fn maintain_sync(&self, now: std::time::Instant) {
+        let Some(mut session) = self.sync_session.borrow_mut().take() else {
+            return;
+        };
+        let snapshots = [
+            self.engine.snapshot(DeckId::A),
+            self.engine.snapshot(DeckId::B),
+        ];
+        let valid = [DeckId::A, DeckId::B]
+            .into_iter()
+            .enumerate()
+            .all(|(i, id)| {
+                self.can_control_deck(id)
+                    && snapshots[i].playing
+                    && !snapshots[i].loop_active
+                    && snapshots[i].nudge_direction == 0
+                    && snapshots[i].grid == Some(session.grids[i])
+                    && snapshots[i]
+                        .detail
+                        .as_ref()
+                        .is_some_and(|s| Arc::ptr_eq(s, &session.sources[i]))
+                    && self.engine.command_version(id) == Some(session.versions[i])
+            })
+            && self.grid_editors.borrow().iter().all(Option::is_none)
+            && self.nudges.borrow().iter().all(Option::is_none)
+            && self.pending_pitch.borrow().iter().all(Option::is_none)
+            && now
+                .checked_duration_since(session.last_good)
+                .is_some_and(|age| age <= std::time::Duration::from_millis(100));
+        let result = if !valid {
+            Err("Sync stopped after input, transport or freshness change".to_string())
+        } else if let Some((error, frame, nominal)) = self.engine.sync_observation(session.target) {
+            let base = snapshots[Self::grid_index(session.target)].requested_speed;
+            frame
+                .checked_sub(session.last_frame)
+                .ok_or("Sync clock reset".to_string())
+                .and_then(|elapsed| {
+                    crate::sync_control::step(
+                        session.factor,
+                        error,
+                        nominal,
+                        base,
+                        elapsed,
+                        self.engine.output_rate(),
+                    )
+                })
+                .and_then(|factor| {
+                    self.engine.apply_sync_factor(session.target, factor)?;
+                    session.factor = factor;
+                    session.last_frame = frame;
+                    session.last_good = now;
+                    Ok(())
+                })
+        } else {
+            session.factor = 1.;
+            session.last_frame = self.engine.rendered_frames();
+            self.engine.apply_sync_factor(session.target, 1.)
+        };
+        match result {
+            Ok(()) => {
+                session.versions = [
+                    self.engine.command_version(DeckId::A).unwrap(),
+                    self.engine.command_version(DeckId::B).unwrap(),
+                ];
+                *self.sync_session.borrow_mut() = Some(session);
+            }
+            Err(error) => {
+                let _ = self.engine.apply_sync_factor(session.target, 1.);
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+        }
+    }
     fn phase_sync_ready(&self, id: DeckId) -> Result<(), String> {
         self.tempo_match_target(id)?;
         self.engine.phase_sync_frame(id)?;
@@ -768,6 +897,26 @@ impl AudioController {
     }
     fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let follow = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.toggle_sync(id);
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(
+                            result
+                                .map(|()| "Sync follower updated".to_string())
+                                .unwrap_or_else(|e| e)
+                                .into(),
+                        );
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_toggle_sync_left(follow),
+                DeckId::B => ui.on_toggle_sync_right(follow),
+            }
+
             let weak = Rc::downgrade(self);
             let sync = move || {
                 if let Some(c) = weak.upgrade() {
@@ -1568,6 +1717,7 @@ impl AudioController {
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
+        self.stop_sync();
         if let Some(cancel) = self.pending_cancel.borrow().as_ref() {
             cancel.request();
         }
@@ -1756,6 +1906,7 @@ impl AudioController {
                 },
             );
         }
+        self.maintain_sync(self.engine.control_now());
         self.save_library();
         self.refresh();
     }
@@ -1876,6 +2027,17 @@ impl AudioController {
         ui.set_background_job_active(
             self.pending.borrow().is_some() || self.pending_import.borrow().is_some(),
         );
+        let follower = self.sync_session.borrow().as_ref().map(|s| s.target);
+        ui.set_left_sync_active(follower == Some(DeckId::A));
+        ui.set_right_sync_active(follower == Some(DeckId::B));
+        ui.set_left_can_sync(
+            follower == Some(DeckId::A)
+                || (follower.is_none() && self.phase_sync_ready(DeckId::A).is_ok()),
+        );
+        ui.set_right_can_sync(
+            follower == Some(DeckId::B)
+                || (follower.is_none() && self.phase_sync_ready(DeckId::B).is_ok()),
+        );
         ui.set_left_can_phase_sync(self.phase_sync_ready(DeckId::A).is_ok());
         ui.set_right_can_phase_sync(self.phase_sync_ready(DeckId::B).is_ok());
         ui.set_left_can_match_tempo(self.tempo_match_target(DeckId::A).is_ok());
@@ -1911,6 +2073,11 @@ impl AudioController {
                 (s.requested_speed - 1.) * 100.,
                 (s.effective_speed - 1.) * 100.
             );
+            let pitch = if s.sync_factor != 1. {
+                format!("Sync {:+.3}% · {pitch}", (s.sync_factor - 1.) * 100.)
+            } else {
+                pitch
+            };
             let pitch = if s.nudge_direction != 0 {
                 format!("Nudge {:+}% · {pitch}", s.nudge_direction * 2)
             } else {
@@ -2348,6 +2515,198 @@ mod tests {
             }
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
+        }
+    }
+    #[test]
+    fn continuous_sync_cancels_on_grid_source_pause_loop_busy_and_held_input() {
+        i_slint_backend_testing::init_no_event_loop();
+        for action in 0..8 {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+            let clock = Rc::new(Cell::new(Instant::now()));
+            let source_clock = Rc::clone(&clock);
+            let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+                mixer,
+                1,
+                48000,
+                Box::new(move || source_clock.get()),
+            ));
+            let file = wav_file(4096, 192000);
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            for id in [DeckId::A, DeckId::B] {
+                engine
+                    .set_grid(
+                        id,
+                        Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+                    )
+                    .unwrap();
+                engine.play(id);
+            }
+            c.refresh();
+            for _ in 0..1000 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(DeckId::A).unwrap();
+            match action {
+                0 => engine
+                    .set_grid(
+                        DeckId::B,
+                        Some(crate::beatgrid::BeatGrid::new(121., Duration::ZERO).unwrap()),
+                    )
+                    .unwrap(),
+                1 => engine.load_b(file.path()).unwrap(),
+                2 => engine.pause(DeckId::B),
+                3 => {
+                    engine
+                        .restore_loop(DeckId::B, Duration::ZERO, Duration::from_secs(1))
+                        .unwrap();
+                    engine.activate_loop(DeckId::B).unwrap();
+                }
+                4 => {
+                    let (_tx, rx) = mpsc::channel();
+                    *c.pending.borrow_mut() = Some((DeckId::B, rx));
+                }
+                5 => c.begin_grid_editor(DeckId::B).unwrap(),
+                6 => {
+                    ui.invoke_nudge_right(-1, true);
+                    ui.invoke_nudge_right(1, true);
+                }
+                _ => {
+                    engine.apply_sync_factor(DeckId::A, 1.01).unwrap();
+                    drop(c);
+                    assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+                    continue;
+                }
+            }
+            c.maintain_sync(clock.get());
+            assert!(c.sync_session.borrow().is_none(), "action {action}");
+            assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
+        }
+    }
+    #[test]
+    fn continuous_sync_controls_feedback_freshness_and_manual_release_on_both_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        for target in [DeckId::A, DeckId::B] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+            let clock = Rc::new(Cell::new(Instant::now()));
+            let source_clock = Rc::clone(&clock);
+            let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+                mixer,
+                1,
+                48000,
+                Box::new(move || source_clock.get()),
+            ));
+            let file = wav_file(4096, 384000);
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            for (id, bpm) in [(DeckId::A, 123.45), (DeckId::B, 128.5)] {
+                engine
+                    .set_grid(
+                        id,
+                        Some(crate::beatgrid::BeatGrid::new(bpm, Duration::ZERO).unwrap()),
+                    )
+                    .unwrap();
+                engine.play(id);
+            }
+            let other = if target == DeckId::A {
+                DeckId::B
+            } else {
+                DeckId::A
+            };
+            let label = if target == DeckId::A {
+                "DECK A"
+            } else {
+                "DECK B"
+            };
+            for _ in 0..4 {
+                control(&ui, &format!("{label} deck tools panel"))
+                    .invoke_accessible_default_action();
+            }
+            c.refresh();
+            for _ in 0..1000 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            control(&ui, &format!("{label} continuous sync")).invoke_accessible_default_action();
+            assert!(c.sync_session.borrow().is_some(), "{}", ui.get_status());
+            let base = engine.snapshot(target).requested_speed;
+            let reference = engine.snapshot(other).requested_speed;
+            let levels = engine.output_volumes();
+            for _ in 0..30 {
+                for _ in 0..1584 {
+                    output.next();
+                }
+                clock.set(clock.get() + Duration::from_millis(33));
+                c.maintain_sync(clock.get());
+                assert!(c.sync_session.borrow().is_some(), "{}", ui.get_status());
+            }
+            assert!((engine.snapshot(target).sync_factor - 1.).abs() > 1e-10);
+            assert_eq!(engine.snapshot(target).requested_speed, base);
+            assert_eq!(engine.snapshot(other).requested_speed, reference);
+            assert_eq!(engine.output_volumes(), levels);
+            let last = c.sync_session.borrow().as_ref().unwrap().last_good;
+            clock.set(last + Duration::from_millis(1));
+            c.maintain_sync(clock.get());
+            assert_eq!(engine.snapshot(target).sync_factor, 1.);
+            clock.set(last + Duration::from_millis(101));
+            c.maintain_sync(clock.get());
+            assert!(c.sync_session.borrow().is_none());
+            c.refresh();
+            for _ in 0..1000 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(target).unwrap();
+            assert!(
+                c.toggle_sync(other).is_err(),
+                "two followers would create a cycle"
+            );
+            c.toggle_sync(target).unwrap();
+            assert!(c.sync_session.borrow().is_none());
+            c.refresh();
+            for _ in 0..1000 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(target).unwrap();
+            engine.set_speed(other, 1.01).unwrap();
+            c.maintain_sync(clock.get());
+            assert!(c.sync_session.borrow().is_none());
+            assert_eq!(engine.snapshot(target).sync_factor, 1.);
+            c.refresh();
+            for _ in 0..1000 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(target).unwrap();
+            engine
+                .seek_position(other, Duration::from_millis(1250))
+                .unwrap();
+            c.maintain_sync(clock.get());
+            assert!(c.sync_session.borrow().is_none());
+            c.refresh();
+            for _ in 0..1000 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(target).unwrap();
+            c.close_library().unwrap();
+            assert!(c.sync_session.borrow().is_none());
+            assert_eq!(engine.snapshot(target).sync_factor, 1.);
+            assert!(!c.dirty.get());
         }
     }
     #[test]
@@ -5109,7 +5468,13 @@ mod tests {
                 }
                 control(&ui, &format!("{deck} deck tools panel"))
                     .invoke_accessible_default_action();
-                for action in ["nudge down", "nudge up", "cancel nudge", "phase sync"] {
+                for action in [
+                    "nudge down",
+                    "nudge up",
+                    "cancel nudge",
+                    "phase sync",
+                    "continuous sync",
+                ] {
                     let item = control(&ui, &format!("{deck} {action}"));
                     assert!(item.size().width > 0. && item.size().height > 0.);
                     assert!(item.absolute_position().x >= 0.);

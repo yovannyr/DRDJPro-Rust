@@ -171,6 +171,7 @@ component CompactDeck inherits Rectangle {
     callback pitch(float); callback reset-pitch();
     in property <bool> can-match-tempo; callback match-tempo();
     in property <bool> can-phase-sync; callback phase-sync();
+    in property <bool> sync-active; in property <bool> can-sync; callback toggle-sync();
     in-out property <int> auto-loop-index: 5;
     in-out property <bool> auto-loop-snap: false;
     callback auto-loop(); callback half-loop(); callback double-loop();
@@ -279,7 +280,10 @@ component CompactDeck inherits Rectangle {
                 Button { text: "CANCEL"; accessible-label: root.deck-label + " cancel nudge"; clicked => { root.cancel-nudge(); } }
                 Button { width: 72px; text: "PHASE"; accessible-label: root.deck-label + " phase sync"; accessible-description: "One-shot tempo and nearest beat phase; both decks playing, loops off"; enabled: root.can-phase-sync; clicked => { root.phase-sync(); } }
             }
-            Text { height: 12px; text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; }
+            HorizontalLayout { height: 20px; spacing: 4px;
+                Button { width: 72px; text: root.sync-active ? "SYNC ON" : "SYNC"; accessible-label: root.deck-label + " continuous sync"; accessible-description: "Follow the other playing deck; toggle off to release"; enabled: root.can-sync; clicked => { root.toggle-sync(); } }
+                Text { text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; vertical-alignment: center; }
+            }
             Text { height: 12px; text: root.bpm-caption; color: #b9c7d9; font-size: 10px; overflow: elide; }
         }
         if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
@@ -549,6 +553,7 @@ export component AppWindow inherits Window {
     callback pitch-left(float); callback reset-pitch-left();
     in property <bool> left-can-match-tempo; callback match-tempo-left();
     in property <bool> left-can-phase-sync; callback phase-sync-left();
+    in property <bool> left-sync-active; in property <bool> left-can-sync; callback toggle-sync-left();
     in-out property <bool> left-auto-loop-snap: false;
     in-out property <int> left-auto-loop-index: 5;
     callback auto-loop-left(); callback half-loop-left(); callback double-loop-left();
@@ -579,6 +584,7 @@ export component AppWindow inherits Window {
     callback pitch-right(float); callback reset-pitch-right();
     in property <bool> right-can-match-tempo; callback match-tempo-right();
     in property <bool> right-can-phase-sync; callback phase-sync-right();
+    in property <bool> right-sync-active; in property <bool> right-can-sync; callback toggle-sync-right();
     in-out property <bool> right-auto-loop-snap: false;
     in-out property <int> right-auto-loop-index: 5;
     callback auto-loop-right(); callback half-loop-right(); callback double-loop-right();
@@ -668,6 +674,7 @@ export component AppWindow inherits Window {
                 pitch(value) => { root.pitch-left(value); } reset-pitch => { root.reset-pitch-left(); }
                 can-match-tempo: root.left-can-match-tempo; match-tempo => { root.match-tempo-left(); }
                 can-phase-sync: root.left-can-phase-sync; phase-sync => { root.phase-sync-left(); }
+                sync-active: root.left-sync-active; can-sync: root.left-can-sync; toggle-sync => { root.toggle-sync-left(); }
                 grid-active: root.left-grid-active; auto-loop-index <=> root.left-auto-loop-index; auto-loop-snap <=> root.left-auto-loop-snap;
                 auto-loop => { root.auto-loop-left(); } half-loop => { root.half-loop-left(); } double-loop => { root.double-loop-left(); }
                 saved-loops: root.left-saved-loops; saved-loop-slot <=> root.left-saved-loop-slot; saved-loop-name <=> root.left-saved-loop-name;
@@ -695,6 +702,7 @@ export component AppWindow inherits Window {
                 pitch(value) => { root.pitch-right(value); } reset-pitch => { root.reset-pitch-right(); }
                 can-match-tempo: root.right-can-match-tempo; match-tempo => { root.match-tempo-right(); }
                 can-phase-sync: root.right-can-phase-sync; phase-sync => { root.phase-sync-right(); }
+                sync-active: root.right-sync-active; can-sync: root.right-can-sync; toggle-sync => { root.toggle-sync-right(); }
                 grid-active: root.right-grid-active; auto-loop-index <=> root.right-auto-loop-index; auto-loop-snap <=> root.right-auto-loop-snap;
                 auto-loop => { root.auto-loop-right(); } half-loop => { root.half-loop-right(); } double-loop => { root.double-loop-right(); }
                 saved-loops: root.right-saved-loops; saved-loop-slot <=> root.right-saved-loop-slot; saved-loop-name <=> root.right-saved-loop-name;

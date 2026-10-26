@@ -18,6 +18,7 @@ mod playback;
 mod playback_speed;
 mod render_bus;
 mod saved_loops;
+mod sync_control;
 mod tempo;
 #[cfg(test)]
 mod test_support;
