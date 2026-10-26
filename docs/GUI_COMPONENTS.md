@@ -244,3 +244,8 @@ The NUDGE panel adds PHASE beside Cancel. It matches tempo and seeks the target 
 ## Shared render bus integration (2026-10-26)
 
 No control or latched Sync state is added. Existing transport, gains, source-time captions, MATCH and one-shot PHASE run through one private deck bus before the output mixer. The shared completed-frame clock is infrastructure for later timestamped phase publication/continuous correction, not a GUI timer or hardware-played position. Native visual/listening acceptance remains unverified.
+
+
+## Timestamped one-shot phase inputs (2026-10-26)
+
+No new control or continuous Sync mode. PHASE can use coherent source-phase pairs from the same completed bus frame; otherwise its previous explicit control-position behavior remains. Pending commands invalidate older rendered pairs. Paused/EOF sources may retain last rendered timestamps, which do not indicate current hardware time. Future continuous regulation must require eligible/fresh timestamps rather than the one-shot fallback. Native visual/listening/physical timing acceptance remains open.

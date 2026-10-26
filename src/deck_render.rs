@@ -35,6 +35,11 @@ struct Settings {
     seek_ns: u64,
     seek_units: u64,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RenderStamp {
+    pub phase_units: u64,
+    pub output_frame: u64,
+}
 pub(crate) struct RenderControl {
     format: RenderFormat,
     sequence: AtomicU64,
@@ -47,6 +52,10 @@ pub(crate) struct RenderControl {
     applied_seek: AtomicU64,
     seek_units: AtomicU64,
     phase_units: AtomicU64,
+    stamp_sequence: AtomicU64,
+    stamp_phase: AtomicU64,
+    stamp_frame: AtomicU64,
+    stamp_command: AtomicU64,
     pub stopped: AtomicBool,
 }
 impl RenderControl {
@@ -73,6 +82,10 @@ impl RenderControl {
             ),
             applied_seek: AtomicU64::new(0),
             phase_units: AtomicU64::new(0),
+            stamp_sequence: AtomicU64::new(0),
+            stamp_phase: AtomicU64::new(0),
+            stamp_frame: AtomicU64::new(0),
+            stamp_command: AtomicU64::new(0),
             stopped: AtomicBool::new(false),
         })
     }
@@ -135,6 +148,24 @@ impl RenderControl {
         // Do not spin on the real-time path: an overlapping command is retried next frame.
         (self.sequence.load(Ordering::SeqCst) == first).then_some(settings)
     }
+    /// One bounded read: overlapping render publication or a pending command returns None.
+    pub fn rendered_stamp(&self) -> Option<RenderStamp> {
+        let first = self.stamp_sequence.load(Ordering::SeqCst);
+        if first == 0 || first & 1 != 0 || self.stopped.load(Ordering::Acquire) {
+            return None;
+        }
+        let stamp = RenderStamp {
+            phase_units: self.stamp_phase.load(Ordering::SeqCst),
+            output_frame: self.stamp_frame.load(Ordering::SeqCst),
+        };
+        let command = self.stamp_command.load(Ordering::SeqCst);
+        (self.stamp_sequence.load(Ordering::SeqCst) == first
+            && self.sequence.load(Ordering::SeqCst) == command)
+            .then_some(stamp)
+    }
+    pub fn stamped_position(&self, stamp: RenderStamp) -> Duration {
+        self.time_at(u128::from(stamp.phase_units))
+    }
     fn current_units(&self) -> u128 {
         let requested = self.seek_serial.load(Ordering::Acquire);
         let phase = if self.applied_seek.load(Ordering::Acquire) != requested {
@@ -189,6 +220,7 @@ pub(crate) struct DeckRenderer {
     // Source-frame position * output_rate. Integer accumulation avoids repeated-rate drift.
     phase: u128,
     applied_seek: u64,
+    clock: Option<Arc<crate::render_bus::RenderClock>>,
 }
 impl DeckRenderer {
     pub fn new(samples: PcmSource, control: Arc<RenderControl>, channels: u16, rate: u32) -> Self {
@@ -208,7 +240,28 @@ impl DeckRenderer {
             channel: 0,
             phase: 0,
             applied_seek: 0,
+            clock: None,
         }
+    }
+    pub fn with_clock(mut self, clock: Arc<crate::render_bus::RenderClock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+    fn publish_stamp(&self) {
+        let Some(clock) = &self.clock else {
+            return;
+        };
+        // The bus increments completed only after this full frame returns from its inner mixer.
+        let frame = clock.completed.load(Ordering::Acquire).wrapping_add(1);
+        self.control.stamp_sequence.fetch_add(1, Ordering::SeqCst);
+        self.control
+            .stamp_phase
+            .store(self.phase as u64, Ordering::SeqCst);
+        self.control.stamp_frame.store(frame, Ordering::SeqCst);
+        self.control
+            .stamp_command
+            .store(self.settings.sequence, Ordering::SeqCst);
+        self.control.stamp_sequence.fetch_add(1, Ordering::SeqCst);
     }
     fn wrap(&self, phase: u128) -> u128 {
         wrap_units(phase, self.settings.region, self.control.format)
@@ -284,6 +337,7 @@ impl Iterator for DeckRenderer {
                 self.phase = self.wrap(self.phase + u128::from(self.settings.rate));
                 self.publish_position();
             }
+            self.publish_stamp();
         }
         // Keep EOF silent but installed: explicit seek/restart cannot race queue exhaustion.
         Some(value)
@@ -307,6 +361,44 @@ impl Source for DeckRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stamped_renderer_publication_adds_no_allocations_for_complete_stereo_frames() {
+        let pcm = PcmSource::new(2, 44100, vec![0.125; 400000]);
+        let control = RenderControl::new(
+            44100,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::ZERO,
+                frame: 0,
+            },
+            RenderFormat {
+                source_rate: 44100,
+                output_rate: 48000,
+                frames: 200000,
+            },
+        );
+        let clock = Arc::new(crate::render_bus::RenderClock::default());
+        let mut renderer =
+            DeckRenderer::new(pcm, Arc::clone(&control), 2, 48000).with_clock(Arc::clone(&clock));
+        let allocations = crate::looping::counted_allocations(|| {
+            for frame in 0..50000 {
+                assert_eq!(renderer.next(), Some(0.125));
+                assert_eq!(renderer.next(), Some(0.125));
+                clock.completed.store(frame + 1, Ordering::Release);
+            }
+        });
+        assert_eq!(allocations, 0);
+        let stamp = control.rendered_stamp().unwrap();
+        assert_eq!(stamp.output_frame, 50000);
+        assert_eq!(stamp.phase_units, 50000 * 44100);
+        control.stamp_sequence.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            control.rendered_stamp().is_none(),
+            "in-progress publication must return without waiting"
+        );
+        control.stamp_sequence.fetch_add(1, Ordering::SeqCst);
+    }
     #[test]
     fn explicit_frame_seeks_keep_canonical_nonintegral_nanosecond_boundaries() {
         for rate in [44100, 48000, 96000] {

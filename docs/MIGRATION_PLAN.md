@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 151 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 154 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist anschließend mit151 Tests, Release-Build und akzeptiertem Astra-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Die anschließende kohärente Phasen-Veröffentlichung ist mit154 Tests, Release-Build und akzeptiertem Astra-Mittel-Follow-up geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -57,6 +57,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
 - [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
 - [x] ✅ Gemeinsamer interner Deck-Render-Bus und Zähler vollständiger Ausgabeframes; Lade-/Pause-/EOF-/Kanalgrenzen und Warm-Allokationen geprüft.
+- [x] ✅ Kohärente Quellphase/Bus-Frame-Paare mit begrenztem Lesen, Befehls-/Wechsel-Validierung und parallelen Tests; einmaliger Sync nutzt passende Paare.
 - [ ] ☐ Dauerhafte Phasenregelung mit gemeinsamem Render-Zeitbezug; Takt-/Downbeat-Sync, Keylock und Quantisierung sowie physische Audio-Abnahme.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
@@ -368,3 +369,10 @@ Focused domain, actual-ramp engine and both-deck accessible-action tests pass; f
 Both deck queues now feed a private fixed-format Rodio mixer, wrapped once by RenderBus before entering the device/injected mixer. Its shared AtomicU64 counts completed interleaved output frames, including silence while unloaded/paused/EOF. The bus remains installed and continues polling its mixer so late source admission and replacement work after an empty result. One engine clock handle is retained for the next sync-control integration; continuous sync does not consume it yet. Existing MATCH/PHASE semantics remain unchanged and the continuous-sync checkbox stays open.
 
 This is a render-frame clock, not hardware/device/drain time. It establishes a common point at which both deck sample pulls finish; timestamped coherent phase publication, matching controls to that clock and bounded continuous correction still require subsequent reviewed slices. No new GUI, dependency/schema or DeckRenderer iterator change. Rodio inner/outer mixer source admission still uses its own locks/allocations; only the wrapper and warmed steady pull are tested for no added allocations. Hardware deadlines/listening/latency and platform acceptance remain open.
+
+
+## Coherent source-phase / bus-frame publication (2026-10-26)
+
+Each clock-attached deck renderer publishes exact source-phase units and the corresponding completed-frame boundary together, only after a complete interleaved frame. A separate single-writer SC sequence protects the atomic payload. Readers make one bounded attempt and reject overlapping publication, stopped sources and a changed/unapplied command sequence. The stamp records a produced-frame boundary, not hardware-played/drained time. Paused Sink sources can retain an old, truthful stamp while the shared bus advances; no freshness is inferred from mere presence.
+
+One-shot PHASE uses two valid stamps only when their frame identifiers match and the bus has completed that boundary. Otherwise it retains its existing control-position fallback, including explicit pending seeks. That fallback is not suitable for a future continuous regulator: timestamp freshness, shared-clock correction policy and lifecycle cancellation still need further slices. Existing UI/MATCH/transport behavior remains unchanged. No schema/dependency change. Tests cover stereo half frames, command invalidation, pause/EOF/restart/replacement, concurrent readers and isolated allocation-free publication. Review/final evidence: LOCAL_VALIDATION.md.

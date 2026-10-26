@@ -283,8 +283,8 @@ pub struct DualDeckEngine {
     output_channels: u16,
     output_rate: u32,
     retired: RefCell<Vec<RetiredTrack>>,
-    // Retain the shared render timeline for the next sync-control integration.
-    _render_clock: Arc<crate::render_bus::RenderClock>,
+    // Shared producer timeline; completed-frame stamps are consumed by one-shot sync.
+    render_clock: Arc<crate::render_bus::RenderClock>,
     // Drop explicitly stops the owned device before releasing track-buffer owners.
     _stream: Option<OutputStream>,
 }
@@ -339,7 +339,7 @@ impl DualDeckEngine {
             output_channels,
             output_rate,
             retired: RefCell::new(Vec::new()),
-            _render_clock: render_clock,
+            render_clock,
             _stream: None,
         };
         engine.set_levels(MixerLevels::default());
@@ -442,7 +442,8 @@ impl DualDeckEngine {
             Arc::clone(&render),
             self.output_channels,
             self.output_rate,
-        );
+        )
+        .with_clock(Arc::clone(&self.render_clock));
         let source_retired = Arc::new(AtomicBool::new(false));
         let (sink, queue) = Sink::new();
         let output = DeckOutput {
@@ -564,11 +565,28 @@ impl DualDeckEngine {
             return Err("Exit loops on both decks before phase sync".into());
         }
         let track = own.track.as_ref().unwrap();
+        let own_render = own.render.as_ref().unwrap();
+        let reference_render = reference.render.as_ref().unwrap();
+        let positions = own_render
+            .rendered_stamp()
+            .zip(reference_render.rendered_stamp())
+            .filter(|(a, b)| {
+                a.output_frame == b.output_frame
+                    && a.output_frame <= self.render_clock.completed.load(Ordering::Acquire)
+            })
+            .map(|(a, b)| {
+                (
+                    own_render.stamped_position(a),
+                    reference_render.stamped_position(b),
+                )
+            })
+            // Explicit pending commands retain the previous one-shot control-position semantics.
+            .unwrap_or_else(|| (own_render.position(), reference_render.position()));
         crate::phase_sync::target_frame(
             own.grid.unwrap(),
-            own.render.as_ref().unwrap().position(),
+            positions.0,
             reference.grid.unwrap(),
-            reference.render.as_ref().unwrap().position(),
+            positions.1,
             track.samples.sample_rate(),
             track.samples.frames(),
         )
@@ -1011,13 +1029,128 @@ mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
     #[test]
+    fn coherent_render_stamps_follow_full_frames_and_invalidate_on_commands_and_replacement() {
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let a = engine.decks[0].borrow().render.as_ref().unwrap().clone();
+        let b = engine.decks[1].borrow().render.as_ref().unwrap().clone();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        assert!(a.rendered_stamp().is_none());
+        output.next();
+        assert!(
+            a.rendered_stamp().is_none(),
+            "half stereo frame must not publish a stamp"
+        );
+        output.next();
+        let first = a.rendered_stamp().unwrap();
+        assert_eq!(first, b.rendered_stamp().unwrap());
+        assert_eq!(first.output_frame, 1);
+        assert_eq!(first.phase_units, 48000);
+        assert_eq!(engine.render_clock.completed.load(Ordering::Acquire), 1);
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(1))
+            .unwrap();
+        assert!(a.rendered_stamp().is_none());
+        output.next();
+        assert!(a.rendered_stamp().is_none());
+        output.next();
+        let sought = a.rendered_stamp().unwrap();
+        assert_eq!(sought.output_frame, 2);
+        assert_eq!(sought.phase_units, 48001 * 48000);
+        engine.set_speed(DeckId::A, 1.25).unwrap();
+        assert!(a.rendered_stamp().is_none());
+        output.next();
+        output.next();
+        let sped = a.rendered_stamp().unwrap();
+        assert_eq!(sped.phase_units, sought.phase_units + 60000);
+        engine.pause(DeckId::A);
+        assert!(a.rendered_stamp().is_none());
+        engine.play(DeckId::A);
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert!(a.rendered_stamp().is_some());
+        engine.seek_percent(DeckId::A, 100.).unwrap();
+        assert!(a.rendered_stamp().is_none());
+        for _ in 0..1000 {
+            output.next();
+        }
+        let end = a.rendered_stamp().unwrap();
+        assert_eq!(end.phase_units, 192000 * 48000);
+        assert!(end.output_frame <= engine.render_clock.completed.load(Ordering::Acquire));
+        // Explicit EOF pauses the Sink, so its last real render stamp remains frozen.
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert_eq!(a.rendered_stamp().unwrap(), end);
+        engine.play(DeckId::A);
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert!(a.rendered_stamp().unwrap().output_frame > end.output_frame);
+        engine.pause(DeckId::A);
+        engine.load_a(file.path()).unwrap();
+        assert!(
+            a.rendered_stamp().is_none(),
+            "stopped source rejects its old stamp"
+        );
+        let next = engine.decks[0].borrow().render.as_ref().unwrap().clone();
+        assert!(!Arc::ptr_eq(&a, &next));
+        assert!(next.rendered_stamp().is_none());
+    }
+    #[test]
+    fn concurrent_render_stamp_reads_are_coherent() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.play(DeckId::A);
+        let render = engine.decks[0].borrow().render.as_ref().unwrap().clone();
+        for _ in 0..1000 {
+            output.next();
+        }
+        let (start, wait) = std::sync::mpsc::channel();
+        let finished = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&finished);
+        let worker = std::thread::spawn(move || {
+            wait.recv().unwrap();
+            for _ in 0..100000 {
+                output.next();
+            }
+            done.store(true, Ordering::Release);
+            // Return ownership so the injected audio source drops before engine buffer owners.
+            output
+        });
+        start.send(()).unwrap();
+        let mut accepted = 0;
+        let mut mismatch = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !finished.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            if let Some(stamp) = render.rendered_stamp() {
+                if stamp.phase_units != stamp.output_frame * 48000 {
+                    mismatch = Some(stamp);
+                    break;
+                }
+                accepted += 1;
+            }
+        }
+        let output = worker.join().unwrap();
+        drop(output);
+        assert_eq!(mismatch, None);
+        assert!(accepted > 0);
+    }
+    #[test]
     fn shared_bus_clock_survives_late_loading_pause_eof_and_track_replacement() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
         let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
         for _ in 0..20 {
             assert_eq!(output.next(), Some(0.));
         }
-        assert_eq!(engine._render_clock.completed.load(Ordering::Acquire), 10);
+        assert_eq!(engine.render_clock.completed.load(Ordering::Acquire), 10);
         let track = wav_file(8192, 4800);
         engine.load_a(track.path()).unwrap();
         engine.load_b(track.path()).unwrap();
@@ -1026,7 +1159,7 @@ mod tests {
         for _ in 0..200 {
             output.next();
         }
-        assert_eq!(engine._render_clock.completed.load(Ordering::Acquire), 110);
+        assert_eq!(engine.render_clock.completed.load(Ordering::Acquire), 110);
         let a = engine.snapshot(DeckId::A).position;
         let b = engine.snapshot(DeckId::B).position;
         assert_eq!(a, b);
@@ -1048,12 +1181,12 @@ mod tests {
         assert!(!engine.snapshot(DeckId::B).playing);
         engine.load_b(track.path()).unwrap();
         engine.play(DeckId::B);
-        let before = engine._render_clock.completed.load(Ordering::Acquire);
+        let before = engine.render_clock.completed.load(Ordering::Acquire);
         for _ in 0..1000 {
             output.next();
         }
         assert_eq!(
-            engine._render_clock.completed.load(Ordering::Acquire),
+            engine.render_clock.completed.load(Ordering::Acquire),
             before + 500
         );
         assert!(engine.snapshot(DeckId::B).position > Duration::ZERO);
