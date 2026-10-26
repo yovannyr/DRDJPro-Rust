@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 144 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 148 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Der Tempo-Matching-Schritt hat144 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Review. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -55,7 +55,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [ ] ☐ Weitere Skalierung: Crate-Beziehungen granularisieren (aktuell Snapshot nur bei Crate-Änderung), größere Bibliotheksansichten virtualisieren.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
-- [ ] ☐ Phasen-Sync, Keylock und Quantisierung mit separaten Engine-/GUI- und Audio-Abnahmen.
+- [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
+- [ ] ☐ Dauerhafte Phasenregelung mit gemeinsamem Render-Zeitbezug; Takt-/Downbeat-Sync, Keylock und Quantisierung sowie physische Audio-Abnahme.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -350,3 +351,12 @@ Offline ramp samples verify the distinct start positions; headless controls veri
 MATCH in each deck's PITCH panel sets that deck's coupled playback speed to (other confirmed grid BPM * other effective rounded playback factor) / own confirmed grid BPM. It is one-shot: later reference pitch changes do not follow automatically. Estimated/tag BPM, beat-phase alignment, automatic master selection, octave/double-tempo selection and keylock are outside this slice. Exact requested factor is passed to the existing whole-Hz renderer mapping without GUI hundredth-percent quantization; current requested/effective captions expose rounding.
 
 Both tracks need saved manual grids, both must be available for control, and target factor must fit engine0.5–2x and selected GUI pitch range. Active nudge/held nudge ownership, pending pitch gestures and grid edits reject without consuming or changing them. MATCH applies on one control-thread turn; imports need not block it, while restore or loading either deck does. Position/fractional phase, loop boundaries/activation, Play/Pause, manual grids, mixer and other deck remain intact. No new dependency/schema/storage/audio-callback work. Publication requires Astra-medium independent review and final checks recorded in LOCAL_VALIDATION.md. Phase Sync, keylock, quantization and physical/musical qualification remain open.
+
+
+## One-shot beat-phase sync checkpoint (2026-10-26)
+
+PHASE in the NUDGE panel performs one immediate tempo-and-nearest-beat-phase alignment from two confirmed manual grids. It is distinct from MATCH (rate only). Both decks must be playing, with active loops off on both. Existing range/loading/restore/pending-pitch/grid-editor/held-nudge guards apply before mutation. No estimated BPM, auto-master, latched regulation, downbeat/bar alignment, keylock or quantization mode is introduced.
+
+Both grid phases use exact binary-BPM remainders scaled to a shared integer denominator. The shortest signed beat displacement is chosen exactly before final floating-point nearest-frame projection onto the target grid. Nearest half-beat ties choose later; if that nearest rounded source frame is outside the decoded track it rejects rather than making a larger jump or clamping to EOF. Positions beyond seven days reject. The control plane publishes rate and source-frame seek coherently to the installed renderer. Inactive loop boundaries, manual grids, gains, reference deck and storage remain unchanged. Positions are separately sampled published render coordinates, not a simultaneous physical-output clock: scheduling delay, device buffers, fractional-frame rounding and unequal device paths remain qualification limits. No click-free/musical/physical synchronization claim.
+
+Focused domain, actual-ramp engine and both-deck accessible-action tests pass; final gates and Astra-medium review are recorded in LOCAL_VALIDATION.md. Continuous shared-clock sync and native/hardware/listening qualification remain open. No dependency/schema/audio-iterator changes.

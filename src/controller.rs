@@ -616,6 +616,11 @@ impl AudioController {
         }
         Ok(factor)
     }
+    fn phase_sync_ready(&self, id: DeckId) -> Result<(), String> {
+        self.tempo_match_target(id)?;
+        self.engine.phase_sync_frame(id)?;
+        Ok(())
+    }
     fn match_tempo(&self, id: DeckId) -> Result<(), String> {
         let factor = self.tempo_match_target(id)?;
         // Apply on this control-thread turn, before any later pitch gesture.
@@ -763,6 +768,27 @@ impl AudioController {
     }
     fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let sync = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c
+                        .phase_sync_ready(id)
+                        .and_then(|()| c.engine.phase_sync_once(id));
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(
+                            result
+                                .map(|()| format!("Deck {id:?}: one-shot beat phase sync"))
+                                .unwrap_or_else(|error| error)
+                                .into(),
+                        );
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_phase_sync_left(sync),
+                DeckId::B => ui.on_phase_sync_right(sync),
+            }
             let weak = Rc::downgrade(self);
             let match_tempo = move || {
                 if let Some(c) = weak.upgrade() {
@@ -1850,6 +1876,8 @@ impl AudioController {
         ui.set_background_job_active(
             self.pending.borrow().is_some() || self.pending_import.borrow().is_some(),
         );
+        ui.set_left_can_phase_sync(self.phase_sync_ready(DeckId::A).is_ok());
+        ui.set_right_can_phase_sync(self.phase_sync_ready(DeckId::B).is_ok());
         ui.set_left_can_match_tempo(self.tempo_match_target(DeckId::A).is_ok());
         ui.set_right_can_match_tempo(self.tempo_match_target(DeckId::B).is_ok());
         ui.set_left_busy(!self.can_control_deck(DeckId::A));
@@ -2321,6 +2349,81 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn phase_sync_buttons_validate_both_decks_and_preserve_inactive_loop_bounds() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        for label in ["DECK A", "DECK B"] {
+            for _ in 0..4 {
+                control(&ui, &format!("{label} deck tools panel"))
+                    .invoke_accessible_default_action();
+            }
+            assert_eq!(
+                control(&ui, &format!("{label} phase sync")).accessible_enabled(),
+                Some(false)
+            );
+        }
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            engine
+                .restore_loop(id, Duration::from_secs(1), Duration::from_secs(3))
+                .unwrap();
+            engine.play(id);
+        }
+        let levels = engine.output_volumes();
+        for (id, label, other) in [
+            (DeckId::A, "DECK A", DeckId::B),
+            (DeckId::B, "DECK B", DeckId::A),
+        ] {
+            engine
+                .seek_position(id, Duration::from_millis(1100))
+                .unwrap();
+            engine
+                .seek_position(other, Duration::from_millis(125))
+                .unwrap();
+            c.refresh();
+            assert_eq!(
+                control(&ui, &format!("{label} phase sync")).accessible_enabled(),
+                Some(true)
+            );
+            control(&ui, &format!("{label} phase sync")).invoke_accessible_default_action();
+            let after = engine.snapshot(id);
+            assert_eq!(after.position, Duration::from_millis(1125));
+            assert!(after.playing);
+            assert_eq!(after.loop_in, Some(Duration::from_secs(1)));
+            assert_eq!(after.loop_out, Some(Duration::from_secs(3)));
+            assert!(!after.loop_active);
+            assert_eq!(engine.snapshot(other).position, Duration::from_millis(125));
+        }
+        assert_eq!(engine.output_volumes(), levels);
+        assert!(!c.dirty.get());
+        engine.activate_loop(DeckId::A).unwrap();
+        ui.invoke_phase_sync_right();
+        assert!(ui.get_status().contains("Exit loops"));
+        engine.exit_loop(DeckId::A).unwrap();
+        c.queue_pitch(DeckId::B, 2.).unwrap();
+        ui.invoke_phase_sync_left();
+        assert!(ui.get_status().contains("pending pitch"));
+        assert!(c.pending_pitch.borrow()[1].is_some());
+        c.apply_pending_pitch();
+        engine.pause(DeckId::B);
+        ui.invoke_phase_sync_left();
+        assert!(ui.get_status().contains("Play both"));
+        c.storage_ready.set(false);
+        ui.invoke_phase_sync_left();
+        assert!(ui.get_status().contains("Finish loading"));
     }
     #[test]
     fn match_tempo_controls_preserve_transport_and_reject_conflicting_requests() {
@@ -5006,7 +5109,7 @@ mod tests {
                 }
                 control(&ui, &format!("{deck} deck tools panel"))
                     .invoke_accessible_default_action();
-                for action in ["nudge down", "nudge up", "cancel nudge"] {
+                for action in ["nudge down", "nudge up", "cancel nudge", "phase sync"] {
                     let item = control(&ui, &format!("{deck} {action}"));
                     assert!(item.size().width > 0. && item.size().height > 0.);
                     assert!(item.absolute_position().x >= 0.);

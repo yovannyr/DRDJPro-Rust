@@ -12,6 +12,7 @@ mod legacy_catalog;
 mod library;
 mod library_store;
 mod looping;
+mod phase_sync;
 mod pitch_control;
 mod playback;
 mod playback_speed;

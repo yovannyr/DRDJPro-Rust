@@ -545,6 +545,46 @@ impl DualDeckEngine {
         PlaybackSpeed::new(factor, track.samples.sample_rate())?;
         Ok(factor)
     }
+    pub fn phase_sync_frame(&self, id: DeckId) -> Result<usize, String> {
+        self.tempo_match_factor(id)?;
+        let own = self.decks[id.index()].borrow();
+        let reference = self.decks[1 - id.index()].borrow();
+        if !own.playing() || !reference.playing() {
+            return Err("Play both decks before phase sync".into());
+        }
+        if own.loop_active || reference.loop_active {
+            return Err("Exit loops on both decks before phase sync".into());
+        }
+        let track = own.track.as_ref().unwrap();
+        crate::phase_sync::target_frame(
+            own.grid.unwrap(),
+            own.render.as_ref().unwrap().position(),
+            reference.grid.unwrap(),
+            reference.render.as_ref().unwrap().position(),
+            track.samples.sample_rate(),
+            track.samples.frames(),
+        )
+    }
+    pub fn phase_sync_once(&self, id: DeckId) -> Result<(), String> {
+        let factor = self.tempo_match_factor(id)?;
+        let frame = self.phase_sync_frame(id)?;
+        let mut deck = self.decks[id.index()].borrow_mut();
+        let rate = deck.track.as_ref().unwrap().samples.sample_rate();
+        let speed = PlaybackSpeed::new(factor, rate)?;
+        // Rate and seek become one coherent command at the next output-frame boundary.
+        deck.render.as_ref().unwrap().publish(
+            speed.output_rate().get(),
+            true,
+            None,
+            Some(SeekFrame {
+                time: frame_time(frame, rate),
+                frame,
+            }),
+        );
+        deck.base_factor = factor;
+        deck.speed = Some(speed);
+        Ok(())
+    }
     pub fn set_speed(&self, id: DeckId, factor: f64) -> Result<(), String> {
         let nudge = self.decks[id.index()].borrow().nudge;
         self.set_rate_state(id, factor, nudge)
@@ -962,6 +1002,74 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn one_shot_phase_sync_publishes_rate_and_seek_together_and_renders_target_samples() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let ramp: Vec<i16> = (0..192000).map(|i| (i % 10000) as i16).collect();
+        let a = crate::test_support::wav_samples(&ramp, 48000, 1);
+        let b = wav_file(0, 192000);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        for (id, bpm) in [(DeckId::A, 120.), (DeckId::B, 128.)] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(bpm, Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            engine.play(id);
+        }
+        engine.set_levels(MixerLevels {
+            channel_a: 1.,
+            channel_b: 0.,
+            crossfader: 0.,
+        });
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(100))
+            .unwrap();
+        engine
+            .seek_position(DeckId::B, Duration::from_nanos(117187500))
+            .unwrap();
+        let renderer = engine.decks[0].borrow().render.as_ref().unwrap().clone();
+        let reference = engine.snapshot(DeckId::B);
+        engine.phase_sync_once(DeckId::A).unwrap();
+        let snapshot = engine.snapshot(DeckId::A);
+        assert_eq!(snapshot.position, Duration::from_millis(125));
+        assert_eq!(snapshot.requested_speed, 128. / 120.);
+        assert!(snapshot.playing);
+        assert!(Arc::ptr_eq(
+            &renderer,
+            engine.decks[0].borrow().render.as_ref().unwrap()
+        ));
+        assert_eq!(engine.snapshot(DeckId::B).position, reference.position);
+        assert_eq!(
+            engine.snapshot(DeckId::B).requested_speed,
+            reference.requested_speed
+        );
+        assert!((output.next().unwrap() - 6000. / 32768.).abs() < 1e-7);
+        assert!((output.next().unwrap() - (6001. + 1. / 15.) / 32768.).abs() < 1e-7);
+        engine
+            .restore_loop(DeckId::A, Duration::ZERO, Duration::from_secs(1))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        let before = engine.snapshot(DeckId::A);
+        assert!(engine.phase_sync_once(DeckId::A).is_err());
+        assert!(engine.phase_sync_once(DeckId::B).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).position, before.position);
+        assert_eq!(
+            engine.snapshot(DeckId::A).requested_speed,
+            before.requested_speed
+        );
+        engine.exit_loop(DeckId::A).unwrap();
+        engine.pause(DeckId::B);
+        assert!(engine.phase_sync_once(DeckId::A).is_err());
+        assert!(!engine.snapshot(DeckId::B).playing);
+        engine.play(DeckId::B);
+        engine.seek_percent(DeckId::A, 100.).unwrap();
+        assert!(engine.phase_sync_once(DeckId::A).is_err());
+        assert!(!engine.snapshot(DeckId::A).playing);
+    }
     #[test]
     fn tempo_matching_uses_manual_grids_effective_rate_and_rejects_invalid_state() {
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
