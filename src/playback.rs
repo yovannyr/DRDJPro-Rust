@@ -694,7 +694,11 @@ impl DualDeckEngine {
     pub fn rendered_frames(&self) -> u64 {
         self.render_clock.completed.load(Ordering::Acquire)
     }
-    pub fn sync_observation(&self, id: DeckId) -> Option<(f64, u64, f64)> {
+    pub fn sync_observation(
+        &self,
+        id: DeckId,
+        alignment: crate::phase_sync::Alignment,
+    ) -> Option<(f64, u64, f64)> {
         let nominal = self.tempo_match_factor(id).ok()?;
         let own = self.decks[id.index()].borrow();
         let reference = self.decks[1 - id.index()].borrow();
@@ -702,7 +706,19 @@ impl DualDeckEngine {
             return None;
         }
         let (a, b) = self.fresh_phase_positions(&own, &reference)?;
-        let error = crate::phase_sync::beat_displacement(own.grid?, a, reference.grid?, b).ok()?;
+        let error = match alignment {
+            crate::phase_sync::Alignment::Beat => {
+                crate::phase_sync::beat_displacement(own.grid?, a, reference.grid?, b).ok()?
+            }
+            crate::phase_sync::Alignment::Bar4 => crate::phase_sync::alignment_displacement(
+                own.grid?,
+                a,
+                reference.grid?,
+                b,
+                alignment,
+            )
+            .ok()?,
+        };
         Some((error, self.rendered_frames(), nominal))
     }
     pub fn apply_sync_factor(&self, id: DeckId, factor: f64) -> Result<(), String> {
@@ -1185,6 +1201,55 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn continuous_bar_observation_detects_whole_beat_offset_without_mutating_decks() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let clock = std::rc::Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+        let source_clock = std::rc::Rc::clone(&clock);
+        let engine = DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            1,
+            48000,
+            Box::new(move || source_clock.get()),
+        );
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            engine.play(id);
+        }
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(500))
+            .unwrap();
+        let beat = crate::phase_sync::Alignment::Beat;
+        let bar = crate::phase_sync::Alignment::Bar4;
+        assert!(engine.sync_observation(DeckId::A, beat).is_none());
+        for _ in 0..1000 {
+            output.next();
+        }
+        clock.set(clock.get() + Duration::from_millis(1));
+        let a = engine.snapshot(DeckId::A);
+        let b = engine.snapshot(DeckId::B);
+        assert!(engine.sync_observation(DeckId::A, beat).unwrap().0.abs() < 1e-8);
+        assert!((engine.sync_observation(DeckId::A, bar).unwrap().0 + 1.).abs() < 1e-8);
+        assert!((engine.sync_observation(DeckId::B, bar).unwrap().0 - 1.).abs() < 1e-8);
+        assert_eq!(engine.snapshot(DeckId::A).position, a.position);
+        assert_eq!(engine.snapshot(DeckId::B).position, b.position);
+        assert_eq!(
+            engine.snapshot(DeckId::A).requested_speed,
+            a.requested_speed
+        );
+        assert_eq!(
+            engine.snapshot(DeckId::B).requested_speed,
+            b.requested_speed
+        );
+    }
     #[test]
     fn bar_phase_sync_seeks_matching_bar_and_renders_expected_pcm_without_touching_reference() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);

@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 166 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 168 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Die anschließende Beat-/4/4-Takt-Auswahl ist mit166 Tests, Release-Build und akzeptiertem Astra-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Der anschließende QWEN-Schritt für fortlaufende Taktphasenregelung ist mit168 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -61,7 +61,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Frischeprüfung für gleiche Render-Frames mit Alters-/Lesefenster, beobachtetem Bus-Fortschritt, Stillstandsablauf und Wiederanlauf-Tests.
 - [x] ✅ Begrenzter kontinuierlicher SYNC-Follower für bestätigte konstante Grids: getrennte Korrektur, Frische-/Eingabeschutz und Render-Deadline, beide Deck-Richtungen getestet.
 - [x] ✅ Beat-/4/4-Takt-Auswahl für PHASE und initiale SYNC-Ausrichtung, mit exakten Halbperioden-Entscheidungen und Modus-/Abbruchtests.
-- [ ] ☐ Musikalische/Hardware-Langzeitqualifikation von Sync, hörbare Übergänge, fortlaufende Taktphasenregelung, Keylock und Quantisierung.
+- [x] ✅ Fortlaufende 4/4-Taktphasenregelung mit erfasstem Sitzungsmodus, Ganz-Beat-Fehlererkennung und unveränderten Sicherheitsgrenzen.
+- [ ] ☐ Musikalische/Hardware-Langzeitqualifikation von Sync, hörbare Übergänge, variable Taktarten, Keylock und Quantisierung.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
@@ -406,3 +407,10 @@ Each deck now has Beat(default) and Bar4/4 acquisition modes in NUDGE. PHASE and
 Both periods use exact binary-BPM phase remainders/common-denominator arithmetic for the discrete decision; exact half-period ties choose later. Different manual anchors, pre-anchor beat indices and fractional BPM remain supported within the existing seven-day bound. Defaults retain previous Beat behavior. The per-deck choice lasts for the current app session and survives track replacement, but is not stored in SQLite/media tags. A changed target choice stops its active follower and neutralizes correction without seeking; changing only the reference deck's view choice does not change the follower. Invalid selections preserve the current state and restore the authoritative displayed index. Valid selection alone never seeks or starts playback.
 
 Tests cover half-bar±1ns, distinct whole-beat ambiguity, manual anchors/fractional tempos, endpoint rejection, actual PCM after Bar4 seek, both deck controls, invalid selection and active-follower release. The existing freshness, loop, loading, grid and nudge guards apply. Full bar-phase regulation, variable meters, quantization, artifact-free transitions, music/hardware/native qualification and full reference parity remain open. No dependency/schema change. Final review/checks are recorded in LOCAL_VALIDATION.md.
+
+
+## Continuous Bar4 feedback (2026-10-26)
+
+The session's selected Beat/Bar4 period now governs ongoing feedback as well as acquisition. A SyncSession captures its target's alignment at activation; engine observation computes signed phase displacement in source beats for that period. Beat uses a half-period0.5-beat error bound, Bar4 uses2 beats. The existing proportional gain,0.98–1.02 multiplier cap,0.02 multiplier-units/second slew,100ms control interval, strict fresh-pair checks and producer deadline remain unchanged. No recurrent seek or schema/dependency/UI-layout change. A whole-beat offset is now visible to Bar4 rather than being discarded by beat-period wrapping.
+
+Runtime implementation was generated by the configured QWEN API model (reported qwen-3.6-35b-sovereign), inspected/applied by Codex and independently reviewed with GPT-6.1 Sol / medium. Codex also added independent engine/controller verification. This does not qualify physical output phase, musical quality, audible transitions, variable meter or device longevity. Evidence is in LOCAL_VALIDATION.md.

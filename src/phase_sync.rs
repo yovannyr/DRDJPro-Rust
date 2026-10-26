@@ -1,4 +1,4 @@
-//! Control-plane beat/bar acquisition; continuous regulation remains beat-based.
+//! Control-plane beat/bar acquisition and continuous phase feedback.
 use crate::beatgrid::{BeatGrid, MAX_ANCHOR};
 use std::time::Duration;
 
@@ -9,6 +9,12 @@ pub enum Alignment {
     Bar4,
 }
 impl Alignment {
+    pub fn half_period_beats(self) -> f64 {
+        match self {
+            Self::Beat => 0.5,
+            Self::Bar4 => 2.0,
+        }
+    }
     pub fn from_index(index: i32) -> Result<Self, String> {
         match index {
             0 => Ok(Self::Beat),
@@ -59,7 +65,7 @@ pub fn beat_displacement(
         Alignment::Beat,
     )
 }
-fn alignment_displacement(
+pub(crate) fn alignment_displacement(
     own: BeatGrid,
     position: Duration,
     reference: BeatGrid,

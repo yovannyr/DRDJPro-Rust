@@ -29,6 +29,7 @@ struct SyncSession {
     factor: f64,
     last_frame: u64,
     last_good: std::time::Instant,
+    alignment: crate::phase_sync::Alignment,
 }
 struct NudgeSession {
     source: Arc<crate::waveform::DetailPeaks>,
@@ -666,12 +667,12 @@ impl AudioController {
             return Ok(());
         }
         self.phase_sync_ready(id)?;
+        let alignment = self.alignments.get()[Self::grid_index(id)];
         let (_, frame, _) = self
             .engine
-            .sync_observation(id)
+            .sync_observation(id, alignment)
             .ok_or("Wait for fresh playing deck frames before Sync")?;
-        self.engine
-            .phase_sync_once(id, self.alignments.get()[Self::grid_index(id)])?;
+        self.engine.phase_sync_once(id, alignment)?;
         let snapshots = [
             self.engine.snapshot(DeckId::A),
             self.engine.snapshot(DeckId::B),
@@ -690,6 +691,7 @@ impl AudioController {
             factor: 1.,
             last_frame: frame,
             last_good: self.engine.control_now(),
+            alignment,
         });
         Ok(())
     }
@@ -724,7 +726,10 @@ impl AudioController {
                 .is_some_and(|age| age <= std::time::Duration::from_millis(100));
         let result = if !valid {
             Err("Sync stopped after input, transport or freshness change".to_string())
-        } else if let Some((error, frame, nominal)) = self.engine.sync_observation(session.target) {
+        } else if let Some((error, frame, nominal)) = self
+            .engine
+            .sync_observation(session.target, session.alignment)
+        {
             let base = snapshots[Self::grid_index(session.target)].requested_speed;
             frame
                 .checked_sub(session.last_frame)
@@ -737,6 +742,7 @@ impl AudioController {
                         base,
                         elapsed,
                         self.engine.output_rate(),
+                        session.alignment,
                     )
                 })
                 .and_then(|factor| {
@@ -2634,6 +2640,17 @@ mod tests {
             engine.snapshot(DeckId::A).position,
             acquisition_before + Duration::from_secs(1)
         );
+        for _ in 0..3 {
+            for _ in 0..1584 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(33));
+            c.maintain_sync(clock.get());
+            assert_eq!(
+                c.sync_session.borrow().as_ref().unwrap().alignment,
+                crate::phase_sync::Alignment::Bar4
+            );
+        }
         ui.set_left_alignment_index(-1);
         ui.invoke_alignment_mode_left();
         assert!(c.sync_session.borrow().is_some());

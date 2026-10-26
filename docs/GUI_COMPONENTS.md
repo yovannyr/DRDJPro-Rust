@@ -265,4 +265,9 @@ Pending/manual render commands, source/grid changes, active loops, not-playing/l
 
 ## Alignment period selector (2026-10-26)
 
-The NUDGE Sync row adds an accessible `DECK A/B phase alignment mode` selector for Beat / Bar4/4. It controls PHASE and SYNC's initial one-shot acquisition; SYNC's ongoing regulator still corrects beat phase. Bar4 matches position inside the manual grid's four-beat period, rather than waiting for a future downbeat. Selection itself preserves transport/position. Changing a follower's target choice releases Sync/temporary correction; a reference deck's independent choice does not affect the other follower. Invalid values are rejected and reset to the stored session choice. Default is Beat, no persistence/schema change. Headless two-size geometry includes the selector; native visuals, usability and listening remain unqualified.
+The NUDGE Sync row adds an accessible `DECK A/B phase alignment mode` selector for Beat / Bar4/4. It controls PHASE, SYNC's initial acquisition and the active session's ongoing feedback period. Beat wraps at one beat; Bar4 retains position inside the four-beat period. Bar4 matches position inside the manual grid's four-beat period, rather than waiting for a future downbeat. Selection itself preserves transport/position. Changing a follower's target choice releases Sync/temporary correction; a reference deck's independent choice does not affect the other follower. Invalid values are rejected and reset to the stored session choice. Default is Beat, no persistence/schema change. Headless two-size geometry includes the selector; native visuals, usability and listening remain unqualified.
+
+
+## Continuous alignment-period feedback (2026-10-26)
+
+The existing selector now determines continuous SYNC feedback too. The target mode is captured at activation; the existing target mode-change cancellation/reacquisition behavior remains. No new controls or layout changes. Beat remains default. Error correction is still bounded and rate-only after initial acquisition; no claim of native visual/listening or physical synchronization acceptance follows from headless tests.
