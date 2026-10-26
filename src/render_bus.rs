@@ -5,12 +5,52 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Default)]
 pub(crate) struct RenderClock {
     pub completed: AtomicU64,
+}
+const MAX_FRAME_AGE_MS: u64 = 5;
+const MAX_PROGRESS_GAP: Duration = Duration::from_millis(100);
+impl RenderClock {
+    /// Bound render-coordinate age and frame advancement during sampling; wall time is separate.
+    pub fn frame_is_fresh(frame: u64, before: u64, after: u64, rate: u32) -> bool {
+        if rate == 0 || frame == 0 {
+            return false;
+        }
+        let budget = (u64::from(rate) * MAX_FRAME_AGE_MS).div_ceil(1000);
+        after
+            .checked_sub(before)
+            .is_some_and(|elapsed| elapsed <= budget)
+            && after.checked_sub(frame).is_some_and(|age| age <= budget)
+    }
+}
+#[derive(Default)]
+pub(crate) struct ClockObserver {
+    last: Option<(u64, Instant)>,
+    progress: Option<Instant>,
+}
+impl ClockObserver {
+    /// Control-plane observation only. Acquisition needs progress between timely observations.
+    pub fn observe(&mut self, frame: u64, now: Instant) -> bool {
+        if let Some((previous, at)) = self.last {
+            let timely = now
+                .checked_duration_since(at)
+                .is_some_and(|gap| gap <= MAX_PROGRESS_GAP);
+            if !timely || frame < previous {
+                self.progress = None;
+            } else if frame > previous {
+                self.progress = Some(now);
+            }
+        }
+        self.last = Some((frame, now));
+        self.progress.is_some_and(|at| {
+            now.checked_duration_since(at)
+                .is_some_and(|age| age <= MAX_PROGRESS_GAP)
+        })
+    }
 }
 pub(crate) struct RenderBus<S> {
     source: S,
@@ -68,6 +108,50 @@ impl<S: Source> Source for RenderBus<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frame_freshness_rejects_future_old_and_slow_pair_reads_at_exact_limits() {
+        for (rate, budget) in [(44100, 221), (48000, 240), (96000, 480)] {
+            assert!(RenderClock::frame_is_fresh(
+                1000 - budget,
+                1000 - budget,
+                1000,
+                rate
+            ));
+            assert!(!RenderClock::frame_is_fresh(
+                1000 - budget - 1,
+                1000,
+                1000,
+                rate
+            ));
+            assert!(!RenderClock::frame_is_fresh(
+                1000,
+                1000 - budget - 1,
+                1000,
+                rate
+            ));
+            assert!(!RenderClock::frame_is_fresh(1001, 1000, 1000, rate));
+            assert!(!RenderClock::frame_is_fresh(1000, 1001, 1000, rate));
+        }
+        assert!(!RenderClock::frame_is_fresh(0, 1000, 1000, 48000));
+        assert!(!RenderClock::frame_is_fresh(1000, 1000, 1000, 0));
+    }
+    #[test]
+    fn clock_observer_requires_timely_progress_and_expires_stalls_and_poll_gaps() {
+        let start = Instant::now();
+        let mut observer = ClockObserver::default();
+        assert!(!observer.observe(10, start));
+        assert!(!observer.observe(10, start + Duration::from_millis(10)));
+        assert!(observer.observe(11, start + Duration::from_millis(20)));
+        assert!(observer.observe(11, start + Duration::from_millis(120)));
+        assert!(!observer.observe(11, start + Duration::from_millis(121)));
+        assert!(observer.observe(12, start + Duration::from_millis(122)));
+        assert!(!observer.observe(100, start + Duration::from_millis(300)));
+        assert!(!observer.observe(100, start + Duration::from_millis(301)));
+        assert!(observer.observe(101, start + Duration::from_millis(302)));
+        assert!(!observer.observe(1, start + Duration::from_millis(303)));
+        assert!(observer.observe(2, start + Duration::from_millis(304)));
+        assert!(!observer.observe(3, start));
+    }
     #[test]
     fn bus_counts_complete_frames_during_silence_and_admits_late_stereo_sources() {
         let (input, source) = rodio::mixer::mixer(2, 48000);

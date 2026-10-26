@@ -249,3 +249,8 @@ No control or latched Sync state is added. Existing transport, gains, source-tim
 ## Timestamped one-shot phase inputs (2026-10-26)
 
 No new control or continuous Sync mode. PHASE can use coherent source-phase pairs from the same completed bus frame; otherwise its previous explicit control-position behavior remains. Pending commands invalidate older rendered pairs. Paused/EOF sources may retain last rendered timestamps, which do not indicate current hardware time. Future continuous regulation must require eligible/fresh timestamps rather than the one-shot fallback. Native visual/listening/physical timing acceptance remains open.
+
+
+## Freshness gate for rendered phase inputs (2026-10-26)
+
+No new control or latched Sync mode. One-shot PHASE uses same-frame rendered inputs only when the5ms render-frame/read-window and100ms observed-progress policies pass; absent fresh inputs retain the existing explicit control-position behavior. Continuous regulation will require strict freshness rather than this fallback. Long control polling gaps force liveness reacquisition. These are producer-side checks, not proof of physical output timing or hardware continuity. Native visual/listening qualification remains open.

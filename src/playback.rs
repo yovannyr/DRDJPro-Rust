@@ -285,6 +285,7 @@ pub struct DualDeckEngine {
     retired: RefCell<Vec<RetiredTrack>>,
     // Shared producer timeline; completed-frame stamps are consumed by one-shot sync.
     render_clock: Arc<crate::render_bus::RenderClock>,
+    clock_observer: RefCell<crate::render_bus::ClockObserver>,
     // Drop explicitly stops the owned device before releasing track-buffer owners.
     _stream: Option<OutputStream>,
 }
@@ -340,6 +341,7 @@ impl DualDeckEngine {
             output_rate,
             retired: RefCell::new(Vec::new()),
             render_clock,
+            clock_observer: RefCell::new(crate::render_bus::ClockObserver::default()),
             _stream: None,
         };
         engine.set_levels(MixerLevels::default());
@@ -554,6 +556,49 @@ impl DualDeckEngine {
         PlaybackSpeed::new(factor, track.samples.sample_rate())?;
         Ok(factor)
     }
+    fn fresh_phase_positions(&self, own: &Deck, reference: &Deck) -> Option<(Duration, Duration)> {
+        self.fresh_phase_positions_at(
+            own,
+            reference,
+            std::time::Instant::now(),
+            std::time::Instant::now,
+        )
+    }
+    fn fresh_phase_positions_at(
+        &self,
+        own: &Deck,
+        reference: &Deck,
+        now: std::time::Instant,
+        finish: impl FnOnce() -> std::time::Instant,
+    ) -> Option<(Duration, Duration)> {
+        let before = self.render_clock.completed.load(Ordering::Acquire);
+        if !self.clock_observer.borrow_mut().observe(before, now) {
+            return None;
+        }
+        let own_render = own.render.as_ref()?;
+        let reference_render = reference.render.as_ref()?;
+        let a = own_render.rendered_stamp()?;
+        let b = reference_render.rendered_stamp()?;
+        let after = self.render_clock.completed.load(Ordering::Acquire);
+        let frame_fresh = a.output_frame == b.output_frame
+            && crate::render_bus::RenderClock::frame_is_fresh(
+                a.output_frame,
+                before,
+                after,
+                self.output_rate,
+            );
+        let end = finish();
+        let live = self.clock_observer.borrow_mut().observe(after, end);
+        let timely = end
+            .checked_duration_since(now)
+            .is_some_and(|elapsed| elapsed <= Duration::from_millis(5));
+        (frame_fresh && live && timely).then(|| {
+            (
+                own_render.stamped_position(a),
+                reference_render.stamped_position(b),
+            )
+        })
+    }
     pub fn phase_sync_frame(&self, id: DeckId) -> Result<usize, String> {
         self.tempo_match_factor(id)?;
         let own = self.decks[id.index()].borrow();
@@ -567,19 +612,8 @@ impl DualDeckEngine {
         let track = own.track.as_ref().unwrap();
         let own_render = own.render.as_ref().unwrap();
         let reference_render = reference.render.as_ref().unwrap();
-        let positions = own_render
-            .rendered_stamp()
-            .zip(reference_render.rendered_stamp())
-            .filter(|(a, b)| {
-                a.output_frame == b.output_frame
-                    && a.output_frame <= self.render_clock.completed.load(Ordering::Acquire)
-            })
-            .map(|(a, b)| {
-                (
-                    own_render.stamped_position(a),
-                    reference_render.stamped_position(b),
-                )
-            })
+        let positions = self
+            .fresh_phase_positions(&own, &reference)
             // Explicit pending commands retain the previous one-shot control-position semantics.
             .unwrap_or_else(|| (own_render.position(), reference_render.position()));
         crate::phase_sync::target_frame(
@@ -1028,6 +1062,113 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn fresh_pair_rechecks_wall_time_after_a_suspended_read_with_stalled_bus() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let start = std::time::Instant::now();
+        let pair = |begin, end| {
+            engine.fresh_phase_positions_at(
+                &engine.decks[0].borrow(),
+                &engine.decks[1].borrow(),
+                begin,
+                || end,
+            )
+        };
+        assert!(pair(start, start).is_none());
+        output.next();
+        assert!(pair(
+            start + Duration::from_millis(1),
+            start + Duration::from_millis(1)
+        )
+        .is_some());
+        // Still-current stamps cannot disguise a long suspended control-plane read.
+        assert!(pair(
+            start + Duration::from_millis(2),
+            start + Duration::from_millis(103)
+        )
+        .is_none());
+        assert!(pair(
+            start + Duration::from_millis(104),
+            start + Duration::from_millis(104)
+        )
+        .is_none());
+        output.next();
+        assert!(pair(
+            start + Duration::from_millis(105),
+            start + Duration::from_millis(110)
+        )
+        .is_some());
+        assert!(pair(
+            start + Duration::from_millis(111),
+            start + Duration::from_millis(117)
+        )
+        .is_none());
+    }
+    #[test]
+    fn fresh_phase_pairs_require_live_bus_equal_frames_and_acknowledged_commands() {
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let start = std::time::Instant::now();
+        let pair = |now| {
+            engine.fresh_phase_positions_at(
+                &engine.decks[0].borrow(),
+                &engine.decks[1].borrow(),
+                now,
+                || now,
+            )
+        };
+        assert!(pair(start).is_none());
+        output.next();
+        output.next();
+        assert!(pair(start + Duration::from_millis(1)).is_some());
+        // A half stereo frame retains the last complete, matching and still-fresh pair.
+        output.next();
+        assert!(pair(start + Duration::from_millis(2)).is_some());
+        output.next();
+        assert!(pair(start + Duration::from_millis(3)).is_some());
+        engine.set_speed(DeckId::A, 1.1).unwrap();
+        assert!(pair(start + Duration::from_millis(4)).is_none());
+        output.next();
+        assert!(pair(start + Duration::from_millis(5)).is_none());
+        output.next();
+        assert!(pair(start + Duration::from_millis(6)).is_some());
+        assert!(pair(start + Duration::from_millis(106)).is_some());
+        assert!(
+            pair(start + Duration::from_millis(107)).is_none(),
+            "stalled bus must expire even if stamp frames match"
+        );
+        output.next();
+        output.next();
+        assert!(pair(start + Duration::from_millis(108)).is_some());
+        // A long observation gap must reacquire progress, not revive a newly-seen old pair.
+        assert!(pair(start + Duration::from_millis(500)).is_none());
+        assert!(pair(start + Duration::from_millis(501)).is_none());
+        output.next();
+        output.next();
+        assert!(pair(start + Duration::from_millis(502)).is_some());
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(1))
+            .unwrap();
+        assert!(pair(start + Duration::from_millis(503)).is_none());
+        output.next();
+        output.next();
+        assert!(pair(start + Duration::from_millis(504)).is_some());
+        engine.pause(DeckId::A);
+        assert!(pair(start + Duration::from_millis(505)).is_none());
+        engine.load_a(file.path()).unwrap();
+        assert!(pair(start + Duration::from_millis(506)).is_none());
+    }
     #[test]
     fn coherent_render_stamps_follow_full_frames_and_invalidate_on_commands_and_replacement() {
         let (mixer, mut output) = rodio::mixer::mixer(2, 48000);

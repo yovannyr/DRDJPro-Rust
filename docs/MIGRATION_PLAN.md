@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 154 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 158 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Die anschließende kohärente Phasen-Veröffentlichung ist mit154 Tests, Release-Build und akzeptiertem Astra-Mittel-Follow-up geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Die anschließende Frischeprüfung ist mit158 Tests, Release-Build und akzeptiertem Astra-Mittel-Follow-up geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -58,6 +58,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
 - [x] ✅ Gemeinsamer interner Deck-Render-Bus und Zähler vollständiger Ausgabeframes; Lade-/Pause-/EOF-/Kanalgrenzen und Warm-Allokationen geprüft.
 - [x] ✅ Kohärente Quellphase/Bus-Frame-Paare mit begrenztem Lesen, Befehls-/Wechsel-Validierung und parallelen Tests; einmaliger Sync nutzt passende Paare.
+- [x] ✅ Frischeprüfung für gleiche Render-Frames mit Alters-/Lesefenster, beobachtetem Bus-Fortschritt, Stillstandsablauf und Wiederanlauf-Tests.
 - [ ] ☐ Dauerhafte Phasenregelung mit gemeinsamem Render-Zeitbezug; Takt-/Downbeat-Sync, Keylock und Quantisierung sowie physische Audio-Abnahme.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
@@ -376,3 +377,10 @@ This is a render-frame clock, not hardware/device/drain time. It establishes a c
 Each clock-attached deck renderer publishes exact source-phase units and the corresponding completed-frame boundary together, only after a complete interleaved frame. A separate single-writer SC sequence protects the atomic payload. Readers make one bounded attempt and reject overlapping publication, stopped sources and a changed/unapplied command sequence. The stamp records a produced-frame boundary, not hardware-played/drained time. Paused Sink sources can retain an old, truthful stamp while the shared bus advances; no freshness is inferred from mere presence.
 
 One-shot PHASE uses two valid stamps only when their frame identifiers match and the bus has completed that boundary. Otherwise it retains its existing control-position fallback, including explicit pending seeks. That fallback is not suitable for a future continuous regulator: timestamp freshness, shared-clock correction policy and lifecycle cancellation still need further slices. Existing UI/MATCH/transport behavior remains unchanged. No schema/dependency change. Tests cover stereo half frames, command invalidation, pause/EOF/restart/replacement, concurrent readers and isolated allocation-free publication. Review/final evidence: LOCAL_VALIDATION.md.
+
+
+## Fresh render-pair eligibility foundation (2026-10-26)
+
+Same-frame phase pairs now pass a strict control-plane freshness helper before being used as rendered one-shot inputs. At the final sampled bus counter, the stamp must be at most ceil(output_rate*5ms) frames old, and the bus must not have advanced by more than that budget during pair sampling. Future frames, counter discontinuities, invalid stamps and mismatched frames reject. A separate control-plane Instant observer acquires liveness only after progress between timely observations; it expires after100ms without observed progress, rejects observation gaps over100ms and reacquires after new progress. The pair read also revalidates at its end and must take no more than5ms wall time. Boundary limits are inclusive. No Instant calls, new allocations or locks are added to audio callbacks.
+
+This is observed producer liveness, not a device clock/deadline guarantee or proof of current hardware output. A qualifying pair is observed at validation; it cannot promise that rendering continues afterward. Paused/EOF/deck/grid/loop/nudge ownership eligibility still belongs to surrounding engine/controller guards. One-shot PHASE keeps its previous control-position fallback when fresh rendered inputs are absent. Future continuous regulation must require the strict helper and must not silently use that fallback. Continuous correction/lifecycle ownership remains open. Review and deterministic clock/boundary/lifecycle evidence are recorded in LOCAL_VALIDATION.md.
