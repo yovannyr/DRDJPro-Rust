@@ -229,3 +229,8 @@ The library footer shows CANCEL while a load/import job owns the single slot. Re
 ## Opus4: distinct LOOP and RELOOP controls (2026-10-26)
 
 The original user manual printed50–51 separates Loop On/Off and Slot Reloop. LOOP toggles activation, preserving source phase inside the interval; activation from outside starts at In. RELOOP replaces the redundant EXIT button and always activates/restarts at In. Both remain available for valid boundaries while active, preserve transport, and use existing per-deck busy/restore guards. The programmatic Exit callback remains available. OUT still captures the boundary; no automatic start is inferred. Saved-loop recall continues to install inactive boundaries. Headless control/ramp/geometry tests do not establish native visuals, focus or listening acceptance. Fine editing, auto-loop toggle/resize parity and direct slot controls remain open.
+
+
+## Manual-grid tempo MATCH (2026-10-26)
+
+A MATCH button beside pitch reset performs one-shot tempo matching to the other deck, retaining source phase rather than seeking a beat. Both confirmed manual grids and loaded/control-ready decks are required. It uses reference effective playback BPM, rejects transient nudge/held ownership, pending pitch and unsaved grid edit sessions, and respects the target pitch range. Direct callbacks repeat these guards. The button is disabled when unavailable; a direct rejected callback supplies the reason in status. No latched Sync/master mode, phase alignment, estimated-BPM fallback or keylock is implied. Current requested/effective pitch/BPM captions remain authoritative. Two-size headless geometry includes MATCH in both decks; native visual/focus/listening acceptance remains separate.

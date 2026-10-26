@@ -516,6 +516,35 @@ impl DualDeckEngine {
         );
         Ok(())
     }
+    /// One-shot tempo matching from confirmed constant grids; no beat-phase alignment.
+    pub fn tempo_match_factor(&self, id: DeckId) -> Result<f64, String> {
+        let target = self.decks[id.index()].borrow();
+        let reference = self.decks[1 - id.index()].borrow();
+        let track = target
+            .track
+            .as_ref()
+            .ok_or("Load both decks before matching tempo")?;
+        reference
+            .track
+            .as_ref()
+            .ok_or("Load both decks before matching tempo")?;
+        let own_grid = target
+            .grid
+            .ok_or("Save manual grids on both decks before matching tempo")?;
+        let reference_grid = reference
+            .grid
+            .ok_or("Save manual grids on both decks before matching tempo")?;
+        if target.nudge != 0 || reference.nudge != 0 {
+            return Err("Release nudge on both decks before matching tempo".into());
+        }
+        let reference_speed = reference
+            .speed
+            .expect("Loaded deck speed")
+            .effective_factor();
+        let factor = reference_grid.bpm() * reference_speed / own_grid.bpm();
+        PlaybackSpeed::new(factor, track.samples.sample_rate())?;
+        Ok(factor)
+    }
     pub fn set_speed(&self, id: DeckId, factor: f64) -> Result<(), String> {
         let nudge = self.decks[id.index()].borrow().nudge;
         self.set_rate_state(id, factor, nudge)
@@ -933,6 +962,46 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn tempo_matching_uses_manual_grids_effective_rate_and_rejects_invalid_state() {
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        assert!(engine.tempo_match_factor(DeckId::A).is_err());
+        let a = wav_file(4096, 192000);
+        let b = crate::test_support::wav_samples(&vec![4096; 176400], 44100, 1);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        let grid = |bpm| Some(crate::beatgrid::BeatGrid::new(bpm, Duration::ZERO).unwrap());
+        engine.set_grid(DeckId::A, grid(120.)).unwrap();
+        assert!(engine.tempo_match_factor(DeckId::A).is_err());
+        engine.set_grid(DeckId::B, grid(127.)).unwrap();
+        engine.set_speed(DeckId::B, 1.03123456).unwrap();
+        let expected_bpm = 127. * engine.snapshot(DeckId::B).effective_speed;
+        let factor = engine.tempo_match_factor(DeckId::A).unwrap();
+        assert_eq!(factor, expected_bpm / 120.);
+        engine.set_speed(DeckId::A, factor).unwrap();
+        assert!(
+            (120. * engine.snapshot(DeckId::A).effective_speed - expected_bpm).abs()
+                <= 120. / 48000. / 2. + 1e-10
+        );
+        engine.play(DeckId::B);
+        engine.set_nudge(DeckId::B, 1).unwrap();
+        assert!(engine.tempo_match_factor(DeckId::A).is_err());
+        assert!(engine.tempo_match_factor(DeckId::B).is_err());
+        engine.set_nudge(DeckId::B, 0).unwrap();
+        engine.set_grid(DeckId::A, grid(40.)).unwrap();
+        engine.set_grid(DeckId::B, grid(240.)).unwrap();
+        let before = engine.snapshot(DeckId::A).requested_speed;
+        assert!(engine.tempo_match_factor(DeckId::A).is_err());
+        assert!(engine.tempo_match_factor(DeckId::B).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, before);
+        engine.set_grid(DeckId::A, grid(120.)).unwrap();
+        engine.set_grid(DeckId::B, grid(240.)).unwrap();
+        engine.set_speed(DeckId::B, 1.).unwrap();
+        assert_eq!(engine.tempo_match_factor(DeckId::A).unwrap(), 2.);
+        engine.set_speed(DeckId::A, 1.).unwrap();
+        assert_eq!(engine.tempo_match_factor(DeckId::B).unwrap(), 0.5);
+    }
     #[test]
     fn loop_enable_preserves_inside_phase_reloop_restarts_and_both_preserve_transport() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);

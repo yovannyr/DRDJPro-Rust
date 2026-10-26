@@ -597,6 +597,30 @@ impl AudioController {
             }
         }
     }
+    fn tempo_match_target(&self, id: DeckId) -> Result<f64, String> {
+        if !self.can_control_deck(DeckId::A) || !self.can_control_deck(DeckId::B) {
+            return Err("Finish loading both decks before matching tempo".into());
+        }
+        if self.grid_editors.borrow().iter().any(Option::is_some) {
+            return Err("Save or cancel both grid edits before matching tempo".into());
+        }
+        if self.pending_pitch.borrow().iter().any(Option::is_some) {
+            return Err("Wait for pending pitch changes before matching tempo".into());
+        }
+        if self.nudges.borrow().iter().any(Option::is_some) {
+            return Err("Release nudge on both decks before matching tempo".into());
+        }
+        let factor = self.engine.tempo_match_factor(id)?;
+        if !self.pitch_ranges.get()[Self::grid_index(id)].contains(factor) {
+            return Err("Widen the target pitch range before matching tempo".into());
+        }
+        Ok(factor)
+    }
+    fn match_tempo(&self, id: DeckId) -> Result<(), String> {
+        let factor = self.tempo_match_target(id)?;
+        // Apply on this control-thread turn, before any later pitch gesture.
+        self.engine.set_speed(id, factor)
+    }
     fn queue_pitch(&self, id: DeckId, percent: f32) -> Result<(), String> {
         self.pending_pitch.borrow_mut()[Self::grid_index(id)].take();
         if !self.can_control_deck(id) {
@@ -739,6 +763,25 @@ impl AudioController {
     }
     fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let match_tempo = move || {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.match_tempo(id);
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(
+                            result
+                                .map(|()| format!("Deck {id:?}: tempo matched; phase unchanged"))
+                                .unwrap_or_else(|error| error)
+                                .into(),
+                        );
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_match_tempo_left(match_tempo),
+                DeckId::B => ui.on_match_tempo_right(match_tempo),
+            }
             let weak = Rc::downgrade(self);
             let range = move || {
                 if let Some(c) = weak.upgrade() {
@@ -1807,6 +1850,8 @@ impl AudioController {
         ui.set_background_job_active(
             self.pending.borrow().is_some() || self.pending_import.borrow().is_some(),
         );
+        ui.set_left_can_match_tempo(self.tempo_match_target(DeckId::A).is_ok());
+        ui.set_right_can_match_tempo(self.tempo_match_target(DeckId::B).is_ok());
         ui.set_left_busy(!self.can_control_deck(DeckId::A));
         ui.set_right_busy(!self.can_control_deck(DeckId::B));
         for id in [DeckId::A, DeckId::B] {
@@ -2276,6 +2321,120 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn match_tempo_controls_preserve_transport_and_reject_conflicting_requests() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        for label in ["DECK A", "DECK B"] {
+            for _ in 0..3 {
+                control(&ui, &format!("{label} deck tools panel"))
+                    .invoke_accessible_default_action();
+            }
+        }
+        assert_eq!(
+            control(&ui, "DECK A match tempo").accessible_enabled(),
+            Some(false)
+        );
+        ui.invoke_match_tempo_left();
+        assert!(ui.get_status().contains("manual grids"));
+        for (id, bpm) in [(DeckId::A, 120.), (DeckId::B, 128.)] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(bpm, Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            engine
+                .restore_loop(id, Duration::from_secs(1), Duration::from_secs(3))
+                .unwrap();
+            engine.seek_position(id, Duration::from_secs(2)).unwrap();
+            engine.activate_loop(id).unwrap();
+        }
+        engine.play(DeckId::A);
+        engine.set_speed(DeckId::B, 1.03).unwrap();
+        c.refresh();
+        let levels = engine.output_volumes();
+        for (id, label) in [(DeckId::A, "DECK A"), (DeckId::B, "DECK B")] {
+            let other = if id == DeckId::A {
+                DeckId::B
+            } else {
+                DeckId::A
+            };
+            let before = engine.snapshot(id);
+            let reference = engine.snapshot(other);
+            let reference_bpm = reference.grid.unwrap().bpm() * reference.effective_speed;
+            assert_eq!(
+                control(&ui, &format!("{label} match tempo")).accessible_enabled(),
+                Some(true)
+            );
+            control(&ui, &format!("{label} match tempo")).invoke_accessible_default_action();
+            let after = engine.snapshot(id);
+            assert_eq!(after.position, before.position);
+            assert_eq!(after.playing, before.playing);
+            assert_eq!(after.loop_in, before.loop_in);
+            assert_eq!(after.loop_out, before.loop_out);
+            assert!(after.loop_active);
+            assert!(
+                (after.grid.unwrap().bpm() * after.effective_speed - reference_bpm).abs() < 0.002
+            );
+            assert_eq!(
+                engine.snapshot(other).requested_speed,
+                reference.requested_speed
+            );
+        }
+        assert_eq!(engine.output_volumes(), levels);
+        assert!(!c.dirty.get());
+        // A rejected action must neither consume a pending pitch gesture nor alter rate.
+        c.queue_pitch(DeckId::B, 4.).unwrap();
+        let speed = engine.snapshot(DeckId::A).requested_speed;
+        ui.invoke_match_tempo_left();
+        assert!(ui.get_status().contains("pending pitch"));
+        assert!(c.pending_pitch.borrow()[1].is_some());
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, speed);
+        c.apply_pending_pitch();
+        c.begin_grid_editor(DeckId::B).unwrap();
+        ui.invoke_match_tempo_left();
+        assert!(ui.get_status().contains("grid edits"));
+        c.cancel_grid_editor(DeckId::B);
+        engine.set_nudge(DeckId::A, 1).unwrap();
+        ui.invoke_match_tempo_right();
+        assert!(ui.get_status().contains("Release nudge"));
+        engine.set_nudge(DeckId::A, 0).unwrap();
+        // Opposing held inputs are still an active gesture even at neutral net rate.
+        ui.invoke_nudge_left(-1, true);
+        ui.invoke_nudge_left(1, true);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert!(c.nudges.borrow()[0].is_some());
+        ui.invoke_match_tempo_right();
+        assert!(ui.get_status().contains("Release nudge"));
+        ui.invoke_nudge_left(-1, false);
+        ui.invoke_nudge_left(1, false);
+        ui.set_left_pitch_range_index(0);
+        c.change_pitch_range(DeckId::A).unwrap();
+        engine.set_speed(DeckId::B, 1.2).unwrap();
+        ui.invoke_match_tempo_left();
+        assert!(ui.get_status().contains("Widen"));
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, speed);
+        let (_tx, rx) = mpsc::channel();
+        *c.pending.borrow_mut() = Some((DeckId::B, rx));
+        c.refresh();
+        assert_eq!(
+            control(&ui, "DECK A match tempo").accessible_enabled(),
+            Some(false)
+        );
+        ui.invoke_match_tempo_left();
+        assert!(ui.get_status().contains("Finish loading"));
+        c.pending.borrow_mut().take();
+        c.storage_ready.set(false);
+        ui.invoke_match_tempo_right();
+        assert!(ui.get_status().contains("Finish loading"));
     }
     #[test]
     fn loop_toggle_and_reloop_buttons_follow_distinct_reference_actions_on_both_decks() {
@@ -4835,6 +4994,7 @@ mod tests {
                     "pitch range",
                     "pitch fine down",
                     "pitch fine up",
+                    "match tempo",
                 ] {
                     let item = control(&ui, &format!("{deck} {action}"));
                     assert!(item.absolute_position().x >= 0.);
