@@ -283,6 +283,8 @@ pub struct DualDeckEngine {
     output_channels: u16,
     output_rate: u32,
     retired: RefCell<Vec<RetiredTrack>>,
+    // Retain the shared render timeline for the next sync-control integration.
+    _render_clock: Arc<crate::render_bus::RenderClock>,
     // Drop explicitly stops the owned device before releasing track-buffer owners.
     _stream: Option<OutputStream>,
 }
@@ -308,6 +310,11 @@ impl DualDeckEngine {
     /// An injected renderer on another thread must be stopped/joined before this engine drops.
     pub(crate) fn from_mixer(mixer: Mixer, output_channels: u16, output_rate: u32) -> Self {
         assert!(output_channels > 0 && output_rate > 0);
+        // Both deck queues enter one fixed-format bus before the device/injected mixer.
+        let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
+        let (bus, render_clock) = crate::render_bus::RenderBus::new(deck_output);
+        mixer.add(bus);
+        let mixer = deck_mixer;
         let decks = std::array::from_fn(|_| {
             let sink = Sink::connect_new(&mixer);
             sink.pause();
@@ -332,6 +339,7 @@ impl DualDeckEngine {
             output_channels,
             output_rate,
             retired: RefCell::new(Vec::new()),
+            _render_clock: render_clock,
             _stream: None,
         };
         engine.set_levels(MixerLevels::default());
@@ -1002,6 +1010,56 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn shared_bus_clock_survives_late_loading_pause_eof_and_track_replacement() {
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
+        for _ in 0..20 {
+            assert_eq!(output.next(), Some(0.));
+        }
+        assert_eq!(engine._render_clock.completed.load(Ordering::Acquire), 10);
+        let track = wav_file(8192, 4800);
+        engine.load_a(track.path()).unwrap();
+        engine.load_b(track.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        for _ in 0..200 {
+            output.next();
+        }
+        assert_eq!(engine._render_clock.completed.load(Ordering::Acquire), 110);
+        let a = engine.snapshot(DeckId::A).position;
+        let b = engine.snapshot(DeckId::B).position;
+        assert_eq!(a, b);
+        engine.pause(DeckId::A);
+        // Sink pause is a Rodio control callback; settle its existing 5ms control tick.
+        for _ in 0..1000 {
+            output.next();
+        }
+        let paused = engine.snapshot(DeckId::A).position;
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert_eq!(engine.snapshot(DeckId::A).position, paused);
+        assert!(engine.snapshot(DeckId::B).position > b);
+        engine.seek_percent(DeckId::B, 100.).unwrap();
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert!(!engine.snapshot(DeckId::B).playing);
+        engine.load_b(track.path()).unwrap();
+        engine.play(DeckId::B);
+        let before = engine._render_clock.completed.load(Ordering::Acquire);
+        for _ in 0..1000 {
+            output.next();
+        }
+        assert_eq!(
+            engine._render_clock.completed.load(Ordering::Acquire),
+            before + 500
+        );
+        assert!(engine.snapshot(DeckId::B).position > Duration::ZERO);
+        engine.collect_retired();
+        assert!(engine.retired.borrow().is_empty());
+    }
     #[test]
     fn one_shot_phase_sync_publishes_rate_and_seek_together_and_renders_target_samples() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);

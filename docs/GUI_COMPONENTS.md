@@ -239,3 +239,8 @@ A MATCH button beside pitch reset performs one-shot tempo matching to the other 
 ## One-shot PHASE action (2026-10-26)
 
 The NUDGE panel adds PHASE beside Cancel. It matches tempo and seeks the target to the nearest matching beat fraction of the other confirmed manual grid. Both decks must play with loops off, and MATCH prerequisites/range/editor/pending/held-nudge guards still apply. Direct rejected actions report why; neither action starts a paused deck. Existing inactive loop bounds remain. This is a single control-plane alignment from published source positions; subsequent seek/pitch/loop changes are not followed. It is not bar/downbeat synchronization or a latched Sync state. The audio command changes rate and seek together on an output-frame boundary. Headless geometry includes PHASE at850x740 and1280x860; native visuals, audible transitions and physical timing remain separate gates.
+
+
+## Shared render bus integration (2026-10-26)
+
+No control or latched Sync state is added. Existing transport, gains, source-time captions, MATCH and one-shot PHASE run through one private deck bus before the output mixer. The shared completed-frame clock is infrastructure for later timestamped phase publication/continuous correction, not a GUI timer or hardware-played position. Native visual/listening acceptance remains unverified.

@@ -16,6 +16,7 @@ mod phase_sync;
 mod pitch_control;
 mod playback;
 mod playback_speed;
+mod render_bus;
 mod saved_loops;
 mod tempo;
 #[cfg(test)]

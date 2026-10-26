@@ -28,9 +28,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 148 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 151 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist anschließend mit151 Tests, Release-Build und akzeptiertem Astra-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -56,6 +56,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
 - [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
+- [x] ✅ Gemeinsamer interner Deck-Render-Bus und Zähler vollständiger Ausgabeframes; Lade-/Pause-/EOF-/Kanalgrenzen und Warm-Allokationen geprüft.
 - [ ] ☐ Dauerhafte Phasenregelung mit gemeinsamem Render-Zeitbezug; Takt-/Downbeat-Sync, Keylock und Quantisierung sowie physische Audio-Abnahme.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
@@ -360,3 +361,10 @@ PHASE in the NUDGE panel performs one immediate tempo-and-nearest-beat-phase ali
 Both grid phases use exact binary-BPM remainders scaled to a shared integer denominator. The shortest signed beat displacement is chosen exactly before final floating-point nearest-frame projection onto the target grid. Nearest half-beat ties choose later; if that nearest rounded source frame is outside the decoded track it rejects rather than making a larger jump or clamping to EOF. Positions beyond seven days reject. The control plane publishes rate and source-frame seek coherently to the installed renderer. Inactive loop boundaries, manual grids, gains, reference deck and storage remain unchanged. Positions are separately sampled published render coordinates, not a simultaneous physical-output clock: scheduling delay, device buffers, fractional-frame rounding and unequal device paths remain qualification limits. No click-free/musical/physical synchronization claim.
 
 Focused domain, actual-ramp engine and both-deck accessible-action tests pass; final gates and Astra-medium review are recorded in LOCAL_VALIDATION.md. Continuous shared-clock sync and native/hardware/listening qualification remain open. No dependency/schema/audio-iterator changes.
+
+
+## Shared deck render bus foundation (2026-10-26)
+
+Both deck queues now feed a private fixed-format Rodio mixer, wrapped once by RenderBus before entering the device/injected mixer. Its shared AtomicU64 counts completed interleaved output frames, including silence while unloaded/paused/EOF. The bus remains installed and continues polling its mixer so late source admission and replacement work after an empty result. One engine clock handle is retained for the next sync-control integration; continuous sync does not consume it yet. Existing MATCH/PHASE semantics remain unchanged and the continuous-sync checkbox stays open.
+
+This is a render-frame clock, not hardware/device/drain time. It establishes a common point at which both deck sample pulls finish; timestamped coherent phase publication, matching controls to that clock and bounded continuous correction still require subsequent reviewed slices. No new GUI, dependency/schema or DeckRenderer iterator change. Rodio inner/outer mixer source admission still uses its own locks/allocations; only the wrapper and warmed steady pull are tested for no added allocations. Hardware deadlines/listening/latency and platform acceptance remain open.
