@@ -30,7 +30,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 191 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 192 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -60,6 +60,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Unveränderte Bibliotheksansichten wiederverwenden; bei Änderungen an Suche, Sortierung, Tracks oder Crate-Mitgliedschaften neu berechnen.
 - [x] ✅ Neue Bibliotheksansichten mit vorbereiteten Unicode-Such- und Sortierwerten aufbauen; bisherige Ergebnisse gegen Referenztests geprüft.
 - [x] ✅ Trackauswahl und Pfadauflösung über den ID-Index; Sichtbarkeit bleibt an Suche und aktives Crate gebunden.
+- [x] ✅ Headless-Bibliotheksmodell mit 100.000 synthetischen Tracks, Suche, Sortierung und Auswahl geprüft.
 - [ ] ☐ Weitere Bibliotheksskalierung: indexierte/paginierte Suche und große Ansichten unter realistischen Bedingungen qualifizieren.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
@@ -486,3 +487,10 @@ A local 10,000-track fixture measured16 allocations for cold view construction a
 A further bounded part of the first open scaling item resolves a selected track through the existing ID index, checks the same normalized query and active-crate predicate as the visible view, and resolves its path by ID. Validating an existing selection after a query change no longer constructs or sorts the entire visible view. Navigation by previous/next still uses the ordered visible list. Crate lookup and matching the selected track's strings still require work; this is not a worst-case constant-time, paginated or indexed full-text search claim.
 
 A local 100,000-track fixture selected an ID with zero measured allocations before any view was built, then compared selection against the actual visible set across missing IDs, queries and crate scopes. No time or native UI guarantee follows. Indexed/paged new search and large-view qualification remain open. Final check/review evidence is in LOCAL_VALIDATION.md.
+
+
+## 100,000-track headless qualification (2026-10-27)
+
+At the existing catalog limit a headless test inserts100,000 synthetic track paths, publishes the real library model, checks the visible viewport, searches for one and many tracks, selects the result and reverses sort order while retaining selection. The corrected viewport counter observed2 model-row requests before any explicit first/last row reads. A standalone diagnostic run measured insertion796.55ms, initial publication52.52ms, selective search72.81ms and broad search102.67ms. Search timings include accessibility-control lookup and callbacks; these are test-backend observations in one run, not native render/scroll timings, actual file/metadata I/O, peak-memory bounds or guarantees. The test uses no timing threshold.
+
+The next open scaling work remains indexed/paged search and real-environment qualification. SQLite FTS5 trigram supports substring matching but full-text queries shorter than three Unicode characters do not match, and wildcard/escaping behavior needs explicit handling and correctness tests; see [SQLite FTS5 documentation](https://www.sqlite.org/fts5.html). No FTS integration or semantic equivalence is claimed by this qualification slice.

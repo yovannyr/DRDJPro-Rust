@@ -2808,6 +2808,62 @@ mod tests {
     }
 
     #[test]
+    fn large_library_headless_view_search_sort_and_selection_at_track_limit() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        let dir = tempfile::tempdir().unwrap();
+        let count = crate::library::MAX_TRACKS;
+        let start = Instant::now();
+        assert_eq!(
+            c.library
+                .borrow_mut()
+                .insert((0..count).map(|i| dir.path().join(format!("track-{i:06}.wav")))),
+            count
+        );
+        let insert_time = start.elapsed();
+        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.show().unwrap();
+        let start = Instant::now();
+        c.publish_library();
+        let publish_time = start.elapsed();
+        let model = ui.get_library_rows();
+        assert_eq!(model.row_count(), count);
+        control(&ui, "Library track 1");
+        let requested = model
+            .as_any()
+            .downcast_ref::<LibraryRows>()
+            .unwrap()
+            .row_data_calls
+            .get();
+        assert!(
+            requested > 0 && requested < 1000,
+            "viewport requested {requested} rows"
+        );
+        assert_eq!(model.row_data(0).unwrap().id, 1);
+        assert_eq!(model.row_data(count - 1).unwrap().id, count as i32);
+        let start = Instant::now();
+        control(&ui, "Library search").set_accessible_value(format!("track-{:06}", count - 1));
+        let search_time = start.elapsed();
+        let filtered = ui.get_library_rows();
+        assert_eq!(filtered.row_count(), 1);
+        assert_eq!(filtered.row_data(0).unwrap().id, count as i32);
+        control(&ui, &format!("Library track {count}")).invoke_accessible_default_action();
+        assert_eq!(ui.get_selected_track(), count as i32);
+        let start = Instant::now();
+        control(&ui, "Library search").set_accessible_value("track");
+        let broad_time = start.elapsed();
+        assert_eq!(ui.get_library_rows().row_count(), count);
+        control(&ui, "Sort library by name").invoke_accessible_default_action();
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, count as i32);
+        assert_eq!(ui.get_selected_track(), count as i32);
+        println!("100,000 synthetic tracks: insert {insert_time:?}, cold publish {publish_time:?}, selective query {search_time:?}, broad query {broad_time:?}; viewport requested {requested} rows");
+    }
+
+    #[test]
     fn source_time_formatting_handles_boundaries_long_tracks_and_overrun() {
         assert_eq!(precise_time(Duration::from_nanos(999_999)), "00:00.000");
         assert_eq!(precise_time(Duration::from_millis(59_999)), "00:59.999");

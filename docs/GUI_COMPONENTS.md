@@ -302,3 +302,8 @@ The accessible description identifies the latest completed producer window. With
 ## Lazy library list rows (2026-10-27)
 
 The existing ListView now obtains LibraryRow data on demand from an ordered stable-ID model instead of eagerly allocating all row strings on publication. Headless tests cover20,000 tracks, viewport requests, search/sort, catalog replacement and safe controller lifetime. Sorting/filtering still process the full in-memory catalog and the model rebuilds its ID list. Headless viewport and allocation evidence is not native scrolling/rendering, accessibility-reader, visual or platform acceptance.
+
+
+## 100,000-track headless library workflow (2026-10-27)
+
+A test at the existing 100,000-track limit exercises the library model and accessible search/sort/selection callbacks; two model-row requests were observed before explicit first/last lookups in one standalone run. Paths and metadata are synthetic. This does not constitute native visual/scrolling/screen-reader acceptance or establish responsiveness with real media and device loads. Indexed/paged search remains open.
