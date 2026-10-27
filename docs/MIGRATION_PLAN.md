@@ -30,7 +30,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 184 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 187 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -55,7 +55,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Opus5: revisionsgebundene Track-Deltas, begrenzte Zeilenänderungen, periodische geprüfte Backups und Retry/Close; Snapshot bei100000 Tracks vermessen.
 - [x] ✅ Opus7: PCM-Puffer ohne Sample-Kopie teilen, fallibel begrenzt reservieren und Lade-/Import-Worker kooperativ abbrechen; späte Ergebnisse verworfen.
 - [x] ✅ Crate-Mitgliedschaften revisionsgebunden einzeln speichern; Rollback, parallele Änderungen und Neustart geprüft.
-- [ ] ☐ Weitere Skalierung: Strukturänderungen an Crates granularisieren; größere Bibliotheksansichten virtualisieren.
+- [x] ✅ Crate-Strukturänderungen revisionsgebunden einzeln speichern, einschließlich Namenswechsel, ID-Fortschreibung und Rollback.
+- [ ] ☐ Weitere Skalierung: größere Bibliotheksansichten virtualisieren.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
 - [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
@@ -447,4 +448,9 @@ Acceptance scope is offline sample/atomic/window/gain regression and headless GU
 
 ## Incremental crate membership changes (2026-10-27)
 
-First bounded part of the earliest open scaling item: membership additions/removals use revision-tracked pair deltas and transactional per-pair SQLite writes, without cloning or rewriting unchanged crate relationships during membership-only saves. Structural crate create/rename/delete still uses the existing full snapshot; library-view virtualization has not yet been started. In-flight acknowledgement, batched additions, atomic failure/retry, track-plus-membership saves and restart are covered by regression tests. Periodic validated backups remain full-catalog work. Final check/review/publication evidence is in LOCAL_VALIDATION.md. The remaining parts of this plan item retain priority before later open items.
+First bounded part of the earliest open scaling item: membership additions/removals use revision-tracked pair deltas and transactional per-pair SQLite writes, without cloning or rewriting unchanged crate relationships during membership-only saves. At this checkpoint structural crate create/rename/delete still used the full snapshot; the subsequent checkpoint removes it. Library-view virtualization has not yet been started. In-flight acknowledgement, batched additions, atomic failure/retry, track-plus-membership saves and restart are covered by regression tests. Periodic validated backups remain full-catalog work. Final check/review/publication evidence is in LOCAL_VALIDATION.md. The remaining parts of this plan item retain priority before later open items.
+
+
+## Incremental crate structure (2026-10-27)
+
+The next part of the same first open scaling item replaces structural crate snapshots with revision-bound per-ID create/rename/delete changes and a monotonic high-water mark. The worker applies structural and membership changes atomically, including multi-rename name exchanges. Deleting a crate cascades its own members; other members are not rewritten. Tests cover injected rollback, unchanged memberships, in-flight create/delete and restart. Periodic backups and deletion of a crate with many members remain proportional to their data. Library-view virtualization is the next open part of this plan item. See LOCAL_VALIDATION.md for review and final checks.

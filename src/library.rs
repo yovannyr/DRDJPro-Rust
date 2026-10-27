@@ -31,8 +31,12 @@ pub struct SavedTrack {
 pub struct CatalogDelta {
     pub revision: u64,
     pub tracks: Vec<SavedTrack>,
-    pub crates: Option<crate::crates::CrateCatalog>,
+    pub crates: Option<CrateDelta>,
     pub memberships: Vec<(i32, i32, bool)>,
+}
+pub struct CrateDelta {
+    pub last_id: i32,
+    pub entries: Vec<(i32, Option<String>)>,
 }
 impl Catalog {
     pub fn validate(&self) -> Result<(), String> {
@@ -158,7 +162,7 @@ impl Track {
 pub struct Library {
     revision: u64,
     changed_tracks: BTreeMap<usize, u64>,
-    changed_crates: Option<u64>,
+    changed_crates: BTreeMap<i32, u64>,
     changed_memberships: BTreeMap<(i32, i32), (u64, bool)>,
     tracks: Vec<Track>,
     last_id: i32,
@@ -188,12 +192,12 @@ impl Library {
             .expect("Library revision overflow");
         self.changed_tracks.insert(index, self.revision);
     }
-    fn mark_crates(&mut self) {
+    fn mark_crate(&mut self, id: i32) {
         self.revision = self
             .revision
             .checked_add(1)
             .expect("Library revision overflow");
-        self.changed_crates = Some(self.revision);
+        self.changed_crates.insert(id, self.revision);
     }
     fn mark_memberships(
         &mut self,
@@ -215,16 +219,14 @@ impl Library {
     }
     pub fn has_changes(&self) -> bool {
         !self.changed_tracks.is_empty()
-            || self.changed_crates.is_some()
+            || !self.changed_crates.is_empty()
             || !self.changed_memberships.is_empty()
     }
     pub fn acknowledge(&mut self, revision: u64) {
         self.changed_tracks.retain(|_, changed| *changed > revision);
         self.changed_memberships
             .retain(|_, (changed, _)| *changed > revision);
-        if self.changed_crates.is_some_and(|r| r <= revision) {
-            self.changed_crates = None;
-        }
+        self.changed_crates.retain(|_, changed| *changed > revision);
     }
     pub fn changes(&self) -> CatalogDelta {
         CatalogDelta {
@@ -234,7 +236,23 @@ impl Library {
                 .keys()
                 .map(|index| self.tracks[*index].saved())
                 .collect(),
-            crates: self.changed_crates.map(|_| self.crates.clone()),
+            crates: (!self.changed_crates.is_empty()).then(|| CrateDelta {
+                last_id: self.crates.last_id,
+                entries: self
+                    .changed_crates
+                    .keys()
+                    .map(|&id| {
+                        (
+                            id,
+                            self.crates
+                                .entries
+                                .iter()
+                                .find(|c| c.id == id)
+                                .map(|c| c.name.clone()),
+                        )
+                    })
+                    .collect(),
+            }),
             memberships: self
                 .changed_memberships
                 .iter()
@@ -322,19 +340,19 @@ impl Library {
     }
     pub fn create_crate(&mut self, name: &str) -> Result<i32, String> {
         let id = self.crates.create(name)?;
-        self.mark_crates();
+        self.mark_crate(id);
         Ok(id)
     }
     pub fn rename_crate(&mut self, id: i32, name: &str) -> Result<(), String> {
         self.crates.rename(id, name)?;
-        self.mark_crates();
+        self.mark_crate(id);
         Ok(())
     }
     pub fn delete_crate(&mut self, id: i32) -> Result<(), String> {
         self.crates.delete(id)?;
         self.changed_memberships
             .retain(|(crate_id, _), _| *crate_id != id);
-        self.mark_crates();
+        self.mark_crate(id);
         if self.active_crate == id {
             self.select_crate(0)?;
         }
@@ -629,7 +647,7 @@ mod tests {
         library.acknowledge(latest.revision);
         let remaining = library.changes();
         assert!(remaining.tracks.is_empty());
-        assert_eq!(remaining.crates.unwrap().entries[0].id, crate_id);
+        assert_eq!(remaining.crates.unwrap().entries[0].0, crate_id);
         library.acknowledge(library.revision());
         assert!(!library.has_changes());
         println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");

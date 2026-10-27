@@ -752,3 +752,13 @@ Final fmt --check and strict clippy --all-targets -- -D warnings passed(exit0;Cl
 
 
 Final cargo build --release passed(exit0;1m00s); rebuilt executable MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. Reviewer accepted documentation subject to two small accuracy improvements, which were applied: fixture measures two membership changes; flat-crate text distinguishes structural snapshots from membership deltas. No runtime/test changes followed accepted review and final gates. git diff --check passed. Commit/push recorded in Git history.
+
+
+## Incremental crate structure (2026-10-27)
+
+Started from clean64f2a2b immediately after the membership slice. The user authorized Codex for crate granularization after QWEN HTTP502/429 and explicitly requested plan order. Scope: replace remaining routine structural crate snapshots with revision-bound per-ID name/delete changes and high-water ID; retain transactional membership deltas and existing schema/backups. Full initial/legacy writes remain unchanged. GUI/audio behavior and dependencies are unchanged.
+
+`cargo test crate_structure -- --nocapture` passed2/2(exit0;0.24s;12.58s compile). One test swaps two names through an intermediate state with 1,000/500 unchanged memberships, disallows membership deletion with a trigger, injects a rename failure and confirms rollback/restart and at most five changed rows on success. A second saves an in-flight create after a newer delete/recreate, verifies latest revisions/membership and ID high-water after restart. Previous membership tests also pass4/4 on this structural implementation. Final review and all checks follow. No maximum-scale timing or native UI/audio acceptance is claimed.
+
+
+Reviewer configured gpt-6.1-sol / medium accepted runtime and docs; independent cargo test crate_structure_ -- --nocapture passed2/2(exit0). At reviewer suggestion an additional create-and-delete-before-any-save regression was added; cargo test crate_structure passed3/3(exit0;0.40s) and reviewer accepted the follow-up. Final corrected-source cargo fmt --check and strict cargo clippy --all-targets -- -D warnings passed(exit0;Clippy5.92s); full cargo test passed187/187(exit0;18.54s;0failed/ignored); cargo build --release passed(exit0;41.44s). Rebuilt MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. No runtime/test changes followed final accepted review and checks; final result/count documentation only. Commit/push identity is in Git history.

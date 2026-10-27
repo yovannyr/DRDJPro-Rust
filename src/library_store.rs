@@ -870,37 +870,87 @@ impl Store {
         write_hot_cues_rows(&tx, &delta.tracks)?;
         write_saved_loops_rows(&tx, &delta.tracks)?;
         if let Some(crates) = &delta.crates {
-            let mut statement = tx
-                .prepare("SELECT id FROM tracks")
+            let previous: String = tx
+                .query_row(
+                    "SELECT value FROM library_meta WHERE key='last_crate_id'",
+                    [],
+                    |row| row.get(0),
+                )
                 .map_err(|e| e.to_string())?;
-            let ids = statement
-                .query_map([], |r| r.get::<_, i32>(0))
-                .map_err(|e| e.to_string())?
-                .collect::<Result<HashSet<_>, _>>()
-                .map_err(|e| e.to_string())?;
-            crates.validate(&ids)?;
-            write_crates(&tx, crates)?;
-        } else {
-            for &(crate_id, track_id, present) in &delta.memberships {
-                if crate_id <= 0 || crate_id == i32::MAX || track_id <= 0 || track_id == i32::MAX {
-                    return Err("Invalid crate membership identity".into());
+            let previous: i32 = previous.parse().map_err(|_| "Invalid crate ID sequence")?;
+            if crates.last_id < previous || crates.last_id == i32::MAX {
+                return Err("Invalid crate ID sequence".into());
+            }
+            let mut ids = HashSet::new();
+            for (id, name) in &crates.entries {
+                if *id <= 0 || *id > crates.last_id || !ids.insert(*id) {
+                    return Err("Invalid crate identity".into());
                 }
-                let valid: bool = tx.query_row(
+                if let Some(name) = name {
+                    crate::crates::CrateCatalog {
+                        last_id: crates.last_id,
+                        entries: vec![crate::crates::Crate {
+                            id: *id,
+                            name: name.clone(),
+                            tracks: HashSet::new(),
+                        }],
+                    }
+                    .validate(&HashSet::new())?;
+                }
+            }
+            // Delete first, then reserve temporary keys for all renamed rows. A NUL-prefixed
+            // key cannot be produced by a valid crate name and exists only inside this transaction.
+            for (id, name) in &crates.entries {
+                if name.is_none() {
+                    tx.execute("DELETE FROM crates WHERE id=?1", [id])
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            for (id, name) in &crates.entries {
+                if name.is_some() {
+                    tx.execute(
+                        "UPDATE crates SET name_key=char(0)||CAST(id AS TEXT) WHERE id=?1",
+                        [id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+            for (id, name) in &crates.entries {
+                if let Some(name) = name {
+                    tx.execute("INSERT INTO crates(id,name,name_key) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET name=excluded.name,name_key=excluded.name_key", rusqlite::params![id, name, crate::crates::name_key(name)]).map_err(|e| e.to_string())?;
+                }
+            }
+            let count: i64 = tx
+                .query_row("SELECT COUNT(*) FROM crates", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            if count > crate::crates::MAX_CRATES as i64 {
+                return Err("Crate limit exceeded".into());
+            }
+            tx.execute(
+                "UPDATE library_meta SET value=?1 WHERE key='last_crate_id'",
+                [crates.last_id.to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        for &(crate_id, track_id, present) in &delta.memberships {
+            if crate_id <= 0 || crate_id == i32::MAX || track_id <= 0 || track_id == i32::MAX {
+                return Err("Invalid crate membership identity".into());
+            }
+            let valid: bool = tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM crates WHERE id=?1) AND EXISTS(SELECT 1 FROM tracks WHERE id=?2)",
                     rusqlite::params![crate_id, track_id],
                     |row| row.get(0),
                 ).map_err(|e| e.to_string())?;
-                if !valid {
-                    return Err("Invalid crate membership identity".into());
-                }
-                let sql = if present {
-                    "INSERT INTO crate_tracks(crate_id,track_id) VALUES(?1,?2) ON CONFLICT(crate_id,track_id) DO NOTHING"
-                } else {
-                    "DELETE FROM crate_tracks WHERE crate_id=?1 AND track_id=?2"
-                };
-                tx.execute(sql, rusqlite::params![crate_id, track_id])
-                    .map_err(|e| e.to_string())?;
+            if !valid {
+                return Err("Invalid crate membership identity".into());
             }
+            let sql = if present {
+                "INSERT INTO crate_tracks(crate_id,track_id) VALUES(?1,?2) ON CONFLICT(crate_id,track_id) DO NOTHING"
+            } else {
+                "DELETE FROM crate_tracks WHERE crate_id=?1 AND track_id=?2"
+            };
+            tx.execute(sql, rusqlite::params![crate_id, track_id])
+                .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
         self.has_tracks = self.has_tracks || added > 0;
@@ -1835,6 +1885,110 @@ mod tests {
         assert!(first_entry.tracks.contains(&1001));
         assert!(first_entry.tracks.contains(&2000));
         assert_eq!(other_entry.tracks.len(), 1001);
+    }
+
+    #[test]
+    fn crate_structure_deltas_swap_names_without_rewriting_memberships_and_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("1.wav"), 1);
+        let template = data.tracks[0].clone();
+        for id in 2..=1000 {
+            let mut track = template.clone();
+            track.id = id;
+            track.path = dir.path().join(format!("{id}.wav"));
+            data.tracks.push(track);
+        }
+        let a = data.crates.create("Alpha").unwrap();
+        let b = data.crates.create("Beta").unwrap();
+        data.crates.add_many(a, &(1..=1000).collect()).unwrap();
+        data.crates.add_many(b, &(1..=500).collect()).unwrap();
+        store.save(&data).unwrap();
+        let mut library = Library::restore(data).unwrap();
+        library.rename_crate(a, "Temporary").unwrap();
+        library.rename_crate(b, "Alpha").unwrap();
+        library.rename_crate(a, "Beta").unwrap();
+        let delta = library.changes();
+        assert_eq!(delta.crates.as_ref().unwrap().entries.len(), 2);
+        assert!(delta.memberships.is_empty());
+        store.connection.execute_batch("CREATE TRIGGER no_membership_delete BEFORE DELETE ON crate_tracks BEGIN SELECT RAISE(ABORT,'unexpected membership deletion'); END; CREATE TRIGGER fail_rename BEFORE UPDATE ON crates WHEN NEW.name='Beta' AND OLD.name='Alpha' BEGIN SELECT RAISE(ABORT,'rename failure'); END;").unwrap();
+        assert!(store
+            .save_delta(&delta)
+            .unwrap_err()
+            .contains("rename failure"));
+        let before = inspect(&store.connection).unwrap().unwrap();
+        assert_eq!(before.crates.entries[0].name, "Alpha");
+        assert_eq!(before.crates.entries[1].name, "Beta");
+        assert_eq!(before.crates.entries[0].tracks.len(), 1000);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_rename")
+            .unwrap();
+        let changes = store.connection.total_changes();
+        store.save_delta(&delta).unwrap();
+        assert!(store.connection.total_changes() - changes <= 5);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER no_membership_delete")
+            .unwrap();
+        drop(store);
+        let (_, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.crates().entries[0].name, "Beta");
+        assert_eq!(restored.crates().entries[1].name, "Alpha");
+        assert_eq!(restored.crates().entries[0].tracks.len(), 1000);
+        assert_eq!(restored.crates().entries[1].tracks.len(), 500);
+    }
+
+    #[test]
+    fn crate_structure_create_then_delete_before_save_keeps_high_water() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let id = library.create_crate("Transient").unwrap();
+        library.delete_crate(id).unwrap();
+        let delta = library.changes();
+        assert_eq!(delta.crates.as_ref().unwrap().entries, vec![(id, None)]);
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+        assert!(!library.has_changes());
+        drop(store);
+        let (_, mut restored, _) = Store::open(db).unwrap();
+        assert!(restored.crates().entries.is_empty());
+        assert_eq!(restored.create_crate("Next").unwrap(), id + 1);
+    }
+
+    #[test]
+    fn crate_structure_inflight_create_delete_and_high_water_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let path = dir.path().join("new.wav");
+        library.insert([path.clone()]);
+        let a = library.create_crate("First").unwrap();
+        library
+            .add_paths_to_crate(a, std::slice::from_ref(&path))
+            .unwrap();
+        let inflight = library.changes();
+        library.delete_crate(a).unwrap();
+        let b = library.create_crate("Second").unwrap();
+        library.add_paths_to_crate(b, &[path]).unwrap();
+        store.save_delta(&inflight).unwrap();
+        library.acknowledge(inflight.revision);
+        let latest = library.changes();
+        assert_eq!(
+            latest.crates.as_ref().unwrap().entries,
+            vec![(a, None), (b, Some("Second".into()))]
+        );
+        assert_eq!(latest.memberships, vec![(b, 1, true)]);
+        store.save_delta(&latest).unwrap();
+        library.acknowledge(latest.revision);
+        assert!(!library.has_changes());
+        drop(store);
+        let (_, mut restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.crates().entries.len(), 1);
+        assert_eq!(restored.crates().entries[0].tracks, HashSet::from([1]));
+        assert_eq!(restored.create_crate("Next").unwrap(), b + 1);
     }
 
     #[test]
