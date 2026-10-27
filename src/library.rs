@@ -275,6 +275,7 @@ pub(crate) struct SearchSpec {
     pub query: String,
     pub field: i32,
     pub descending: bool,
+    pub page_index: usize,
 }
 
 impl SearchProjection {
@@ -797,6 +798,7 @@ impl Library {
             query: self.query.clone(),
             field: self.sort_field,
             descending: self.descending,
+            page_index: 0,
         }
     }
 

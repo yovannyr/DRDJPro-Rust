@@ -32,7 +32,7 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Cue-point panel | 48, 58 | Overview sections 48, 58 | Partial data foundation: eight fixed per-track positions/names/colors persist in SQLite schema 5. Eight pads per deck now set empty slots and recall occupied slots without changing Play/Pause; explicit slot deletion exists. Name/RGB Save/Cancel editing and named/numbered overview/detail markers now exist. Quantization and controller feedback remain open. Existing Cue-to-zero is not hot-cue parity. |
 | Flip/loop panels | 31, 33, 56 | Overview numbered sections | Open: flip sequences, auto-loop UI and saved loops; require separate engine and persistence slices. |
 | Library actions/search | 36, 37, 38, 39, 40 | Manual p. 30 | Open: Search, History, Prepare, Browse, Files. Native file picker is not a library browser. |
-| Library table/view | 45, 49 | Manual pp. 39–40; overview screenshot | Partial: track table, search, sort headers, selection and lazy row materialization exist. Catalog-wide filtering/sorting, native large-list performance and alternate list/art view remain open. |
+| Library table/view | 45, 49 | Manual pp. 39–40; overview screenshot | Partial: track table, indexed background search/sort, selection and 200-row page navigation exist. Worker filtering/sorting still processes all matching records; native large-list performance and alternate list/art view remain open. |
 | Crate navigation | 51, 52, 53, 54 | Overview numbered sections | Partial: flat persistent crate navigation/create/rename/delete, set membership and active-crate import are implemented. Subcrates/smart crates and iTunes/Serato-format compatibility remain open. |
 
 ### Concrete behavior to preserve from the manual

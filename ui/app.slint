@@ -477,6 +477,15 @@ component TrackLibrary inherits Rectangle {
     callback cancel-job();
     in property <[LibraryRow]> rows;
     in property <string> count-text;
+    in property <string> page-text;
+    in property <bool> can-previous-page;
+    in property <bool> can-next-page;
+    out property <length> scroll-y: library-list.content-y;
+    callback scroll-page(bool);
+    scroll-page(end) => {
+        library-list.content-y = end ? min(0px, library-list.height - root.rows.length * 30px) : 0px;
+    }
+    callback change-page(int);
     in property <string> empty-text;
     in property <string> storage-text;
     in property <bool> save-failed;
@@ -513,7 +522,8 @@ component TrackLibrary inherits Rectangle {
                 if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
                 return reject;
             }
-            ListView {
+            library-list := ListView {
+                content-height: root.rows.length * 30px;
                 for row in root.rows : Rectangle {
                     height: 30px; background: root.selection == row.id ? #194b70 : #1a222e;
                     accessible-role: button; accessible-label: "Library track " + row.id;
@@ -535,6 +545,9 @@ component TrackLibrary inherits Rectangle {
         }
         HorizontalLayout {
             Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
+            Button { text: "‹"; width: 32px; accessible-label: "Previous library page"; enabled: root.can-previous-page; clicked => { root.change-page(-1); } }
+            Text { text: page-text; accessible-role: text; accessible-label: "Library page"; color: #9faec2; font-size: 11px; vertical-alignment: center; }
+            Button { text: "›"; width: 32px; accessible-label: "Next library page"; enabled: root.can-next-page; clicked => { root.change-page(1); } }
             Text { text: storage-text; accessible-role: text; accessible-label: "Library storage status"; color: save-failed ? #ffae58 : #9faec2; font-size: 11px; overflow: elide; vertical-alignment: center; }
             if root.job-active : Button { text: "CANCEL"; accessible-label: "Cancel background load or import"; clicked => { root.cancel-job(); } }
             if save-failed : Button { text: "RETRY SAVE"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
@@ -690,6 +703,13 @@ export component AppWindow inherits Window {
 
     in property <[LibraryRow]> library-rows;
     in property <string> library-count: "0 tracks";
+    in property <string> library-page-text: "0 / 0";
+    in property <bool> library-can-previous-page;
+    in property <bool> library-can-next-page;
+    out property <length> library-scroll-y: track-library.scroll-y;
+    callback library-scroll-page(bool);
+    library-scroll-page(end) => { track-library.scroll-page(end); }
+    callback library-change-page(int);
     in property <string> library-storage: "Session library";
     in property <bool> library-save-failed;
     callback retry-library-save();
@@ -870,9 +890,11 @@ export component AppWindow inherits Window {
                     save-name => { root.save-crate-name(); } cancel-dialog => { root.cancel-crate-dialog(); } confirm-delete => { root.confirm-delete-crate(); }
                     add-track => { root.add-to-crate(); } remove-track => { root.remove-from-crate(); }
                 }
-        TrackLibrary {
+        track-library := TrackLibrary {
             horizontal-stretch: 1; min-width: 0px;
             rows: root.library-rows; count-text: root.library-count; empty-text: root.library-empty;
+            page-text: root.library-page-text; can-previous-page: root.library-can-previous-page; can-next-page: root.library-can-next-page;
+            change-page(delta) => { root.library-change-page(delta); }
             storage-text: root.library-storage; save-failed: root.library-save-failed;
             selection: root.selected-track; query <=> root.library-query;
             busy: root.loading || root.library-busy || !root.audio-enabled;
