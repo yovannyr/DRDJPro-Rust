@@ -565,10 +565,7 @@ impl Library {
             self.query = normalized;
             *self.view_cache.get_mut() = None;
         }
-        if self
-            .selected
-            .is_some_and(|id| !self.visible().iter().any(|track| track.id == id))
-        {
+        if self.selected.is_some_and(|id| !self.is_visible_id(id)) {
             self.selected = None;
         }
     }
@@ -610,10 +607,7 @@ impl Library {
         let mut tracks: Vec<&Track> = self
             .tracks
             .iter()
-            .filter(|track| {
-                (self.active_crate == 0 || members.is_some_and(|set| set.contains(&track.id)))
-                    && (self.query.is_empty() || track.matches_query(&self.query))
-            })
+            .filter(|track| self.matches_visible(track, members))
             .collect();
 
         tracks.sort_by(|a, b| {
@@ -627,12 +621,18 @@ impl Library {
 
         tracks
     }
+    fn matches_visible(&self, track: &Track, members: Option<&HashSet<i32>>) -> bool {
+        (self.active_crate == 0 || members.is_some_and(|set| set.contains(&track.id)))
+            && (self.query.is_empty() || track.matches_query(&self.query))
+    }
+
+    fn is_visible_id(&self, id: i32) -> bool {
+        self.track_by_id(id)
+            .is_some_and(|track| self.matches_visible(track, self.scope_members()))
+    }
+
     pub fn select(&mut self, id: i32) {
-        self.selected = self
-            .visible()
-            .iter()
-            .find(|track| track.id == id)
-            .map(|track| track.id);
+        self.selected = self.is_visible_id(id).then_some(id);
     }
     pub fn selected_id(&self) -> i32 {
         self.selected.unwrap_or(-1)
@@ -655,9 +655,8 @@ impl Library {
         self.selected = id;
     }
     pub fn selected_path(&self) -> Option<PathBuf> {
-        self.tracks
-            .iter()
-            .find(|track| Some(track.id) == self.selected)
+        self.selected
+            .and_then(|id| self.track_by_id(id))
             .map(|track| track.path.clone())
     }
 }
@@ -727,6 +726,65 @@ mod tests {
         assert!(!library.has_changes());
         println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
     }
+    #[test]
+    fn indexed_selection_matches_visible_scope_and_avoids_building_large_views() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+        let size = 100_000;
+        library.insert((0..size).map(|i| dir.path().join(format!("track-{i:06}.wav"))));
+        assert!(library.view_cache.borrow().is_none());
+        let allocations = crate::looping::counted_allocations(|| library.select(size));
+        assert_eq!(allocations, 0);
+        assert_eq!(library.selected_id(), size);
+        assert!(library
+            .selected_path()
+            .unwrap()
+            .ends_with("track-099999.wav"));
+        assert!(library.view_cache.borrow().is_none());
+        library.set_query("track-099999".into());
+        assert_eq!(library.selected_id(), size);
+        assert!(library.view_cache.borrow().is_none());
+        library.set_query("track-000001".into());
+        assert_eq!(library.selected_id(), -1);
+        assert!(library.selected_path().is_none());
+        assert!(library.view_cache.borrow().is_none());
+        let crate_id = library.create_crate("Subset").unwrap();
+        library
+            .add_paths_to_crate(
+                crate_id,
+                &[
+                    dir.path().join("track-000001.wav"),
+                    dir.path().join("track-099999.wav"),
+                ],
+            )
+            .unwrap();
+        for scope in [0, crate_id] {
+            library.select_crate(scope).unwrap();
+            for query in ["", "track-000001", "track-099999", "missing"] {
+                library.set_query(query.into());
+                let visible: HashSet<i32> =
+                    library.visible().iter().map(|track| track.id).collect();
+                for id in [-1, 0, 1, 2, 99_999, 100_000, 100_001] {
+                    library.select(id);
+                    assert_eq!(
+                        library.selected_id(),
+                        if visible.contains(&id) { id } else { -1 },
+                        "scope {scope}, query {query}, id {id}"
+                    );
+                }
+            }
+        }
+        library.select_crate(0).unwrap();
+        library.set_query("track-000001".into());
+        library.select(2);
+        assert_eq!(library.selected_id(), 2);
+        library.set_query("absent".into());
+        assert_eq!(library.selected_id(), -1);
+        println!(
+            "100,000-track direct selection: {allocations} allocations before view construction"
+        );
+    }
+
     #[test]
     fn normalized_library_search_matches_previous_filter_and_sort_semantics() {
         fn reference(library: &Library) -> Vec<i32> {

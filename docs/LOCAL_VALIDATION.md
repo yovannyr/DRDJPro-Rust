@@ -797,3 +797,16 @@ Started from cleanf7d9c47, continuing the first open library scaling item. QWEN 
 
 
 Independent reviewer configured gpt-6.1-sol / medium accepted runtime, reference tests and docs; independent cargo test library::tests -- --nocapture passed8/8(exit0) and reproduced16 cold/1 cached allocations. Final cargo fmt --check and strict clippy --all-targets -- -D warnings passed(exit0;Clippy7.64s); cargo test passed190/190(exit0;19.72s;0failed/ignored); cargo build --release passed(exit0;42.36s). Rebuilt MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. No runtime/test changes followed accepted review and final gates; only result/count documentation. Commit/push identity is in Git history.
+
+
+## QWEN / ID-indexed library selection (2026-10-27)
+
+Started from clean656b97e, continuing the first open library-scaling plan item. QWEN API reported qwen-3.6-35b-sovereign (thinking disabled) and generated the shared visibility predicate, direct ID selection/path lookup and query/filter wiring. Codex inspected/placed fragments and authored independent regression tests/docs. API model identity is provider-reported only; no credentials/base URL/raw responses committed.
+
+`cargo test indexed_selection -- --nocapture` passed1/1(exit0;1.11s;24.04s compile). Before building a view, selecting the last of100,000 tracks performed0 measured allocations and selected the correct path. The test compares selected IDs with the actual visible set across two crate scopes, four queries and valid/invalid IDs, checks revalidation and that direct actions did not populate the view cache. Previous stable-identity regression passed1/1(exit0). These are local correctness/allocation tests, not worst-case time or native latency measurements. ID lookup is expected hash-map lookup; matching still examines the selected track's text and active-crate lookup scans bounded crate entries. Full-text searching/sorting and previous/next navigation still need the view, and SQL paging remains open. Review/full checks follow.
+
+
+Initial strict Clippy failed(exit101) on three unnecessary i32 casts in the independent test fixture. These casts were removed without lint suppression; complete final gates are rerun on the corrected test.
+
+
+Independent reviewer configured gpt-6.1-sol / medium accepted runtime/tests/docs; independently ran cargo test indexed_selection -- --nocapture(exit0;1/1) and reproduced0 direct-selection allocations. Reviewer clarified that media-missing tracks remain selectable when visible; documentation was corrected to distinguish hidden tracks from nonexistent IDs. After the test-only unnecessary-cast fix, final cargo fmt --check and strict clippy --all-targets -- -D warnings passed(exit0;Clippy4.70s); full cargo test passed191/191(exit0;17.64s;0failed/ignored); cargo build --release passed(exit0;58.06s). Rebuilt MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. No runtime changes followed accepted review and final checks; the test-only cast cleanup and result documentation followed. Commit/push identity is in Git history.
