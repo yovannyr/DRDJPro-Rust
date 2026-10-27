@@ -797,7 +797,7 @@ impl Store {
         Ok(())
     }
     fn save_delta(&mut self, delta: &crate::library::CatalogDelta) -> Result<(), String> {
-        if delta.tracks.is_empty() && delta.crates.is_none() {
+        if delta.tracks.is_empty() && delta.crates.is_none() && delta.memberships.is_empty() {
             return self.checkpoint(true);
         }
         Catalog {
@@ -880,6 +880,27 @@ impl Store {
                 .map_err(|e| e.to_string())?;
             crates.validate(&ids)?;
             write_crates(&tx, crates)?;
+        } else {
+            for &(crate_id, track_id, present) in &delta.memberships {
+                if crate_id <= 0 || crate_id == i32::MAX || track_id <= 0 || track_id == i32::MAX {
+                    return Err("Invalid crate membership identity".into());
+                }
+                let valid: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM crates WHERE id=?1) AND EXISTS(SELECT 1 FROM tracks WHERE id=?2)",
+                    rusqlite::params![crate_id, track_id],
+                    |row| row.get(0),
+                ).map_err(|e| e.to_string())?;
+                if !valid {
+                    return Err("Invalid crate membership identity".into());
+                }
+                let sql = if present {
+                    "INSERT INTO crate_tracks(crate_id,track_id) VALUES(?1,?2) ON CONFLICT(crate_id,track_id) DO NOTHING"
+                } else {
+                    "DELETE FROM crate_tracks WHERE crate_id=?1 AND track_id=?2"
+                };
+                tx.execute(sql, rusqlite::params![crate_id, track_id])
+                    .map_err(|e| e.to_string())?;
+            }
         }
         tx.commit().map_err(|e| e.to_string())?;
         self.has_tracks = self.has_tracks || added > 0;
@@ -1077,6 +1098,7 @@ mod tests {
                 revision: 1,
                 tracks: data.tracks,
                 crates: None,
+                memberships: Vec::new(),
             })
             .unwrap();
         let backup = side_path(&db, ".bak");
@@ -1092,6 +1114,7 @@ mod tests {
                 revision: 1,
                 tracks: Vec::new(),
                 crates: None,
+                memberships: Vec::new(),
             })
             .unwrap();
         assert!(backup.is_file());
@@ -1113,6 +1136,7 @@ mod tests {
                 revision: 1,
                 tracks: data.tracks,
                 crates: None,
+                memberships: Vec::new(),
             })
             .unwrap();
         assert!(matches!(
@@ -1167,6 +1191,7 @@ mod tests {
                 revision: 1,
                 tracks: vec![target],
                 crates: None,
+                memberships: Vec::new(),
             };
             store.save_delta(&delta).unwrap();
             let checkpoint = store.last_checkpoint;
@@ -1720,6 +1745,161 @@ mod tests {
         assert!(data.crates.create("Next").unwrap() > last);
         assert_eq!(data.tracks[0].id, 1);
     }
+    #[test]
+    fn membership_deltas_are_bounded_atomic_and_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("1.wav"), 1);
+        let template = data.tracks[0].clone();
+        for id in 2..=2000 {
+            let mut track = template.clone();
+            track.id = id;
+            track.path = dir.path().join(format!("{id}.wav"));
+            data.tracks.push(track);
+        }
+        let first = data.crates.create("First").unwrap();
+        let other = data.crates.create("Other").unwrap();
+        data.crates.add_many(first, &(1..=1000).collect()).unwrap();
+        data.crates
+            .add_many(other, &(500..=1500).collect())
+            .unwrap();
+        store.save(&data).unwrap();
+        let mut library = Library::restore(data).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER no_snapshot BEFORE DELETE ON crates BEGIN SELECT RAISE(ABORT,'unexpected snapshot'); END;").unwrap();
+        assert_eq!(
+            library
+                .add_paths_to_crate(
+                    first,
+                    &[dir.path().join("1001.wav"), dir.path().join("2000.wav")]
+                )
+                .unwrap(),
+            2
+        );
+        let delta = library.changes();
+        assert!(delta.crates.is_none());
+        assert_eq!(delta.memberships.len(), 2);
+        let before = store.connection.total_changes();
+        store.save_delta(&delta).unwrap();
+        assert_eq!(store.connection.total_changes() - before, 2);
+        library.acknowledge(delta.revision);
+        library.select_crate(first).unwrap();
+        library.select(1);
+        assert!(library.remove_selected_from_crate().unwrap());
+        assert_eq!(
+            library
+                .add_paths_to_crate(first, &[dir.path().join("1501.wav")])
+                .unwrap(),
+            1
+        );
+        let delta = library.changes();
+        store.connection.execute_batch("CREATE TRIGGER reject_membership BEFORE INSERT ON crate_tracks WHEN NEW.track_id=1501 BEGIN SELECT RAISE(ABORT,'membership failure'); END;").unwrap();
+        assert!(store
+            .save_delta(&delta)
+            .unwrap_err()
+            .contains("membership failure"));
+        let old = inspect(&store.connection).unwrap().unwrap();
+        assert!(old.crates.entries[0].tracks.contains(&1));
+        assert!(!old.crates.entries[0].tracks.contains(&1501));
+        assert_eq!(old.crates.entries[1].tracks.len(), 1001);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_membership")
+            .unwrap();
+        let before = store.connection.total_changes();
+        store.save_delta(&delta).unwrap();
+        assert_eq!(store.connection.total_changes() - before, 2);
+        library.acknowledge(delta.revision);
+        assert!(!library.has_changes());
+        store
+            .connection
+            .execute_batch("DROP TRIGGER no_snapshot")
+            .unwrap();
+        drop(store);
+        let (_, restored, _) = Store::open(db).unwrap();
+        let catalog = restored.catalog();
+        let first_entry = catalog
+            .crates
+            .entries
+            .iter()
+            .find(|c| c.id == first)
+            .unwrap();
+        let other_entry = catalog
+            .crates
+            .entries
+            .iter()
+            .find(|c| c.id == other)
+            .unwrap();
+        assert!(!first_entry.tracks.contains(&1));
+        assert!(first_entry.tracks.contains(&1501));
+        assert!(first_entry.tracks.contains(&1001));
+        assert!(first_entry.tracks.contains(&2000));
+        assert_eq!(other_entry.tracks.len(), 1001);
+    }
+
+    #[test]
+    fn membership_inflight_and_mixed_snapshot_saves_preserve_latest_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let paths = [dir.path().join("a.wav"), dir.path().join("b.wav")];
+        library.insert(paths.clone());
+        let id = library.create_crate("Set").unwrap();
+        library.add_paths_to_crate(id, &paths[..1]).unwrap();
+        let mixed = library.changes();
+        assert!(mixed.crates.is_some());
+        assert_eq!(mixed.memberships, vec![(id, 1, true)]);
+        store.save_delta(&mixed).unwrap();
+        library.acknowledge(mixed.revision);
+        library.select_crate(id).unwrap();
+        library.select(1);
+        library.remove_selected_from_crate().unwrap();
+        let inflight = library.changes();
+        library.add_paths_to_crate(id, &paths[..1]).unwrap();
+        library.add_paths_to_crate(id, &paths[1..]).unwrap();
+        store.save_delta(&inflight).unwrap();
+        library.acknowledge(inflight.revision);
+        let latest = library.changes();
+        assert_eq!(latest.memberships, vec![(id, 1, true), (id, 2, true)]);
+        store.save_delta(&latest).unwrap();
+        library.acknowledge(latest.revision);
+        assert!(!library.has_changes());
+        drop(store);
+        let (_, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.crates().entries[0].tracks, HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn membership_and_track_changes_commit_together_and_reject_bad_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, mut library, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let crate_id = library.create_crate("Set").unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+        let path = dir.path().join("new.wav");
+        library.insert([path.clone()]);
+        assert_eq!(library.add_paths_to_crate(crate_id, &[path]).unwrap(), 1);
+        let delta = library.changes();
+        assert!(delta.crates.is_none());
+        assert_eq!(delta.tracks.len(), 1);
+        assert_eq!(delta.memberships, vec![(crate_id, 1, true)]);
+        store.save_delta(&delta).unwrap();
+        let restored = inspect(&store.connection).unwrap().unwrap();
+        assert_eq!(restored.crates.entries[0].tracks, HashSet::from([1]));
+        for (id, track, present) in [(crate_id, 999, true), (999, 1, false), (0, 1, true)] {
+            let bad = library::CatalogDelta {
+                revision: 0,
+                tracks: Vec::new(),
+                crates: None,
+                memberships: vec![(id, track, present)],
+            };
+            assert!(store.save_delta(&bad).is_err());
+            let restored = inspect(&store.connection).unwrap().unwrap();
+            assert_eq!(restored.crates.entries[0].tracks, HashSet::from([1]));
+        }
+    }
+
     #[test]
     fn crate_snapshot_failure_rolls_back_names_memberships_and_sequence() {
         let dir = tempfile::tempdir().unwrap();

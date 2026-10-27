@@ -32,6 +32,7 @@ pub struct CatalogDelta {
     pub revision: u64,
     pub tracks: Vec<SavedTrack>,
     pub crates: Option<crate::crates::CrateCatalog>,
+    pub memberships: Vec<(i32, i32, bool)>,
 }
 impl Catalog {
     pub fn validate(&self) -> Result<(), String> {
@@ -158,6 +159,7 @@ pub struct Library {
     revision: u64,
     changed_tracks: BTreeMap<usize, u64>,
     changed_crates: Option<u64>,
+    changed_memberships: BTreeMap<(i32, i32), (u64, bool)>,
     tracks: Vec<Track>,
     last_id: i32,
     keys: HashMap<PathBuf, usize>,
@@ -193,14 +195,33 @@ impl Library {
             .expect("Library revision overflow");
         self.changed_crates = Some(self.revision);
     }
+    fn mark_memberships(
+        &mut self,
+        crate_id: i32,
+        tracks: impl IntoIterator<Item = i32>,
+        present: bool,
+    ) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("Library revision overflow");
+        for track_id in tracks {
+            self.changed_memberships
+                .insert((crate_id, track_id), (self.revision, present));
+        }
+    }
     pub fn revision(&self) -> u64 {
         self.revision
     }
     pub fn has_changes(&self) -> bool {
-        !self.changed_tracks.is_empty() || self.changed_crates.is_some()
+        !self.changed_tracks.is_empty()
+            || self.changed_crates.is_some()
+            || !self.changed_memberships.is_empty()
     }
     pub fn acknowledge(&mut self, revision: u64) {
         self.changed_tracks.retain(|_, changed| *changed > revision);
+        self.changed_memberships
+            .retain(|_, (changed, _)| *changed > revision);
         if self.changed_crates.is_some_and(|r| r <= revision) {
             self.changed_crates = None;
         }
@@ -214,6 +235,11 @@ impl Library {
                 .map(|index| self.tracks[*index].saved())
                 .collect(),
             crates: self.changed_crates.map(|_| self.crates.clone()),
+            memberships: self
+                .changed_memberships
+                .iter()
+                .map(|(&(crate_id, track_id), &(_, present))| (crate_id, track_id, present))
+                .collect(),
         }
     }
 
@@ -306,6 +332,8 @@ impl Library {
     }
     pub fn delete_crate(&mut self, id: i32) -> Result<(), String> {
         self.crates.delete(id)?;
+        self.changed_memberships
+            .retain(|(crate_id, _), _| *crate_id != id);
         self.mark_crates();
         if self.active_crate == id {
             self.select_crate(0)?;
@@ -316,7 +344,7 @@ impl Library {
         let track = self.selected.ok_or("Select a track first")?;
         let changed = self.crates.add(id, track)?;
         if changed {
-            self.mark_crates();
+            self.mark_memberships(id, [track], true);
         }
         Ok(changed)
     }
@@ -328,9 +356,16 @@ impl Library {
             .iter()
             .filter_map(|p| self.keys.get(&identity(p)).map(|i| self.tracks[*i].id))
             .collect();
+        let entry = self
+            .crates
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("Crate no longer exists")?;
+        let added: Vec<_> = tracks.difference(&entry.tracks).copied().collect();
         let changed = self.crates.add_many(id, &tracks)?;
         if changed > 0 {
-            self.mark_crates();
+            self.mark_memberships(id, added, true);
         }
         Ok(changed)
     }
@@ -338,7 +373,7 @@ impl Library {
         let track = self.selected.ok_or("Select a track first")?;
         let removed = self.crates.remove(self.active_crate, track)?;
         if removed {
-            self.mark_crates();
+            self.mark_memberships(self.active_crate, [track], false);
         }
         self.set_query(self.query.clone());
         Ok(removed)
@@ -599,6 +634,36 @@ mod tests {
         assert!(!library.has_changes());
         println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
     }
+    #[test]
+    fn membership_deltas_survive_inflight_ack_and_coalesce_without_catalog_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [dir.path().join("a.wav"), dir.path().join("b.wav")];
+        let mut library = Library::default();
+        assert_eq!(library.insert(paths.clone()), 2);
+        let id = library.create_crate("Set").unwrap();
+        library.acknowledge(library.revision());
+        assert_eq!(library.add_paths_to_crate(id, &paths[..1]).unwrap(), 1);
+        let inflight = library.changes();
+        assert!(inflight.crates.is_none());
+        assert_eq!(inflight.memberships, vec![(id, 1, true)]);
+        library.select_crate(id).unwrap();
+        library.select(1);
+        assert!(library.remove_selected_from_crate().unwrap());
+        assert_eq!(library.add_paths_to_crate(id, &paths[1..]).unwrap(), 1);
+        library.acknowledge(inflight.revision);
+        let latest = library.changes();
+        assert!(latest.crates.is_none());
+        assert_eq!(latest.memberships, vec![(id, 1, false), (id, 2, true)]);
+        library.acknowledge(latest.revision);
+        assert!(!library.has_changes());
+        assert_eq!(library.add_paths_to_crate(id, &paths[1..]).unwrap(), 0);
+        assert!(!library.has_changes());
+        library.delete_crate(id).unwrap();
+        let deleted = library.changes();
+        assert!(deleted.crates.is_some());
+        assert!(deleted.memberships.is_empty());
+    }
+
     #[test]
     fn stable_identity_survives_sort_and_filter_never_loads_a_hidden_selection() {
         let mut library = Library::default();

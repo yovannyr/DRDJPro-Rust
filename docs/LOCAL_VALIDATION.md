@@ -739,3 +739,16 @@ Corrected-state final cargo fmt --check and strict cargo clippy --all-targets --
 
 
 Final cargo build --release passed(exit0;1m06s). Rebuilt executable MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. No runtime/test changes followed accepted final review and corrected-state green gates. Only result/plan count updates followed. Publication identity is recorded by Git history. Mixer-DSP overall remains partial; sample-peak measurement is not full mixer feature parity.
+
+
+## Incremental crate memberships (2026-10-27)
+
+Started from clean71053f2. The user directed work in plan order and explicitly authorized Codex for this crate implementation after configured QWEN returned HTTP502 and429, including a small retry. Scope: revision-bound membership-pair deltas in Library, transactional per-pair SQLite changes in Store, focused tests/docs. Structural crate edits still use the existing full snapshot, which takes precedence when included alongside membership edits. No schema/dependency/audio/GUI behavior change.
+
+`cargo test membership_ -- --nocapture` passed4/4(exit0;0.55s after compile). Tests exercise revision coalescing and newer changes surviving older acknowledgement, combined structural snapshot plus membership, in-flight save followed by opposing/later edits and reopen, new-track plus membership in one transaction, invalid identities, and two additions/removals against two large crates in a 2,000-track fixture. The latter changes exactly two SQLite rows, forbids whole-crate deletion with a trigger, injects an insertion error after a removal, verifies rollback, retries and verifies unrelated members and restart. These are local test results and row counts, not a maximum-scale timing guarantee. Final review, complete checks and publication results follow.
+
+
+Final fmt --check and strict clippy --all-targets -- -D warnings passed(exit0;Clippy13.97s). Full cargo test passed184/184(exit0;19.44s;0failed/ignored). Independent configured gpt-6.1-sol / medium accepted the runtime diff without blocking findings and ran cargo test membership -- --nocapture(exit0,9 passed, including existing membership tests). Structural snapshots and periodic checkpoints retain their existing full-catalog work. Final release and documentation review results follow.
+
+
+Final cargo build --release passed(exit0;1m00s); rebuilt executable MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. Reviewer accepted documentation subject to two small accuracy improvements, which were applied: fixture measures two membership changes; flat-crate text distinguishes structural snapshots from membership deltas. No runtime/test changes followed accepted review and final gates. git diff --check passed. Commit/push recorded in Git history.
