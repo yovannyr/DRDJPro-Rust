@@ -706,3 +706,16 @@ No native visual/listening, physical output/latency or full product-parity accep
 
 
 Final release gate passed: cargo build --release(exit0,1m02s). Rebuilt executable MP3 analysis passed(exit0):44100Hz,2channels,398592frames,9.038s,peak0.0883,RMS0.0592. git diff --check passed. All runtime/test files are unchanged from the accepted independent source review; only result documentation followed. Commit/push identity is recorded by the Git history.
+
+
+## QWEN / focus-scoped detail keyboard zoom (2026-10-27)
+
+Started from clean3e545b5. Runtime scope is WaveformStrip/DetailWaveform Slint wiring; no audio/controller runtime/dependency/storage change. The configured QWEN API reported qwen-3.6-35b-sovereign with thinking disabled. One initial request failed HTTP502; a subsequent invalid proposal used unsupported event/key/modifier/on syntax and was rejected before application. Narrow fragment requests supplied the final valid Slint. Codex inspected/placed those fragments and mechanically made the keyboard-zoom declaration an input property at the component boundary (missing in qualifier in returned fragment); independent event tests/docs are Codex-authored. A final QWEN-generated accessible description explains focus/keys and that clicking seeks. No implementation model substitution or printed/committed credentials/base URL/raw responses.
+
+Initial cargo test keyboard_zoom -- --nocapture passed2/2(exit0,3.31s; compile48.07s). Actual WindowEvents exercise unloaded/disabled focus, both decks at850x740/1280x860, zoom bounds/repeats, Ctrl/Alt/Meta pass-through, Shift-plus, unrelated keys, viewport refresh, source position/play/pause/base pitch/gain preservation after zoom, search/draft text receiving -+, and detail zoom during grid editing. Overview input and existing mouse/accessibility seek paths are retained. Plus/minus are local to waveform focus, not global. No native focus/usability, screen-reader, visual, hearing or physical output acceptance is claimed. Final all-target Clippy/full tests/release and independent Sol-medium review results follow.
+
+
+Independent reviewer configured gpt-6.1-sol / medium accepted runtime, tests and all three documents, no actionable correctness findings. Independent cargo test keyboard_zoom -- --test-threads=1 passed2/2(exit0;3.23s). Reviewer suggested optional Tab-traversal and right-button non-focus event coverage; these paths are not claimed as covered by the new headless tests. No blocking finding remains. Final cargo fmt --check and cargo clippy --all-targets -- -D warnings passed(exit0; Clippy21.03s), full cargo test passed175/175(exit0;17.93s;0failed/ignored). Release result follows; no runtime/test changes followed review acceptance.
+
+
+Final cargo build --release passed(exit0;56.64s). Rebuilt executable MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. Final documentation-only result/count updates followed the accepted independent review. Commit/push identity is recorded in Git history; native visual/focus/screen-reader/listening and full reference-parity gates remain open.

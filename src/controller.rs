@@ -6183,6 +6183,201 @@ mod tests {
         ui.hide().unwrap();
     }
     #[test]
+    fn keyboard_zoom_is_focus_scoped_bounded_and_preserves_audio_state() {
+        use slint::platform::{Key, PointerEventButton, WindowEvent};
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        let click = |label: &str| {
+            let target = control(&ui, label);
+            let origin = target.absolute_position();
+            let size = target.size();
+            let position = slint::LogicalPosition::new(
+                origin.x + size.width / 2.,
+                origin.y + size.height / 2.,
+            );
+            ui.window()
+                .dispatch_event(WindowEvent::PointerMoved { position });
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        };
+        let key = |text: &str| {
+            ui.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+            ui.window()
+                .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+        };
+        click("DECK A detailed waveform");
+        key("+");
+        assert_eq!(ui.get_left_detail_window(), 8); // Unloaded detail cannot zoom.
+        let file = wav_file(8192, 48_000 * 30);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.set_speed(DeckId::A, 1.25).unwrap();
+        engine.set_speed(DeckId::B, 0.75).unwrap();
+        c.tick();
+        let gains = engine.output_volumes();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            ui.set_left_detail_window(8);
+            ui.set_right_detail_window(8);
+            c.tick();
+            click("DECK A detailed waveform");
+            let before_a = engine.snapshot(DeckId::A);
+            let before_b = engine.snapshot(DeckId::B);
+            let span = ui.get_left_detail_end() - ui.get_left_detail_start();
+            key("+");
+            assert_eq!(ui.get_left_detail_window(), 4);
+            assert_eq!(ui.get_right_detail_window(), 8);
+            assert!(
+                ((ui.get_left_detail_end() - ui.get_left_detail_start()) * 2. - span).abs() < 0.001
+            );
+            ui.window()
+                .dispatch_event(WindowEvent::KeyPressRepeated { text: "+".into() });
+            assert_eq!(ui.get_left_detail_window(), 2);
+            key("+");
+            assert_eq!(ui.get_left_detail_window(), 2);
+            for _ in 0..5 {
+                key("-");
+            }
+            assert_eq!(ui.get_left_detail_window(), 32);
+            assert_eq!(ui.get_right_detail_window(), 8);
+            for modifier in [Key::Control, Key::Alt, Key::Meta] {
+                ui.window().dispatch_event(WindowEvent::KeyPressed {
+                    text: modifier.into(),
+                });
+                key("+");
+                ui.window().dispatch_event(WindowEvent::KeyReleased {
+                    text: modifier.into(),
+                });
+                assert_eq!(ui.get_left_detail_window(), 32);
+            }
+            ui.window().dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Shift.into(),
+            });
+            key("+");
+            ui.window().dispatch_event(WindowEvent::KeyReleased {
+                text: Key::Shift.into(),
+            });
+            assert_eq!(ui.get_left_detail_window(), 16);
+            key("x");
+            assert_eq!(ui.get_left_detail_window(), 16);
+            assert_eq!(engine.snapshot(DeckId::A).position, before_a.position);
+            assert_eq!(engine.snapshot(DeckId::B).position, before_b.position);
+            assert!(engine.snapshot(DeckId::A).playing);
+            assert!(!engine.snapshot(DeckId::B).playing);
+            assert_eq!(
+                engine.snapshot(DeckId::A).requested_speed,
+                before_a.requested_speed
+            );
+            assert_eq!(engine.output_volumes(), gains);
+            click("DECK B detailed waveform");
+            let b_position = engine.snapshot(DeckId::B).position;
+            key("-");
+            assert_eq!(ui.get_left_detail_window(), 16);
+            assert_eq!(ui.get_right_detail_window(), 16);
+            key("+");
+            assert_eq!(ui.get_right_detail_window(), 8);
+            assert_eq!(engine.snapshot(DeckId::B).position, b_position);
+            ui.set_audio_enabled(false);
+            key("+");
+            assert_eq!(ui.get_right_detail_window(), 8);
+            ui.set_audio_enabled(true);
+        }
+    }
+
+    #[test]
+    fn keyboard_zoom_does_not_consume_search_or_grid_text_input() {
+        use slint::platform::{Key, PointerEventButton, WindowEvent};
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let file = wav_file(8192, 48_000 * 3);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        c.tick();
+        ui.show().unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        let click = |label: &str| {
+            let target = control(&ui, label);
+            let origin = target.absolute_position();
+            let size = target.size();
+            let position = slint::LogicalPosition::new(
+                origin.x + size.width / 2.,
+                origin.y + size.height / 2.,
+            );
+            ui.window()
+                .dispatch_event(WindowEvent::PointerMoved { position });
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        };
+        let key = |text: &str| {
+            ui.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+            ui.window()
+                .dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+        };
+        click("DECK A detailed waveform");
+        key("+");
+        assert_eq!(ui.get_left_detail_window(), 4);
+        click("Library search");
+        key("-");
+        key("+");
+        assert_eq!(ui.get_library_query(), "-+");
+        assert_eq!(ui.get_left_detail_window(), 4);
+        assert_eq!(ui.get_right_detail_window(), 8);
+        control(&ui, "DECK A edit beatgrid").invoke_accessible_default_action();
+        click("DECK A draft BPM");
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        key("a");
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+        key("-");
+        key("+");
+        assert_eq!(ui.get_left_grid_draft_bpm(), "-+");
+        assert_eq!(ui.get_left_detail_window(), 4);
+        assert_eq!(ui.get_right_detail_window(), 8);
+        click("DECK A detailed waveform");
+        key("-");
+        assert_eq!(ui.get_left_detail_window(), 8); // Zoom also works in grid-edit mode.
+        assert_eq!(ui.get_left_grid_draft_bpm(), "-+");
+    }
+
+    #[test]
     fn detail_zoom_and_clicks_follow_local_time_without_changing_other_deck() {
         use slint::platform::{PointerEventButton, WindowEvent};
         use slint::Model;

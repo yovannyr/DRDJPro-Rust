@@ -21,6 +21,11 @@ component WaveformStrip inherits Rectangle {
     in property <float> range-start: 0;
     in property <float> range-end: 100;
     callback seek(float);
+    in property <bool> keyboard-zoom: false;
+    callback zoom-step(int);
+    forward-focus: zoom-keys;
+    border-width: zoom-keys.has-focus ? 1px : 0px;
+    border-color: #77baff;
     background: #070b11; clip: true;
     Rectangle {
         visible: root.loop-range.visible;
@@ -77,9 +82,33 @@ component WaveformStrip inherits Rectangle {
         x: clamp(marker, 0, 100) / 100 * max(0px, parent.width - self.width);
         width: 2px; height: parent.height; background: #ffffff;
     }
+    zoom-keys := FocusScope {
+        width: 0;
+        enabled: root.enabled && root.keyboard-zoom;
+        key-pressed(event) => {
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
+                return reject;
+            }
+            if event.text == "+" {
+                root.zoom-step(-1);
+                return accept;
+            }
+            if event.text == "-" {
+                root.zoom-step(1);
+                return accept;
+            }
+            return reject;
+        }
+    }
     TouchArea {
+        pointer-event(event) => {
+            if root.enabled && root.keyboard-zoom && event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                zoom-keys.focus();
+            }
+        }
         enabled: root.enabled; accessible-role: slider;
         accessible-label: deck-label + (overview ? " waveform overview" : " detailed waveform");
+        accessible-description: root.keyboard-zoom ? "Click to seek and focus; use + or - while focused to zoom this deck from 2 to 32 source seconds." : "Click to seek within the track.";
         accessible-enabled: self.enabled; accessible-value: position;
         accessible-value-minimum: range-start; accessible-value-maximum: range-end;
         accessible-action-set-value(v) => { if self.enabled && v.is-float() { root.seek(clamp(v.to-float(), range-start, range-end)); } }
@@ -368,6 +397,16 @@ component DetailWaveform inherits Rectangle {
             Text { text: root.grid-caption; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; }
         }
         WaveformStrip {
+            keyboard-zoom: true;
+            zoom-step(direction) => {
+                if root.enabled {
+                    let next = direction < 0 ? max(2, root.detail-window / 2) : min(32, root.detail-window * 2);
+                    if next != root.detail-window {
+                        root.detail-window = next;
+                        root.zoom();
+                    }
+                }
+            }
             height: 54px; overview: false; deck-label: root.deck-label; accent: root.accent;
             values: root.detail; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; beats: root.beats; enabled: root.enabled;
             position: root.position; marker: root.marker; range-start: root.detail-start; range-end: root.detail-end;

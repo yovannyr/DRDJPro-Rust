@@ -21,6 +21,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Beschriftete verstrichene Zeit, Restzeit und Gesamtdauer in Original-Trackzeit mit Millisekunden für beide Decks; native Lesbarkeitsprüfung bleibt offen.
 - [x] ✅ Extended-Workspace-Struktur mit gemeinsamen Detail-Waveforms und Bibliotheksbereich.
 - [x] ✅ PCM-Waveform-Übersicht, folgende Detailansicht, Zoom und approximative Frequenzfarben.
+- [x] ✅ Fokusgebundener Plus-/Minus-Tastaturzoom der Detail-Waveforms mit Grenzen2–32s und Schutz fokussierter Texteingaben; native Fokusabnahme offen.
 - [x] ✅ Experimenteller BPM-Vorschlag mit begrenzter Offline-Analyse; keine automatische musikalische Ausrichtung.
 - [x] ✅ Manueller konstanter 4/4-Beatgrid-Editor mit Vorschau, Save/Cancel, Anker, Slip und SQLite-Speicherung.
 - [x] ✅ SQLite-Bibliothek mit stabilen Track-IDs, JSON-Migration, Transaktionen, Backup/Recovery und Speichern beim Beenden.
@@ -29,9 +30,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 173 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 175 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -428,3 +429,8 @@ The toggle defaults off, is per-deck session state, survives track replacement a
 ## Precise original-source time display (2026-10-27)
 
 The next bounded UI/reference item replaces elapsed/total whole seconds with a two-line, explicitly labeled ELAPSED/LEFT/TOTAL millisecond caption for both decks. Integer Duration arithmetic clamps elapsed to duration and saturates remaining; pitch does not change source-time coordinates. Sub-millisecond fractions truncate, minutes can exceed59, and the complete caption is available as an accessible description when elided. Tests include arithmetic boundaries and both real controller deck bindings, transport/seek/pitch/EOF and two-size headless geometry. No DSP, scheduled triggering, persistence or native acceptance is added. Final command/review/publication evidence is recorded in LOCAL_VALIDATION.md.
+
+
+## Focus-scoped detail keyboard zoom (2026-10-27)
+
+Bounded UI-reference follow-up: per-deck detail waveforms route focused + and - key presses/repeats to the existing zoom path, with2–32s bounds and no global shortcut. Click-to-focus retains existing click-to-seek. Ctrl/Alt/Meta combinations pass through, Shift is allowed, text fields retain input, and overview keyboard zoom remains disabled. Two headless tests exercise actual pointer/keyboard WindowEvents, both deck focus paths/two supported sizes, modifier/repeat/boundary behavior and preserved audio state after zoom. Native focus/readability/screen-reader acceptance, scrubbing and pitch-scaled waveform reference parity remain open. See LOCAL_VALIDATION.md for final review/check/publication evidence.
