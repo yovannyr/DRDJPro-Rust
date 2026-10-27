@@ -561,9 +561,24 @@ impl Library {
     }
     pub fn set_query(&mut self, query: String) {
         let normalized = query.trim().to_lowercase();
+        let prior_cache = self.view_cache.get_mut().take();
+        let extends = normalized.starts_with(&self.query);
         if self.query != normalized {
             self.query = normalized;
-            *self.view_cache.get_mut() = None;
+            if extends {
+                if let Some(indices) = prior_cache {
+                    let members = self.scope_members();
+                    let filtered: Vec<usize> = indices
+                        .into_iter()
+                        .filter(|&i| self.matches_visible(&self.tracks[i], members))
+                        .collect();
+                    *self.view_cache.get_mut() = Some(filtered);
+                }
+            } else {
+                *self.view_cache.get_mut() = None;
+            }
+        } else if let Some(indices) = prior_cache {
+            *self.view_cache.get_mut() = Some(indices);
         }
         if self.selected.is_some_and(|id| !self.is_visible_id(id)) {
             self.selected = None;
@@ -664,6 +679,155 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_narrowing_unicode_prefix_query_with_crate_switch_and_member_invalidation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+
+        let track1_path = dir.path().join("Éclair.wav");
+        let track2_path = dir.path().join("École.wav");
+        let track3_path = dir.path().join("Beta.wav");
+
+        library.insert(vec![
+            track1_path.clone(),
+            track2_path.clone(),
+            track3_path.clone(),
+        ]);
+
+        library.set_metadata(
+            &track1_path,
+            crate::track_metadata::TrackMetadata {
+                title: "Éclair".into(),
+                ..Default::default()
+            },
+        );
+        library.set_metadata(
+            &track2_path,
+            crate::track_metadata::TrackMetadata {
+                title: "École".into(),
+                ..Default::default()
+            },
+        );
+        library.set_metadata(
+            &track3_path,
+            crate::track_metadata::TrackMetadata {
+                title: "Beta".into(),
+                ..Default::default()
+            },
+        );
+
+        let crate_id = library.create_crate("Test Crate").unwrap();
+        library
+            .add_paths_to_crate(crate_id, &[track1_path.clone(), track2_path.clone()])
+            .unwrap();
+
+        library.select_crate(crate_id).unwrap();
+
+        library.sort(0);
+
+        library.set_query("É".into());
+        let visible = library.visible();
+        let visible_ids: Vec<i32> = visible.iter().map(|t| t.id).collect();
+
+        assert!(library.view_cache.borrow().is_some());
+
+        assert_eq!(visible_ids, vec![2, 1]);
+
+        library.set_query("Éco".into());
+        assert!(library.view_cache.borrow().is_some());
+        let visible_narrow = library.visible();
+        let visible_ids_narrow: Vec<i32> = visible_narrow.iter().map(|t| t.id).collect();
+
+        assert!(library.view_cache.borrow().is_some());
+        assert_eq!(visible_ids_narrow, vec![2]);
+
+        library.select_crate(0).unwrap();
+        assert!(library.view_cache.borrow().is_none());
+
+        library.select_crate(crate_id).unwrap();
+        assert_eq!(library.visible().len(), 1);
+        assert!(library.view_cache.borrow().is_some());
+        library
+            .add_paths_to_crate(crate_id, std::slice::from_ref(&track3_path))
+            .unwrap();
+
+        assert!(library.view_cache.borrow().is_none());
+
+        library.set_query("É".into());
+        let visible_after_add = library.visible();
+        let visible_ids_after_add: Vec<i32> = visible_after_add.iter().map(|t| t.id).collect();
+
+        assert_eq!(visible_ids_after_add, vec![2, 1]);
+
+        library.set_query("Éco".into());
+        let visible_final = library.visible();
+        let visible_ids_final: Vec<i32> = visible_final.iter().map(|t| t.id).collect();
+        assert_eq!(visible_ids_final, vec![2]);
+    }
+
+    #[test]
+    fn test_search_cache_and_metadata_invalidation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+
+        let alpha_path = dir.path().join("Zzalpha.wav");
+        let alpine_path = dir.path().join("Zzalpine.wav");
+        let beta_path = dir.path().join("Beta.mp3");
+
+        library.insert(vec![
+            alpha_path.clone(),
+            alpine_path.clone(),
+            beta_path.clone(),
+        ]);
+
+        library.set_query("Zzal".into());
+        let visible = library.visible();
+
+        assert!(library.view_cache.borrow().is_some());
+        let visible_ids: Vec<i32> = visible.iter().map(|t| t.id).collect();
+        assert_eq!(visible_ids, vec![1, 2]);
+
+        library.set_query("Zzalp".into());
+        assert!(library.view_cache.borrow().is_some());
+        let visible_alp = library.visible();
+        let visible_ids_alp: Vec<i32> = visible_alp.iter().map(|t| t.id).collect();
+        assert_eq!(visible_ids_alp, vec![1, 2]); // Zzalpha and Zzalpine still match "Zzalp"
+
+        library.set_query("Zzalpha".into());
+        let visible_alpha = library.visible();
+        let visible_ids_alpha: Vec<i32> = visible_alpha.iter().map(|t| t.id).collect();
+        assert_eq!(visible_ids_alpha, vec![1]);
+
+        library.set_query("Zzalphaz".into());
+        let visible_alphaz = library.visible();
+        assert!(visible_alphaz.is_empty());
+        assert!(library.view_cache.borrow().is_some());
+
+        library.set_query("Zzal".into());
+        assert!(library.view_cache.borrow().is_none());
+        let visible_al = library.visible();
+        let visible_ids_al: Vec<i32> = visible_al.iter().map(|t| t.id).collect();
+        assert_eq!(visible_ids_al, vec![1, 2]);
+
+        let metadata = crate::track_metadata::TrackMetadata {
+            title: "Zzalpine".into(),
+            ..Default::default()
+        };
+        library.set_metadata(&beta_path, metadata);
+        assert!(library.view_cache.borrow().is_none());
+
+        library.set_query("Zzal".into());
+        let visible_al_new = library.visible();
+        let visible_ids_al_new: Vec<i32> = visible_al_new.iter().map(|t| t.id).collect();
+        assert_eq!(visible_ids_al_new, vec![1, 3, 2]);
+
+        library.set_query("nonexistent".into());
+        assert!(library.visible().is_empty());
+
+        library.set_query("α".into());
+        assert!(library.visible().is_empty());
+    }
+
     #[test]
     fn cancelled_import_does_not_inspect_or_return_partial_paths() {
         let cancel = crate::cancellation::Cancellation::default();
