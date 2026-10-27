@@ -115,6 +115,96 @@ struct TrackSearch {
     path: String,
 }
 
+// A bounded, lossy trigram index. Collisions and obsolete metadata bits can
+// produce extra candidates; matches_query remains the authority for matches.
+const SEARCH_BUCKETS: usize = 1024;
+const SEARCH_WORDS: usize = MAX_TRACKS.div_ceil(64);
+
+struct SearchIndex {
+    buckets: Vec<Vec<u64>>,
+    disabled: bool,
+}
+
+impl Default for SearchIndex {
+    fn default() -> Self {
+        Self {
+            buckets: (0..SEARCH_BUCKETS).map(|_| Vec::new()).collect(),
+            disabled: false,
+        }
+    }
+}
+
+impl SearchIndex {
+    fn bucket(gram: &[u8]) -> usize {
+        let hash = gram.iter().fold(2166136261_u32, |hash, byte| {
+            (hash ^ u32::from(*byte)).wrapping_mul(16777619)
+        });
+        hash as usize % SEARCH_BUCKETS
+    }
+
+    fn add(&mut self, index: usize, search: &TrackSearch) {
+        if self.disabled {
+            return;
+        }
+        let word = index / 64;
+        debug_assert!(word < SEARCH_WORDS);
+        for value in [
+            &search.title,
+            &search.artist,
+            &search.album,
+            &search.name,
+            &search.path,
+        ] {
+            for gram in value.as_bytes().windows(3) {
+                let bucket = &mut self.buckets[Self::bucket(gram)];
+                if bucket.len() <= word {
+                    let needed = word + 1 - bucket.len();
+                    if bucket.try_reserve(needed).is_err() {
+                        self.buckets.clear();
+                        self.disabled = true;
+                        return;
+                    }
+                    bucket.resize(word + 1, 0);
+                }
+                bucket[word] |= 1_u64 << (index % 64);
+            }
+        }
+    }
+
+    // Each byte trigram of a matching UTF-8 substring must occur in the
+    // field too. Hash collisions are filtered by the exact predicate later.
+    fn candidates(&self, query: &str, count: usize) -> Option<Vec<usize>> {
+        if self.disabled || query.len() < 3 {
+            return None;
+        }
+        let mut buckets = Vec::with_capacity(3);
+        for gram in query.as_bytes().windows(3) {
+            let bucket = Self::bucket(gram);
+            if !buckets.contains(&bucket) {
+                buckets.push(bucket);
+            }
+            if buckets.len() == 3 {
+                break;
+            }
+        }
+        let mut result = Vec::new();
+        for word in 0..count.div_ceil(64) {
+            let mut bits = u64::MAX;
+            for &bucket in &buckets {
+                bits &= self.buckets[bucket].get(word).copied().unwrap_or(0);
+            }
+            while bits != 0 {
+                let index = word * 64 + bits.trailing_zeros() as usize;
+                if index < count {
+                    result.push(index);
+                }
+                bits &= bits - 1;
+            }
+        }
+        Some(result)
+    }
+}
+
 impl Track {
     fn refresh_search(&mut self) {
         self.search = TrackSearch {
@@ -225,6 +315,7 @@ pub struct Library {
     keys: HashMap<PathBuf, usize>,
     id_indices: HashMap<i32, usize>,
     view_cache: std::cell::RefCell<Option<Vec<usize>>>,
+    search_index: SearchIndex,
     query: String,
     selected: Option<i32>,
     sort_field: i32,
@@ -469,6 +560,7 @@ impl Library {
             if self.tracks[index].metadata != metadata {
                 self.tracks[index].metadata = metadata;
                 self.tracks[index].refresh_search();
+                self.search_index.add(index, &self.tracks[index].search);
                 self.mark_track(index);
             }
         }
@@ -500,6 +592,10 @@ impl Library {
             track.saved_loops = saved.saved_loops;
             library.id_indices.insert(track.id, library.tracks.len());
             library.tracks.push(track);
+            let index = library.tracks.len() - 1;
+            library
+                .search_index
+                .add(index, &library.tracks[index].search);
             if changed {
                 library.mark_track(library.tracks.len() - 1);
             }
@@ -563,7 +659,9 @@ impl Library {
             self.keys.insert(identity(&path), self.tracks.len());
             self.id_indices.insert(id, self.tracks.len());
             self.tracks.push(Track::new(id, path, true));
-            self.mark_track(self.tracks.len() - 1);
+            let index = self.tracks.len() - 1;
+            self.search_index.add(index, &self.tracks[index].search);
+            self.mark_track(index);
         }
         self.tracks.len() - before
     }
@@ -630,11 +728,19 @@ impl Library {
     }
     fn build_visible(&self) -> Vec<&Track> {
         let members = self.scope_members();
-        let mut tracks: Vec<&Track> = self
-            .tracks
-            .iter()
-            .filter(|track| self.matches_visible(track, members))
-            .collect();
+        let candidates = self.search_index.candidates(&self.query, self.tracks.len());
+        let mut tracks: Vec<&Track> = match candidates {
+            Some(indices) => indices
+                .into_iter()
+                .map(|i| &self.tracks[i])
+                .filter(|track| self.matches_visible(track, members))
+                .collect(),
+            None => self
+                .tracks
+                .iter()
+                .filter(|track| self.matches_visible(track, members))
+                .collect(),
+        };
 
         tracks.sort_by(|a, b| {
             a.view_sort_key(self.sort_field)
@@ -690,6 +796,79 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trigram_index_preserves_exact_search_on_mutations_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+        let paths: Vec<_> = (0..1000)
+            .map(|n| dir.path().join(format!("track-{n:04}.wav")))
+            .collect();
+        library.insert(paths.clone());
+        library.set_metadata(
+            &paths[17],
+            crate::track_metadata::TrackMetadata {
+                title: "Éclair %_ sample".into(),
+                ..Default::default()
+            },
+        );
+        let crate_id = library.create_crate("Test").unwrap();
+        library
+            .add_paths_to_crate(crate_id, &[paths[17].clone(), paths[18].clone()])
+            .unwrap();
+        for scope in [0, crate_id] {
+            library.select_crate(scope).unwrap();
+            for query in ["", "é", "Écl", "%_", "track-001", "not-present", "sample"] {
+                library.set_query(query.into());
+                for field in 0..6 {
+                    library.sort(field);
+                    let indexed: Vec<_> = library.visible().iter().map(|t| t.id).collect();
+                    library.search_index.disabled = true;
+                    *library.view_cache.get_mut() = None;
+                    let linear: Vec<_> = library.visible().iter().map(|t| t.id).collect();
+                    assert_eq!(
+                        indexed, linear,
+                        "query {query:?}, field {field}, scope {scope}"
+                    );
+                    library.search_index.disabled = false;
+                    *library.view_cache.get_mut() = None;
+                }
+            }
+        }
+        let candidates = library
+            .search_index
+            .candidates("éclair", library.len())
+            .unwrap();
+        assert!(candidates.contains(&17));
+        assert!(candidates.len() < library.len());
+        library.set_metadata(
+            &paths[17],
+            crate::track_metadata::TrackMetadata {
+                title: "Neuer Titel".into(),
+                ..Default::default()
+            },
+        );
+        library.set_query("neuer titel".into());
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![18]
+        );
+        library.set_query("éclair".into());
+        assert!(library.visible().is_empty());
+        let mut restored = Library::restore(library.catalog()).unwrap();
+        restored.select_crate(crate_id).unwrap();
+        restored.set_query("neuer titel".into());
+        assert_eq!(
+            restored.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![18]
+        );
+        library.search_index.disabled = true;
+        library.set_query("neuer titel".into());
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![18]
+        );
+    }
+
     #[test]
     fn test_missing_cache_behavior_on_real_library() {
         let dir = tempfile::tempdir().unwrap();
@@ -945,6 +1124,12 @@ mod tests {
         let profile = tempfile::tempdir().unwrap();
         let mut library = Library::default();
         library.insert((0..MAX_TRACKS).map(|i| profile.path().join(format!("{i}.wav"))));
+        library.set_query("99999.wav".into());
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![100_000]
+        );
+        library.set_query(String::new());
         library.acknowledge(library.revision());
         assert!(!library.has_changes());
         let path = profile.path().join("0.wav");
