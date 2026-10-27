@@ -2,6 +2,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 pub const MAX_IMPORT: usize = 5000;
@@ -120,6 +121,7 @@ struct TrackSearch {
 const SEARCH_BUCKETS: usize = 1024;
 const SEARCH_WORDS: usize = MAX_TRACKS.div_ceil(64);
 
+#[derive(Clone)]
 struct SearchIndex {
     buckets: Vec<Vec<u64>>,
     disabled: bool,
@@ -207,13 +209,13 @@ impl SearchIndex {
 
 impl Track {
     fn refresh_search(&mut self) {
-        self.search = TrackSearch {
+        self.search = Arc::new(TrackSearch {
             title: self.metadata.title.to_lowercase(),
             artist: self.metadata.artist.to_lowercase(),
             album: self.metadata.album.to_lowercase(),
             name: self.name.to_lowercase(),
             path: self.path.to_string_lossy().to_lowercase(),
-        };
+        });
     }
 
     fn matches_query(&self, query: &str) -> bool {
@@ -248,6 +250,79 @@ impl Track {
     }
 }
 
+// Immutable projection used by the background view worker. Text is shared
+// with the library and remains valid when a newer metadata revision arrives.
+struct SearchRecord {
+    id: i32,
+    search: Arc<TrackSearch>,
+    has_title: bool,
+    format: String,
+    duration: Option<u64>,
+    in_scope: bool,
+}
+
+pub(crate) struct SearchProjection {
+    tracks: Vec<SearchRecord>,
+    index: SearchIndex,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct SearchSpec {
+    pub generation: u64,
+    pub revision: u64,
+    pub scope: i32,
+    pub query: String,
+    pub field: i32,
+    pub descending: bool,
+}
+
+impl SearchProjection {
+    pub(crate) fn search(&self, spec: &SearchSpec) -> Vec<i32> {
+        let candidates = self.index.candidates(&spec.query, self.tracks.len());
+        let all = 0..self.tracks.len();
+        let mut matches: Vec<&SearchRecord> = match candidates {
+            Some(indices) => indices
+                .into_iter()
+                .map(|i| &self.tracks[i])
+                .filter(|t| t.matches(&spec.query))
+                .collect(),
+            None => all
+                .map(|i| &self.tracks[i])
+                .filter(|t| t.matches(&spec.query))
+                .collect(),
+        };
+        matches.sort_by(|a, b| a.sort_key(spec.field).cmp(&b.sort_key(spec.field)));
+        if spec.descending {
+            matches.reverse();
+        }
+        matches.into_iter().map(|track| track.id).collect()
+    }
+}
+
+impl SearchRecord {
+    fn matches(&self, query: &str) -> bool {
+        self.in_scope
+            && (query.is_empty()
+                || self.search.title.contains(query)
+                || self.search.artist.contains(query)
+                || self.search.album.contains(query)
+                || self.search.name.contains(query)
+                || self.search.path.contains(query))
+    }
+    fn sort_key(&self, field: i32) -> (&str, Option<u64>, i32) {
+        let key = match field {
+            1 => self.format.as_str(),
+            2 => self.search.path.as_str(),
+            3 => self.search.artist.as_str(),
+            4 => self.search.album.as_str(),
+            5 => "",
+            _ if self.has_title => self.search.title.as_str(),
+            _ => self.search.name.as_str(),
+        };
+        (key, if field == 5 { self.duration } else { None }, self.id)
+    }
+}
+
 pub struct Track {
     pub id: i32,
     pub path: PathBuf,
@@ -258,7 +333,7 @@ pub struct Track {
     pub grid: Option<crate::beatgrid::BeatGrid>,
     pub hot_cues: crate::hot_cues::HotCues,
     pub saved_loops: crate::saved_loops::SavedLoops,
-    search: TrackSearch,
+    search: Arc<TrackSearch>,
 }
 impl Track {
     fn saved(&self) -> SavedTrack {
@@ -298,7 +373,7 @@ impl Track {
             grid: None,
             hot_cues: Default::default(),
             saved_loops: Default::default(),
-            search: TrackSearch::default(),
+            search: Arc::new(TrackSearch::default()),
         };
         track.refresh_search();
         track
@@ -671,7 +746,7 @@ impl Library {
     pub fn set_query(&mut self, query: String) {
         let normalized = query.trim().to_lowercase();
         let prior_cache = self.view_cache.get_mut().take();
-        let extends = normalized.starts_with(&self.query);
+        let extends = self.tracks.len() < 50_000 && normalized.starts_with(&self.query);
         if self.query != normalized {
             self.query = normalized;
             if extends {
@@ -703,6 +778,40 @@ impl Library {
             self.descending = false;
         }
     }
+    pub(crate) fn search_spec(&self, generation: u64) -> SearchSpec {
+        SearchSpec {
+            generation,
+            revision: self.revision,
+            scope: self.active_crate,
+            query: self.query.clone(),
+            field: self.sort_field,
+            descending: self.descending,
+        }
+    }
+
+    pub(crate) fn search_projection(&self) -> SearchProjection {
+        let members = self.scope_members();
+        SearchProjection {
+            tracks: self
+                .tracks
+                .iter()
+                .map(|t| SearchRecord {
+                    id: t.id,
+                    search: Arc::clone(&t.search),
+                    has_title: !t.metadata.title.is_empty(),
+                    format: t.format.clone(),
+                    duration: t.metadata.duration_ms,
+                    in_scope: self.active_crate == 0 || members.is_some_and(|m| m.contains(&t.id)),
+                })
+                .collect(),
+            index: self.search_index.clone(),
+        }
+    }
+
+    pub(crate) fn install_search_result(&mut self, ids: &[i32]) {
+        *self.view_cache.get_mut() = Some(ids.iter().map(|id| self.id_indices[id]).collect());
+    }
+
     pub fn track_by_id(&self, id: i32) -> Option<&Track> {
         self.id_indices
             .get(&id)
@@ -1290,6 +1399,13 @@ mod tests {
                 for field in 0..=5 {
                     for _ in 0..2 {
                         library.sort(field);
+                        let projection = library.search_projection();
+                        assert_eq!(
+                            projection.search(&library.search_spec(7)),
+                            reference(library),
+                            "background projection query {query}, field {field}, descending {}",
+                            library.descending
+                        );
                         assert_eq!(
                             library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
                             reference(library),

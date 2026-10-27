@@ -111,6 +111,61 @@ fn library_row(track: &crate::library::Track) -> crate::LibraryRow {
     }
 }
 
+const BACKGROUND_SEARCH_MIN_TRACKS: usize = 50_000;
+
+type SearchRequest = (
+    Arc<crate::library::SearchProjection>,
+    crate::library::SearchSpec,
+);
+type SearchResponse = (crate::library::SearchSpec, Vec<i32>);
+
+struct SearchWorker {
+    sender: mpsc::SyncSender<SearchRequest>,
+    receiver: Receiver<SearchResponse>,
+    pending: Option<SearchRequest>,
+    wanted: Option<crate::library::SearchSpec>,
+    projection: Option<(u64, u64, i32, Arc<crate::library::SearchProjection>)>,
+    published: Option<crate::library::SearchSpec>,
+}
+
+impl SearchWorker {
+    fn start() -> std::io::Result<Self> {
+        let (sender, requests) = mpsc::sync_channel::<SearchRequest>(1);
+        let (responses, receiver) = mpsc::sync_channel::<SearchResponse>(1);
+        std::thread::Builder::new()
+            .name("library-search".into())
+            .spawn(move || {
+                while let Ok((projection, spec)) = requests.recv() {
+                    let ids = projection.search(&spec);
+                    if responses.send((spec, ids)).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            sender,
+            receiver,
+            pending: None,
+            wanted: None,
+            projection: None,
+            published: None,
+        })
+    }
+
+    fn send_pending(&mut self) -> Result<(), &'static str> {
+        if let Some(request) = self.pending.take() {
+            match self.sender.try_send(request) {
+                Ok(()) => (),
+                Err(mpsc::TrySendError::Full(request)) => self.pending = Some(request),
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Err("Library search worker stopped")
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct AudioController {
     ui: slint::Weak<AppWindow>,
     engine: Rc<DualDeckEngine>,
@@ -118,6 +173,7 @@ pub struct AudioController {
     library_picker: LibraryPicker,
     library: Rc<RefCell<crate::library::Library>>,
     library_generation: Rc<Cell<u64>>,
+    search_worker: RefCell<Option<SearchWorker>>,
     persistence: RefCell<Option<crate::library_store::Worker>>,
     storage_ready: Cell<bool>,
     dirty: Cell<bool>,
@@ -168,6 +224,7 @@ impl AudioController {
             library_picker,
             library: Rc::new(RefCell::new(crate::library::Library::default())),
             library_generation: Rc::new(Cell::new(0)),
+            search_worker: RefCell::new(None),
             persistence: RefCell::new(None),
             storage_ready: Cell::new(true),
             dirty: Cell::new(false),
@@ -309,6 +366,9 @@ impl AudioController {
         let weak = Rc::downgrade(&controller);
         ui.on_move_library_selection(move |delta| {
             if let Some(c) = weak.upgrade() {
+                if c.search_in_progress() {
+                    return;
+                }
                 c.library.borrow_mut().move_selection(delta);
                 if let Some(ui) = c.ui.upgrade() {
                     ui.set_selected_track(c.library.borrow().selected_id());
@@ -1966,6 +2026,7 @@ impl AudioController {
         self.cancel_stale_nudges();
         self.apply_pending_pitch();
         self.poll_storage();
+        self.poll_search();
         let import = self
             .pending_import
             .borrow()
@@ -2115,12 +2176,146 @@ impl AudioController {
                 .collect::<Vec<_>>(),
         ))));
         ui.set_selected_crate(library.active_crate());
-        let visible = library.visible();
-        let rows: Vec<i32> = visible.iter().map(|track| track.id).collect();
+        if library.len() >= BACKGROUND_SEARCH_MIN_TRACKS {
+            let spec = library.search_spec(self.library_generation.get());
+            let mut worker_slot = self.search_worker.borrow_mut();
+            if worker_slot.is_none() {
+                match SearchWorker::start() {
+                    Ok(worker) => *worker_slot = Some(worker),
+                    Err(error) => {
+                        ui.set_status(format!("Cannot start library search: {error}").into());
+                        ui.set_library_rows(ModelRc::new(Rc::new(
+                            VecModel::<crate::LibraryRow>::default(),
+                        )));
+                        ui.set_library_count("Search unavailable".into());
+                        ui.set_library_empty("Search unavailable. Change search to retry.".into());
+                        return;
+                    }
+                }
+            }
+            let worker = worker_slot.as_mut().unwrap();
+            if worker.published.as_ref() == Some(&spec) && worker.wanted.is_none() {
+                drop(worker_slot);
+                drop(library);
+                self.publish_search_rows(None);
+                return;
+            }
+            if worker.wanted.as_ref() == Some(&spec) {
+                return;
+            }
+            let key = (spec.generation, spec.revision, spec.scope);
+            if !worker
+                .projection
+                .as_ref()
+                .is_some_and(|(g, r, c, _)| (*g, *r, *c) == key)
+            {
+                worker.projection =
+                    Some((key.0, key.1, key.2, Arc::new(library.search_projection())));
+            }
+            let projection = Arc::clone(&worker.projection.as_ref().unwrap().3);
+            worker.wanted = Some(spec.clone());
+            worker.pending = Some((projection, spec));
+            if let Err(error) = worker.send_pending() {
+                ui.set_status(error.into());
+                *worker_slot = None;
+                ui.set_library_rows(ModelRc::new(Rc::new(
+                    VecModel::<crate::LibraryRow>::default(),
+                )));
+                ui.set_library_count("Search unavailable".into());
+                ui.set_library_empty("Search unavailable. Change search to retry.".into());
+                return;
+            }
+            ui.set_library_count("Searching library…".into());
+            ui.set_library_rows(ModelRc::new(Rc::new(
+                VecModel::<crate::LibraryRow>::default(),
+            )));
+            ui.set_library_empty("Searching library…".into());
+            ui.set_selected_track(library.selected_id());
+            return;
+        }
+        if let Some(worker) = self.search_worker.borrow_mut().as_mut() {
+            worker.wanted = None;
+            worker.pending = None;
+            worker.published = None;
+            worker.projection = None;
+        }
+        drop(library);
+        self.publish_search_rows(None);
+    }
+
+    fn search_in_progress(&self) -> bool {
+        self.search_worker
+            .borrow()
+            .as_ref()
+            .is_some_and(|worker| worker.wanted.is_some())
+    }
+
+    fn poll_search(&self) {
+        let mut slot = self.search_worker.borrow_mut();
+        let Some(worker) = slot.as_mut() else {
+            return;
+        };
+        let mut accepted = None;
+        let mut reschedule = false;
+        let mut failed = false;
+        loop {
+            match worker.receiver.try_recv() {
+                Ok((spec, ids)) => {
+                    let current = self
+                        .library
+                        .borrow()
+                        .search_spec(self.library_generation.get());
+                    if worker.wanted.as_ref() == Some(&spec) {
+                        if current == spec {
+                            worker.wanted = None;
+                            worker.published = Some(spec);
+                            accepted = Some(ids);
+                        } else {
+                            worker.wanted = None;
+                            worker.pending = None;
+                            worker.published = None;
+                            reschedule = true;
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        if !failed && worker.send_pending().is_err() {
+            failed = true;
+        }
+        if failed {
+            *slot = None;
+        }
+        drop(slot);
+        if failed {
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_status("Library search worker stopped".into());
+                ui.set_library_count("Search unavailable".into());
+                ui.set_library_empty("Search unavailable. Change search to retry.".into());
+            }
+        } else if reschedule {
+            self.publish_library();
+        } else if let Some(ids) = accepted {
+            self.library.borrow_mut().install_search_result(&ids);
+            self.publish_search_rows(Some(ids));
+        }
+    }
+
+    fn publish_search_rows(&self, ids: Option<Vec<i32>>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let library = self.library.borrow();
+        let rows = ids.unwrap_or_else(|| library.visible().iter().map(|track| track.id).collect());
         ui.set_library_count(
             format!(
                 "{} / {} tracks ({} missing)",
-                visible.len(),
+                rows.len(),
                 library.scope_len(),
                 library.missing_count()
             )
@@ -2129,12 +2324,12 @@ impl AudioController {
         ui.set_library_empty(
             if library.len() == 0 {
                 "Add MP3/WAV files to your library"
-            } else if visible.is_empty()
+            } else if rows.is_empty()
                 && library.active_crate() != 0
                 && ui.get_library_query().is_empty()
             {
                 "This crate is empty. Add tracks or import files."
-            } else if visible.is_empty() {
+            } else if rows.is_empty() {
                 "No tracks match your search"
             } else {
                 ""
@@ -2151,6 +2346,7 @@ impl AudioController {
         })));
         ui.set_selected_track(library.selected_id());
     }
+
     fn refresh(&self) {
         let Some(ui) = self.ui.upgrade() else {
             return;
@@ -2810,6 +3006,14 @@ mod tests {
     #[test]
     fn large_library_headless_view_search_sort_and_selection_at_track_limit() {
         use slint::Model;
+        fn finish_search(c: &AudioController) {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while c.search_in_progress() {
+                assert!(Instant::now() < deadline, "search worker timed out");
+                c.tick();
+                std::thread::yield_now();
+            }
+        }
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
@@ -2830,6 +3034,7 @@ mod tests {
         let start = Instant::now();
         c.publish_library();
         let publish_time = start.elapsed();
+        finish_search(&c);
         let model = ui.get_library_rows();
         assert_eq!(model.row_count(), count);
         control(&ui, "Library track 1");
@@ -2848,6 +3053,7 @@ mod tests {
         let start = Instant::now();
         control(&ui, "Library search").set_accessible_value(format!("track-{:06}", count - 1));
         let search_time = start.elapsed();
+        finish_search(&c);
         let filtered = ui.get_library_rows();
         assert_eq!(filtered.row_count(), 1);
         assert_eq!(filtered.row_data(0).unwrap().id, count as i32);
@@ -2856,10 +3062,100 @@ mod tests {
         let start = Instant::now();
         control(&ui, "Library search").set_accessible_value("track");
         let broad_time = start.elapsed();
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), count);
         control(&ui, "Sort library by name").invoke_accessible_default_action();
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, count as i32);
         assert_eq!(ui.get_selected_track(), count as i32);
+
+        // Changes made while a result is in flight must trigger a new search,
+        // even if that change did not itself request a new library publication.
+        control(&ui, "Library search").set_accessible_value("unique-live-title");
+        assert!(c.search_in_progress());
+        let changed_path = dir.path().join("track-000042.wav");
+        c.library.borrow_mut().set_metadata(
+            &changed_path,
+            crate::track_metadata::TrackMetadata {
+                title: "unique-live-title".into(),
+                ..Default::default()
+            },
+        );
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 43);
+
+        // Several requests can be outstanding, but only the latest is shown.
+        control(&ui, "Library search").set_accessible_value("track-000001");
+        control(&ui, "Library search").set_accessible_value("track-000002");
+        control(&ui, "Library search").set_accessible_value("track-000003");
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 4);
+
+        control(&ui, "Library search").set_accessible_value("track-000004");
+        c.library_generation.set(c.library_generation.get() + 1);
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 5);
+
+        let (sender, receiver_end) = mpsc::sync_channel(1);
+        drop(receiver_end);
+        let (sender_end, receiver) = mpsc::sync_channel(1);
+        drop(sender_end);
+        *c.search_worker.borrow_mut() = Some(SearchWorker {
+            sender,
+            receiver,
+            pending: None,
+            wanted: None,
+            projection: None,
+            published: None,
+        });
+        control(&ui, "Library search").set_accessible_value("track-000005");
+        assert!(!c.search_in_progress());
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        assert!(ui.get_library_empty().contains("unavailable"));
+        control(&ui, "Library search").set_accessible_value("track-000006");
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 7);
+        let crate_id = c.library.borrow_mut().create_crate("search scope").unwrap();
+        c.library
+            .borrow_mut()
+            .add_paths_to_crate(crate_id, &[dir.path().join("track-000006.wav")])
+            .unwrap();
+        c.library.borrow_mut().select_crate(crate_id).unwrap();
+        c.publish_library();
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 7);
+        control(&ui, "Library search").set_accessible_value("track");
+        c.library
+            .borrow_mut()
+            .add_paths_to_crate(crate_id, &[dir.path().join("track-000007.wav")])
+            .unwrap();
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 2);
+
+        control(&ui, "Library search").set_accessible_value("track-000007");
+        *c.library.borrow_mut() = crate::library::Library::default();
+        c.library_generation.set(c.library_generation.get() + 1);
+        c.publish_library();
+        assert!(!c.search_in_progress());
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+
+        // Exercise disconnect while polling, independently of a failed send.
+        let (sender, _request_receiver) = mpsc::sync_channel(1);
+        let (response_sender, receiver) = mpsc::sync_channel(1);
+        drop(response_sender);
+        *c.search_worker.borrow_mut() = Some(SearchWorker {
+            sender,
+            receiver,
+            pending: None,
+            wanted: None,
+            projection: None,
+            published: None,
+        });
+        c.poll_search();
+        assert!(c.search_worker.borrow().is_none());
+        assert!(ui.get_library_empty().contains("unavailable"));
         println!("100,000 synthetic tracks: insert {insert_time:?}, cold publish {publish_time:?}, selective query {search_time:?}, broad query {broad_time:?}; viewport requested {requested} rows");
     }
 

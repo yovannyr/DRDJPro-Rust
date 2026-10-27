@@ -64,6 +64,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Bereits sortierte Treffer bei Verfeinerung der Suche weiterverwenden; Erweiterungen und Katalogänderungen bauen die Sicht neu auf.
 - [x] ✅ Anzahl fehlender Dateien bei unverändertem Bibliotheksbereich zwischenspeichern und bei Änderungen neu bestimmen.
 - [x] ✅ Begrenzter In-Memory-Trigramm-Kandidatenindex mit exakter Nachprüfung und linearem Fallback; Aufbau und Ansicht bleiben synchron.
+- [x] ✅ Bibliothekssuche und Sortierung ab 50.000 Tracks im Hintergrund mit revisionsgebundener Ergebnisprüfung; Projektionsaufbau bleibt synchron.
 - [ ] ☐ Weitere Bibliotheksskalierung: indexierte/paginierte Suche und große Ansichten unter realistischen Bedingungen qualifizieren.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
@@ -92,7 +93,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 
 ## Next library-search architecture slice (2026-10-27)
 
-The current synchronous view uses a bounded in-memory trigram candidate index for queries of at least three UTF-8 bytes and still filters and sorts candidates on the UI thread. A persisted SQLite index alone cannot represent unsaved or failed-save edits. The next search slice should introduce a separately synchronized background search projection with its own catalog generation, search revision and request identity, preserve current substring/sort/crate semantics, discard stale results and keep worker communication bounded. Search changes must not consume persistence acknowledgements; later index work can build on that projection. Validate delayed results, unsaved edits, worker failure, selection and 100,000-track headless behavior before marking indexed/paged search complete. This is a proposal, not an implemented worker or performance acceptance.
+At 50,000 tracks and above, the view worker filters and sorts an immutable in-memory projection with a bounded trigram index. Smaller libraries continue synchronously. Creating a fresh projection on catalog or scope changes still copies records and the index on the UI thread; search completion is asynchronous and uses generation/revision/query/sort/scope validation. A persisted SQLite index alone cannot represent unsaved or failed-save edits. The next search slice should introduce a separately synchronized background search projection with its own catalog generation, search revision and request identity, preserve current substring/sort/crate semantics, discard stale results and keep worker communication bounded. Search changes must not consume persistence acknowledgements; later index work can build on that projection. Validate delayed results, unsaved edits, worker failure, selection and 100,000-track headless behavior before marking indexed/paged search complete. This is a proposal, not an implemented worker or performance acceptance.
 
 ## Reference
 .NET repository: https://github.com/yovannyr/DRDJ
