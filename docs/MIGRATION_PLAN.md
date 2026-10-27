@@ -30,7 +30,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 188 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 189 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -57,7 +57,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Crate-Mitgliedschaften revisionsgebunden einzeln speichern; Rollback, parallele Änderungen und Neustart geprüft.
 - [x] ✅ Crate-Strukturänderungen revisionsgebunden einzeln speichern, einschließlich Namenswechsel, ID-Fortschreibung und Rollback.
 - [x] ✅ Bibliothekszeilen im Slint-ListView bedarfsweise erzeugen; 20.000 Tracks headless auf begrenzte Zeilenanforderungen geprüft.
-- [ ] ☐ Weitere Bibliotheksskalierung: katalogweite Filter-/Sortierarbeit reduzieren und große Ansichten unter realistischen Bedingungen qualifizieren.
+- [x] ✅ Unveränderte Bibliotheksansichten wiederverwenden; bei Änderungen an Suche, Sortierung, Tracks oder Crate-Mitgliedschaften neu berechnen.
+- [ ] ☐ Weitere Bibliotheksskalierung: neue Filter-/Sortieranfragen für große Kataloge optimieren und Ansichten unter realistischen Bedingungen qualifizieren.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
 - [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
@@ -462,3 +463,10 @@ The next part of the same first open scaling item replaces structural crate snap
 The next part of the first open scaling item keeps the existing Slint ListView and replaces eager construction of every LibraryRow with an immutable ordered ID model. A validated ID-to-index lookup retrieves and formats only requested rows. Weak references avoid a UI/controller ownership cycle, and a catalog generation prevents retained old models from returning rows from a replacement catalog. Filtering, sorting, selection and counts retain their existing behavior. Search/sort still traverse and sort the in-memory catalog and the ordered ID vector is rebuilt on publish; this is not SQL paging or constant-time filtering.
 
 A 20,000-track headless fixture requested two model rows for its visible viewport; sorting, filtering, borrow contention and stale models after restore were checked. In the same local test, preparing IDs from an already sorted visible list used one allocation versus200,001 for eagerly materializing all row objects. The comparison excludes filtering, sorting, index construction and rendering; it is not a whole-refresh or maximum-scale latency measurement. Native scroll/render performance and reduced catalogue-wide filter/sort work remain open, along with the next plan acceptance gates. Review and full-check evidence are recorded in LOCAL_VALIDATION.md.
+
+
+## Reuse unchanged library views (2026-10-27)
+
+The next bounded step caches the current ordered filtered track indices. Repeated reads with the same normalized query, sort and crate scope reuse that result, avoiding rebuilding sort keys and sorting. Track changes, actual membership edits, active-crate changes, changed normalized queries and sort actions invalidate the cache; the next read rebuilds using the existing filter/sort semantics. Structural edits that do not change scope/members do not affect track order. Cached reads still traverse the result and allocate a reference vector; new queries and changed views still filter/sort the full in-memory catalog, and track mutations conservatively invalidate even when they change only cues/grids. No SQL paging or native responsiveness claim is made.
+
+In a local 10,000-track unit fixture the first view build used10,016 allocations and a repeated cached view used1. Tests cover normalization, sorting, metadata, active crate/membership, deletion and new imports. This is a comparison of view construction only, not an end-to-end GUI, native scroll or maximum-scale latency measurement. Remaining cold-search/sort optimization and real-environment qualification stay at this point in the plan. Review and final checks are in LOCAL_VALIDATION.md.

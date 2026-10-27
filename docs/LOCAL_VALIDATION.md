@@ -774,3 +774,16 @@ The existing Slint ListView receives a model holding ordered IDs and weak refere
 
 
 Independent reviewer configured gpt-6.1-sol / medium accepted runtime, measurement and documentation and independently reproduced lazy test1/1(exit0), 2 viewport row requests and1 versus200001 preparation allocations. Final cargo fmt --check and cargo clippy --all-targets -- -D warnings passed(exit0;Clippy9.08s); cargo test passed188/188(exit0;17.49s;0failed/ignored); cargo build --release passed(exit0;39.80s). Rebuilt MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. No runtime/test changes followed accepted review and final checks; result/count documentation only. Commit/push identity is in Git history.
+
+
+## QWEN / cached unchanged library views (2026-10-27)
+
+Started from clean2adb4f8, continuing the same first open library-scaling plan item. QWEN API reported qwen-3.6-35b-sovereign (thinking disabled). A larger request failed HTTP502; smaller requests generated the cache wrapper and invalidation fragments. Codex inspected/placed them, retained the exact existing filter/sort implementation as build_visible, wrote independent tests/docs and coordinated review. No model substitution or credential/base URL/raw response disclosure; backend identity is API-reported only.
+
+`cargo test cached_library_view -- --nocapture` passed1/1(exit0;0.16s after11.76s compile). A 10,000-track unit fixture measured10,016 allocations for cold view construction and1 for a repeated cached read; it checks query normalization, changed search, ascending/descending order, metadata changes, active-crate switching, additions/removals, deletion and new track insertion. This compares view construction in this fixture only, not database, GUI rendering, sorting after a changed query or native latency. Existing lazy model test passed1/1(exit0;0.49s) after adding the cache. Invalidation is conservative on all track mutations; warm reads still create result refs and the GUI still rebuilds an ordered ID vector. No SQL paging or native visual/listening acceptance is claimed. Review/full checks follow.
+
+
+Initial strict Clippy failed(exit101) on `field_reassign_with_default` in the independent test fixture. The fixture was changed to a struct initializer with `..Default::default()`; no lint was suppressed. Final full gates are rerun on that corrected test.
+
+
+Independent reviewer configured gpt-6.1-sol / medium accepted runtime, tests and documentation; `cargo test library::tests -- --nocapture` passed7/7(exit0), reproducing10016 cold versus1 cached allocations. Final corrected-test cargo fmt --check and strict clippy --all-targets -- -D warnings passed(exit0;Clippy5.17s); full cargo test passed189/189(exit0;17.28s;0failed/ignored); cargo build --release passed(exit0;51.68s). Rebuilt MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. No runtime changes followed review; the test-only Clippy initializer correction and result/count documentation followed. Commit/push identity is in Git history.

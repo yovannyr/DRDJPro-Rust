@@ -168,6 +168,7 @@ pub struct Library {
     last_id: i32,
     keys: HashMap<PathBuf, usize>,
     id_indices: HashMap<i32, usize>,
+    view_cache: std::cell::RefCell<Option<Vec<usize>>>,
     query: String,
     selected: Option<i32>,
     sort_field: i32,
@@ -187,6 +188,7 @@ pub(crate) fn identity(path: &Path) -> PathBuf {
 }
 impl Library {
     fn mark_track(&mut self, index: usize) {
+        *self.view_cache.get_mut() = None;
         self.revision = self
             .revision
             .checked_add(1)
@@ -206,6 +208,7 @@ impl Library {
         tracks: impl IntoIterator<Item = i32>,
         present: bool,
     ) {
+        *self.view_cache.get_mut() = None;
         self.revision = self
             .revision
             .checked_add(1)
@@ -335,7 +338,10 @@ impl Library {
         if id != 0 && !self.crates.entries.iter().any(|c| c.id == id) {
             return Err("Crate no longer exists".into());
         }
-        self.active_crate = id;
+        if self.active_crate != id {
+            self.active_crate = id;
+            *self.view_cache.get_mut() = None;
+        }
         self.set_query(self.query.clone());
         Ok(())
     }
@@ -496,7 +502,11 @@ impl Library {
         self.tracks.len()
     }
     pub fn set_query(&mut self, query: String) {
-        self.query = query.trim().to_lowercase();
+        let normalized = query.trim().to_lowercase();
+        if self.query != normalized {
+            self.query = normalized;
+            *self.view_cache.get_mut() = None;
+        }
         if self
             .selected
             .is_some_and(|id| !self.visible().iter().any(|track| track.id == id))
@@ -505,6 +515,7 @@ impl Library {
         }
     }
     pub fn sort(&mut self, field: i32) {
+        *self.view_cache.get_mut() = None;
         let field = field.clamp(0, 5);
         if field == self.sort_field {
             self.descending = !self.descending;
@@ -519,6 +530,24 @@ impl Library {
             .and_then(|index| self.tracks.get(*index))
     }
     pub fn visible(&self) -> Vec<&Track> {
+        let missing = self.view_cache.borrow().is_none();
+        if missing {
+            let id_indices = self
+                .build_visible()
+                .iter()
+                .map(|track| self.id_indices[&track.id])
+                .collect();
+            *self.view_cache.borrow_mut() = Some(id_indices);
+        }
+        self.view_cache
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|&i| &self.tracks[i])
+            .collect()
+    }
+    fn build_visible(&self) -> Vec<&Track> {
         let members = self.scope_members();
         let mut tracks: Vec<_> = self
             .tracks
@@ -660,6 +689,72 @@ mod tests {
         assert!(!library.has_changes());
         println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
     }
+    #[test]
+    fn cached_library_view_reuses_order_and_invalidates_on_query_sort_metadata_and_crates() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+        let size = 10_000;
+        library.insert((0..size).map(|i| dir.path().join(format!("track-{i:05}.wav"))));
+        let cold = crate::looping::counted_allocations(|| {
+            std::hint::black_box(library.visible());
+        });
+        let cached = crate::looping::counted_allocations(|| {
+            std::hint::black_box(library.visible());
+        });
+        assert!(cold > size);
+        assert!(cached <= 2);
+        println!("10,000-track view: cold {cold} allocations; cached {cached}");
+        assert_eq!(library.visible()[0].id, 1);
+        library.set_query(" TRACK-00001 ".into());
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![2]
+        );
+        library.set_query(String::new());
+        library.sort(0);
+        assert_eq!(library.visible()[0].id, size as i32);
+        library.sort(0);
+        let metadata = crate::track_metadata::TrackMetadata {
+            title: "AAA first".into(),
+            ..Default::default()
+        };
+        library.set_metadata(&dir.path().join("track-09999.wav"), metadata);
+        assert_eq!(library.visible()[0].id, size as i32);
+        library.set_query("AAA".into());
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![size as i32]
+        );
+        library.set_query(String::new());
+        let crate_id = library.create_crate("Set").unwrap();
+        let first = dir.path().join("track-00000.wav");
+        let second = dir.path().join("track-00001.wav");
+        library
+            .add_paths_to_crate(crate_id, std::slice::from_ref(&first))
+            .unwrap();
+        library.select_crate(crate_id).unwrap();
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![1]
+        );
+        library.add_paths_to_crate(crate_id, &[second]).unwrap();
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        library.select(1);
+        assert!(library.remove_selected_from_crate().unwrap());
+        assert_eq!(
+            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![2]
+        );
+        library.delete_crate(crate_id).unwrap();
+        assert_eq!(library.active_crate(), 0);
+        assert_eq!(library.visible().len(), size);
+        library.insert([dir.path().join("new.wav")]);
+        assert_eq!(library.visible().len(), size + 1);
+    }
+
     #[test]
     fn membership_deltas_survive_inflight_ack_and_coalesce_without_catalog_snapshot() {
         let dir = tempfile::tempdir().unwrap();
