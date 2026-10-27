@@ -167,6 +167,7 @@ pub struct Library {
     tracks: Vec<Track>,
     last_id: i32,
     keys: HashMap<PathBuf, usize>,
+    id_indices: HashMap<i32, usize>,
     query: String,
     selected: Option<i32>,
     sort_field: i32,
@@ -429,6 +430,7 @@ impl Library {
             track.grid = saved.grid;
             track.hot_cues = saved.hot_cues;
             track.saved_loops = saved.saved_loops;
+            library.id_indices.insert(track.id, library.tracks.len());
             library.tracks.push(track);
             if changed {
                 library.mark_track(library.tracks.len() - 1);
@@ -484,6 +486,7 @@ impl Library {
             };
             self.last_id = id;
             self.keys.insert(identity(&path), self.tracks.len());
+            self.id_indices.insert(id, self.tracks.len());
             self.tracks.push(Track::new(id, path, true));
             self.mark_track(self.tracks.len() - 1);
         }
@@ -509,6 +512,11 @@ impl Library {
             self.sort_field = field;
             self.descending = false;
         }
+    }
+    pub fn track_by_id(&self, id: i32) -> Option<&Track> {
+        self.id_indices
+            .get(&id)
+            .and_then(|index| self.tracks.get(*index))
     }
     pub fn visible(&self) -> Vec<&Track> {
         let members = self.scope_members();

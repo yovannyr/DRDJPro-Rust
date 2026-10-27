@@ -32,7 +32,7 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Cue-point panel | 48, 58 | Overview sections 48, 58 | Partial data foundation: eight fixed per-track positions/names/colors persist in SQLite schema 5. Eight pads per deck now set empty slots and recall occupied slots without changing Play/Pause; explicit slot deletion exists. Name/RGB Save/Cancel editing and named/numbered overview/detail markers now exist. Quantization and controller feedback remain open. Existing Cue-to-zero is not hot-cue parity. |
 | Flip/loop panels | 31, 33, 56 | Overview numbered sections | Open: flip sequences, auto-loop UI and saved loops; require separate engine and persistence slices. |
 | Library actions/search | 36, 37, 38, 39, 40 | Manual p. 30 | Open: Search, History, Prepare, Browse, Files. Native file picker is not a library browser. |
-| Library table/view | 45, 49 | Manual pp. 39–40; overview screenshot | Open: large track table, sort headers, selection and list/art view. Current library footer is a status placeholder. |
+| Library table/view | 45, 49 | Manual pp. 39–40; overview screenshot | Partial: track table, search, sort headers, selection and lazy row materialization exist. Catalog-wide filtering/sorting, native large-list performance and alternate list/art view remain open. |
 | Crate navigation | 51, 52, 53, 54 | Overview numbered sections | Partial: flat persistent crate navigation/create/rename/delete, set membership and active-crate import are implemented. Subcrates/smart crates and iTunes/Serato-format compatibility remain open. |
 
 ### Concrete behavior to preserve from the manual
@@ -297,3 +297,8 @@ A focus border and accessible waveform description identify the scope/keys; the 
 The mixer row now has BUS PEAK with dBFS text and a linear-amplitude bar. Measurement is the maximum absolute sample across all bus channels in the latest completed ceil(sample_rate/20)-frame window (50ms at ordinary supported rates). It is after both channel faders and the crossfader, before the outer/device mixer. No samples are changed. No completed window displays a dash; silence is -infinity dBFS; non-finite source samples invalidate their entire window and display BUS INVALID. At or above1.0 the bar is full and uses warning color; this is a digital full-scale warning, not a verified clipping detector. It does not implement a limiter, master gain, per-channel meters, true peak, RMS or loudness.
 
 The accessible description identifies the latest completed producer window. With output stopped the previous value remains; there is no fresh-device-time claim, animated decay, peak hold or latched clip alarm. Only the latest window is retained, so GUI stalls can miss intervening peaks or invalid windows. The bar is linear amplitude, not a calibrated dB scale. Headless tests cover real post-fader sample values, silence/pause, invalid/full-scale captions and mixer bounds at850x740/1280x860. Native contrast/readability, screen-reader behavior and physical audio output remain open.
+
+
+## Lazy library list rows (2026-10-27)
+
+The existing ListView now obtains LibraryRow data on demand from an ordered stable-ID model instead of eagerly allocating all row strings on publication. Headless tests cover20,000 tracks, viewport requests, search/sort, catalog replacement and safe controller lifetime. Sorting/filtering still process the full in-memory catalog and the model rebuilds its ID list. Headless viewport and allocation evidence is not native scrolling/rendering, accessibility-reader, visual or platform acceptance.

@@ -61,12 +61,63 @@ struct DetailCache {
 }
 pub type TrackPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub type LibraryPicker = Arc<dyn Fn() -> Option<Vec<PathBuf>> + Send + Sync>;
+struct LibraryRows {
+    library: std::rc::Weak<std::cell::RefCell<crate::library::Library>>,
+    generation: std::rc::Weak<std::cell::Cell<u64>>,
+    expected_generation: u64,
+    rows: Vec<i32>,
+    #[cfg(test)]
+    row_data_calls: Cell<usize>,
+}
+impl slint::Model for LibraryRows {
+    type Data = crate::LibraryRow;
+
+    fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn row_data(&self, row: usize) -> Option<Self::Data> {
+        #[cfg(test)]
+        self.row_data_calls.set(self.row_data_calls.get() + 1);
+        let id = *self.rows.get(row)?;
+        let generation = self.generation.upgrade()?;
+        if generation.get() != self.expected_generation {
+            return None;
+        }
+        let library = self.library.upgrade()?;
+        let library = library.try_borrow().ok()?;
+        let track = library.track_by_id(id)?;
+        Some(library_row(track))
+    }
+
+    fn model_tracker(&self) -> &dyn slint::ModelTracker {
+        &()
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+fn library_row(track: &crate::library::Track) -> crate::LibraryRow {
+    crate::LibraryRow {
+        id: track.id,
+        name: track.display_title().into(),
+        artist: track.metadata.artist.clone().into(),
+        album: track.metadata.album.clone().into(),
+        duration: track.metadata.duration_text().into(),
+        metadata_error: track.metadata.error.clone().unwrap_or_default().into(),
+        format: track.format.clone().into(),
+        path: track.path.to_string_lossy().into_owned().into(),
+        available: track.available,
+    }
+}
+
 pub struct AudioController {
     ui: slint::Weak<AppWindow>,
     engine: Rc<DualDeckEngine>,
     picker: TrackPicker,
     library_picker: LibraryPicker,
-    library: RefCell<crate::library::Library>,
+    library: Rc<RefCell<crate::library::Library>>,
+    library_generation: Rc<Cell<u64>>,
     persistence: RefCell<Option<crate::library_store::Worker>>,
     storage_ready: Cell<bool>,
     dirty: Cell<bool>,
@@ -115,7 +166,8 @@ impl AudioController {
             engine,
             picker,
             library_picker,
-            library: RefCell::new(crate::library::Library::default()),
+            library: Rc::new(RefCell::new(crate::library::Library::default())),
+            library_generation: Rc::new(Cell::new(0)),
             persistence: RefCell::new(None),
             storage_ready: Cell::new(true),
             dirty: Cell::new(false),
@@ -1696,6 +1748,12 @@ impl AudioController {
                             note,
                             backfill_error,
                         } = *loaded;
+                        self.library_generation.set(
+                            self.library_generation
+                                .get()
+                                .checked_add(1)
+                                .expect("Library generation overflow"),
+                        );
                         *self.library.borrow_mut() = library;
                         self.publish_library();
                         for id in [DeckId::A, DeckId::B] {
@@ -2058,20 +2116,7 @@ impl AudioController {
         ))));
         ui.set_selected_crate(library.active_crate());
         let visible = library.visible();
-        let rows: Vec<_> = visible
-            .iter()
-            .map(|track| crate::LibraryRow {
-                id: track.id,
-                name: track.display_title().into(),
-                artist: track.metadata.artist.clone().into(),
-                album: track.metadata.album.clone().into(),
-                duration: track.metadata.duration_text().into(),
-                metadata_error: track.metadata.error.clone().unwrap_or_default().into(),
-                format: track.format.clone().into(),
-                path: track.path.to_string_lossy().into_owned().into(),
-                available: track.available,
-            })
-            .collect();
+        let rows: Vec<i32> = visible.iter().map(|track| track.id).collect();
         ui.set_library_count(
             format!(
                 "{} / {} tracks ({} missing)",
@@ -2096,7 +2141,14 @@ impl AudioController {
             }
             .into(),
         );
-        ui.set_library_rows(ModelRc::new(Rc::new(VecModel::from(rows))));
+        ui.set_library_rows(ModelRc::new(Rc::new(LibraryRows {
+            rows,
+            library: Rc::downgrade(&self.library),
+            generation: Rc::downgrade(&self.library_generation),
+            expected_generation: self.library_generation.get(),
+            #[cfg(test)]
+            row_data_calls: Cell::new(0),
+        })));
         ui.set_selected_track(library.selected_id());
     }
     fn refresh(&self) {
@@ -2687,6 +2739,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn lazy_library_model_only_materializes_viewport_rows_and_invalidates_old_catalogs() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        let dir = tempfile::tempdir().unwrap();
+        let count = 20_000;
+        c.library
+            .borrow_mut()
+            .insert((0..count).map(|i| dir.path().join(format!("track-{i:05}.wav"))));
+        let library = c.library.borrow();
+        let visible = library.visible();
+        let lazy_allocations = crate::looping::counted_allocations(|| {
+            let ids: Vec<i32> = visible.iter().map(|track| track.id).collect();
+            std::hint::black_box(ids);
+        });
+        let eager_allocations = crate::looping::counted_allocations(|| {
+            let rows: Vec<_> = visible.iter().map(|track| library_row(track)).collect();
+            std::hint::black_box(rows);
+        });
+        assert!(lazy_allocations < 5);
+        assert!(eager_allocations > count * 3);
+        println!("20,000-row preparation: lazy {lazy_allocations} allocations; eager {eager_allocations}");
+        drop(visible);
+        drop(library);
+        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        c.publish_library();
+        ui.show().unwrap();
+        let old_model = ui.get_library_rows();
+        assert_eq!(old_model.row_count(), count);
+        let model = old_model.as_any().downcast_ref::<LibraryRows>().unwrap();
+        control(&ui, "Library track 1");
+        let requested = model.row_data_calls.get();
+        assert!(
+            requested > 0 && requested < 1000,
+            "viewport requested {requested} rows"
+        );
+        assert_eq!(old_model.row_data(0).unwrap().id, 1);
+        assert_eq!(old_model.row_data(count - 1).unwrap().id, count as i32);
+        assert!(old_model.row_data(count).is_none());
+        let locked = c.library.borrow_mut();
+        assert!(old_model.row_data(0).is_none());
+        drop(locked);
+        assert_eq!(old_model.row_data(0).unwrap().id, 1);
+        control(&ui, "Sort library by name").invoke_accessible_default_action();
+        let reverse = ui.get_library_rows();
+        assert_eq!(reverse.row_data(0).unwrap().id, count as i32);
+        control(&ui, "Library search").set_accessible_value("track-00001");
+        let filtered = ui.get_library_rows();
+        assert_eq!(filtered.row_count(), 1);
+        assert_eq!(filtered.row_data(0).unwrap().id, 2);
+        c.restore_library(Ok(dir.path().join("empty.sqlite3")), Vec::new());
+        finish_storage(&c);
+        assert!(old_model.row_data(0).is_none());
+        assert!(reverse.row_data(0).is_none());
+        assert!(filtered.row_data(0).is_none());
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        c.close_library().unwrap();
+        drop(c);
+        assert!(old_model.row_data(0).is_none());
+        println!("20,000 rows: headless viewport requested {requested} model rows");
     }
 
     #[test]

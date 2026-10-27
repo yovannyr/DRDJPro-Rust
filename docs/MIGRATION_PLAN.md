@@ -30,7 +30,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 187 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 188 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -56,7 +56,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Opus7: PCM-Puffer ohne Sample-Kopie teilen, fallibel begrenzt reservieren und Lade-/Import-Worker kooperativ abbrechen; späte Ergebnisse verworfen.
 - [x] ✅ Crate-Mitgliedschaften revisionsgebunden einzeln speichern; Rollback, parallele Änderungen und Neustart geprüft.
 - [x] ✅ Crate-Strukturänderungen revisionsgebunden einzeln speichern, einschließlich Namenswechsel, ID-Fortschreibung und Rollback.
-- [ ] ☐ Weitere Skalierung: größere Bibliotheksansichten virtualisieren.
+- [x] ✅ Bibliothekszeilen im Slint-ListView bedarfsweise erzeugen; 20.000 Tracks headless auf begrenzte Zeilenanforderungen geprüft.
+- [ ] ☐ Weitere Bibliotheksskalierung: katalogweite Filter-/Sortierarbeit reduzieren und große Ansichten unter realistischen Bedingungen qualifizieren.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
 - [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
@@ -454,3 +455,10 @@ First bounded part of the earliest open scaling item: membership additions/remov
 ## Incremental crate structure (2026-10-27)
 
 The next part of the same first open scaling item replaces structural crate snapshots with revision-bound per-ID create/rename/delete changes and a monotonic high-water mark. The worker applies structural and membership changes atomically, including multi-rename name exchanges. Deleting a crate cascades its own members; other members are not rewritten. Tests cover injected rollback, unchanged memberships, in-flight create/delete and restart. Periodic backups and deletion of a crate with many members remain proportional to their data. Library-view virtualization is the next open part of this plan item. See LOCAL_VALIDATION.md for review and final checks.
+
+
+## Lazy library row materialization (2026-10-27)
+
+The next part of the first open scaling item keeps the existing Slint ListView and replaces eager construction of every LibraryRow with an immutable ordered ID model. A validated ID-to-index lookup retrieves and formats only requested rows. Weak references avoid a UI/controller ownership cycle, and a catalog generation prevents retained old models from returning rows from a replacement catalog. Filtering, sorting, selection and counts retain their existing behavior. Search/sort still traverse and sort the in-memory catalog and the ordered ID vector is rebuilt on publish; this is not SQL paging or constant-time filtering.
+
+A 20,000-track headless fixture requested two model rows for its visible viewport; sorting, filtering, borrow contention and stale models after restore were checked. In the same local test, preparing IDs from an already sorted visible list used one allocation versus200,001 for eagerly materializing all row objects. The comparison excludes filtering, sorting, index construction and rendering; it is not a whole-refresh or maximum-scale latency measurement. Native scroll/render performance and reduced catalogue-wide filter/sort work remain open, along with the next plan acceptance gates. Review and full-check evidence are recorded in LOCAL_VALIDATION.md.
