@@ -3,7 +3,7 @@ use crate::{
     playback::{DeckId, DualDeckEngine, MixerLevels, PreparedTrack},
     AppWindow,
 };
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
     path::PathBuf,
@@ -110,8 +110,6 @@ fn library_row(track: &crate::library::Track) -> crate::LibraryRow {
         available: track.available,
     }
 }
-
-const BACKGROUND_SEARCH_MIN_TRACKS: usize = 50_000;
 
 type SearchRequest = (
     Arc<crate::library::SearchProjection>,
@@ -349,7 +347,7 @@ impl AudioController {
                 if let Some(ui) = c.ui.upgrade() {
                     c.library
                         .borrow_mut()
-                        .set_query(ui.get_library_query().to_string());
+                        .set_query_background(ui.get_library_query().to_string());
                     c.publish_library();
                 }
             }
@@ -365,15 +363,31 @@ impl AudioController {
         });
         let weak = Rc::downgrade(&controller);
         ui.on_move_library_selection(move |delta| {
-            if let Some(c) = weak.upgrade() {
-                if c.search_in_progress() {
-                    return;
-                }
-                c.library.borrow_mut().move_selection(delta);
-                if let Some(ui) = c.ui.upgrade() {
-                    ui.set_selected_track(c.library.borrow().selected_id());
-                }
+            let Some(c) = weak.upgrade() else {
+                return;
+            };
+            if c.search_in_progress() {
+                return;
             }
+            let Some(ui) = c.ui.upgrade() else {
+                return;
+            };
+            let rows = ui.get_library_rows();
+            let Some(model) = rows.as_any().downcast_ref::<LibraryRows>() else {
+                return;
+            };
+            let current = c.library.borrow().selected_id();
+            let index = model.rows.iter().position(|id| *id == current);
+            let target = if model.rows.is_empty() {
+                -1
+            } else {
+                let index = index.map_or(0, |i| {
+                    (i as i32 + delta).clamp(0, model.rows.len() as i32 - 1) as usize
+                });
+                model.rows[index]
+            };
+            c.library.borrow_mut().select(target);
+            ui.set_selected_track(c.library.borrow().selected_id());
         });
         let weak = Rc::downgrade(&controller);
         ui.on_sort_library(move |field| {
@@ -2149,8 +2163,9 @@ impl AudioController {
         };
         self.library
             .borrow_mut()
-            .set_query(ui.get_library_query().to_string());
+            .set_query_background(ui.get_library_query().to_string());
         let library = self.library.borrow();
+        ui.set_selected_track(library.selected_id());
         let crates = library.crates().ordered();
         let target = crates
             .iter()
@@ -2176,73 +2191,64 @@ impl AudioController {
                 .collect::<Vec<_>>(),
         ))));
         ui.set_selected_crate(library.active_crate());
-        if library.len() >= BACKGROUND_SEARCH_MIN_TRACKS {
-            let spec = library.search_spec(self.library_generation.get());
-            let mut worker_slot = self.search_worker.borrow_mut();
-            if worker_slot.is_none() {
-                match SearchWorker::start() {
-                    Ok(worker) => *worker_slot = Some(worker),
-                    Err(error) => {
-                        ui.set_status(format!("Cannot start library search: {error}").into());
-                        ui.set_library_rows(ModelRc::new(Rc::new(
-                            VecModel::<crate::LibraryRow>::default(),
-                        )));
-                        ui.set_library_count("Search unavailable".into());
-                        ui.set_library_empty("Search unavailable. Change search to retry.".into());
-                        return;
-                    }
+
+        let spec = library.search_spec(self.library_generation.get());
+        let mut worker_slot = self.search_worker.borrow_mut();
+        if worker_slot.is_none() {
+            match SearchWorker::start() {
+                Ok(worker) => *worker_slot = Some(worker),
+                Err(error) => {
+                    ui.set_status(format!("Cannot start library search: {error}").into());
+                    ui.set_library_rows(ModelRc::new(Rc::new(
+                        VecModel::<crate::LibraryRow>::default(),
+                    )));
+                    ui.set_library_count("Search unavailable".into());
+                    ui.set_library_empty("Search unavailable. Change search to retry.".into());
+                    return;
                 }
             }
-            let worker = worker_slot.as_mut().unwrap();
-            if worker.published.as_ref() == Some(&spec) && worker.wanted.is_none() {
+        }
+        let worker = worker_slot.as_mut().unwrap();
+        if worker.published.as_ref() == Some(&spec) && worker.wanted.is_none() {
+            if let Some(ids) = library.cached_visible_ids() {
                 drop(worker_slot);
                 drop(library);
-                self.publish_search_rows(None);
+                self.publish_search_rows(ids);
                 return;
             }
-            if worker.wanted.as_ref() == Some(&spec) {
-                return;
-            }
-            let key = (spec.generation, spec.revision, spec.scope);
-            if !worker
-                .projection
-                .as_ref()
-                .is_some_and(|(g, r, c, _)| (*g, *r, *c) == key)
-            {
-                worker.projection =
-                    Some((key.0, key.1, key.2, Arc::new(library.search_projection())));
-            }
-            let projection = Arc::clone(&worker.projection.as_ref().unwrap().3);
-            worker.wanted = Some(spec.clone());
-            worker.pending = Some((projection, spec));
-            if let Err(error) = worker.send_pending() {
-                ui.set_status(error.into());
-                *worker_slot = None;
-                ui.set_library_rows(ModelRc::new(Rc::new(
-                    VecModel::<crate::LibraryRow>::default(),
-                )));
-                ui.set_library_count("Search unavailable".into());
-                ui.set_library_empty("Search unavailable. Change search to retry.".into());
-                return;
-            }
-            ui.set_library_count("Searching library…".into());
+            worker.published = None;
+        }
+        if worker.wanted.as_ref() == Some(&spec) {
+            return;
+        }
+        let key = (spec.generation, spec.revision, spec.scope);
+        if !worker
+            .projection
+            .as_ref()
+            .is_some_and(|(g, r, c, _)| (*g, *r, *c) == key)
+        {
+            worker.projection = Some((key.0, key.1, key.2, Arc::new(library.search_projection())));
+        }
+        let projection = Arc::clone(&worker.projection.as_ref().unwrap().3);
+        worker.wanted = Some(spec.clone());
+        worker.pending = Some((projection, spec));
+        if let Err(error) = worker.send_pending() {
+            ui.set_status(error.into());
+            *worker_slot = None;
             ui.set_library_rows(ModelRc::new(Rc::new(
                 VecModel::<crate::LibraryRow>::default(),
             )));
-            ui.set_library_empty("Searching library…".into());
-            ui.set_selected_track(library.selected_id());
+            ui.set_library_count("Search unavailable".into());
+            ui.set_library_empty("Search unavailable. Change search to retry.".into());
             return;
         }
-        if let Some(worker) = self.search_worker.borrow_mut().as_mut() {
-            worker.wanted = None;
-            worker.pending = None;
-            worker.published = None;
-            worker.projection = None;
-        }
-        drop(library);
-        self.publish_search_rows(None);
+        ui.set_library_count("Searching library…".into());
+        ui.set_library_rows(ModelRc::new(Rc::new(
+            VecModel::<crate::LibraryRow>::default(),
+        )));
+        ui.set_library_empty("Searching library…".into());
+        ui.set_selected_track(library.selected_id());
     }
-
     fn search_in_progress(&self) -> bool {
         self.search_worker
             .borrow()
@@ -2302,16 +2308,15 @@ impl AudioController {
             self.publish_library();
         } else if let Some(ids) = accepted {
             self.library.borrow_mut().install_search_result(&ids);
-            self.publish_search_rows(Some(ids));
+            self.publish_search_rows(ids);
         }
     }
 
-    fn publish_search_rows(&self, ids: Option<Vec<i32>>) {
+    fn publish_search_rows(&self, rows: Vec<i32>) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
         let library = self.library.borrow();
-        let rows = ids.unwrap_or_else(|| library.visible().iter().map(|track| track.id).collect());
         ui.set_library_count(
             format!(
                 "{} / {} tracks ({} missing)",
@@ -2967,6 +2972,7 @@ mod tests {
         drop(library);
         ui.window().set_size(slint::LogicalSize::new(850., 740.));
         c.publish_library();
+        finish_search(&c);
         ui.show().unwrap();
         let old_model = ui.get_library_rows();
         assert_eq!(old_model.row_count(), count);
@@ -2985,9 +2991,11 @@ mod tests {
         drop(locked);
         assert_eq!(old_model.row_data(0).unwrap().id, 1);
         control(&ui, "Sort library by name").invoke_accessible_default_action();
+        finish_search(&c);
         let reverse = ui.get_library_rows();
         assert_eq!(reverse.row_data(0).unwrap().id, count as i32);
         control(&ui, "Library search").set_accessible_value("track-00001");
+        finish_search(&c);
         let filtered = ui.get_library_rows();
         assert_eq!(filtered.row_count(), 1);
         assert_eq!(filtered.row_data(0).unwrap().id, 2);
@@ -3004,16 +3012,62 @@ mod tests {
     }
 
     #[test]
+    fn small_library_always_searches_in_background_and_clears_selection_on_failure() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        assert!(c.search_in_progress());
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        let dir = tempfile::tempdir().unwrap();
+        c.library
+            .borrow_mut()
+            .insert([dir.path().join("one.wav"), dir.path().join("two.mp3")]);
+        c.publish_library();
+        assert!(c.search_in_progress());
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 2);
+        ui.invoke_sort_library(0);
+        assert!(c.search_in_progress());
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 2);
+        ui.invoke_select_library(1);
+        assert_eq!(ui.get_selected_track(), 1);
+        let (sender, input) = mpsc::sync_channel(1);
+        drop(input);
+        let (output, receiver) = mpsc::sync_channel(1);
+        drop(output);
+        *c.search_worker.borrow_mut() = Some(SearchWorker {
+            sender,
+            receiver,
+            pending: None,
+            wanted: None,
+            projection: None,
+            published: None,
+        });
+        ui.set_library_query("no-match".into());
+        ui.invoke_library_search();
+        assert_eq!(c.library.borrow().selected_id(), -1);
+        assert_eq!(ui.get_selected_track(), -1);
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+        assert!(ui.get_library_empty().contains("unavailable"));
+        ui.set_library_query("one".into());
+        ui.invoke_library_search();
+        assert!(c.search_in_progress());
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 1);
+    }
+
+    #[test]
     fn large_library_headless_view_search_sort_and_selection_at_track_limit() {
         use slint::Model;
-        fn finish_search(c: &AudioController) {
-            let deadline = Instant::now() + Duration::from_secs(15);
-            while c.search_in_progress() {
-                assert!(Instant::now() < deadline, "search worker timed out");
-                c.tick();
-                std::thread::yield_now();
-            }
-        }
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
@@ -3138,7 +3192,7 @@ mod tests {
         *c.library.borrow_mut() = crate::library::Library::default();
         c.library_generation.set(c.library_generation.get() + 1);
         c.publish_library();
-        assert!(!c.search_in_progress());
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 0);
 
         // Exercise disconnect while polling, independently of a failed send.
@@ -3258,6 +3312,14 @@ mod tests {
         assert_eq!(controls.len(), 1, "accessible control {label}");
         controls.into_iter().next().unwrap()
     }
+    fn finish_search(c: &AudioController) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while c.search_in_progress() {
+            assert!(Instant::now() < deadline, "search worker timed out");
+            c.tick();
+            std::thread::yield_now();
+        }
+    }
     fn finish(c: &AudioController) {
         assert!(c.pending.borrow().is_some(), "GUI started a load worker");
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
@@ -3267,6 +3329,7 @@ mod tests {
             c.tick();
             std::thread::sleep(Duration::from_millis(1));
         }
+        finish_search(c);
     }
     fn finish_import(c: &AudioController) {
         assert!(c.pending_import.borrow().is_some());
@@ -3276,6 +3339,7 @@ mod tests {
             c.tick();
             std::thread::sleep(Duration::from_millis(1));
         }
+        finish_search(c);
     }
     fn finish_storage(c: &AudioController) {
         let until = Instant::now() + Duration::from_secs(15);
@@ -3290,6 +3354,7 @@ mod tests {
             assert!(Instant::now() < until, "storage worker did not finish");
             thread::sleep(Duration::from_millis(1));
         }
+        finish_search(c);
     }
     #[test]
     fn alignment_choice_wires_both_phase_actions_and_releases_only_its_sync_follower() {
@@ -5802,10 +5867,13 @@ mod tests {
         assert_eq!(rows[1].album, "First album");
         assert!(rows[1].duration.starts_with('~'));
         control(&ui, "Library search").set_accessible_value("ARTIST Ñ");
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 1);
         ui.invoke_select_library(1);
         control(&ui, "Clear library search").invoke_accessible_default_action();
+        finish_search(&c);
         control(&ui, "Sort library by duration").invoke_accessible_default_action();
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 2);
         assert_eq!(ui.get_selected_track(), 1);
         ui.invoke_load_library_left();
@@ -5833,6 +5901,7 @@ mod tests {
         assert_eq!(row.artist, "Artist Ñ");
         assert!(!row.duration.starts_with('~'));
         control(&ui, "Library search").set_accessible_value("second album");
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 2);
         ui.invoke_select_library(2);
         ui.invoke_load_library_right();
@@ -5871,20 +5940,25 @@ mod tests {
         c.import_paths(vec![fixture(), wav.path().to_owned()]);
         finish_import(&c);
         create(&ui, "Música 日本");
+        finish_search(&c);
         assert_eq!(ui.get_selected_crate(), 1);
         assert_eq!(ui.get_crate_rows().row_count(), 1);
         assert_eq!(ui.get_library_rows().row_count(), 0);
         assert!(ui.get_library_empty().contains("crate is empty"));
         control(&ui, "All library tracks").invoke_accessible_default_action();
+        finish_search(&c);
         control(&ui, "Library track 1").invoke_accessible_default_action();
         control(&ui, "Add selected track to crate").invoke_accessible_default_action();
         control(&ui, "Add selected track to crate").invoke_accessible_default_action();
         assert_eq!(ui.get_crate_rows().row_data(0).unwrap().count, 1);
         control(&ui, "Crate 1").invoke_accessible_default_action();
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 1);
         control(&ui, "Library search").set_accessible_value("no matching member");
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 0);
         control(&ui, "Clear library search").invoke_accessible_default_action();
+        finish_search(&c);
         ui.invoke_select_library(1);
         ui.invoke_load_library_left();
         finish(&c);
@@ -5902,10 +5976,12 @@ mod tests {
         assert!(ui.get_status().contains("printable"));
         control(&ui, "Cancel crate dialog").invoke_accessible_default_action();
         create(&ui, "Warmup");
+        finish_search(&c);
         assert_eq!(ui.get_selected_crate(), 2);
         // An import belongs to the captured crate, even if a later callback changes the filter.
         c.import_paths(vec![third.path().to_owned()]);
         ui.invoke_select_crate(1);
+        finish_search(&c);
         finish_import(&c);
         assert_eq!(
             c.library
@@ -5919,12 +5995,14 @@ mod tests {
             std::collections::HashSet::from([3])
         );
         control(&ui, "All library tracks").invoke_accessible_default_action();
+        finish_search(&c);
         ui.invoke_select_library(1);
         ui.set_target_crate_index(1);
         ui.invoke_target_crate(1);
         control(&ui, "Add selected track to crate").invoke_accessible_default_action();
         assert_eq!(c.crate_target.get(), 2);
         ui.invoke_select_crate(1);
+        finish_search(&c);
         control(&ui, "Rename crate").invoke_accessible_default_action();
         control(&ui, "Crate name").set_accessible_value("Zulu");
         control(&ui, "Save crate name").invoke_accessible_default_action();
@@ -5937,11 +6015,14 @@ mod tests {
         assert_eq!(ui.get_crate_rows().row_count(), 2);
         ui.invoke_delete_crate();
         ui.invoke_select_crate(2);
+        finish_search(&c);
         ui.invoke_confirm_delete_crate();
         assert_eq!(ui.get_crate_rows().row_count(), 2);
         ui.invoke_select_crate(1);
+        finish_search(&c);
         control(&ui, "Delete crate").invoke_accessible_default_action();
         control(&ui, "Confirm crate deletion").invoke_accessible_default_action();
+        finish_search(&c);
         assert_eq!(ui.get_crate_rows().row_count(), 1);
         assert_eq!(ui.get_selected_crate(), 0);
         assert_eq!(ui.get_library_rows().row_count(), 3);
@@ -5949,8 +6030,10 @@ mod tests {
         assert_eq!(ui.get_left_title(), title);
         assert!(fixture().is_file() && wav.path().is_file() && third.path().is_file());
         ui.invoke_select_crate(2);
+        finish_search(&c);
         ui.invoke_select_library(1);
         control(&ui, "Remove selected track from crate").invoke_accessible_default_action();
+        finish_search(&c);
         assert_eq!(ui.get_selected_track(), -1);
         assert_eq!(ui.get_library_rows().row_count(), 1);
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 3);
@@ -5982,6 +6065,7 @@ mod tests {
         assert_eq!(ui.get_selected_crate(), 0);
         assert_eq!(ui.get_library_rows().row_count(), 3);
         ui.invoke_select_crate(2);
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 3);
         ui.invoke_select_library(3);
         ui.invoke_load_library_right();
@@ -6404,12 +6488,14 @@ mod tests {
         assert_eq!(ui.get_selected_track(), -1);
         control(&ui, "Library track 2").invoke_accessible_default_action();
         control(&ui, "Sort library by name").invoke_accessible_default_action();
+        finish_search(&c);
         assert_eq!(ui.get_selected_track(), 2);
         control(&ui, "Load selected into deck A").invoke_accessible_default_action();
         finish(&c);
         assert!(ui.get_left_title().ends_with("tone-9s.mp3"));
         assert!(!ui.get_right_loaded());
         control(&ui, "Library search").set_accessible_value(".WAV");
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 1);
         assert_eq!(ui.get_selected_track(), -1);
         assert_eq!(
@@ -6421,9 +6507,11 @@ mod tests {
         finish(&c);
         assert!(ui.get_right_title().ends_with(".wav"));
         control(&ui, "Library search").set_accessible_value("no matching file");
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 0);
         assert!(ui.get_library_empty().contains("No tracks match"));
         control(&ui, "Clear library search").invoke_accessible_default_action();
+        finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 3);
         control(&ui, "Library track 1").invoke_accessible_default_action();
         let ordered_ids: Vec<_> = ui.get_library_rows().iter().map(|row| row.id).collect();

@@ -226,6 +226,7 @@ impl Track {
             || self.search.path.contains(query)
     }
 
+    #[cfg(test)]
     fn view_sort_key(&self, field: i32) -> (&str, Option<u64>, i32) {
         let key: &str = match field {
             1 => self.format.as_str(),
@@ -768,6 +769,16 @@ impl Library {
             self.selected = None;
         }
     }
+    pub(crate) fn set_query_background(&mut self, query: String) {
+        let normalized = query.trim().to_lowercase();
+        if self.query != normalized {
+            self.query = normalized;
+            *self.view_cache.get_mut() = None;
+        }
+        if self.selected.is_some_and(|id| !self.is_visible_id(id)) {
+            self.selected = None;
+        }
+    }
     pub fn sort(&mut self, field: i32) {
         *self.view_cache.get_mut() = None;
         let field = field.clamp(0, 5);
@@ -817,6 +828,13 @@ impl Library {
             .get(&id)
             .and_then(|index| self.tracks.get(*index))
     }
+    pub(crate) fn cached_visible_ids(&self) -> Option<Vec<i32>> {
+        self.view_cache
+            .borrow()
+            .as_ref()
+            .map(|indices| indices.iter().map(|&i| self.tracks[i].id).collect())
+    }
+    #[cfg(test)]
     pub fn visible(&self) -> Vec<&Track> {
         let missing = self.view_cache.borrow().is_none();
         if missing {
@@ -835,6 +853,7 @@ impl Library {
             .map(|&i| &self.tracks[i])
             .collect()
     }
+    #[cfg(test)]
     fn build_visible(&self) -> Vec<&Track> {
         let members = self.scope_members();
         let candidates = self.search_index.candidates(&self.query, self.tracks.len());
@@ -877,23 +896,6 @@ impl Library {
     }
     pub fn selected_id(&self) -> i32 {
         self.selected.unwrap_or(-1)
-    }
-    pub fn move_selection(&mut self, delta: i32) {
-        let id = {
-            let tracks = self.visible();
-            if tracks.is_empty() {
-                None
-            } else {
-                let current = tracks
-                    .iter()
-                    .position(|track| Some(track.id) == self.selected);
-                let index = current.map_or(0, |i| {
-                    (i as i32 + delta).clamp(0, tracks.len() as i32 - 1) as usize
-                });
-                Some(tracks[index].id)
-            }
-        };
-        self.selected = id;
     }
     pub fn selected_path(&self) -> Option<PathBuf> {
         self.selected
