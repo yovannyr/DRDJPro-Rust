@@ -827,3 +827,10 @@ Independent reviewer configured gpt-6.1-sol / medium accepted the corrected test
 ## Incremental search refinement (2026-10-27)
 
 A query that extends the previous normalized query filters the existing sorted result IDs; broadening or changing the query rebuilds the view. Track, metadata, membership, crate and sort changes retain their existing invalidation behavior. This is not an index or pagination and still scans the previous result list synchronously. QWEN supplied the implementation and regression-test drafts; Codex inspected and adapted them. A first focused test exposed an incorrect test expectation for title ordering, which was corrected. The first strict Clippy run also identified an unnecessary clone in a test; this was corrected before the final run. Independent review used GPT-6.1 Sol medium; its separate test attempt encountered Windows linker LNK1104 while the test executable was in use. Final local gates passed: cargo fmt --check, cargo clippy --all-targets -- -D warnings, cargo test (194 passed), cargo build --release, and git diff --check. No native visual or listening acceptance is implied.
+
+
+## Cached missing-track count (2026-10-27)
+
+The count of missing tracks in the current library scope is cached until track, availability, membership or scope changes. Query and sort changes do not affect this count. QWEN supplied the implementation and test drafts; Codex inspected and adapted them. Tests cover warm caches during membership addition/removal, active-crate deletion, track insertion and restored-file availability. This avoids repeated full-catalog counting on unchanged scopes, but cold counting and search/sort remain synchronous. It does not implement indexed or paged search or establish native responsiveness.
+
+Final checks passed: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (195 passed), `cargo build --release` and `git diff --check`. Independent static review and follow-up by GPT-6.1 Sol medium accepted without outstanding findings.

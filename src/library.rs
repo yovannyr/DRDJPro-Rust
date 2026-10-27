@@ -231,6 +231,7 @@ pub struct Library {
     descending: bool,
     crates: crate::crates::CrateCatalog,
     active_crate: i32,
+    missing_cache: std::cell::Cell<Option<usize>>,
 }
 pub(crate) fn identity(path: &Path) -> PathBuf {
     #[cfg(windows)]
@@ -244,6 +245,7 @@ pub(crate) fn identity(path: &Path) -> PathBuf {
 }
 impl Library {
     fn mark_track(&mut self, index: usize) {
+        self.missing_cache.set(None);
         *self.view_cache.get_mut() = None;
         self.revision = self
             .revision
@@ -264,6 +266,7 @@ impl Library {
         tracks: impl IntoIterator<Item = i32>,
         present: bool,
     ) {
+        self.missing_cache.set(None);
         *self.view_cache.get_mut() = None;
         self.revision = self
             .revision
@@ -396,6 +399,7 @@ impl Library {
         }
         if self.active_crate != id {
             self.active_crate = id;
+            self.missing_cache.set(None);
             *self.view_cache.get_mut() = None;
         }
         self.set_query(self.query.clone());
@@ -511,14 +515,20 @@ impl Library {
         }
     }
     pub fn missing_count(&self) -> usize {
+        if let Some(count) = self.missing_cache.get() {
+            return count;
+        }
         let members = self.scope_members();
-        self.tracks
+        let result = self
+            .tracks
             .iter()
             .filter(|t| {
                 !t.available
                     && (self.active_crate == 0 || members.is_some_and(|m| m.contains(&t.id)))
             })
-            .count()
+            .count();
+        self.missing_cache.set(Some(result));
+        result
     }
     fn scope_members(&self) -> Option<&HashSet<i32>> {
         self.crates
@@ -540,6 +550,7 @@ impl Library {
         for path in paths {
             if let Some(index) = self.keys.get(&identity(&path)) {
                 self.tracks[*index].available = true;
+                self.missing_cache.set(None);
                 continue;
             }
             if self.tracks.len() == MAX_TRACKS {
@@ -679,6 +690,96 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_missing_cache_behavior_on_real_library() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let missing1 = dir.path().join("missing1.wav");
+        let missing2 = dir.path().join("missing2.wav");
+
+        let catalog = Catalog {
+            version: 1,
+            tracks: vec![
+                SavedTrack {
+                    id: 1,
+                    path: missing1.clone(),
+                    metadata: crate::track_metadata::TrackMetadata::default(),
+                    grid: None,
+                    hot_cues: crate::hot_cues::HotCues::default(),
+                    saved_loops: crate::saved_loops::SavedLoops::default(),
+                },
+                SavedTrack {
+                    id: 2,
+                    path: missing2.clone(),
+                    metadata: crate::track_metadata::TrackMetadata::default(),
+                    grid: None,
+                    hot_cues: crate::hot_cues::HotCues::default(),
+                    saved_loops: crate::saved_loops::SavedLoops::default(),
+                },
+            ],
+            crates: crate::crates::CrateCatalog::default(),
+        };
+
+        let mut library = Library::restore(catalog).unwrap();
+
+        assert_eq!(library.missing_count(), 2);
+
+        assert_eq!(library.missing_cache.get(), Some(2));
+        library.set_query("anything".into());
+        library.sort(0);
+        assert_eq!(library.missing_cache.get(), Some(2));
+        assert_eq!(library.missing_count(), 2);
+
+        let crate_id = library.create_crate("Test Crate").unwrap();
+        library
+            .add_paths_to_crate(crate_id, std::slice::from_ref(&missing1))
+            .unwrap();
+        library.select_crate(crate_id).unwrap();
+
+        assert_eq!(library.missing_count(), 1);
+        std::fs::write(&missing1, b"fixture").unwrap();
+
+        library.insert(vec![missing1.clone()]);
+        assert_eq!(library.missing_cache.get(), None);
+
+        assert_eq!(library.missing_count(), 0);
+
+        library.select_crate(0).unwrap();
+        assert_eq!(library.missing_count(), 1);
+
+        library.select_crate(crate_id).unwrap();
+        assert_eq!(library.missing_count(), 0);
+        assert_eq!(library.missing_cache.get(), Some(0));
+
+        library
+            .add_paths_to_crate(crate_id, std::slice::from_ref(&missing2))
+            .unwrap();
+
+        assert_eq!(library.missing_cache.get(), None);
+        assert_eq!(library.missing_count(), 1);
+
+        library.set_query(String::new());
+        library.select(2);
+
+        library.remove_selected_from_crate().unwrap();
+
+        assert_eq!(library.missing_cache.get(), None);
+        assert_eq!(library.missing_count(), 0);
+
+        let _ = library.missing_count();
+        assert_eq!(library.missing_cache.get(), Some(0));
+
+        library.delete_crate(crate_id).unwrap();
+
+        assert_eq!(library.missing_cache.get(), None);
+        assert_eq!(library.missing_count(), 1);
+        let new_path = dir.path().join("new.wav");
+        std::fs::write(&new_path, b"fixture").unwrap();
+        library.insert([new_path]);
+        assert_eq!(library.missing_cache.get(), None);
+        assert_eq!(library.missing_count(), 1);
+    }
+
     #[test]
     fn test_narrowing_unicode_prefix_query_with_crate_switch_and_member_invalidation() {
         let dir = tempfile::tempdir().unwrap();
