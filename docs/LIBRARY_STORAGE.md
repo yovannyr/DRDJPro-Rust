@@ -136,3 +136,10 @@ The 20,000-track headless viewport requested two rows. A separate preparation-on
 ## Reusing unchanged in-memory views (2026-10-27)
 
 The in-memory Library caches sorted, filtered stable track indices and invalidates them on changed query/sort/scope, track mutation and membership mutation. Repeating the same normalized query retains the cache. Selection, metadata and crate mutation tests confirm the next read rebuilds when needed. The lazy GUI row model continues to fetch live row values by ID. Cold filtering/sorting is still full-catalog work; cached reads still walk the selected result and create a reference vector, and library publication still builds an ID vector. Cache memory is proportional to visible entries. New track mutations conservatively invalidate the cache even when they only change cue/grid data. SQLite paging, large cold-search optimization and native latency remain open.
+
+
+## Prepared text for new views (2026-10-27)
+
+Track search maintains lowercased title, artist, album, filename and path alongside each track. Insertion and restoration initialize them; metadata changes refresh them. Filtering uses the same substring semantics and sorting compares the same normalized values, optional duration and stable ID as before without allocating a String sort key per track for each cold view. The test suite compares all six fields and both directions against the previous expressions, including Unicode, missing metadata, crate filtering and restore.
+
+This trades five per-track String fields and their metadata-update work for fewer allocations when building a cold view. A local 10,000-track fixture reported16 cold and1 cached allocations versus10016 and1 before this step; the measurement excludes insertion/normalization, rendering, and any comparison of overall memory or wall time. Search still scans, sorting still sorts the in-memory catalog, and SQL paging/indexed search plus native latency remain open.

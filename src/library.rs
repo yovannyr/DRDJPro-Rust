@@ -106,6 +106,58 @@ pub(crate) fn inspect_paths_cancellable(
     Ok(result)
 }
 
+#[derive(Default)]
+struct TrackSearch {
+    title: String,
+    artist: String,
+    album: String,
+    name: String,
+    path: String,
+}
+
+impl Track {
+    fn refresh_search(&mut self) {
+        self.search = TrackSearch {
+            title: self.metadata.title.to_lowercase(),
+            artist: self.metadata.artist.to_lowercase(),
+            album: self.metadata.album.to_lowercase(),
+            name: self.name.to_lowercase(),
+            path: self.path.to_string_lossy().to_lowercase(),
+        };
+    }
+
+    fn matches_query(&self, query: &str) -> bool {
+        self.search.title.contains(query)
+            || self.search.artist.contains(query)
+            || self.search.album.contains(query)
+            || self.search.name.contains(query)
+            || self.search.path.contains(query)
+    }
+
+    fn view_sort_key(&self, field: i32) -> (&str, Option<u64>, i32) {
+        let key: &str = match field {
+            1 => self.format.as_str(),
+            2 => self.search.path.as_str(),
+            3 => self.search.artist.as_str(),
+            4 => self.search.album.as_str(),
+            5 => "",
+            _ => {
+                if self.metadata.title.is_empty() {
+                    self.search.name.as_str()
+                } else {
+                    self.search.title.as_str()
+                }
+            }
+        };
+        let duration = if field == 5 {
+            self.metadata.duration_ms
+        } else {
+            None
+        };
+        (key, duration, self.id)
+    }
+}
+
 pub struct Track {
     pub id: i32,
     pub path: PathBuf,
@@ -116,6 +168,7 @@ pub struct Track {
     pub grid: Option<crate::beatgrid::BeatGrid>,
     pub hot_cues: crate::hot_cues::HotCues,
     pub saved_loops: crate::saved_loops::SavedLoops,
+    search: TrackSearch,
 }
 impl Track {
     fn saved(&self) -> SavedTrack {
@@ -137,7 +190,7 @@ impl Track {
         }
     }
     fn new(id: i32, path: PathBuf, available: bool) -> Self {
-        Self {
+        let mut track = Self {
             id,
             name: path
                 .file_name()
@@ -155,7 +208,10 @@ impl Track {
             grid: None,
             hot_cues: Default::default(),
             saved_loops: Default::default(),
-        }
+            search: TrackSearch::default(),
+        };
+        track.refresh_search();
+        track
     }
 }
 #[derive(Default)]
@@ -408,6 +464,7 @@ impl Library {
             let index = *index;
             if self.tracks[index].metadata != metadata {
                 self.tracks[index].metadata = metadata;
+                self.tracks[index].refresh_search();
                 self.mark_track(index);
             }
         }
@@ -433,6 +490,7 @@ impl Library {
             let mut track = Track::new(saved.id, saved.path, available);
             let changed = enriched && metadata.scanned;
             track.metadata = metadata;
+            track.refresh_search();
             track.grid = saved.grid;
             track.hot_cues = saved.hot_cues;
             track.saved_loops = saved.saved_loops;
@@ -549,44 +607,24 @@ impl Library {
     }
     fn build_visible(&self) -> Vec<&Track> {
         let members = self.scope_members();
-        let mut tracks: Vec<_> = self
+        let mut tracks: Vec<&Track> = self
             .tracks
             .iter()
             .filter(|track| {
-                (self.active_crate == 0 || members.is_some_and(|c| c.contains(&track.id)))
-                    && (self.query.is_empty()
-                        || track.metadata.title.to_lowercase().contains(&self.query)
-                        || track.metadata.artist.to_lowercase().contains(&self.query)
-                        || track.metadata.album.to_lowercase().contains(&self.query)
-                        || track.name.to_lowercase().contains(&self.query)
-                        || track
-                            .path
-                            .to_string_lossy()
-                            .to_lowercase()
-                            .contains(&self.query))
+                (self.active_crate == 0 || members.is_some_and(|set| set.contains(&track.id)))
+                    && (self.query.is_empty() || track.matches_query(&self.query))
             })
             .collect();
-        tracks.sort_by_cached_key(|track| {
-            (
-                match self.sort_field {
-                    1 => track.format.clone(),
-                    2 => track.path.to_string_lossy().to_lowercase(),
-                    3 => track.metadata.artist.to_lowercase(),
-                    4 => track.metadata.album.to_lowercase(),
-                    5 => String::new(),
-                    _ => track.display_title().to_lowercase(),
-                },
-                if self.sort_field == 5 {
-                    track.metadata.duration_ms
-                } else {
-                    None
-                },
-                track.id,
-            )
+
+        tracks.sort_by(|a, b| {
+            a.view_sort_key(self.sort_field)
+                .cmp(&b.view_sort_key(self.sort_field))
         });
+
         if self.descending {
             tracks.reverse();
         }
+
         tracks
     }
     pub fn select(&mut self, id: i32) {
@@ -690,6 +728,118 @@ mod tests {
         println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
     }
     #[test]
+    fn normalized_library_search_matches_previous_filter_and_sort_semantics() {
+        fn reference(library: &Library) -> Vec<i32> {
+            let members = library.scope_members();
+            let mut tracks: Vec<_> = library
+                .tracks
+                .iter()
+                .filter(|track| {
+                    (library.active_crate == 0
+                        || members.is_some_and(|set| set.contains(&track.id)))
+                        && (library.query.is_empty()
+                            || track.metadata.title.to_lowercase().contains(&library.query)
+                            || track
+                                .metadata
+                                .artist
+                                .to_lowercase()
+                                .contains(&library.query)
+                            || track.metadata.album.to_lowercase().contains(&library.query)
+                            || track.name.to_lowercase().contains(&library.query)
+                            || track
+                                .path
+                                .to_string_lossy()
+                                .to_lowercase()
+                                .contains(&library.query))
+                })
+                .collect();
+            tracks.sort_by_cached_key(|track| {
+                (
+                    match library.sort_field {
+                        1 => track.format.clone(),
+                        2 => track.path.to_string_lossy().to_lowercase(),
+                        3 => track.metadata.artist.to_lowercase(),
+                        4 => track.metadata.album.to_lowercase(),
+                        5 => String::new(),
+                        _ => track.display_title().to_lowercase(),
+                    },
+                    if library.sort_field == 5 {
+                        track.metadata.duration_ms
+                    } else {
+                        None
+                    },
+                    track.id,
+                )
+            });
+            if library.descending {
+                tracks.reverse();
+            }
+            tracks.into_iter().map(|track| track.id).collect()
+        }
+        fn compare(library: &mut Library) {
+            for query in ["", "MÜSICA", "İ", "alpha", "日本", "absent"] {
+                library.set_query(query.into());
+                for field in 0..=5 {
+                    for _ in 0..2 {
+                        library.sort(field);
+                        assert_eq!(
+                            library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
+                            reference(library),
+                            "query {query}, field {field}, descending {}",
+                            library.descending
+                        );
+                    }
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [
+            "Éclair.wav",
+            "Straße.mp3",
+            "İstanbul.wav",
+            "Alpha.WAV",
+            "日本.mp3",
+        ]
+        .map(|name| dir.path().join(name));
+        let mut library = Library::default();
+        library.insert(paths.clone());
+        for (i, path) in paths.iter().enumerate() {
+            let metadata = crate::track_metadata::TrackMetadata {
+                title: ["Música", "", "İzmir", "alpha", "音楽"][i].into(),
+                artist: ["Ártist", "zeta", "İPEK", "BETA", "日本"][i].into(),
+                album: ["LATE", "MÚSICA", "First", "", "alpha"][i].into(),
+                duration_ms: [Some(1000), None, Some(5000), Some(1000), None][i],
+                scanned: true,
+                ..Default::default()
+            };
+            library.set_metadata(path, metadata);
+        }
+        let crate_id = library.create_crate("Subset").unwrap();
+        library
+            .add_paths_to_crate(
+                crate_id,
+                &[paths[0].clone(), paths[2].clone(), paths[4].clone()],
+            )
+            .unwrap();
+        compare(&mut library);
+        library.select_crate(crate_id).unwrap();
+        compare(&mut library);
+        let catalog = library.catalog();
+        let mut restored = Library::restore(catalog).unwrap();
+        restored.select_crate(crate_id).unwrap();
+        compare(&mut restored);
+        restored.set_metadata(
+            &paths[0],
+            crate::track_metadata::TrackMetadata {
+                title: "REPLACED 日本".into(),
+                scanned: true,
+                ..Default::default()
+            },
+        );
+        compare(&mut restored);
+    }
+
+    #[test]
     fn cached_library_view_reuses_order_and_invalidates_on_query_sort_metadata_and_crates() {
         let dir = tempfile::tempdir().unwrap();
         let mut library = Library::default();
@@ -701,7 +851,7 @@ mod tests {
         let cached = crate::looping::counted_allocations(|| {
             std::hint::black_box(library.visible());
         });
-        assert!(cold > size);
+        assert!(cold < 100);
         assert!(cached <= 2);
         println!("10,000-track view: cold {cold} allocations; cached {cached}");
         assert_eq!(library.visible()[0].id, 1);
