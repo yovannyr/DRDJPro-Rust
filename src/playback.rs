@@ -1146,6 +1146,10 @@ impl DualDeckEngine {
             },
         }
     }
+    /// Returns the latest complete producer window, not device/current freshness.
+    pub fn output_peak(&self) -> Option<f32> {
+        crate::peak_meter::PeakAccumulator::read_peak(&self.render_clock.peak_window)
+    }
     #[cfg(test)]
     pub fn output_volumes(&self) -> (f32, f32) {
         (

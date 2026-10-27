@@ -2103,6 +2103,10 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        let (caption, level, warning) = peak_display(self.engine.output_peak());
+        ui.set_output_peak_caption(caption.into());
+        ui.set_output_peak_level(level);
+        ui.set_output_peak_warning(warning);
         ui.set_background_job_active(
             self.pending.borrow().is_some() || self.pending_import.borrow().is_some(),
         );
@@ -2544,6 +2548,19 @@ fn loop_overlay(
     }
 }
 
+fn peak_display(peak: Option<f32>) -> (String, f32, bool) {
+    match peak {
+        None => ("BUS PEAK —".into(), 0., false),
+        Some(p) if !p.is_finite() || p < 0. => ("BUS INVALID".into(), 0., true),
+        Some(0.) => ("BUS PEAK -∞ dBFS".into(), 0., false),
+        Some(p) => (
+            format!("BUS PEAK {:+.1} dBFS", 20. * p.log10()),
+            p.clamp(0., 1.),
+            p >= 1.,
+        ),
+    }
+}
+
 fn deck_time(position: std::time::Duration, duration: std::time::Duration) -> String {
     let elapsed = position.min(duration);
     let remaining = duration.saturating_sub(position);
@@ -2573,6 +2590,105 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+    #[test]
+    fn bus_peak_caption_handles_unavailable_silence_invalid_and_full_scale() {
+        assert_eq!(peak_display(None), ("BUS PEAK \u{2014}".into(), 0., false));
+        assert_eq!(
+            peak_display(Some(0.)),
+            ("BUS PEAK -\u{221e} dBFS".into(), 0., false)
+        );
+        assert_eq!(
+            peak_display(Some(1.)),
+            ("BUS PEAK +0.0 dBFS".into(), 1., true)
+        );
+        assert_eq!(
+            peak_display(Some(2.)),
+            ("BUS PEAK +6.0 dBFS".into(), 1., true)
+        );
+        assert_eq!(
+            peak_display(Some(0.5)),
+            ("BUS PEAK -6.0 dBFS".into(), 0.5, false)
+        );
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.] {
+            assert_eq!(
+                peak_display(Some(invalid)),
+                ("BUS INVALID".into(), 0., true)
+            );
+        }
+    }
+
+    #[test]
+    fn bus_peak_gui_measures_actual_post_fader_mix_pause_and_silence() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        assert_eq!(engine.output_peak(), None);
+        assert_eq!(ui.get_output_peak_level(), 0.);
+        assert!(ui.get_output_peak_caption().contains('\u{2014}'));
+        let a = wav_file(8192, 48_000 * 3);
+        let b = wav_file(4096, 48_000 * 3);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let mut render = || {
+            output.by_ref().take(9600).for_each(drop);
+            c.tick();
+        };
+        render();
+        assert!((engine.output_peak().unwrap() - 0.1875).abs() < 0.00001);
+        assert!((ui.get_output_peak_level() - 0.1875).abs() < 0.00001);
+        assert_eq!(ui.get_output_peak_caption(), "BUS PEAK -14.5 dBFS");
+        control(&ui, "Channel A fader").set_accessible_value("0.8");
+        control(&ui, "Channel B fader").set_accessible_value("0.4");
+        control(&ui, "Crossfader").set_accessible_value("0.25");
+        render();
+        assert!((engine.output_peak().unwrap() - 0.1625).abs() < 0.00001);
+        control(&ui, "Crossfader").set_accessible_value("1");
+        render();
+        assert!((ui.get_output_peak_level() - 0.05).abs() < 0.00001);
+        control(&ui, "Crossfader").set_accessible_value("0");
+        render();
+        assert!((ui.get_output_peak_level() - 0.2).abs() < 0.00001);
+        let held = ui.get_output_peak_caption();
+        c.tick(); // No output pulled: a last-window meter must retain its real prior reading.
+        assert_eq!(ui.get_output_peak_caption(), held);
+        engine.pause(DeckId::A);
+        engine.pause(DeckId::B);
+        render();
+        assert_eq!(engine.output_peak(), Some(0.));
+        assert_eq!(ui.get_output_peak_level(), 0.);
+        assert!(!ui.get_output_peak_warning());
+        assert_eq!(ui.get_output_peak_caption(), "BUS PEAK -\u{221e} dBFS");
+        ui.show().unwrap();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let meter = control(&ui, "Post-fader bus sample peak");
+            assert!(meter.size().width >= 170. && meter.size().height >= 22.);
+            assert!(meter.absolute_position().x >= 0.);
+            assert!(meter.absolute_position().x + meter.size().width <= width + 0.1);
+            assert!(
+                meter.absolute_position().y + meter.size().height
+                    <= control(&ui, "Shared waveform area").absolute_position().y
+            );
+            for label in ["Channel A fader", "Crossfader", "Channel B fader"] {
+                let slider = control(&ui, label);
+                assert!(slider.size().width > 0.);
+                assert!(
+                    slider.absolute_position().x + slider.size().width
+                        <= meter.absolute_position().x + 0.1
+                );
+            }
+        }
+    }
+
     #[test]
     fn source_time_formatting_handles_boundaries_long_tracks_and_overrun() {
         assert_eq!(precise_time(Duration::from_nanos(999_999)), "00:00.000");

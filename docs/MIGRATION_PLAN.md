@@ -30,9 +30,9 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 175 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Aktuellen lokalen Stand geprüft: 180 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
-Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
+Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
 ### Nächste und offene Arbeitspakete
 
@@ -67,6 +67,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Opt-in Beat-Quantisierung neuer HotCue-Slots mit Grid-/Draft-/Endschutz, exaktem Recall und SQLite-Neustarttests.
 - [ ] ☐ Musikalische/Hardware-Langzeitqualifikation von Sync, hörbare Übergänge, variable Taktarten, Keylock und geplante quantisierte Trigger.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
+- [x] ✅ Gemessener Post-Fader-Bus-Sample-Peak aus vollständigen50-ms-Renderfenstern mit dBFS-Anzeige; kein True-Peak-/Lautheits-/Hardware-Nachweis.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
 - [ ] ☐ MIDI/HID-Controller und Hardware-Feedback.
@@ -434,3 +435,10 @@ The next bounded UI/reference item replaces elapsed/total whole seconds with a t
 ## Focus-scoped detail keyboard zoom (2026-10-27)
 
 Bounded UI-reference follow-up: per-deck detail waveforms route focused + and - key presses/repeats to the existing zoom path, with2–32s bounds and no global shortcut. Click-to-focus retains existing click-to-seek. Ctrl/Alt/Meta combinations pass through, Shift is allowed, text fields retain input, and overview keyboard zoom remains disabled. Two headless tests exercise actual pointer/keyboard WindowEvents, both deck focus paths/two supported sizes, modifier/repeat/boundary behavior and preserved audio state after zoom. Native focus/readability/screen-reader acceptance, scrubbing and pitch-scaled waveform reference parity remain open. See LOCAL_VALIDATION.md for final review/check/publication evidence.
+
+
+## Post-fader bus sample-peak meter (2026-10-27)
+
+Bounded mixer foundation: a focused PeakAccumulator computes aggregate absolute sample maxima across all output channels in ceil(rate/20)-frame windows. RenderBus integrates it without changing returned samples or existing frame-clock counting. One packed AtomicU64 store per completed window publishes value plus validity sequence; control reads once and formats dBFS. Non-finite samples invalidate a whole window. GUI adds BUS PEAK beside the existing faders with full-scale warning and accessible scope description. Producer callbacks gain no loops, locks, allocation, syscalls or logarithms from the meter; existing Rodio internals retain their own limitations.
+
+Acceptance scope is offline sample/atomic/window/gain regression and headless GUI bounds. The latest window can remain after rendering stops or overwrite a peak before a delayed GUI poll. This is not true peak, loudness, physical output timing, a limiter, clip latch or native visual/listening acceptance. Individual channel meters, persistent track gain, EQ/filter/effects and routing/hardware remain open. Actual checks/review/publication evidence is in LOCAL_VALIDATION.md.

@@ -719,3 +719,23 @@ Independent reviewer configured gpt-6.1-sol / medium accepted runtime, tests and
 
 
 Final cargo build --release passed(exit0;56.64s). Rebuilt executable MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. Final documentation-only result/count updates followed the accepted independent review. Commit/push identity is recorded in Git history; native visual/focus/screen-reader/listening and full reference-parity gates remain open.
+
+
+## QWEN / post-fader bus sample-peak meter (2026-10-27)
+
+Started from clean9287bc6. Scope: new peak_meter.rs accumulator, RenderBus hook/publication, engine read, control-plane dBFS formatting and compact Slint mixer display, tests/docs. QWEN API reported qwen-3.6-35b-sovereign (thinking disabled) and generated all runtime fragments. Codex inspected/placed them, shortened verbose module comments, mechanically adapted the generated read_peak associated-function path and decoded returned JSON string escapes, and authored independent tests/docs. One local Python diagnostic print hit console cp1252 on the infinity character before any edits; subsequent inspection used escaped JSON and file writes explicitly use UTF-8. No implementation-model substitution; API identity is reported rather than independently attested. No credential/base URL/raw response was printed or committed.
+
+Targeted cargo test peak_ -- --nocapture passed6/6(exit0,1.16s;15.05s compile): five new tests plus an existing waveform regression. New tests cover ceiling frame rounding at1/44100/44101/48000/96000Hz, negative/overrange peaks, NaN and +/-infinity invalidation/reset, sequence wrap skippingzero, concurrent readers, partial stereo frame nonpublication, bit-identical returned samples, real dual-deck post-fader sums with both channel faders/crossfader endpoints, pause/silence, unavailable/dB/full-scale captions and GUI bounds at850x740/1280x860. Existing warmed bus allocation test passed(exit0,.04s) after runtime integration; its final assertion now also checks the published peak across1/2/4channel formats.
+
+Independent reviewer configured gpt-6.1-sol / medium caught a blocking integration attribute mistake: inserting output_peak immediately before test-only output_volumes accidentally attached its existing cfg(test) to the new production method. Codex moved the existing attribute back to output_volumes; reviewer inspected and confirmed the corrected placement. Two whitespace-only Slint lines were stripped after diffcheck. Neither issue is bypassed; final production checks and review results follow.
+
+Meter semantics: max absolute sample across all channels per latest completed ceil(rate/20) frame window; >=1 means full-scale warning, not measured analog clipping. NaN marks an invalid window. GUI logarithms/strings stay on the control plane. Audio instrumentation has bounded local arithmetic and one atomic store/window, no additional locks/allocations/syscalls/loops. Full Rodio graph lock-free behavior is not claimed. Last window remains when the renderer stops and intervening windows may be overwritten before a slow GUI poll. No true peak, RMS/loudness, hold/clip latch, limiter, individual channel meter, device-clock or native visual/listening acceptance is claimed.
+
+
+First strict Clippy gate failed(exit101): redundant_guards in the QWEN-generated silence match arm. Applied Clippy's mechanical Some(0.) pattern suggestion instead of Some(p) if p==0., with no suppression. Full gates restart against this corrected source; earlier targeted checks are not treated as final validation of the changed match spelling.
+
+
+Corrected-state final cargo fmt --check and strict cargo clippy --all-targets -- -D warnings passed(exit0;Clippy12.56s). Full cargo test passed180/180(exit0;17.97s;0failed/ignored). Independent configured gpt-6.1-sol / medium accepted runtime, all three documentation checkpoints and the final silence-arm style correction. Its actual checks passed cargo check --locked(exit0;35.54s), cargo test --locked peak_ -- --test-threads=1(6/6;exit0;1.16s), warmed allocation regression(1/1;exit0) and diffcheck(exit0). Blocking attribute finding is resolved; no actionable findings remain. Final release result follows. Subsequent changes are result/plan documentation only.
+
+
+Final cargo build --release passed(exit0;1m06s). Rebuilt executable MP3 analysis passed(exit0):44100Hz/2channels/398592frames/9.038s/peak0.0883/RMS0.0592. git diff --check passed. No runtime/test changes followed accepted final review and corrected-state green gates. Only result/plan count updates followed. Publication identity is recorded by Git history. Mixer-DSP overall remains partial; sample-peak measurement is not full mixer feature parity.

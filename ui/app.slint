@@ -584,6 +584,9 @@ export component AppWindow inherits Window {
     in property <string> left-time: "SIMULATION";
     in property <string> right-time: "SIMULATION";
     in property <string> status;
+    in property<string> output-peak-caption:"BUS PEAK —";
+    in property<float> output-peak-level:0;
+    in property<bool> output-peak-warning:false;
     in-out property <float> channel-a: 1;
     in-out property <float> channel-b: 1;
     in-out property <float> crossfader: 0.5;
@@ -789,6 +792,29 @@ export component AppWindow inherits Window {
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
                 Text { text: "B"; color: #ffae58; vertical-alignment: center; }
                 Slider { accessible-label: "Channel B fader"; minimum: 0; maximum: 1; value <=> root.channel-b; changed => { root.mixer-changed(); } }
+                Rectangle {
+                    width: 170px;
+                    height: 22px;
+                    vertical-stretch: 0;
+                    background: #0b1119;
+                    accessible-role: image;
+                    accessible-label: "Post-fader bus sample peak";
+                    accessible-description: root.output-peak-caption + ". Latest completed 50 ms producer window across all channels; retained when rendering stops. Not hardware timing or true peak.";
+
+                    Rectangle {
+                        width: parent.width * clamp(root.output-peak-level, 0, 1);
+                        height: parent.height;
+                        background: root.output-peak-warning ? #b03535 : #216546;
+                    }
+
+                    Text {
+                        text: root.output-peak-caption;
+                        color: #edf2fa;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
         Rectangle {

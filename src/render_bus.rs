@@ -11,6 +11,7 @@ use std::{
 #[derive(Default)]
 pub(crate) struct RenderClock {
     pub completed: AtomicU64,
+    pub peak_window: AtomicU64,
 }
 const MAX_FRAME_AGE_MS: u64 = 5;
 const MAX_PROGRESS_GAP: Duration = Duration::from_millis(100);
@@ -58,6 +59,7 @@ pub(crate) struct RenderBus<S> {
     channels: u16,
     rate: u32,
     channel: u16,
+    peak: crate::peak_meter::PeakAccumulator,
 }
 impl<S: Source> RenderBus<S> {
     pub fn new(source: S) -> (Self, Arc<RenderClock>) {
@@ -72,6 +74,7 @@ impl<S: Source> RenderBus<S> {
                 channels,
                 rate,
                 channel: 0,
+                peak: crate::peak_meter::PeakAccumulator::new(rate),
             },
             clock,
         )
@@ -82,9 +85,11 @@ impl<S: Source> Iterator for RenderBus<S> {
     fn next(&mut self) -> Option<f32> {
         // MixerSource can admit late sources after returning None; retain the bus at silence.
         let sample = self.source.next().unwrap_or(0.);
+        self.peak.sample(sample);
         self.channel += 1;
         if self.channel == self.channels {
             self.channel = 0;
+            self.peak.complete_frame(&self.clock.peak_window);
             self.clock.completed.fetch_add(1, Ordering::Release);
         }
         Some(sample)
@@ -183,6 +188,44 @@ mod tests {
         );
     }
     #[test]
+    fn bus_peak_uses_complete_windows_all_channels_and_preserves_output_bits() {
+        let samples: Vec<f32> = (0..100)
+            .map(|i| {
+                if i == 99 {
+                    -1.25
+                } else if i % 2 == 0 {
+                    -0.25
+                } else {
+                    0.5
+                }
+            })
+            .collect();
+        let source = rodio::buffer::SamplesBuffer::new(2, 1000, samples.clone());
+        let (mut bus, clock) = RenderBus::new(source);
+        for sample in &samples[..99] {
+            assert_eq!(bus.next().unwrap().to_bits(), sample.to_bits());
+            assert_eq!(
+                crate::peak_meter::PeakAccumulator::read_peak(&clock.peak_window),
+                None
+            );
+        }
+        assert_eq!(clock.completed.load(Ordering::Acquire), 49);
+        assert_eq!(bus.next().unwrap().to_bits(), samples[99].to_bits());
+        assert_eq!(
+            crate::peak_meter::PeakAccumulator::read_peak(&clock.peak_window),
+            Some(1.25)
+        );
+        for _ in 0..100 {
+            assert_eq!(bus.next(), Some(0.));
+        }
+        assert_eq!(
+            crate::peak_meter::PeakAccumulator::read_peak(&clock.peak_window),
+            Some(0.)
+        );
+        assert_eq!(clock.completed.load(Ordering::Acquire), 100);
+    }
+
+    #[test]
     fn warmed_bus_pull_adds_no_allocations_and_counts_frames_at_supported_formats() {
         for (channels, rate) in [(1, 44100), (2, 48000), (4, 96000)] {
             let (input, source) = rodio::mixer::mixer(channels, rate);
@@ -201,6 +244,10 @@ mod tests {
                 }
             });
             assert_eq!(allocations, 0);
+            assert_eq!(
+                crate::peak_meter::PeakAccumulator::read_peak(&clock.peak_window),
+                Some(0.125)
+            );
             assert_eq!(
                 clock.completed.load(Ordering::Acquire),
                 100016 / u64::from(channels)
