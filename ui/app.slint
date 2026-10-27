@@ -209,8 +209,15 @@ component CompactDeck inherits Rectangle {
             seek(value) => { if audio-enabled { root.seek(value); } else { root.position = value; } }
         }
         HorizontalLayout {
-            Text { text: "ELAPSED / TOTAL  " + time-text; color: #a8b3c3; font-size: 11px; }
-            Text { text: round(position) + "%"; color: accent; font-size: 11px; horizontal-alignment: right; }
+            Text {
+                text: root.time-text;
+                color: #a8b3c3;
+                font-size: 11px;
+                overflow: elide;
+                accessible-role: text;
+                accessible-label: root.deck-label + " source time";
+                accessible-description: root.time-text;
+            }
         }
         Slider { minimum: 0; maximum: 100; value <=> position; accessible-label: deck-label + " position"; enabled: !audio-enabled || loaded; changed(value) => { if audio-enabled { root.seek(value); } } }
         if root.tools-panel == 0 : HorizontalLayout {

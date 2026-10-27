@@ -2461,7 +2461,7 @@ impl AudioController {
                     }
                 }
             }
-            let time = format!("{} / {}", clock(s.position), clock(s.duration));
+            let time = deck_time(s.position, s.duration);
             let caption = preview.map_or_else(
                 || "GRID OFF".into(),
                 |grid| format!("{} BPM · MANUAL 4/4", grid.bpm()),
@@ -2544,9 +2544,22 @@ fn loop_overlay(
     }
 }
 
-fn clock(time: std::time::Duration) -> String {
-    let secs = time.as_secs();
-    format!("{:02}:{:02}", secs / 60, secs % 60)
+fn deck_time(position: std::time::Duration, duration: std::time::Duration) -> String {
+    let elapsed = position.min(duration);
+    let remaining = duration.saturating_sub(position);
+    format!(
+        "ELAPSED {}   LEFT {}\nTOTAL {}",
+        precise_time(elapsed),
+        precise_time(remaining),
+        precise_time(duration)
+    )
+}
+
+fn precise_time(time: std::time::Duration) -> String {
+    let total_ms = time.as_millis();
+    let secs = total_ms / 1000;
+    let millis = total_ms % 1000;
+    format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, millis)
 }
 
 #[cfg(test)]
@@ -2560,6 +2573,100 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+    #[test]
+    fn source_time_formatting_handles_boundaries_long_tracks_and_overrun() {
+        assert_eq!(precise_time(Duration::from_nanos(999_999)), "00:00.000");
+        assert_eq!(precise_time(Duration::from_millis(59_999)), "00:59.999");
+        assert_eq!(precise_time(Duration::from_secs(60)), "01:00.000");
+        assert_eq!(precise_time(Duration::from_millis(3_600_123)), "60:00.123");
+        assert_eq!(precise_time(Duration::MAX), "307445734561825860:15.999");
+        assert_eq!(
+            deck_time(Duration::ZERO, Duration::ZERO),
+            "ELAPSED 00:00.000   LEFT 00:00.000\nTOTAL 00:00.000"
+        );
+        assert_eq!(
+            deck_time(Duration::from_millis(250), Duration::from_millis(1_501)),
+            "ELAPSED 00:00.250   LEFT 00:01.251\nTOTAL 00:01.501"
+        );
+        assert_eq!(
+            deck_time(Duration::from_secs(3), Duration::from_secs(2)),
+            "ELAPSED 00:02.000   LEFT 00:00.000\nTOTAL 00:02.000"
+        );
+    }
+
+    #[test]
+    fn source_time_display_tracks_both_decks_seek_pitch_pause_and_eof() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        assert_eq!(
+            ui.get_left_time(),
+            "ELAPSED 00:00.000   LEFT 00:00.000\nTOTAL 00:00.000"
+        );
+        let file = wav_file(8192, 96_000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(1_250))
+            .unwrap();
+        engine
+            .seek_position(DeckId::B, Duration::from_millis(500))
+            .unwrap();
+        engine.set_speed(DeckId::A, 2.).unwrap();
+        engine.set_speed(DeckId::B, 0.5).unwrap();
+        c.tick();
+        let a = "ELAPSED 00:01.250   LEFT 00:00.750\nTOTAL 00:02.000";
+        let b = "ELAPSED 00:00.500   LEFT 00:01.500\nTOTAL 00:02.000";
+        assert_eq!(ui.get_left_time(), a);
+        assert_eq!(ui.get_right_time(), b);
+        engine.play(DeckId::A);
+        c.tick();
+        assert_eq!(ui.get_left_time(), a); // No produced frames: no invented time progression.
+        engine.pause(DeckId::A);
+        c.tick();
+        assert_eq!(ui.get_left_time(), a);
+        ui.show().unwrap();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let shared = control(&ui, "Shared waveform area");
+            for deck in ["DECK A", "DECK B"] {
+                let time = control(&ui, &format!("{deck} source time"));
+                let seek = control(&ui, &format!("{deck} position"));
+                assert!(time.size().height >= 22., "both time lines have height");
+                assert!(time.size().width >= 275., "compact time row has width");
+                assert!(time.absolute_position().x >= 0.);
+                assert!(time.absolute_position().x + time.size().width <= width + 0.1);
+                assert!(
+                    time.absolute_position().y + time.size().height
+                        <= seek.absolute_position().y + 0.1
+                );
+                assert!(seek.absolute_position().y < shared.absolute_position().y);
+            }
+        }
+        control(&ui, "DECK A position").set_accessible_value("100");
+        c.tick();
+        assert_eq!(
+            ui.get_left_time(),
+            "ELAPSED 00:02.000   LEFT 00:00.000\nTOTAL 00:02.000"
+        );
+        assert_eq!(ui.get_right_time(), b);
+        control(&ui, "DECK B cue").invoke_accessible_default_action();
+        c.tick();
+        assert_eq!(
+            ui.get_right_time(),
+            "ELAPSED 00:00.000   LEFT 00:02.000\nTOTAL 00:02.000"
+        );
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::B).playing);
+    }
+
     fn control(ui: &AppWindow, label: &str) -> ElementHandle {
         let controls: Vec<_> = ElementHandle::find_by_accessible_label(ui, label).collect();
         assert_eq!(controls.len(), 1, "accessible control {label}");
