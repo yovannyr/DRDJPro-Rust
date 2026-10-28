@@ -97,22 +97,27 @@ impl PreparedTrack {
             return Err("Select a supported audio file".into());
         }
         let canonical = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
-        let decoder = Decoder::try_from(File::open(&canonical).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let channels = decoder.channels();
-        let rate = decoder.sample_rate();
-        if channels == 0 || rate == 0 {
-            return Err("Invalid audio format".into());
-        }
-        let hint = decoder
-            .total_duration()
-            .and_then(|d| {
-                d.as_nanos()
-                    .checked_mul(u128::from(rate))?
-                    .checked_mul(u128::from(channels))
-            })
-            .map_or(0, |n| (n / 1_000_000_000).min(limit as u128) as usize);
-        let samples = collect_pcm(decoder, hint, limit, cancel)?;
+        let (channels, rate, samples) = if crate::opus_audio::is_opus(&canonical)? {
+            crate::opus_audio::decode(&canonical, limit, cancel)?
+        } else {
+            let decoder = Decoder::try_from(File::open(&canonical).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+            let channels = decoder.channels();
+            let rate = decoder.sample_rate();
+            if channels == 0 || rate == 0 {
+                return Err("Invalid audio format".into());
+            }
+            let hint = decoder
+                .total_duration()
+                .and_then(|d| {
+                    d.as_nanos()
+                        .checked_mul(u128::from(rate))?
+                        .checked_mul(u128::from(channels))
+                })
+                .map_or(0, |n| (n / 1_000_000_000).min(limit as u128) as usize);
+            let samples = collect_pcm(decoder, hint, limit, cancel)?;
+            (channels, rate, samples)
+        };
         if samples.is_empty() || samples.len() % usize::from(channels) != 0 {
             return Err("No complete audio frames decoded".into());
         }

@@ -27,6 +27,25 @@ impl AudioAnalysis {
 
 /// Decode the first decodable audio track and validate its samples.
 pub fn analyze_file(path: &Path) -> Result<AudioAnalysis, Box<dyn Error>> {
+    if crate::opus_audio::is_opus(path)? {
+        let (channels, rate, samples) = crate::opus_audio::decode(
+            path,
+            64 * 1024 * 1024,
+            &crate::cancellation::Cancellation::default(),
+        )?;
+        let sum = samples
+            .iter()
+            .map(|&s| f64::from(s) * f64::from(s))
+            .sum::<f64>();
+        let peak = samples.iter().fold(0.0_f32, |p, s| p.max(s.abs()));
+        return Ok(AudioAnalysis {
+            sample_rate: rate,
+            channels: usize::from(channels),
+            frames: (samples.len() / usize::from(channels)) as u64,
+            peak,
+            rms: (sum / samples.len() as f64).sqrt() as f32,
+        });
+    }
     let source = Box::new(File::open(path)?);
     let stream = MediaSourceStream::new(source, Default::default());
     let mut hint = Hint::new();

@@ -44,7 +44,7 @@ impl TrackMetadata {
         )
     }
 }
-fn text(value: &str) -> String {
+pub(crate) fn text(value: &str) -> String {
     value
         .trim()
         .chars()
@@ -67,6 +67,25 @@ fn tags(output: &mut TrackMetadata, revision: &MetadataRevision) {
     }
 }
 pub fn read(path: &Path) -> TrackMetadata {
+    read_cancellable(path, &crate::cancellation::Cancellation::default())
+        .expect("a fresh cancellation token cannot be cancelled")
+}
+
+pub(crate) fn read_cancellable(
+    path: &Path,
+    cancel: &crate::cancellation::Cancellation,
+) -> Result<TrackMetadata, String> {
+    cancel.check()?;
+    if crate::opus_audio::is_opus(path).unwrap_or(false) {
+        let metadata =
+            crate::opus_audio::metadata(path, cancel).unwrap_or_else(|error| TrackMetadata {
+                scanned: true,
+                error: Some(text(&error)),
+                ..Default::default()
+            });
+        cancel.check()?;
+        return Ok(metadata);
+    }
     let result = (|| -> Result<TrackMetadata, Box<dyn std::error::Error>> {
         let stream = MediaSourceStream::new(Box::new(File::open(path)?), Default::default());
         let mut hint = Hint::new();
@@ -109,11 +128,13 @@ pub fn read(path: &Path) -> TrackMetadata {
         }
         Ok(output)
     })();
-    result.unwrap_or_else(|e| TrackMetadata {
+    let metadata = result.unwrap_or_else(|e| TrackMetadata {
         scanned: true,
         error: Some(text(&e.to_string())),
         ..Default::default()
-    })
+    });
+    cancel.check()?;
+    Ok(metadata)
 }
 
 #[cfg(test)]

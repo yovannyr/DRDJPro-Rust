@@ -2059,7 +2059,7 @@ impl AudioController {
                     cancel.check()?;
                     let path = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
                     let track = PreparedTrack::open_cancellable(&path, &cancel)?;
-                    let mut metadata = crate::track_metadata::read(&path);
+                    let mut metadata = crate::track_metadata::read_cancellable(&path, &cancel)?;
                     metadata.duration_ms = Some(track.duration().as_millis() as u64);
                     metadata.duration_exact = true;
                     cancel.check()?;
@@ -6148,6 +6148,8 @@ mod tests {
             "format-flac.flac",
             "format-aiff.aiff",
             "format-vorbis.ogg",
+            "format-opus.opus",
+            "format-opus-mono.opus",
         ];
         let mut paths = Vec::new();
         for name in names {
@@ -6158,7 +6160,15 @@ mod tests {
             std::fs::copy(source, &destination).unwrap();
             let analysis = crate::audio::analyze_file(&destination).unwrap();
             assert_eq!(analysis.sample_rate, 48_000, "{name}");
-            assert_eq!(analysis.channels, 2, "{name}");
+            assert_eq!(
+                analysis.channels,
+                if name == "format-opus-mono.opus" {
+                    1
+                } else {
+                    2
+                },
+                "{name}"
+            );
             assert!((40_000..=52_000).contains(&analysis.frames), "{name}");
             assert!(analysis.peak > 0.01, "{name}");
             let metadata = crate::track_metadata::read(&destination);

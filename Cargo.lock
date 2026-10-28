@@ -1124,6 +1124,7 @@ name = "drdjpro-ui-spike"
 version = "0.1.0"
 dependencies = [
  "i-slint-backend-testing",
+ "opus-pure",
  "rfd",
  "rodio",
  "rusqlite",
@@ -3430,6 +3431,12 @@ dependencies = [
  "critical-section",
  "portable-atomic",
 ]
+
+[[package]]
+name = "opus-pure"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4de7c2ad44427a636b27bf0b03eb29e713775ba1b45ff31a0618c19ee5adb215"
 
 [[package]]
 name = "orbclient"

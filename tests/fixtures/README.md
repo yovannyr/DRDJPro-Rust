@@ -20,3 +20,10 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:sample_ra
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=1" -ac 2 -metadata "title=Fixture Tone" -metadata "artist=Fixture Artist" -c:a pcm_s16be tests/fixtures/format-aiff.aiff
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=1" -ac 2 -metadata "title=Fixture Tone" -metadata "artist=Fixture Artist" -c:a libvorbis tests/fixtures/format-vorbis.ogg
 ```
+
+The `format-opus.opus` and `format-opus-mono.opus` fixtures are original synthetic one-second 440 Hz tones at 48 kHz, tagged with the same title and artist. Generate them with FFmpeg and libopus:
+
+```sh
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=1" -ac 2 -metadata "title=Fixture Tone" -metadata "artist=Fixture Artist" -c:a libopus tests/fixtures/format-opus.opus
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=1" -ac 1 -metadata "title=Fixture Tone" -metadata "artist=Fixture Artist" -c:a libopus tests/fixtures/format-opus-mono.opus
+```

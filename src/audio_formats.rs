@@ -1,7 +1,9 @@
 //! Supported extensions; actual decoding still validates the container and codec.
 use std::path::Path;
 
-pub const EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "flac", "aif", "aiff", "ogg", "oga"];
+pub const EXTENSIONS: &[&str] = &[
+    "mp3", "wav", "m4a", "flac", "aif", "aiff", "ogg", "oga", "opus",
+];
 
 pub fn supported(path: &Path) -> bool {
     path.extension()
@@ -25,7 +27,7 @@ mod tests {
                 extension.to_uppercase()
             ))));
         }
-        for name in ["song.opus", "song.m4p", "song.wma", "song.txt", "song"] {
+        for name in ["song.m4p", "song.wma", "song.txt", "song"] {
             assert!(!supported(Path::new(name)));
         }
     }

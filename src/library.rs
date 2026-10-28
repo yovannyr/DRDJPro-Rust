@@ -88,9 +88,10 @@ pub(crate) fn inspect_paths_cancellable(
         let supported = crate::audio_formats::supported(&path);
         match std::fs::canonicalize(&path) {
             Ok(path) if supported && path.is_file() => {
-                result
-                    .metadata
-                    .push((path.clone(), crate::track_metadata::read(&path)));
+                result.metadata.push((
+                    path.clone(),
+                    crate::track_metadata::read_cancellable(&path, cancel)?,
+                ));
                 result.paths.push(path);
             }
             _ => result.rejected += 1,

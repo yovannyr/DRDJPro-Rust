@@ -16,7 +16,8 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 
 - [x] ✅ Alle 59 nummerierten UI-Referenzpunkte im Komponenten-Inventar erfasst; vollständiger Code-/Referenztest-Abgleich bleibt offen.
 - [x] ✅ Reale MP3/WAV-Auswahl und Hintergrund-Loading für Deck A/B.
-- [x] ✅ M4A (AAC-LC/ALAC), FLAC, AIFF/AIF und Ogg/Vorbis durch Dateiauswahl, Bibliothek und beide Decks; Opus und weitere Codecs bleiben offen.
+- [x] ✅ M4A (AAC-LC/ALAC), FLAC, AIFF/AIF und Ogg/Vorbis durch Dateiauswahl, Bibliothek und beide Decks; Weitere Codecs bleiben offen.
+- [x] ✅ Ogg/Opus (Mono und Stereo) durch Dateiauswahl, Bibliothek und beide Decks; verkettete Streams und Mehrkanal bleiben offen.
 - [x] ✅ Play/Pause, Cue-to-zero, Positionsanzeige und Seek; Schutz vor Ersetzen eines spielenden Decks.
 - [x] ✅ Channel-Fader und Crossfader mit der Rodio-Engine verbunden.
 - [x] ✅ Beschriftete verstrichene Zeit, Restzeit und Gesamtdauer in Original-Trackzeit mit Millisekunden für beide Decks; native Lesbarkeitsprüfung bleibt offen.
