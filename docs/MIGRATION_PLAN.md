@@ -90,6 +90,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Sync-Ausrichtung um Perioden mit 3, 5 und 7 Beats erweitert; vollständige Grid-Taktarten und Speicherung bleiben offen.
   - [x] ✅ Konstante Taktlänge von 1–16 Viertelschlägen im Grid-Modell, Grid-Editor und SQLite-Schema 7; bestehende Grids bleiben bei 4. Gemischte Taktarten und andere Nenner bleiben offen.
   - [x] ✅ Software-Keylock an beiden Decks: GUI und MC4000-Taste, asynchrone Tempovorbereitung, Quellzeit, Seek/Cue/Pause/EOF und Loop-Erhalt automatisiert geprüft.
+  - [x] ✅ Keylock-Umschaltungen im laufenden Deck über 5 ms geglättet; Stereo, Pause/Seek sowie Ein-/Aus-/Tempoübernahme mit Offline-PCM geprüft. Musikalische Hörabnahme bleibt offen.
   - [ ] ☐ Gemischte Taktarten, Keylock zusammen mit kontinuierlichem Sync/Nudge, hörbare Übergänge und physische Hardware-Langzeitabnahme bleiben offen.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [x] ✅ Gemessener Post-Fader-Bus-Sample-Peak aus vollständigen50-ms-Renderfenstern mit dBFS-Anzeige; kein True-Peak-/Lautheits-/Hardware-Nachweis.

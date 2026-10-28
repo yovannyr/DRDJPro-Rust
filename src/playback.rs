@@ -494,6 +494,19 @@ impl DualDeckEngine {
                 )
             }
         };
+        let handoff = {
+            let deck = self.decks[id.index()].borrow();
+            deck.track
+                .as_ref()
+                .filter(|old| {
+                    playing
+                        && Arc::ptr_eq(&old.detail, &track.detail)
+                        && old.keylock.as_ref().map(|k| Arc::as_ptr(&k.1))
+                            != track.keylock.as_ref().map(|k| Arc::as_ptr(&k.1))
+                })
+                .and(deck.render.as_ref())
+                .cloned()
+        };
         let region = source.loop_region();
         {
             let mut deck = self.decks[id.index()].borrow_mut();
@@ -527,7 +540,7 @@ impl DualDeckEngine {
             }
         }
         self.collect_retired();
-        let render = RenderControl::new(
+        let render = RenderControl::new_with_history(
             speed.output_rate().get(),
             playing,
             region,
@@ -540,6 +553,7 @@ impl DualDeckEngine {
                 output_rate: self.output_rate,
                 frames: track.samples.frames(),
             },
+            handoff.as_deref(),
         );
         let renderer = DeckRenderer::new(
             source,
@@ -548,6 +562,7 @@ impl DualDeckEngine {
             self.output_rate,
         )
         .with_clock(Arc::clone(&self.render_clock))
+        .with_handoff(handoff)
         .with_keylock(track.keylock.as_ref().map(|k| Arc::clone(&k.1)));
         let source_retired = Arc::new(AtomicBool::new(false));
         let (sink, queue) = Sink::new();
@@ -1349,19 +1364,42 @@ mod tests {
             // A nudge arriving during preparation must not leak into the adopted renderer.
             engine.play(id);
             engine.set_nudge(id, 1).unwrap();
+            let previous = output.by_ref().take(9600).last().unwrap();
+            let before = engine.snapshot(id).position.as_secs_f64();
             engine
                 .adopt_keylock(id, Some((tempo, prepared.clip)))
                 .unwrap();
             engine.play(id);
             let pcm: Vec<_> = output.by_ref().take(rate as usize).collect();
+            assert!((pcm[0] - previous).abs() < 1e-6, "Keylock enable handoff");
             let hz = pcm[12000..36000]
                 .windows(2)
                 .filter(|s| s[0] <= 0.0 && s[1] > 0.0)
                 .count() as f64
                 * 2.0;
             assert!((hz - 440.0).abs() < 3.0, "{hz}");
-            assert!((engine.snapshot(id).position.as_secs_f64() - tempo).abs() < 0.02);
+            assert!((engine.snapshot(id).position.as_secs_f64() - before - tempo).abs() < 0.02);
             assert!((engine.snapshot(id).duration.as_secs_f64() - 3.0).abs() < 0.001);
+            let changed_tempo = if tempo > 1. { 0.8 } else { 1.25 };
+            let job = engine.prepare_keylock(id, 2, changed_tempo).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let changed = loop {
+                if let Some(result) = job.poll().unwrap() {
+                    break result.unwrap();
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            // The intermediate disabled renderer is deliberately never pulled.
+            engine.adopt_keylock(id, None).unwrap();
+            engine
+                .adopt_keylock(id, Some((changed_tempo, changed.clip)))
+                .unwrap();
+            let handoff: Vec<_> = output.by_ref().take(300).collect();
+            assert!(
+                (handoff[0] - pcm.last().unwrap()).abs() < 1e-6,
+                "Keylock tempo handoff"
+            );
             engine
                 .seek_position(id, Duration::from_millis(1500))
                 .unwrap();
@@ -1383,7 +1421,7 @@ mod tests {
                 .restore_loop(id, Duration::from_millis(250), Duration::from_millis(500))
                 .unwrap();
             engine.activate_loop(id).unwrap();
-            output.by_ref().take(48000).for_each(drop);
+            let last_keylocked = output.by_ref().take(48000).last().unwrap();
             let looped = engine.snapshot(id);
             assert!(looped.loop_active);
             assert!(
@@ -1391,6 +1429,10 @@ mod tests {
                     && looped.position < Duration::from_millis(500)
             );
             engine.adopt_keylock(id, None).unwrap();
+            assert!(
+                (output.next().unwrap() - last_keylocked).abs() < 1e-6,
+                "Keylock disable handoff"
+            );
             assert_eq!(engine.keylock_factor(id), None);
             assert!(engine.snapshot(id).loop_active);
             assert_eq!(engine.snapshot(id).loop_in, looped.loop_in);

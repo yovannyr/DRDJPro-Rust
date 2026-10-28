@@ -68,14 +68,26 @@ pub(crate) struct RenderControl {
     stamp_frame: AtomicU64,
     stamp_command: AtomicU64,
     pub stopped: AtomicBool,
+    last_sample: Arc<[AtomicU32; 2]>,
 }
 impl RenderControl {
+    #[cfg(test)]
     pub fn new(
         rate: u32,
         playing: bool,
         region: Option<FrameLoop>,
         seek: SeekFrame,
         format: RenderFormat,
+    ) -> Arc<Self> {
+        Self::new_with_history(rate, playing, region, seek, format, None)
+    }
+    pub fn new_with_history(
+        rate: u32,
+        playing: bool,
+        region: Option<FrameLoop>,
+        seek: SeekFrame,
+        format: RenderFormat,
+        previous: Option<&Self>,
     ) -> Arc<Self> {
         assert!(format.source_rate > 0 && format.output_rate > 0);
         assert!(format.frames as u128 * u128::from(format.output_rate) <= u128::from(u64::MAX));
@@ -104,6 +116,10 @@ impl RenderControl {
             stamp_frame: AtomicU64::new(0),
             stamp_command: AtomicU64::new(0),
             stopped: AtomicBool::new(false),
+            last_sample: previous.map_or_else(
+                || Arc::new([const { AtomicU32::new(0) }; 2]),
+                |old| Arc::clone(&old.last_sample),
+            ),
         })
     }
     // Single control-plane writer (the engine is !Send/!Sync). All payload fields are atomic.
@@ -282,7 +298,15 @@ fn wrap_units(phase: u128, region: Option<FrameLoop>, format: RenderFormat) -> u
         phase.min(format.frames as u128 * u128::from(format.output_rate))
     }
 }
+struct Handoff {
+    previous: Arc<RenderControl>,
+    offsets: [f32; 2],
+    elapsed: u32,
+    frames: u32,
+    seek_serial: u64,
+}
 pub(crate) struct DeckRenderer {
+    handoff: Option<Handoff>,
     keylock: Option<Arc<drdj_keylock::PreparedKeylock>>,
     samples: PcmSource,
     control: Arc<RenderControl>,
@@ -306,6 +330,7 @@ impl DeckRenderer {
         assert_eq!(control.format.output_rate, rate);
         assert_eq!(control.format.frames, samples.frames());
         Self {
+            handoff: None,
             keylock: None,
             samples,
             control,
@@ -318,6 +343,17 @@ impl DeckRenderer {
             applied_trigger: 0,
             clock: None,
         }
+    }
+    /// Five-ms dezipper: retain the small old control, never its decoded PCM.
+    pub fn with_handoff(mut self, previous: Option<Arc<RenderControl>>) -> Self {
+        self.handoff = previous.map(|previous| Handoff {
+            previous,
+            offsets: [0.; 2],
+            elapsed: 0,
+            frames: (self.output_rate / 200).max(2),
+            seek_serial: self.settings.seek_serial,
+        });
+        self
     }
     pub fn with_keylock(mut self, clip: Option<Arc<drdj_keylock::PreparedKeylock>>) -> Self {
         self.keylock = clip;
@@ -362,6 +398,11 @@ impl DeckRenderer {
         }
         let settings = self.settings;
         if self.applied_seek != settings.seek_serial {
+            if let Some(handoff) = &mut self.handoff {
+                if settings.seek_serial != handoff.seek_serial {
+                    handoff.elapsed = handoff.frames;
+                }
+            }
             self.phase = u128::from(settings.seek_units);
             self.applied_seek = settings.seek_serial;
         }
@@ -437,8 +478,33 @@ impl Iterator for DeckRenderer {
                 (a + (b - a) * fraction) as f32
             })
         };
+        let mut value = value;
+        if let Some(handoff) = &mut self.handoff {
+            if handoff.elapsed < handoff.frames && !self.settings.paused && !finished {
+                if let Some(offset) = handoff.offsets.get_mut(usize::from(self.channel)) {
+                    if handoff.elapsed == 0 {
+                        let previous = f32::from_bits(
+                            handoff.previous.last_sample[usize::from(self.channel)]
+                                .load(Ordering::Relaxed),
+                        );
+                        *offset = previous - value;
+                    }
+                    let weight = 1. - handoff.elapsed as f32 / (handoff.frames - 1) as f32;
+                    value += *offset * weight;
+                }
+            } else if self.settings.paused || finished {
+                // Silence is authoritative; never inject an old signal into a paused/EOF deck.
+                handoff.elapsed = handoff.frames;
+            }
+        }
+        if let Some(last) = self.control.last_sample.get(usize::from(self.channel)) {
+            last.store(value.to_bits(), Ordering::Relaxed);
+        }
         self.channel += 1;
         if self.channel == self.output_channels {
+            if let Some(handoff) = &mut self.handoff {
+                handoff.elapsed = handoff.elapsed.saturating_add(1).min(handoff.frames);
+            }
             self.channel = 0;
             if !self.settings.paused && !finished {
                 self.phase = self.wrap(self.phase + u128::from(applied_rate));
@@ -468,6 +534,71 @@ impl Source for DeckRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn handoff_dezips_stereo_for_five_ms_and_respects_silence_and_seek() {
+        fn renderer(values: [f32; 2], playing: bool) -> (Arc<RenderControl>, DeckRenderer) {
+            let pcm = PcmSource::new(2, 2000, values.repeat(200));
+            let control = RenderControl::new(
+                2000,
+                playing,
+                None,
+                SeekFrame {
+                    time: Duration::ZERO,
+                    frame: 0,
+                },
+                RenderFormat {
+                    source_rate: 2000,
+                    output_rate: 2000,
+                    frames: 200,
+                },
+            );
+            let render = DeckRenderer::new(pcm, control.clone(), 2, 2000);
+            (control, render)
+        }
+        let (old, mut previous) = renderer([0.75, -0.75], true);
+        assert_eq!(previous.next(), Some(0.75));
+        assert_eq!(previous.next(), Some(-0.75));
+        let (_, next) = renderer([-0.25, 0.25], true);
+        let values: Vec<_> = next.with_handoff(Some(old.clone())).take(24).collect();
+        for (frame, pair) in values.as_chunks::<2>().0.iter().enumerate() {
+            let expected = 0.75 - (frame.min(9) as f32 / 9.);
+            assert!((pair[0] - expected).abs() < 1e-6);
+            assert!((pair[0] + pair[1]).abs() < 1e-6);
+        }
+        let (early_control, early) = renderer([-0.25, 0.25], true);
+        let mut early = early.with_handoff(Some(old.clone()));
+        early_control.publish(
+            2000,
+            true,
+            None,
+            Some(SeekFrame {
+                time: Duration::from_millis(50),
+                frame: 100,
+            }),
+        );
+        assert_eq!(early.next(), Some(-0.25));
+        assert_eq!(early.next(), Some(0.25));
+        let (_, paused) = renderer([-0.25, 0.25], false);
+        assert!(paused
+            .with_handoff(Some(old.clone()))
+            .take(24)
+            .all(|s| s == 0.));
+        let (control, next) = renderer([-0.25, 0.25], true);
+        let mut next = next.with_handoff(Some(old));
+        assert_eq!(next.next(), Some(0.75));
+        assert_eq!(next.next(), Some(-0.75));
+        control.publish(
+            2000,
+            true,
+            None,
+            Some(SeekFrame {
+                time: Duration::from_millis(50),
+                frame: 100,
+            }),
+        );
+        assert_eq!(next.next(), Some(-0.25));
+        assert_eq!(next.next(), Some(0.25));
+    }
     #[test]
     fn scheduled_trigger_executes_once_at_frame_boundary_and_commands_cancel_it() {
         let pcm = PcmSource::new(2, 4, (0..16).map(|i| i as f32).collect());
