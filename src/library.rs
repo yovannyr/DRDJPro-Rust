@@ -247,18 +247,23 @@ impl Track {
 
 // Immutable projection used by the background view worker. Text is shared
 // with the library and remains valid when a newer metadata revision arrives.
+#[derive(Clone)]
 struct SearchRecord {
     id: i32,
     search: Arc<TrackSearch>,
     has_title: bool,
     format: String,
     duration: Option<u64>,
-    in_scope: bool,
 }
 
+const SEARCH_RECORD_CHUNK: usize = 256;
+type SearchRecordChunks = Arc<Vec<Arc<Vec<SearchRecord>>>>;
+
 pub(crate) struct SearchProjection {
-    tracks: Vec<SearchRecord>,
-    index: OnceLock<SearchIndex>,
+    tracks: SearchRecordChunks,
+    count: usize,
+    members: Option<Arc<Vec<u64>>>,
+    index: Arc<OnceLock<SearchIndex>>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -273,6 +278,22 @@ pub(crate) struct SearchSpec {
 }
 
 impl SearchProjection {
+    #[cfg(test)]
+    pub(crate) fn shares_index_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.index, &other.index)
+    }
+
+    pub(crate) fn share_index_from(&mut self, previous: &Self) {
+        self.index = Arc::clone(&previous.index);
+    }
+
+    fn in_scope(&self, index: usize) -> bool {
+        self.members.as_ref().is_none_or(|bits| {
+            bits.get(index / 64)
+                .is_some_and(|word| word & (1_u64 << (index % 64)) != 0)
+        })
+    }
+
     pub(crate) fn search(&self, spec: &SearchSpec) -> Vec<i32> {
         // Build the snapshot index only when the background search needs it.
         // Short queries cannot use trigrams and do not pay for construction.
@@ -282,22 +303,32 @@ impl SearchProjection {
             self.index
                 .get_or_init(|| {
                     let mut index = SearchIndex::default();
-                    for (position, track) in self.tracks.iter().enumerate() {
+                    for (position, track) in self
+                        .tracks
+                        .iter()
+                        .flat_map(|chunk| chunk.iter())
+                        .enumerate()
+                    {
                         index.add(position, &track.search);
                     }
                     index
                 })
-                .candidates(&spec.query, self.tracks.len())
+                .candidates(&spec.query, self.count)
         };
-        let all = 0..self.tracks.len();
         let mut matches: Vec<&SearchRecord> = match candidates {
             Some(indices) => indices
                 .into_iter()
-                .map(|i| &self.tracks[i])
+                .filter(|&i| self.in_scope(i))
+                .map(|i| &self.tracks[i / SEARCH_RECORD_CHUNK][i % SEARCH_RECORD_CHUNK])
                 .filter(|t| t.matches(&spec.query))
                 .collect(),
-            None => all
-                .map(|i| &self.tracks[i])
+            None => self
+                .tracks
+                .iter()
+                .flat_map(|chunk| chunk.iter())
+                .enumerate()
+                .filter(|(i, _)| self.in_scope(*i))
+                .map(|(_, track)| track)
                 .filter(|t| t.matches(&spec.query))
                 .collect(),
         };
@@ -311,13 +342,12 @@ impl SearchProjection {
 
 impl SearchRecord {
     fn matches(&self, query: &str) -> bool {
-        self.in_scope
-            && (query.is_empty()
-                || self.search.title.contains(query)
-                || self.search.artist.contains(query)
-                || self.search.album.contains(query)
-                || self.search.name.contains(query)
-                || self.search.path.contains(query))
+        query.is_empty()
+            || self.search.title.contains(query)
+            || self.search.artist.contains(query)
+            || self.search.album.contains(query)
+            || self.search.name.contains(query)
+            || self.search.path.contains(query)
     }
     fn sort_key(&self, field: i32) -> (&str, Option<u64>, i32) {
         let key = match field {
@@ -392,14 +422,18 @@ impl Track {
 #[derive(Default)]
 pub struct Library {
     revision: u64,
+    search_revision: u64,
     changed_tracks: BTreeMap<usize, u64>,
     changed_crates: BTreeMap<i32, u64>,
     changed_memberships: BTreeMap<(i32, i32), (u64, bool)>,
     tracks: Vec<Track>,
+    search_records: SearchRecordChunks,
+    scope_bits: HashMap<i32, Arc<Vec<u64>>>,
     last_id: i32,
     keys: HashMap<PathBuf, usize>,
     id_indices: HashMap<i32, usize>,
     view_cache: std::cell::RefCell<Option<Vec<usize>>>,
+    #[cfg(test)]
     search_index: SearchIndex,
     query: String,
     selected: Option<i32>,
@@ -420,6 +454,35 @@ pub(crate) fn identity(path: &Path) -> PathBuf {
     }
 }
 impl Library {
+    fn update_search_record(&mut self, index: usize) {
+        let track = &self.tracks[index];
+        let record = SearchRecord {
+            id: track.id,
+            search: Arc::clone(&track.search),
+            has_title: !track.metadata.title.is_empty(),
+            format: track.format.clone(),
+            duration: track.metadata.duration_ms,
+        };
+        let chunks = Arc::make_mut(&mut self.search_records);
+        let chunk_index = index / SEARCH_RECORD_CHUNK;
+        if chunk_index == chunks.len() {
+            chunks.push(Arc::new(Vec::new()));
+        }
+        let chunk = Arc::make_mut(&mut chunks[chunk_index]);
+        let offset = index % SEARCH_RECORD_CHUNK;
+        if offset == chunk.len() {
+            chunk.push(record);
+        } else {
+            chunk[offset] = record;
+        }
+    }
+    fn mark_search_track(&mut self, index: usize) {
+        self.update_search_record(index);
+        self.search_revision = self
+            .search_revision
+            .checked_add(1)
+            .expect("Search revision overflow");
+    }
     fn mark_track(&mut self, index: usize) {
         self.missing_cache.set(None);
         *self.view_cache.get_mut() = None;
@@ -448,7 +511,24 @@ impl Library {
             .revision
             .checked_add(1)
             .expect("Library revision overflow");
+        self.search_revision = self
+            .search_revision
+            .checked_add(1)
+            .expect("Search revision overflow");
         for track_id in tracks {
+            let index = self.id_indices[&track_id];
+            let words = Arc::make_mut(self.scope_bits.entry(crate_id).or_default());
+            let word = index / 64;
+            if present && words.len() <= word {
+                words.resize(word + 1, 0);
+            }
+            if let Some(value) = words.get_mut(word) {
+                if present {
+                    *value |= 1_u64 << (index % 64);
+                } else {
+                    *value &= !(1_u64 << (index % 64));
+                }
+            }
             self.changed_memberships
                 .insert((crate_id, track_id), (self.revision, present));
         }
@@ -593,6 +673,7 @@ impl Library {
     }
     pub fn delete_crate(&mut self, id: i32) -> Result<(), String> {
         self.crates.delete(id)?;
+        self.scope_bits.remove(&id);
         self.changed_memberships
             .retain(|(crate_id, _), _| *crate_id != id);
         self.mark_crate(id);
@@ -645,6 +726,8 @@ impl Library {
             if self.tracks[index].metadata != metadata {
                 self.tracks[index].metadata = metadata;
                 self.tracks[index].refresh_search();
+                self.mark_search_track(index);
+                #[cfg(test)]
                 self.search_index.add(index, &self.tracks[index].search);
                 self.mark_track(index);
             }
@@ -677,14 +760,29 @@ impl Library {
             track.saved_loops = saved.saved_loops;
             library.id_indices.insert(track.id, library.tracks.len());
             library.tracks.push(track);
+            #[cfg(test)]
             let index = library.tracks.len() - 1;
+            #[cfg(test)]
             library
                 .search_index
                 .add(index, &library.tracks[index].search);
+            library.mark_search_track(library.tracks.len() - 1);
             if changed {
                 library.mark_track(library.tracks.len() - 1);
             }
             library.last_id = library.last_id.max(saved.id);
+        }
+        for entry in &library.crates.entries {
+            let mut words = Vec::new();
+            for track_id in &entry.tracks {
+                let index = library.id_indices[track_id];
+                let word = index / 64;
+                if words.len() <= word {
+                    words.resize(word + 1, 0);
+                }
+                words[word] |= 1_u64 << (index % 64);
+            }
+            library.scope_bits.insert(entry.id, Arc::new(words));
         }
         Ok(library)
     }
@@ -745,6 +843,8 @@ impl Library {
             self.id_indices.insert(id, self.tracks.len());
             self.tracks.push(Track::new(id, path, true));
             let index = self.tracks.len() - 1;
+            self.mark_search_track(index);
+            #[cfg(test)]
             self.search_index.add(index, &self.tracks[index].search);
             self.mark_track(index);
         }
@@ -801,7 +901,7 @@ impl Library {
     pub(crate) fn search_spec(&self, generation: u64) -> SearchSpec {
         SearchSpec {
             generation,
-            revision: self.revision,
+            revision: self.search_revision,
             scope: self.active_crate,
             query: self.query.clone(),
             field: self.sort_field,
@@ -811,21 +911,16 @@ impl Library {
     }
 
     pub(crate) fn search_projection(&self) -> SearchProjection {
-        let members = self.scope_members();
         SearchProjection {
-            tracks: self
-                .tracks
-                .iter()
-                .map(|t| SearchRecord {
-                    id: t.id,
-                    search: Arc::clone(&t.search),
-                    has_title: !t.metadata.title.is_empty(),
-                    format: t.format.clone(),
-                    duration: t.metadata.duration_ms,
-                    in_scope: self.active_crate == 0 || members.is_some_and(|m| m.contains(&t.id)),
-                })
-                .collect(),
-            index: OnceLock::new(),
+            tracks: Arc::clone(&self.search_records),
+            count: self.tracks.len(),
+            members: (self.active_crate != 0).then(|| {
+                self.scope_bits
+                    .get(&self.active_crate)
+                    .cloned()
+                    .unwrap_or_default()
+            }),
+            index: Arc::new(OnceLock::new()),
         }
     }
 
@@ -863,6 +958,11 @@ impl Library {
             .map(|&i| &self.tracks[i])
             .collect()
     }
+    #[cfg(test)]
+    pub(crate) fn reference_visible_ids(&self) -> Vec<i32> {
+        self.build_visible().iter().map(|track| track.id).collect()
+    }
+
     #[cfg(test)]
     fn build_visible(&self) -> Vec<&Track> {
         let members = self.scope_members();
@@ -953,6 +1053,91 @@ mod tests {
         library.set_query("original".into());
         assert!(current.search(&library.search_spec(7)).is_empty());
         assert!(library.has_changes());
+    }
+
+    #[test]
+    fn search_revision_is_independent_of_persistence_ack_and_non_search_edits() {
+        let mut library = Library::default();
+        let path = PathBuf::from("independent-revision.wav");
+        library.insert([path.clone()]);
+        let baseline = library.search_spec(1).revision;
+        let before = library.revision();
+        library.set_grid(&path, None).unwrap();
+        assert!(library.revision() > before);
+        assert_eq!(library.search_spec(1).revision, baseline);
+        library.acknowledge(library.revision());
+        assert_eq!(library.search_spec(1).revision, baseline);
+        library.set_metadata(
+            &path,
+            crate::track_metadata::TrackMetadata {
+                title: "unsaved-change".into(),
+                ..Default::default()
+            },
+        );
+        let metadata_revision = library.search_spec(1).revision;
+        assert!(metadata_revision > baseline);
+        let id = library.create_crate("membership").unwrap();
+        assert_eq!(library.search_spec(1).revision, metadata_revision);
+        library.add_paths_to_crate(id, &[path]).unwrap();
+        assert!(library.search_spec(1).revision > metadata_revision);
+    }
+
+    #[test]
+    fn chunked_snapshots_keep_old_data_and_share_unchanged_chunks() {
+        let mut library = Library::default();
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..600)
+            .map(|i| dir.path().join(format!("chunk-{i:04}.wav")))
+            .collect();
+        library.insert(paths.clone());
+        let original = library.search_projection();
+        let mut old_spec = library.search_spec(1);
+        old_spec.query = "unique-replacement".into();
+        library.set_metadata(
+            &paths[300],
+            crate::track_metadata::TrackMetadata {
+                title: "unique-replacement".into(),
+                ..Default::default()
+            },
+        );
+        let updated = library.search_projection();
+        assert_eq!(original.tracks.len(), 3);
+        assert!(Arc::ptr_eq(&original.tracks[0], &updated.tracks[0]));
+        assert!(!Arc::ptr_eq(&original.tracks[1], &updated.tracks[1]));
+        assert!(Arc::ptr_eq(&original.tracks[2], &updated.tracks[2]));
+        assert!(original.search(&old_spec).is_empty());
+        assert_eq!(updated.search(&library.search_spec(1)).len(), 600);
+        assert_eq!(updated.search(&old_spec), vec![301]);
+        let crate_id = library.create_crate("scope").unwrap();
+        library
+            .add_paths_to_crate(crate_id, &[paths[300].clone()])
+            .unwrap();
+        library.select_crate(crate_id).unwrap();
+        let scoped = library.search_projection();
+        assert!(Arc::ptr_eq(&updated.tracks, &scoped.tracks));
+        assert_eq!(scoped.search(&library.search_spec(1)), vec![301]);
+        let scoped_spec = library.search_spec(1);
+        library.select(301);
+        assert!(library.remove_selected_from_crate().unwrap());
+        let empty = library.search_projection();
+        assert_eq!(scoped.search(&scoped_spec), vec![301]);
+        assert!(empty.search(&library.search_spec(1)).is_empty());
+        library
+            .add_paths_to_crate(crate_id, &[paths[300].clone()])
+            .unwrap();
+        let catalog = library.catalog();
+        let restored = Library::restore(catalog).unwrap();
+        let snapshot = restored.search_projection();
+        assert_eq!(snapshot.count, 600);
+        assert_eq!(snapshot.search(&restored.search_spec(2)).len(), 600);
+        let mut restored = restored;
+        restored.select_crate(crate_id).unwrap();
+        assert_eq!(
+            restored
+                .search_projection()
+                .search(&restored.search_spec(2)),
+            vec![301]
+        );
     }
 
     #[test]

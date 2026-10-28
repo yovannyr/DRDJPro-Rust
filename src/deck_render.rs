@@ -36,6 +36,9 @@ struct Settings {
     seek_serial: u64,
     seek_ns: u64,
     seek_units: u64,
+    trigger_serial: u64,
+    trigger_at: u64,
+    trigger_units: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RenderStamp {
@@ -56,6 +59,9 @@ pub(crate) struct RenderControl {
     seek_ns: AtomicU64,
     applied_seek: AtomicU64,
     seek_units: AtomicU64,
+    trigger_serial: AtomicU64,
+    trigger_at: AtomicU64,
+    trigger_units: AtomicU64,
     phase_units: AtomicU64,
     stamp_sequence: AtomicU64,
     stamp_phase: AtomicU64,
@@ -89,6 +95,9 @@ impl RenderControl {
                 (seek.frame as u128 * u128::from(format.output_rate)) as u64,
             ),
             applied_seek: AtomicU64::new(0),
+            trigger_serial: AtomicU64::new(0),
+            trigger_at: AtomicU64::new(0),
+            trigger_units: AtomicU64::new(0),
             phase_units: AtomicU64::new(0),
             stamp_sequence: AtomicU64::new(0),
             stamp_phase: AtomicU64::new(0),
@@ -117,6 +126,24 @@ impl RenderControl {
     ) {
         self.publish_guarded(rate, playing, region, None, Some((neutral_rate, until)));
     }
+    pub fn cancel_trigger(&self) {
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.trigger_at.store(0, Ordering::SeqCst);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
+    pub fn schedule_trigger(&self, at_frame: usize, target_frame: usize) {
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.trigger_at.store(
+            at_frame as u64 * u64::from(self.format.output_rate),
+            Ordering::SeqCst,
+        );
+        self.trigger_units.store(
+            target_frame as u64 * u64::from(self.format.output_rate),
+            Ordering::SeqCst,
+        );
+        self.trigger_serial.fetch_add(1, Ordering::SeqCst);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
     fn publish_guarded(
         &self,
         rate: u32,
@@ -142,6 +169,7 @@ impl RenderControl {
                 (mapped != phase).then(|| (self.time_at(mapped), mapped))
             });
         self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.trigger_at.store(0, Ordering::SeqCst);
         self.rate.store(rate, Ordering::SeqCst);
         self.neutral_rate
             .store(expiry.map_or(rate, |e| e.0), Ordering::SeqCst);
@@ -178,6 +206,9 @@ impl RenderControl {
             seek_serial: self.seek_serial.load(Ordering::SeqCst),
             seek_ns: self.seek_ns.load(Ordering::SeqCst),
             seek_units: self.seek_units.load(Ordering::SeqCst),
+            trigger_serial: self.trigger_serial.load(Ordering::SeqCst),
+            trigger_at: self.trigger_at.load(Ordering::SeqCst),
+            trigger_units: self.trigger_units.load(Ordering::SeqCst),
         };
         // Do not spin on the real-time path: an overlapping command is retried next frame.
         (self.sequence.load(Ordering::SeqCst) == first).then_some(settings)
@@ -261,6 +292,7 @@ pub(crate) struct DeckRenderer {
     // Source-frame position * output_rate. Integer accumulation avoids repeated-rate drift.
     phase: u128,
     applied_seek: u64,
+    applied_trigger: u64,
     clock: Option<Arc<crate::render_bus::RenderClock>>,
 }
 impl DeckRenderer {
@@ -281,6 +313,7 @@ impl DeckRenderer {
             channel: 0,
             phase: 0,
             applied_seek: 0,
+            applied_trigger: 0,
             clock: None,
         }
     }
@@ -325,6 +358,15 @@ impl DeckRenderer {
         if self.applied_seek != settings.seek_serial {
             self.phase = u128::from(settings.seek_units);
             self.applied_seek = settings.seek_serial;
+        }
+        if !settings.paused
+            && settings.trigger_at != 0
+            && self.applied_trigger != settings.trigger_serial
+            && self.phase >= u128::from(settings.trigger_at)
+        {
+            self.phase = u128::from(settings.trigger_units);
+            self.applied_trigger = settings.trigger_serial;
+            self.publish_position();
         }
         self.phase = self.wrap(self.phase);
         if self.phase != prior_phase || self.applied_seek != prior_seek {
@@ -414,6 +456,51 @@ impl Source for DeckRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scheduled_trigger_executes_once_at_frame_boundary_and_commands_cancel_it() {
+        let pcm = PcmSource::new(2, 4, (0..16).map(|i| i as f32).collect());
+        let control = RenderControl::new(
+            4,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::ZERO,
+                frame: 0,
+            },
+            RenderFormat {
+                source_rate: 4,
+                output_rate: 4,
+                frames: 8,
+            },
+        );
+        let mut renderer = DeckRenderer::new(pcm, control.clone(), 2, 4);
+        assert_eq!(renderer.next(), Some(0.0));
+        control.schedule_trigger(2, 6);
+        assert_eq!(renderer.next(), Some(1.0));
+        assert_eq!(renderer.next(), Some(2.0));
+        assert_eq!(renderer.next(), Some(3.0));
+        assert_eq!(renderer.next(), Some(12.0));
+        assert_eq!(renderer.next(), Some(13.0));
+        assert_eq!(renderer.next(), Some(14.0));
+        assert_eq!(renderer.next(), Some(15.0));
+        control.publish(
+            4,
+            true,
+            None,
+            Some(SeekFrame {
+                time: Duration::ZERO,
+                frame: 0,
+            }),
+        );
+        renderer.next();
+        control.schedule_trigger(2, 6);
+        control.publish(4, true, None, None);
+        assert_eq!(renderer.next(), Some(1.0));
+        assert_eq!(renderer.next(), Some(2.0));
+        assert_eq!(renderer.next(), Some(3.0));
+        assert_eq!(renderer.next(), Some(4.0));
+    }
+
     #[test]
     fn stamped_renderer_publication_adds_no_allocations_for_complete_stereo_frames() {
         let pcm = PcmSource::new(2, 44100, vec![0.125; 400000]);

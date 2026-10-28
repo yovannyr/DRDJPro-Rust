@@ -32,7 +32,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Aktuellen lokalen Stand geprüft: 201 Tests, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Lokaler Zwischenstand geprüft: 210 Tests (zusätzlich ein expliziter realer Sammlungstest), `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -69,7 +69,10 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Bibliothekssuche und Sortierung für alle Bibliotheksgrößen im Hintergrund mit revisionsgebundener Ergebnisprüfung; Projektionsaufbau bleibt synchron.
 - [x] ✅ Bibliotheksseiten mit höchstens 200 Tracks, global sortierten Treffern, Seitensteuerung und Tastaturwechsel; Seitenantworten stammen vom Hintergrundworker.
 - [ ] ☐ Weitere Bibliotheksskalierung: indexierte/paginierte Suche und große Ansichten unter realistischen Bedingungen qualifizieren.
-  - Teilfortschritt: Der Trigrammindex des Such-Snapshots wird bei Bedarf im Suchworker aufgebaut statt im UI-Thread kopiert. Der Snapshot der Track-Daten entsteht weiterhin synchron; inkrementelle Synchronisierung, Lastmessung und unabhängiges Review stehen noch aus.
+  - [x] ✅ 100.000 synthetische Tracks headless: Anfrage und Ergebnisübernahme getrennt gemessen; Suchergebnis, Seitengrenze und Auswahl geprüft. Keine native Leistungsabnahme.
+  - [x] ✅ Such-Snapshots teilen unveränderliche Track-Blöcke und Crate-Bitmengen; indexierte Suche/Sortierung laufen im Worker. Eine eigene Suchrevision schützt ungespeicherte Änderungen und vermeidet Index-Neuaufbau bei reinen Grid-/Cue-Änderungen.
+  - [x] ✅ 5.463 unterstützte reale Dateien headless untersucht, 3.475 MP3-Treffer über alle Seiten mit der Referenz verglichen; nativer Windows-Release-Lauf mit 3.480 Katalogeinträgen, Seitenwechsel und gezielter Suche bestanden.
+  - Offen: 66 Metadatenfehler in der realen Sammlung untersuchen; Grenzwerte und wiederholbare native End-to-End-Leistungsmessungen unter DJ-Last fehlen. Das unabhängige Review ist zurückgestellt.
   - Reale USB-Musiksammlung auf Windows geprüft: 3.478 unterstützte Pfade, 60 Sekunden Zwei-Deck-Lauf mit auf null gesetzten GUI-Kanalfadern und Seiten-/Suchaktionen; Erststart mit ungelesenen Tags und 59 Metadatenfehler bleiben offene Befunde; bei fünf getesteten Dateien mit ID3-Textkodierungsdiagnose dekodierte FFmpeg jeweils eine Sekunde Audio erfolgreich; DrDJs `--analyze` schlug fehl. Details und Grenzen siehe LOCAL_VALIDATION.md.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
@@ -82,6 +85,10 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Fortlaufende 4/4-Taktphasenregelung mit erfasstem Sitzungsmodus, Ganz-Beat-Fehlererkennung und unveränderten Sicherheitsgrenzen.
 - [x] ✅ Opt-in Beat-Quantisierung neuer HotCue-Slots mit Grid-/Draft-/Endschutz, exaktem Recall und SQLite-Neustarttests.
 - [ ] ☐ Musikalische/Hardware-Langzeitqualifikation von Sync, hörbare Übergänge, variable Taktarten, Keylock und geplante quantisierte Trigger.
+  - [x] ✅ Offline-PCM: beide Sync-Richtungen jeweils 119,988 Sekunden mit konstanten Grids geprüft; kein Hör-, Geräte- oder echter Langzeittest.
+  - [x] ✅ Geplante Hot-Cue-Trigger: eigener Schalter je Deck, Ausführung am nächsten Beat im Renderer; Stereo-Framegrenze, Abbruch und GUI-/Engine-Pfad auf beiden Decks geprüft.
+  - [x] ✅ Sync-Ausrichtung um Perioden mit 3, 5 und 7 Beats erweitert; vollständige Grid-Taktarten und Speicherung bleiben offen.
+  - [ ] ☐ Variable Taktarten, Keylock, hörbare Übergänge und physische Hardware-Langzeitabnahme bleiben offen.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [x] ✅ Gemessener Post-Fader-Bus-Sample-Peak aus vollständigen50-ms-Renderfenstern mit dBFS-Anzeige; kein True-Peak-/Lautheits-/Hardware-Nachweis.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
@@ -96,9 +103,9 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [ ] ☐ Native visuelle/Usability-Abnahme, Musik-Korpusprüfung und reale Audio-/Latenz-/Langzeittests.
 - [ ] ☐ Windows/macOS-Plattformqualifikation und abschließende Produktabnahme.
 
-## Next library-search architecture slice (2026-10-27)
+## Library search architecture checkpoint (2026-10-28)
 
-For every library size, the view worker filters and sorts an immutable in-memory projection with a bounded trigram index. Creating a fresh projection on catalog or scope changes still copies records and the index on the UI thread; search completion is asynchronous and uses generation/revision/query/sort/scope validation. A persisted SQLite index alone cannot represent unsaved or failed-save edits. The next search slice should introduce a separately synchronized background search projection with its own catalog generation, search revision and request identity, preserve current substring/sort/crate semantics, discard stale results and keep worker communication bounded. Search changes must not consume persistence acknowledgements; later index work can build on that projection. Validate delayed results, unsaved edits, worker failure, selection and 100,000-track headless behavior before marking indexed/paged search complete. This is a proposal, not an implemented worker or performance acceptance.
+The worker receives revision-bound immutable snapshots of chunked track records and crate bitsets. Metadata and membership changes update affected pieces with copy-on-write; persistence acknowledgements do not change search revision. Trigram construction, filtering and global sorting execute on the worker; bounded requests and result validation remain. Page delivery is bounded, while matching IDs and sorting are still retained in memory. This is not SQLite-level paging or a hard real-time guarantee. See LOCAL_VALIDATION.md for the real collection and native evidence, failure history and outstanding performance/metadata boundaries.
 
 ## Reference
 .NET repository: https://github.com/yovannyr/DRDJ

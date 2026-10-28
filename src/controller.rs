@@ -1509,8 +1509,29 @@ impl AudioController {
                 if cue.position() >= source.duration {
                     return Err("Saved cue is outside the loaded track; delete and reset it".into());
                 }
-                self.engine.seek_position(id, cue.position())?;
-                self.cancel_nudge(id);
+                let ui = self.ui.upgrade().ok_or("Window closed")?;
+                let scheduled = match id {
+                    DeckId::A => ui.get_left_quantize_triggers(),
+                    DeckId::B => ui.get_right_quantize_triggers(),
+                };
+                if scheduled {
+                    if self.sync_session.borrow().is_some()
+                        || self.pending_pitch.borrow()[Self::grid_index(id)].is_some()
+                    {
+                        return Err(
+                            "Stop Sync and finish pitch changes before scheduling a cue".into()
+                        );
+                    }
+                    if self.grid_editors.borrow()[Self::grid_index(id)].is_some() {
+                        return Err("Save or cancel the grid draft first".into());
+                    }
+                    self.engine.schedule_cue(id, cue.position())?;
+                } else {
+                    self.engine.seek_position(id, cue.position())?;
+                }
+                if !scheduled {
+                    self.cancel_nudge(id);
+                }
                 return Ok(());
             }
         } else if cues.slots()[slot].is_none() {
@@ -1566,6 +1587,14 @@ impl AudioController {
         Ok(())
     }
     fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
+        for id in [DeckId::A, DeckId::B] {
+            let engine = Rc::clone(&self.engine);
+            let cancel = move || engine.cancel_scheduled_cue(id);
+            match id {
+                DeckId::A => ui.on_cancel_trigger_left(cancel),
+                DeckId::B => ui.on_cancel_trigger_right(cancel),
+            }
+        }
         for id in [DeckId::A, DeckId::B] {
             let weak = Rc::downgrade(self);
             let edit = move |slot| {
@@ -2315,7 +2344,13 @@ impl AudioController {
             .as_ref()
             .is_some_and(|(g, r, c, _)| (*g, *r, *c) == key)
         {
-            worker.projection = Some((key.0, key.1, key.2, Arc::new(library.search_projection())));
+            let mut projection = library.search_projection();
+            if let Some((generation, revision, _, previous)) = worker.projection.as_ref() {
+                if (*generation, *revision) == (key.0, key.1) {
+                    projection.share_index_from(previous);
+                }
+            }
+            worker.projection = Some((key.0, key.1, key.2, Arc::new(projection)));
         }
         let projection = Arc::clone(&worker.projection.as_ref().unwrap().3);
         worker.wanted = Some(spec.clone());
@@ -3218,6 +3253,93 @@ mod tests {
     }
 
     #[test]
+    fn search_index_is_shared_across_scopes_but_not_revisions() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        finish_search(&c);
+        let path = std::path::PathBuf::from("shared-index.wav");
+        {
+            let mut library = c.library.borrow_mut();
+            library.insert([path.clone()]);
+            let id = library.create_crate("scope").unwrap();
+            library
+                .add_paths_to_crate(id, std::slice::from_ref(&path))
+                .unwrap();
+            library.set_query("shared".into());
+        }
+        c.publish_library();
+        finish_search(&c);
+        let old = Arc::clone(
+            &c.search_worker
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .projection
+                .as_ref()
+                .unwrap()
+                .3,
+        );
+        c.library.borrow_mut().select_crate(1).unwrap();
+        c.publish_library();
+        finish_search(&c);
+        let scoped = Arc::clone(
+            &c.search_worker
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .projection
+                .as_ref()
+                .unwrap()
+                .3,
+        );
+        assert!(old.shares_index_with(&scoped));
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        c.library.borrow_mut().set_metadata(
+            &path,
+            crate::track_metadata::TrackMetadata {
+                title: "new unique title".into(),
+                ..Default::default()
+            },
+        );
+        c.library.borrow_mut().set_query("unique".into());
+        c.publish_library();
+        finish_search(&c);
+        let updated = Arc::clone(
+            &c.search_worker
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .projection
+                .as_ref()
+                .unwrap()
+                .3,
+        );
+        assert!(!scoped.shares_index_with(&updated));
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        c.library_generation.set(c.library_generation.get() + 1);
+        c.publish_library();
+        finish_search(&c);
+        let next_generation = Arc::clone(
+            &c.search_worker
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .projection
+                .as_ref()
+                .unwrap()
+                .3,
+        );
+        assert!(!updated.shares_index_with(&next_generation));
+    }
+
+    #[test]
     fn paged_worker_returns_correct_boundaries_and_global_order() {
         let dir = tempfile::tempdir().unwrap();
         let worker = SearchWorker::start().unwrap();
@@ -3354,6 +3476,104 @@ mod tests {
         assert_eq!(ui.get_selected_track(), -1);
     }
 
+    // Explicitly opt in: reads the user's music collection and never writes to it.
+    #[test]
+    #[ignore = "requires DRDJ_MUSIC_ROOT and real media files"]
+    fn real_music_collection_paged_search_and_sort_qualification() {
+        use slint::Model;
+        let root =
+            std::path::PathBuf::from(std::env::var_os("DRDJ_MUSIC_ROOT").expect("DRDJ_MUSIC_ROOT"));
+        let mut pending = vec![root];
+        let mut paths = Vec::new();
+        let mut inaccessible = 0_usize;
+        while let Some(dir) = pending.pop() {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    inaccessible += 1;
+                    continue;
+                }
+            };
+            for entry in entries {
+                let Ok(entry) = entry else {
+                    inaccessible += 1;
+                    continue;
+                };
+                let Ok(kind) = entry.file_type() else {
+                    inaccessible += 1;
+                    continue;
+                };
+                if kind.is_dir() {
+                    pending.push(entry.path());
+                } else if kind.is_file() && crate::audio_formats::supported(&entry.path()) {
+                    paths.push(entry.path());
+                }
+            }
+        }
+        paths.sort();
+        assert!(
+            paths.len() > LIBRARY_PAGE_SIZE,
+            "collection must exceed one page"
+        );
+        assert!(paths.len() <= crate::library::MAX_TRACKS);
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        finish_search(&c);
+        assert_eq!(c.library.borrow_mut().insert(paths.clone()), paths.len());
+        let start = Instant::now();
+        let mut errors = 0;
+        for (index, path) in paths.iter().enumerate() {
+            let metadata = crate::track_metadata::read(path);
+            errors += usize::from(metadata.error.is_some());
+            c.library.borrow_mut().set_metadata(path, metadata);
+            if (index + 1) % 1000 == 0 {
+                eprintln!("metadata processed: {}", index + 1);
+            }
+        }
+        let metadata_time = start.elapsed();
+        ui.set_library_query(".mp3".into());
+        let start = Instant::now();
+        c.publish_library();
+        let dispatch = start.elapsed();
+        finish_search(&c);
+        let completion = start.elapsed();
+        let expected = c.library.borrow().reference_visible_ids();
+        assert!(expected.len() > LIBRARY_PAGE_SIZE);
+        for page in 0..expected.len().div_ceil(LIBRARY_PAGE_SIZE) {
+            if page > 0 {
+                ui.invoke_library_change_page(1);
+                finish_search(&c);
+            }
+            let model = ui.get_library_rows();
+            let first = page * LIBRARY_PAGE_SIZE;
+            let last = (first + LIBRARY_PAGE_SIZE).min(expected.len());
+            assert_eq!(model.row_count(), last - first);
+            for (row, expected_id) in expected[first..last].iter().enumerate() {
+                assert_eq!(model.row_data(row).unwrap().id, *expected_id);
+            }
+        }
+        c.library.borrow_mut().set_metadata(
+            &paths[0],
+            crate::track_metadata::TrackMetadata {
+                title: "qualification-unique-unsaved-marker".into(),
+                ..Default::default()
+            },
+        );
+        ui.set_library_query("qualification-unique-unsaved-marker".into());
+        c.publish_library();
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert!(c.library.borrow().has_changes());
+        println!("real collection: files={} metadata_errors={} inaccessible={} metadata={:?} search_dispatch={:?} search_completion={:?} checked_rows={}", paths.len(), errors, inaccessible, metadata_time, dispatch, completion, expected.len());
+    }
+
     #[test]
     fn large_library_headless_view_search_sort_and_selection_at_track_limit() {
         use slint::Model;
@@ -3378,6 +3598,7 @@ mod tests {
         c.publish_library();
         let publish_time = start.elapsed();
         finish_search(&c);
+        let initial_completion = start.elapsed();
         let model = ui.get_library_rows();
         assert_eq!(model.row_count(), LIBRARY_PAGE_SIZE);
         control(&ui, "Library track 1");
@@ -3400,6 +3621,7 @@ mod tests {
         control(&ui, "Library search").set_accessible_value(format!("track-{:06}", count - 1));
         let search_time = start.elapsed();
         finish_search(&c);
+        let search_completion = start.elapsed();
         let filtered = ui.get_library_rows();
         assert_eq!(filtered.row_count(), 1);
         assert_eq!(filtered.row_data(0).unwrap().id, count as i32);
@@ -3409,6 +3631,7 @@ mod tests {
         control(&ui, "Library search").set_accessible_value("track");
         let broad_time = start.elapsed();
         finish_search(&c);
+        let broad_completion = start.elapsed();
         assert_eq!(ui.get_library_rows().row_count(), LIBRARY_PAGE_SIZE);
         control(&ui, "Sort library by name").invoke_accessible_default_action();
         finish_search(&c);
@@ -3504,7 +3727,7 @@ mod tests {
         c.poll_search();
         assert!(c.search_worker.borrow().is_none());
         assert!(ui.get_library_empty().contains("unavailable"));
-        println!("100,000 synthetic tracks: insert {insert_time:?}, cold publish {publish_time:?}, selective query {search_time:?}, broad query {broad_time:?}; viewport requested {requested} rows");
+        println!("100,000 synthetic tracks: insert {insert_time:?}, initial dispatch {publish_time:?}, initial completion {initial_completion:?}, selective dispatch {search_time:?}, selective completion {search_completion:?}, broad dispatch {broad_time:?}, broad completion {broad_completion:?}; viewport requested {requested} rows");
     }
 
     #[test]
@@ -3819,6 +4042,81 @@ mod tests {
             assert_eq!(engine.snapshot(DeckId::A).sync_factor, 1.);
         }
     }
+    #[test]
+    #[ignore = "offline multi-minute sync qualification"]
+    fn continuous_sync_two_minutes_of_actual_offline_pcm_in_both_directions() {
+        i_slint_backend_testing::init_no_event_loop();
+        // A constant, nonzero synthetic tone checks actual rendering without a sound device.
+        let file = wav_file(4096, 48_000 * 130);
+        for target in [DeckId::A, DeckId::B] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
+            let clock = Rc::new(Cell::new(Instant::now()));
+            let source_clock = Rc::clone(&clock);
+            let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+                mixer,
+                1,
+                48_000,
+                Box::new(move || source_clock.get()),
+            ));
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            for (deck, bpm) in [(DeckId::A, 120.0), (DeckId::B, 121.2)] {
+                engine
+                    .set_grid(
+                        deck,
+                        Some(crate::beatgrid::BeatGrid::new(bpm, Duration::ZERO).unwrap()),
+                    )
+                    .unwrap();
+                engine.play(deck);
+            }
+            c.refresh();
+            for _ in 0..1000 {
+                output.next().unwrap();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(target).unwrap();
+            let base = engine.snapshot(target).requested_speed;
+            let mut max_error = 0.0_f64;
+            let mut nonzero = 0_usize;
+            // 33 ms per control tick; simulated clock follows the rendered frame count.
+            for tick in 0..3636 {
+                for _ in 0..1584 {
+                    let sample = output.next().unwrap();
+                    assert!(sample.is_finite());
+                    nonzero += usize::from(sample != 0.0);
+                }
+                clock.set(clock.get() + Duration::from_millis(33));
+                if tick >= 909 {
+                    let (error, _, _) = engine
+                        .sync_observation(target, crate::phase_sync::Alignment::Beat)
+                        .expect("fresh phase before controller command");
+                    max_error = max_error.max(error.abs());
+                }
+                c.maintain_sync(clock.get());
+                assert!(
+                    c.sync_session.borrow().is_some(),
+                    "sync ended at tick {tick}: {}",
+                    ui.get_status()
+                );
+            }
+            assert!(nonzero > 5_000_000);
+            assert!(max_error < 0.10, "sustained beat phase error {max_error}");
+            assert_eq!(engine.snapshot(target).requested_speed, base);
+            assert!(engine.snapshot(DeckId::A).playing && engine.snapshot(DeckId::B).playing);
+            c.toggle_sync(target).unwrap();
+            assert_eq!(engine.snapshot(target).sync_factor, 1.0);
+            println!(
+                "offline target {target:?}: rendered {:.3}s, max phase error after 30s {:.6} beats",
+                3636.0 * 0.033,
+                max_error
+            );
+        }
+    }
+
     #[test]
     fn continuous_sync_controls_feedback_freshness_and_manual_release_on_both_decks() {
         i_slint_backend_testing::init_no_event_loop();
@@ -5882,6 +6180,63 @@ mod tests {
         assert_eq!(c.library.borrow().revision(), 0);
         assert!(!c.dirty.get());
     }
+    #[test]
+    fn quantized_hot_cue_recall_waits_for_next_rendered_beat_on_both_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        for id in [DeckId::A, DeckId::B] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+            let file = wav_file(4096, 144_000);
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(120.0, Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            let cue_path = engine.snapshot(id).path.unwrap();
+            c.library.borrow_mut().insert([cue_path.to_path_buf()]);
+            c.library
+                .borrow_mut()
+                .set_hot_cue(
+                    &cue_path,
+                    0,
+                    Some(
+                        crate::hot_cues::HotCue::new(
+                            Duration::from_secs(1),
+                            "jump".into(),
+                            0xffffff,
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .unwrap();
+            match id {
+                DeckId::A => ui.set_left_quantize_triggers(true),
+                DeckId::B => ui.set_right_quantize_triggers(true),
+            }
+            assert!(c.change_hot_cue(id, 0, false).is_err());
+            engine.play(id);
+            for _ in 0..1000 {
+                output.next();
+            }
+            c.change_hot_cue(id, 0, false).unwrap();
+            assert!(engine.snapshot(id).position < Duration::from_millis(100));
+            for _ in 0..24_000 {
+                output.next();
+            }
+            let position = engine.snapshot(id).position;
+            assert!(
+                position >= Duration::from_secs(1) && position < Duration::from_millis(1100),
+                "{position:?}"
+            );
+        }
+    }
+
     #[test]
     fn hot_cue_pads_set_recall_delete_share_and_restore_without_transport_changes() {
         use slint::Model;

@@ -902,3 +902,47 @@ Final checks passed: `cargo fmt --check`, `cargo clippy --all-targets -- -D warn
 The search snapshot no longer clones the existing trigram index on the UI thread. A snapshot lazily builds its own index when a query needs trigrams, on the thread executing search; the production search worker executes that search. Short queries use the existing linear fallback without constructing an index. A headless regression checks worker-thread construction, immutable old snapshots and unsaved metadata in a new snapshot. Existing result-generation checks and pagination remain in place. Track records are still copied synchronously, and rebuilding the index for changed snapshots can delay searches; no realistic performance qualification is claimed.
 
 Local checks passed: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (207 passed, 0 failed), `cargo build --release`, and `git diff --check`. The user deferred independent review; this checkpoint remains unreviewed and unpublished. QWEN returned HTTP 502; implementation used the user's Codex fallback.
+
+
+## Search index reuse across crate scope — local checkpoint (2026-10-28)
+
+Snapshots with the same catalog generation and revision share their lazy trigram index across crate scope changes; each snapshot still applies its own scope predicate. Changed revisions or generations use a fresh index. A headless controller regression verifies reuse, filtered results, unsaved metadata updates and generation invalidation. Synchronous track snapshot construction, performance qualification, and independent review remain open.
+
+Local checks passed: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (208 passed, 0 failed), `cargo build --release`, and `git diff --check`. QWEN timed out and Codex implemented the slice under the user's fallback instruction. Review has been deferred by the user; this subsequent slice remains unpublished.
+
+
+## 100,000-track search completion measurement (2026-10-28)
+
+The existing headless track-limit scenario now measures elapsed time through result installation as well as request dispatch; it retains checks for paging, selection, unsaved changes, stale results and worker failure. One debug test run on 100,000 synthetic paths recorded initial dispatch 23.36 ms and completion 41.13 ms, selective-query dispatch 13.05 ms and completion 357.06 ms, broad-query dispatch 13.51 ms and completion 37.73 ms. The first selective query builds the snapshot index; timings include headless control lookup and completion polling. This is one non-controlled run, without real file reads, visual rendering, audio device load, or a predefined performance budget. It does not qualify the native application or complete the library-scaling plan item. The targeted test passed (1/1).
+
+
+## Incremental search snapshots and real collection qualification (2026-10-28)
+
+Track search records are held in immutable 256-record chunks. Updates copy affected chunks, and snapshots share the chunk list. Crate membership uses copy-on-write bitsets keyed by stable track indices, restored from crate membership after loading. A separate search revision changes on track search data and memberships, not persistence acknowledgements or grid edits. Search requests remain bounded and results validated by generation, search revision, query, order, scope and page. A snapshot index is built lazily by the search worker; filtering and global sorting still retain match IDs in memory. In production, the previous additional library-side trigram index is no longer built on the UI thread; it remains compiled for the test reference. The representation does not qualify worst-case allocation, scheduler latency or realtime audio.
+
+A dedicated explicitly ignored-by-default test was run with `DRDJ_MUSIC_ROOT` pointing to the user's collection. It read 5,463 supported files without modifying them, found 66 metadata errors and no inaccessible directories, compared all 3,475 matching MP3 rows across pages against the independent library reference, and checked unsaved metadata search. One earlier test setup failed because the UI overwrote a direct test-only query; the setup was corrected to set the UI query, and the rerun passed. The final corrected run reported 4.35 s metadata read, 0.13 ms search dispatch and 65.70 ms through result installation. These are a single warm-cache headless debug run, not cold-start or native end-to-end performance.
+
+The final Windows release was started against an isolated SQLite backup containing 3,480 tracks; native UI Automation observed a pageable library, next and previous page, and a searched target; the process closed with exit 0. One run measured 1,019 ms to pageable state, 2,068/2,059 ms for page actions and 2,096 ms for target observation. These figures include Windows UI Automation invocation and polling overhead; no separate application-only timing, sustained playback, visual inspection, hearing or device latency is established. Previous two-deck evidence belongs to an earlier build. Metadata error causes, realistic performance budgets and repeated end-to-end DJ-load qualification remain open.
+
+Final local gates passed: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (210 passed, one explicitly ignored real-media test), `cargo build --release` and `git diff --check`. The ignored real-media test was run separately and passed. The user deferred independent review; the changes remain unreviewed.
+
+
+## Continuous sync: two-minute offline PCM qualification (2026-10-28)
+
+The explicitly invoked ignored-by-default test `continuous_sync_two_minutes_of_actual_offline_pcm_in_both_directions` renders a nonzero synthetic PCM tone through both deck renderers for 119.988 seconds per follower direction, with a 33 ms control interval, manual constant 120/121.2 BPM grids and an injected control clock. It verifies finite/nonzero output, continuous session ownership, unchanged requested speed, safe manual release, both decks remaining in play state and phase error below 0.1 beat after 30 seconds. Observed maximum errors were 0.000000 beats for A and 0.000053 beats for B (rounded to six decimals); this is one deterministic offline run, not a statement of device timing or musical quality. Two initial test attempts failed: the first did not establish fresh render observations; the second queried a render stamp after a command invalidated it. The test now establishes initial liveness and samples the coherent phase before the controller issues its next command. Corrected test passed 1/1.
+
+Real music transitions, physical hardware/device latency, actual listening, continuous long-duration operation, variable meters, keylock and quantized live triggers remain open. No audio device was used and no sound was evaluated.
+
+
+## Scheduled quantized hot-cue recall (2026-10-28)
+
+Each deck has a separate opt-in "Trigger on next beat" switch. Recalling an occupied hot cue while playing with a confirmed grid schedules its source-frame target at the next source beat. Execution occurs in DeckRenderer at the start of a complete output frame, without a GUI timer seek. New schedules replace earlier ones; subsequent transport/rate/loop commands, grid changes, source replacement and switching trigger mode cancel the schedule. Paused decks, loops, nudge, active Sync, pending pitch commands and grid drafts reject scheduled recall. Cue creation quantization remains separate. This is source-beat scheduling, not cross-deck musical launch synchronization or a physical device clock.
+
+Exact stereo PCM assertions verify deferred execution, full-frame boundaries, single execution and command cancellation. Headless GUI/engine tests verify both decks and paused rejection with actual rendering through the scheduled point. Initial tests exposed test setup errors (a partial stereo frame at reset and noncanonical fixture path); these were corrected. Final gates passed: fmt, strict Clippy, 212 regular tests (two explicit ignored qualification tests), release build and diff check. No new dependency was added.
+
+Windows reported Realtek and USB audio endpoints; FFmpeg's DirectShow enumeration offered microphones as audio capture sources. No microphone capture was started and no physical output-loopback, listening, controller test or hardware endurance acceptance is claimed. Variable time signatures and keylock are not implemented by this slice. Independent review remains deferred by the user.
+
+
+## Additional sync alignment periods (2026-10-28)
+
+Phase acquisition and continuous feedback accept 3-, 5- and 7-beat periods through the existing per-deck alignment selector. The original Beat and Bar4 indices remain unchanged. The UI labels these options as beat counts: the manual grid, bar numbering and storage still use the existing 4/4 representation. Targeted tests check selector roundtrips, half-period limits and exact target-frame/displacement examples for odd periods. This is partial variable-meter support; no persisted time signature, mixed-meter track, keylock or physical output acceptance is claimed.

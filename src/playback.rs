@@ -559,6 +559,39 @@ impl DualDeckEngine {
         );
         Ok(())
     }
+    /// Schedule a cue at the next source beat; execution occurs at a render frame boundary.
+    pub fn cancel_scheduled_cue(&self, id: DeckId) {
+        if let Some(render) = self.decks[id.index()].borrow().render.as_ref() {
+            render.cancel_trigger();
+        }
+    }
+    pub fn schedule_cue(&self, id: DeckId, target: Duration) -> Result<(), String> {
+        let deck = self.decks[id.index()].borrow();
+        let track = deck.track.as_ref().ok_or("No track loaded")?;
+        if !deck.playing() || deck.loop_active || deck.nudge != 0 || deck.sync_factor != 1.0 {
+            return Err("Quantized triggers require playing without loop, nudge or Sync".into());
+        }
+        let grid = deck
+            .grid
+            .ok_or("Save a manual grid before scheduling a cue")?;
+        let render = deck.render.as_ref().ok_or("Missing renderer")?;
+        let rate = track.samples.sample_rate();
+        let position = render.position();
+        let mut at = grid.nearest_beat_frame(position, rate)?;
+        if frame_time(at, rate) <= position {
+            at = grid
+                .nearest_beat_frame(position + Duration::from_secs_f64(60.0 / grid.bpm()), rate)?;
+        }
+        if target >= track.duration() {
+            return Err("Cue is outside the loaded track".into());
+        }
+        let target_frame = (target.as_nanos() * u128::from(rate) / 1_000_000_000) as usize;
+        if at >= track.samples.frames() || target_frame >= track.samples.frames() {
+            return Err("Scheduled cue or next beat is outside the loaded track".into());
+        }
+        render.schedule_trigger(at, target_frame);
+        Ok(())
+    }
     /// One-shot tempo matching from confirmed constant grids; no beat-phase alignment.
     pub fn tempo_match_factor(&self, id: DeckId) -> Result<f64, String> {
         let target = self.decks[id.index()].borrow();
@@ -711,7 +744,7 @@ impl DualDeckEngine {
             crate::phase_sync::Alignment::Beat => {
                 crate::phase_sync::beat_displacement(own.grid?, a, reference.grid?, b).ok()?
             }
-            crate::phase_sync::Alignment::Bar4 => crate::phase_sync::alignment_displacement(
+            _ => crate::phase_sync::alignment_displacement(
                 own.grid?,
                 a,
                 reference.grid?,
@@ -1095,6 +1128,9 @@ impl DualDeckEngine {
         }
         if grid.is_some_and(|grid| grid.anchor() > deck.track.as_ref().unwrap().duration()) {
             return Err("Grid anchor is outside this track".into());
+        }
+        if let Some(render) = &deck.render {
+            render.cancel_trigger();
         }
         deck.grid = grid;
         Ok(())

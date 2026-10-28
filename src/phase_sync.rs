@@ -7,31 +7,41 @@ pub enum Alignment {
     #[default]
     Beat,
     Bar4,
+    Bar3,
+    Bar5,
+    Bar7,
 }
 impl Alignment {
     pub fn half_period_beats(self) -> f64 {
-        match self {
-            Self::Beat => 0.5,
-            Self::Bar4 => 2.0,
-        }
+        self.beats() as f64 / 2.0
     }
+
     pub fn from_index(index: i32) -> Result<Self, String> {
         match index {
             0 => Ok(Self::Beat),
             1 => Ok(Self::Bar4),
-            _ => Err("Choose Beat or Bar 4/4 alignment".into()),
+            2 => Ok(Self::Bar3),
+            3 => Ok(Self::Bar5),
+            4 => Ok(Self::Bar7),
+            _ => Err("Choose a supported beat-period alignment".into()),
         }
     }
     pub fn index(self) -> i32 {
         match self {
             Self::Beat => 0,
             Self::Bar4 => 1,
+            Self::Bar3 => 2,
+            Self::Bar5 => 3,
+            Self::Bar7 => 4,
         }
     }
     fn beats(self) -> i128 {
         match self {
             Self::Beat => 1,
             Self::Bar4 => 4,
+            Self::Bar3 => 3,
+            Self::Bar5 => 5,
+            Self::Bar7 => 7,
         }
     }
 }
@@ -137,6 +147,41 @@ mod tests {
         Ok(remainder as f64 / denominator as f64)
     }
     #[test]
+    fn odd_beat_periods_align_to_the_next_bar_and_bound_feedback() {
+        let grid = BeatGrid::new(120.0, Duration::ZERO).unwrap();
+        for (index, beats) in [(2, 3), (3, 5), (4, 7)] {
+            let mode = Alignment::from_index(index).unwrap();
+            assert_eq!(mode.index(), index);
+            assert_eq!(mode.half_period_beats(), f64::from(beats) / 2.0);
+            let period = f64::from(beats) / 2.0;
+            let frame = target_frame_mode(
+                grid,
+                Duration::from_secs_f64(period - 0.25),
+                grid,
+                Duration::ZERO,
+                48000,
+                480000,
+                mode,
+            )
+            .unwrap();
+            assert_eq!(frame, (period * 48000.0) as usize);
+            assert!(
+                (alignment_displacement(
+                    grid,
+                    Duration::from_secs_f64(period - 0.25),
+                    grid,
+                    Duration::ZERO,
+                    mode
+                )
+                .unwrap()
+                    - 0.5)
+                    .abs()
+                    < 1e-12
+            );
+        }
+    }
+
+    #[test]
     fn bar_alignment_distinguishes_whole_beats_and_respects_manual_anchors() {
         let grid = BeatGrid::new(120., Duration::ZERO).unwrap();
         assert_eq!(
@@ -212,7 +257,7 @@ mod tests {
             );
         }
         assert!(Alignment::from_index(-1).is_err());
-        assert!(Alignment::from_index(2).is_err());
+        assert!(Alignment::from_index(5).is_err());
     }
     #[test]
     fn exact_half_bar_ties_choose_later_with_nanosecond_neighbours() {
