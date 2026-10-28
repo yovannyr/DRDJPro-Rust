@@ -40,3 +40,12 @@ Offline render timings are diagnostic measurements of CPU rendering, not device 
 `--analyze <file>` decodes and reports metrics without audio hardware. `--play <file>` and `--mix <a> <b>` use the same prepared tracks and default physical output, blocking until playback ends. These CLI paths preload synchronously before showing any GUI.
 
 Next scope requires review: real-music BPM validation, automatic beat/downbeat/key analysis, click-free/sample-accurate seeking, streaming decoding/memory policy, device loss, headphone routing, EQ/limiting and real hardware performance are not part of this change.
+
+
+## Software Keylock
+
+Enable KEYLOCK in either deck cue panel or press MC4000 Key Lock. Tempo processing runs on background workers; pending tempo changes keep the previous prepared rate until the newest requested buffer is available. The original PCM, duration, waveform/grid and source-frame timeline remain authoritative. Prepared PCM is sampled by the renderer at mapped source coordinates. No DSP call or native allocation is made by the Keylock rendering branch. Prepared buffers travel with track ownership and retirement.
+
+There is at most one running job and one latest tempo request per deck and at most two native DSP workers globally. Cancellation discards results before/after the non-interruptible whole-clip native operation. Each input/output PCM buffer is capped at 67,108,864 samples; original PCM, copies and DSP allocations are additional. Failure preserves the previously active prepared audio. Source replacement invalidates pending requests/results. Keylock is runtime per-deck state and is not persisted.
+
+Continuous Sync and nudge with active Keylock are rejected in this version. Whole-track preparation may take time; this is not a streaming low-latency time-stretch implementation. Activating/deactivating or adopting a new tempo replaces the prepared render source; click-free listening, hardware latency and subjective music quality remain unqualified. The MC4000 Keylock LED follows adopted state after startup choreography.

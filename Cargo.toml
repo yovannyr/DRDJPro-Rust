@@ -10,6 +10,7 @@ rust-version = "1.92"
 description = "DrDJ Pro Rust desktop DJ application"
 
 [dependencies]
+drdj-keylock = { path = "crates/drdj-keylock" }
 midir = "=0.10.3"
 rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled", "backup"] }
 serde = { version = "=1.0.229", features = ["derive"] }

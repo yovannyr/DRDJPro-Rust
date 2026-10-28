@@ -31,7 +31,7 @@ pub fn stretch(
     let samples = output_frames
         .checked_mul(usize::from(channels))
         .ok_or("Keylock size overflow")?;
-    if input.len() > 16_777_216 || samples > 16_777_216 {
+    if input.len() > 67_108_864 || samples > 67_108_864 {
         return Err("Keylock clip exceeds worker memory budget");
     }
     let mut copy = Vec::new();
@@ -104,8 +104,104 @@ impl PreparedKeylock {
     }
 }
 
+/// A generation identifies the exact loaded source and requested tempo.
+pub struct PreparedResult {
+    pub generation: u64,
+    pub tempo: f64,
+    pub clip: PreparedKeylock,
+}
+static ACTIVE_JOBS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+struct WorkerSlot;
+impl Drop for WorkerSlot {
+    fn drop(&mut self) {
+        ACTIVE_JOBS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+pub struct Job {
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    receiver: std::sync::mpsc::Receiver<Result<PreparedResult, &'static str>>,
+}
+impl Job {
+    pub fn start(
+        generation: u64,
+        input: std::sync::Arc<Vec<f32>>,
+        channels: u16,
+        rate: u32,
+        tempo: f64,
+    ) -> Result<Self, std::io::Error> {
+        if ACTIVE_JOBS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) >= 2 {
+            ACTIVE_JOBS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "Two Keylock workers are already active",
+            ));
+        }
+        let slot = WorkerSlot;
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let token = cancel.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("keylock-prepare".into())
+            .spawn(move || {
+                let _slot = slot;
+                let result = if token.load(std::sync::atomic::Ordering::Acquire) {
+                    Err("Keylock cancelled")
+                } else {
+                    PreparedKeylock::prepare(&input, channels, rate, tempo).and_then(|clip| {
+                        if token.load(std::sync::atomic::Ordering::Acquire) {
+                            Err("Keylock cancelled")
+                        } else {
+                            Ok(PreparedResult {
+                                generation,
+                                tempo,
+                                clip,
+                            })
+                        }
+                    })
+                };
+                drop(_slot);
+                let _ = sender.send(result);
+            })?;
+        Ok(Self { cancel, receiver })
+    }
+    pub fn cancel(&self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    pub fn poll(&self) -> Result<Option<Result<PreparedResult, &'static str>>, &'static str> {
+        match self.receiver.try_recv() {
+            Ok(result) => Ok(Some(result)),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Keylock worker disconnected"),
+        }
+    }
+}
+impl Drop for Job {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn worker_preserves_source_generation_and_requested_tempo() {
+        let input = std::sync::Arc::new(vec![0.0; 48000]);
+        let job = super::Job::start(42, input, 1, 48000, 1.25).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(result) = job.poll().unwrap() {
+                let result = result.unwrap();
+                assert_eq!(result.generation, 42);
+                assert_eq!(result.tempo, 1.25);
+                assert_eq!(result.clip.source_frames(), 48000);
+                assert_eq!(result.clip.output_frames(), 38400);
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
     #[test]
     fn prepared_coordinates_cover_source_end_and_reject_invalid_seeks() {
         let prepared = super::PreparedKeylock {

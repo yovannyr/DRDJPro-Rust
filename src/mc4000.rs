@@ -7,6 +7,7 @@ use std::sync::{
 #[derive(Debug, PartialEq)]
 pub enum Command {
     Toggle(usize),
+    Keylock(usize),
     Cue(usize),
     Fader(usize, u8),
     Crossfader(u8),
@@ -17,6 +18,7 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
     }
     let channel = bytes[0] & 15;
     match (bytes[0] & 0xf0, channel, bytes[1], bytes[2]) {
+        (0x90, 0..=1, 13, 1..=127) => Some(Command::Keylock(channel as usize)),
         (0x90, 0..=1, 0, 1..=127) => Some(Command::Toggle(channel as usize)),
         (0x90, 0..=1, 1, 1..=127) => Some(Command::Cue(channel as usize)),
         (0xb0, 0..=1, 28, value) => Some(Command::Fader(channel as usize, value)),
@@ -24,23 +26,55 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         _ => None,
     }
 }
-/// Three brief flashes, ending off. Late UI ticks skip expired steps.
+// Manufacturer MIDI table: coloured hot cues use value 1; ordinary LEDs use 127.
+const LED_PATH: [[u8; 3]; 16] = [
+    [0x94, 0x14, 1],
+    [0x94, 0x15, 1],
+    [0x94, 0x16, 1],
+    [0x94, 0x17, 1],
+    [0x9f, 0x21, 127],
+    [0x9f, 0x22, 127],
+    [0x9f, 0x23, 127],
+    [0x9f, 0x24, 127],
+    [0x95, 0x17, 1],
+    [0x95, 0x16, 1],
+    [0x95, 0x15, 1],
+    [0x95, 0x14, 1],
+    [0x91, 0, 127],
+    [0x91, 1, 127],
+    [0x90, 1, 127],
+    [0x90, 0, 127],
+];
+const GREETING_STEPS: usize = LED_PATH.len() * 5;
+/// Five circuits in 5.2 seconds. Each step switches the previous LED off first.
 struct Greeting {
     started: std::time::Instant,
-    last: Option<u128>,
+    last: Option<usize>,
 }
 impl Greeting {
-    fn value(&mut self, now: std::time::Instant) -> Option<u8> {
-        let step = now
-            .saturating_duration_since(self.started)
-            .as_millis()
-            .min(750)
-            / 150;
+    fn messages(&mut self, now: std::time::Instant) -> Option<[[u8; 3]; 2]> {
+        let step = (now.saturating_duration_since(self.started).as_millis() / 65)
+            .min(GREETING_STEPS as u128) as usize;
         if self.last == Some(step) {
             return None;
         }
+        let off = self
+            .last
+            .filter(|&last| last < GREETING_STEPS)
+            .map_or([0xb0, 0x75, 0], |last| {
+                let mut message = LED_PATH[last % LED_PATH.len()];
+                message[2] = 0;
+                message
+            });
         self.last = Some(step);
-        Some(if step.is_multiple_of(2) { 127 } else { 0 })
+        Some([
+            off,
+            if step < GREETING_STEPS {
+                LED_PATH[step % LED_PATH.len()]
+            } else {
+                [0xb0, 0x75, 0]
+            },
+        ])
     }
 }
 pub fn present() -> Result<bool, String> {
@@ -53,6 +87,7 @@ pub fn present() -> Result<bool, String> {
 pub struct Input {
     _connection: midir::MidiInputConnection<()>,
     output: Option<midir::MidiOutputConnection>,
+    keylock_leds: [Option<bool>; 2],
     greeting: Greeting,
     buttons: Receiver<Command>,
     levels: Arc<[AtomicU8; 3]>,
@@ -105,6 +140,7 @@ impl Input {
         let output = port.and_then(|port| midi_out.connect(&port, "DrDJ MC4000 LEDs").ok());
         Ok(Some(Self {
             output,
+            keylock_leds: [None, None],
             greeting: Greeting {
                 started: std::time::Instant::now(),
                 last: None,
@@ -115,11 +151,32 @@ impl Input {
             overflow,
         }))
     }
-    pub fn poll(&mut self, mut apply: impl FnMut(Command)) -> bool {
-        if let Some(value) = self.greeting.value(std::time::Instant::now()) {
+    pub fn keylock_feedback(&mut self, active: [bool; 2]) {
+        if self.greeting.last != Some(GREETING_STEPS) {
+            return;
+        }
+        for (index, enabled) in active.into_iter().enumerate() {
+            if self.keylock_leds[index] == Some(enabled) {
+                continue;
+            }
             if let Some(output) = &mut self.output {
-                if output.send(&[0xb0, 0x75, value]).is_err() {
-                    self.output = None;
+                if output
+                    .send(&[0x90 + index as u8, 13, if enabled { 127 } else { 0 }])
+                    .is_ok()
+                {
+                    self.keylock_leds[index] = Some(enabled);
+                }
+            }
+        }
+    }
+    pub fn poll(&mut self, mut apply: impl FnMut(Command)) -> bool {
+        if let Some(messages) = self.greeting.messages(std::time::Instant::now()) {
+            if let Some(output) = &mut self.output {
+                for message in messages {
+                    if output.send(&message).is_err() {
+                        self.output = None;
+                        break;
+                    }
                 }
             }
         }
@@ -152,6 +209,14 @@ impl Drop for Input {
 }
 pub fn apply(ui: &crate::AppWindow, command: Command) {
     match command {
+        Command::Keylock(0) => {
+            ui.set_left_keylock(!ui.get_left_keylock());
+            ui.invoke_keylock_left();
+        }
+        Command::Keylock(_) => {
+            ui.set_right_keylock(!ui.get_right_keylock());
+            ui.invoke_keylock_right();
+        }
         Command::Toggle(0) => ui.invoke_toggle_left(),
         Command::Toggle(_) => ui.invoke_toggle_right(),
         Command::Cue(0) => ui.invoke_reset_left(),
@@ -174,31 +239,39 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 mod tests {
     use super::*;
     #[test]
-    fn greeting_has_three_flashes_finishes_off_and_skips_late_steps() {
+    fn greeting_runs_five_circuits_one_light_at_a_time_and_finishes_off() {
+        assert_eq!(LED_PATH[0], [0x94, 0x14, 1]);
+        assert_eq!(LED_PATH[4], [0x9f, 0x21, 127]);
+        assert_eq!(LED_PATH[8], [0x95, 0x17, 1]);
         let start = std::time::Instant::now();
         let mut greeting = Greeting {
             started: start,
             last: None,
         };
-        for (ms, value) in [
-            (0, 127),
-            (150, 0),
-            (300, 127),
-            (450, 0),
-            (600, 127),
-            (750, 0),
-        ] {
-            assert_eq!(
-                greeting.value(start + std::time::Duration::from_millis(ms)),
-                Some(value)
-            );
-            assert_eq!(
-                greeting.value(start + std::time::Duration::from_millis(ms)),
-                None
-            );
+        let mut active = std::collections::HashSet::new();
+        for step in 0..GREETING_STEPS {
+            let time = start + std::time::Duration::from_millis(step as u64 * 65);
+            let messages = greeting.messages(time).unwrap();
+            for message in messages {
+                if message[0] == 0xb0 {
+                    active.clear();
+                } else if message[2] == 0 {
+                    active.remove(&(message[0], message[1]));
+                } else {
+                    active.insert((message[0], message[1]));
+                }
+            }
+            assert_eq!(active.len(), 1);
+            assert_eq!(messages[1], LED_PATH[step % LED_PATH.len()]);
+            assert_eq!(greeting.messages(time), None);
         }
+        let messages = greeting
+            .messages(start + std::time::Duration::from_millis(5200))
+            .unwrap();
+        assert_eq!(messages[0][2], 0);
+        assert_eq!(messages[1], [0xb0, 0x75, 0]);
         assert_eq!(
-            greeting.value(start + std::time::Duration::from_secs(10)),
+            greeting.messages(start + std::time::Duration::from_secs(10)),
             None
         );
         let mut late = Greeting {
@@ -206,8 +279,8 @@ mod tests {
             last: None,
         };
         assert_eq!(
-            late.value(start + std::time::Duration::from_secs(2)),
-            Some(0)
+            late.messages(start + std::time::Duration::from_secs(10)),
+            Some([[0xb0, 0x75, 0]; 2])
         );
     }
     #[test]

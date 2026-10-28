@@ -995,3 +995,33 @@ Final MC4000 slice verification: workspace release build passed, all-workspace f
 Input owns an optional MC4000 MIDI output connection. The GUI timer advances a greeting using the documented All LEDs command (channel 1 CC117): 127/0 at 0/150/300/450/600/750 ms. Late polls skip elapsed steps and settle off rather than burst all messages. Dropping the connection requests all LEDs off. Input discovery runs every two seconds; observed absence releases the connection and later presence retries acquisition. An unplug/replug entirely between discovery polls is not detected. Output acquisition/send errors currently leave input usable but may prevent the animation; no persistent transport LED feedback is implemented.
 
 The deterministic test verifies all six greeting states, no repeat at the same step, final off, and a late first poll. Final workspace Clippy, format, tests (218 application tests plus two DSP tests; three explicit qualification tests ignored), release build and diff check passed. A native Windows release run with the isolated test catalog completed startup/page/search checks and closed with exit 0. No human observation of this startup animation or physical unplug/replug test is claimed; the user previously confirmed the standalone All LEDs On command on the same device. No playback was requested by the test. Review remains deferred.
+
+
+## Longer controller startup greeting (2026-10-28)
+
+After the user observed the initial animation and requested a longer signal, the greeting now spans five seconds: five 500 ms on/500 ms off cycles, with an explicit final off at five seconds. The updated test covers all scheduled steps, no duplicate step on repeated polls, terminal off and delayed-first-poll handling. Strict workspace Clippy and the targeted test passed. No transport or audio logic changed.
+
+
+## MC4000 sequential greeting choreography (2026-10-28)
+
+The user requested a sequential circuit instead of simultaneous flashes. The greeting now walks 16 individually addressed LEDs: four A hot cues (channel 5), four central sampler pads (channel 16), four B hot cues in reverse order (channel 6), B Play/Cue and A Cue/Play. Coloured hot cues use blue value 1; ordinary LEDs use 127. There are five circuits of 65 ms steps, nominal 5.2 seconds. Each transition sends previous-off before next-on; entry resets all LEDs and completion sends all-off. Late ticks skip expired steps. The deterministic test tracks active addresses, verifies one active LED throughout all 80 steps, specific manufacturer addresses, five repetitions, final off and delayed completion. The device animation has not yet been visually accepted by the user.
+
+
+## Keylock preparation job (2026-10-28)
+
+The DSP crate now exposes a background preparation job. Its bounded result channel carries source/request generation, requested tempo and the prepared clip; nonblocking polling reports completion or worker failure. Cancellation is checked before and after the native whole-clip operation, and dropping a job sets cancellation. The native operation itself is not interrupted; application-side admission limits and generation validation are still required before adoption. A worker test verifies generation, tempo, original frames and output frames. Package Clippy, three package tests and the package release build passed. Desktop-controller adoption and renderer integration remain open; no end-to-end Keylock claim is made.
+
+
+## End-to-end software Keylock integration (2026-10-28)
+
+The desktop now depends on drdj-keylock. Controller jobs retain source identity and coalesce later tempo requests; obsolete results/queued requests after track replacement are discarded. Jobs are cancelled on disable/close. A global two-native-worker admission limit prevents repeated toggles creating unbounded native jobs; native processing remains non-interruptible. PreparedTrack owns the prepared clip and passes it to DeckRenderer. Original PCM coordinates and frame clocks are unchanged, and shared prepared ownership uses existing source-retirement handling. GUI checkboxes and MC4000 note 0x0D on deck channels toggle the same controller path; LED feedback follows actually adopted Keylock state, after startup animation.
+
+Actual offline engine tests render a 440 Hz tone with Keylock at 1.25 and 0.8 tempo on both deck directions. They verify measured frequency, original duration, source position, seek, pause freeze, Cue, EOF/restart, looping and preserved loop bounds when disabling. Headless controller/MIDI tests exercise enable, serialized latest-tempo requests, same-length/source identity invalidation, disable and both decks. Targeted tests passed. Final workspace tests passed: 220 application tests (three explicit ignored tests) and three DSP tests. Strict workspace Clippy passed after factoring a complex job type; format check passed.
+
+Limits: Keylock plus continuous Sync/nudge is rejected; whole-track preparation is asynchronous rather than streaming; native output latency, subjective music/transient quality, seamless switching and long-run device acceptance are not established. The broader Sync/hardware qualification item remains open. Independent review is still deferred.
+
+Final integration verification: cargo fmt --all --check, cargo build --workspace --release and git diff --check passed. The isolated native Windows startup/page/search smoke completed (startup 2108 ms; next page 74.6 ms; previous page 31.2 ms; filtered target 101.5 ms) and exited normally with code 0. This does not establish physical Keylock-button or listening acceptance.
+
+Independent integration review: gpt-6.1-sol, medium. Two findings were fixed: adoption now validates and establishes rate/nudge state before replacing the renderer; source-bound desired pitch persists through preparation so fine steps accumulate and controls show the pending target. Nudge input is rejected while Keylock is requested/preparing. Regression coverage injects a nudge during preparation and accumulates two fine steps across controller ticks. Follow-up review found no further blocking production-code findings; acceptance requires final green checks with corrected playing-deck regression setup. Earlier deferred-review notes describe earlier checkpoints.
+
+Final checks after review fixes: format check, strict workspace/all-target Clippy, workspace tests (220 application plus three DSP passed; three qualification tests ignored), workspace release build and diff check all passed. Final native smoke also exited 0 (startup 1102.7 ms; next/previous page 2044.8 ms each; target search 2060.6 ms); these are observed smoke timings, not a latency qualification. Review acceptance conditions are satisfied.

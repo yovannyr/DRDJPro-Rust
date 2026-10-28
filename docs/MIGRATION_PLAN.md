@@ -89,14 +89,15 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Geplante Hot-Cue-Trigger: eigener Schalter je Deck, Ausführung am nächsten Beat im Renderer; Stereo-Framegrenze, Abbruch und GUI-/Engine-Pfad auf beiden Decks geprüft.
   - [x] ✅ Sync-Ausrichtung um Perioden mit 3, 5 und 7 Beats erweitert; vollständige Grid-Taktarten und Speicherung bleiben offen.
   - [x] ✅ Konstante Taktlänge von 1–16 Viertelschlägen im Grid-Modell, Grid-Editor und SQLite-Schema 7; bestehende Grids bleiben bei 4. Gemischte Taktarten und andere Nenner bleiben offen.
-  - [ ] ☐ Variable Taktarten, Keylock, hörbare Übergänge und physische Hardware-Langzeitabnahme bleiben offen.
+  - [x] ✅ Software-Keylock an beiden Decks: GUI und MC4000-Taste, asynchrone Tempovorbereitung, Quellzeit, Seek/Cue/Pause/EOF und Loop-Erhalt automatisiert geprüft.
+  - [ ] ☐ Gemischte Taktarten, Keylock zusammen mit kontinuierlichem Sync/Nudge, hörbare Übergänge und physische Hardware-Langzeitabnahme bleiben offen.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [x] ✅ Gemessener Post-Fader-Bus-Sample-Peak aus vollständigen50-ms-Renderfenstern mit dBFS-Anzeige; kein True-Peak-/Lautheits-/Hardware-Nachweis.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
 - [ ] ☐ MIDI/HID-Controller und Hardware-Feedback.
   - [x] ✅ MC4000-MIDI-Grundsteuerung: Play/Pause A/B, vorhandenes Cue-to-zero, Channel-Fader und Crossfader an GUI/Engine angeschlossen; Parser-/GUI-Tests und reales Öffnen/Schließen geprüft.
-  - [x] ✅ Kurze MC4000-LED-Begrüßung beim Verbinden: drei Impulse, danach aus; Port-Erkennung alle zwei Sekunden und Wiederverbindungsversuch eingebaut. Zeitfolge automatisiert geprüft; echter Ab-/Ansteckzyklus noch offen.
+  - [x] ✅ Kurze MC4000-LED-Begrüßung beim Verbinden: Lauflicht über Hot-Cue-/Sampler-Pads und Transporttasten, fünf Runden in etwa 5,2 Sekunden, danach aus; Port-Erkennung alle zwei Sekunden und Wiederverbindungsversuch eingebaut. Zeitfolge automatisiert geprüft; echter Ab-/Ansteckzyklus noch offen.
   - [ ] ☐ Hotplug, LED-Feedback, weitere Regler, vollständige Cue-Semantik und tatsächliche Bedienabnahme der Anwendung mit Hardware.
 - [ ] ☐ Erweiterte Bibliothek: Sub-/Smart-Crates, History, Relocation und Session-Wiederherstellung.
 - [ ] ☐ Erweiterte Grid-Funktionen: variable Tempi, Warp-Marker und Taktartwechsel.

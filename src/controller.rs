@@ -17,6 +17,7 @@ use std::{
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<Result<crate::library::ImportBatch, String>>;
+type KeylockJob = (Arc<crate::waveform::DetailPeaks>, drdj_keylock::Job, f64);
 struct PitchRequest {
     source: Arc<crate::waveform::DetailPeaks>,
     factor: f64,
@@ -214,6 +215,8 @@ pub struct AudioController {
     pitch_ranges: Cell<[crate::pitch_control::PitchRange; 2]>,
     alignments: Cell<[crate::phase_sync::Alignment; 2]>,
     pending_pitch: RefCell<[Option<PitchRequest>; 2]>,
+    keylock_next: Cell<[Option<f64>; 2]>,
+    keylock_jobs: RefCell<[Option<KeylockJob>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
     sync_session: RefCell<Option<SyncSession>>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
@@ -267,6 +270,8 @@ impl AudioController {
             pitch_ranges: Cell::new([crate::pitch_control::PitchRange::default(); 2]),
             alignments: Cell::new([crate::phase_sync::Alignment::Beat; 2]),
             pending_pitch: RefCell::new([None, None]),
+            keylock_jobs: RefCell::new([None, None]),
+            keylock_next: Cell::new([None, None]),
             nudges: RefCell::new([None, None]),
             sync_session: RefCell::new(None),
             cue_editors: RefCell::new([None, None]),
@@ -496,6 +501,18 @@ impl AudioController {
         controller.wire_hot_cues(ui);
         controller.wire_loops(ui);
         controller.wire_pitch(ui);
+        for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(&controller);
+            let change = move || {
+                if let Some(c) = weak.upgrade() {
+                    c.poll_keylock();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_keylock_left(change),
+                DeckId::B => ui.on_keylock_right(change),
+            }
+        }
         controller.wire_nudge(ui);
         controller.wire_saved_loops(ui);
         controller.refresh();
@@ -1010,16 +1027,36 @@ impl AudioController {
         self.pitch_ranges.set(ranges);
         Ok(())
     }
+    fn desired_pitch(
+        &self,
+        id: DeckId,
+        source: &Arc<crate::waveform::DetailPeaks>,
+        fallback: f64,
+    ) -> f64 {
+        let index = Self::grid_index(id);
+        if let Some(request) = self.pending_pitch.borrow()[index]
+            .as_ref()
+            .filter(|r| Arc::ptr_eq(source, &r.source))
+        {
+            return request.factor;
+        }
+        if self.keylock_requested(id) {
+            if let Some((_, _, tempo)) = self.keylock_jobs.borrow()[index]
+                .as_ref()
+                .filter(|(s, _, _)| Arc::ptr_eq(source, s))
+            {
+                return self.keylock_next.get()[index].unwrap_or(*tempo);
+            }
+        }
+        fallback
+    }
     fn fine_pitch(&self, id: DeckId, up: bool) -> Result<(), String> {
         if !self.can_control_deck(id) {
             return Err("Finish loading before changing pitch".into());
         }
         let snapshot = self.engine.snapshot(id);
         let source = snapshot.detail.ok_or("Load a track first")?;
-        let factor = self.pending_pitch.borrow()[Self::grid_index(id)]
-            .as_ref()
-            .filter(|request| Arc::ptr_eq(&source, &request.source))
-            .map_or(snapshot.requested_speed, |request| request.factor);
+        let factor = self.desired_pitch(id, &source, snapshot.requested_speed);
         let target = self.pitch_ranges.get()[Self::grid_index(id)].step(factor, up)?;
         self.queue_pitch(id, ((target - 1.) * 100.) as f32)
     }
@@ -1050,6 +1087,9 @@ impl AudioController {
     fn hold_nudge(&self, id: DeckId, direction: i32, held: bool) -> Result<(), String> {
         if direction != -1 && direction != 1 {
             return Err("Invalid nudge direction".into());
+        }
+        if held && self.keylock_requested(id) {
+            return Err("Nudge unavailable while Keylock is enabled or preparing".into());
         }
         self.cancel_stale_nudges();
         let index = Self::grid_index(id);
@@ -1283,6 +1323,108 @@ impl AudioController {
             }
         }
     }
+    pub fn keylock_active(&self, id: DeckId) -> bool {
+        self.engine.keylock_factor(id).is_some()
+    }
+    fn keylock_requested(&self, id: DeckId) -> bool {
+        self.ui.upgrade().is_some_and(|ui| match id {
+            DeckId::A => ui.get_left_keylock(),
+            DeckId::B => ui.get_right_keylock(),
+        })
+    }
+    fn start_keylock(&self, id: DeckId, tempo: f64) -> Result<(), String> {
+        if self.keylock_jobs.borrow()[Self::grid_index(id)].is_some() {
+            let mut next = self.keylock_next.get();
+            next[Self::grid_index(id)] = Some(tempo);
+            self.keylock_next.set(next);
+            return Ok(());
+        }
+        let source = self
+            .engine
+            .snapshot(id)
+            .detail
+            .ok_or("Load a track first")?;
+        self.stop_sync();
+        self.cancel_nudge(id);
+        let job = self.engine.prepare_keylock(id, 0, tempo)?;
+        self.keylock_jobs.borrow_mut()[Self::grid_index(id)] = Some((source, job, tempo));
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_status(format!("Deck {id:?}: preparing Keylock tempo").into());
+        }
+        Ok(())
+    }
+    fn poll_keylock(&self) {
+        for id in [DeckId::A, DeckId::B] {
+            let index = Self::grid_index(id);
+            let wanted = self.keylock_requested(id);
+            if !wanted {
+                self.keylock_jobs.borrow_mut()[index].take();
+                let mut next = self.keylock_next.get();
+                next[index] = None;
+                self.keylock_next.set(next);
+                if self.engine.keylock_factor(id).is_some() {
+                    let _ = self.engine.adopt_keylock(id, None);
+                }
+                continue;
+            }
+            let ready = {
+                let jobs = self.keylock_jobs.borrow();
+                jobs[index]
+                    .as_ref()
+                    .and_then(|(_, job, _)| match job.poll() {
+                        Ok(Some(result)) => Some(result.map_err(str::to_owned)),
+                        Err(e) => Some(Err(e.into())),
+                        Ok(None) => None,
+                    })
+            };
+            let result = if let Some(result) = ready {
+                let (source, _, _) = self.keylock_jobs.borrow_mut()[index].take().unwrap();
+                if self
+                    .engine
+                    .snapshot(id)
+                    .detail
+                    .as_ref()
+                    .is_none_or(|current| !Arc::ptr_eq(current, &source))
+                {
+                    let mut next = self.keylock_next.get();
+                    next[index] = None;
+                    self.keylock_next.set(next);
+                    continue;
+                }
+                let mut next = self.keylock_next.get();
+                let queued = next[index].take();
+                self.keylock_next.set(next);
+                if let Some(tempo) = queued {
+                    if let Err(error) = self.start_keylock(id, tempo) {
+                        if let Some(ui) = self.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                    }
+                    continue;
+                }
+                result.and_then(|result| {
+                    self.engine
+                        .adopt_keylock(id, Some((result.tempo, result.clip)))
+                })
+            } else if self.keylock_jobs.borrow()[index].is_none()
+                && self.engine.keylock_factor(id).is_none()
+            {
+                self.start_keylock(id, self.engine.snapshot(id).requested_speed)
+            } else {
+                continue;
+            };
+            if let Some(ui) = self.ui.upgrade() {
+                if let Err(error) = result {
+                    let enabled = self.engine.keylock_factor(id).is_some();
+                    match id {
+                        DeckId::A => ui.set_left_keylock(enabled),
+                        DeckId::B => ui.set_right_keylock(enabled),
+                    }
+                    ui.set_status(format!("Keylock: {error}").into());
+                }
+            }
+        }
+    }
     fn apply_pending_pitch(&self) {
         for id in [DeckId::A, DeckId::B] {
             let Some(request) = self.pending_pitch.borrow_mut()[Self::grid_index(id)].take() else {
@@ -1299,7 +1441,11 @@ impl AudioController {
             {
                 Err("Pending pitch discarded after track replacement".into())
             } else {
-                self.engine.set_speed(id, request.factor)
+                if self.keylock_requested(id) {
+                    self.start_keylock(id, request.factor)
+                } else {
+                    self.engine.set_speed(id, request.factor)
+                }
             };
             if let Some(ui) = self.ui.upgrade() {
                 ui.set_status(
@@ -2052,6 +2198,9 @@ impl AudioController {
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
+        for job in self.keylock_jobs.borrow_mut().iter_mut() {
+            job.take();
+        }
         self.stop_sync();
         if let Some(cancel) = self.pending_cancel.borrow().as_ref() {
             cancel.request();
@@ -2163,6 +2312,7 @@ impl AudioController {
         self.engine.collect_retired();
         self.cancel_stale_nudges();
         self.apply_pending_pitch();
+        self.poll_keylock();
         self.poll_storage();
         self.poll_search();
         let import = self
@@ -2592,31 +2742,39 @@ impl AudioController {
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.snapshot(id);
             let index = Self::grid_index(id);
+            let desired = s.detail.as_ref().map_or(s.requested_speed, |source| {
+                self.desired_pitch(id, source, s.requested_speed)
+            });
             let pitch_range = self.pitch_ranges.get()[index];
             let (pitch_min, pitch_max) = pitch_range.bounds();
-            let pitch_outside = !pitch_range.contains(s.requested_speed);
+            let pitch_outside = !pitch_range.contains(desired);
             match id {
                 DeckId::A => {
                     ui.set_left_pitch_range_index(pitch_range.index());
                     ui.set_left_pitch_min(pitch_min as f32);
                     ui.set_left_pitch_max(pitch_max as f32);
                     ui.set_left_pitch_outside(pitch_outside);
-                    ui.set_left_pitch_can_down(pitch_range.step(s.requested_speed, false).is_ok());
-                    ui.set_left_pitch_can_up(pitch_range.step(s.requested_speed, true).is_ok());
+                    ui.set_left_pitch_can_down(pitch_range.step(desired, false).is_ok());
+                    ui.set_left_pitch_can_up(pitch_range.step(desired, true).is_ok());
                 }
                 DeckId::B => {
                     ui.set_right_pitch_range_index(pitch_range.index());
                     ui.set_right_pitch_min(pitch_min as f32);
                     ui.set_right_pitch_max(pitch_max as f32);
                     ui.set_right_pitch_outside(pitch_outside);
-                    ui.set_right_pitch_can_down(pitch_range.step(s.requested_speed, false).is_ok());
-                    ui.set_right_pitch_can_up(pitch_range.step(s.requested_speed, true).is_ok());
+                    ui.set_right_pitch_can_down(pitch_range.step(desired, false).is_ok());
+                    ui.set_right_pitch_can_up(pitch_range.step(desired, true).is_ok());
                 }
             }
             let pitch = format!(
-                "Requested {:+.2}% · effective {:+.4}% · coupled",
-                (s.requested_speed - 1.) * 100.,
-                (s.effective_speed - 1.) * 100.
+                "Requested {:+.2}% · effective {:+.4}% · {}",
+                (desired - 1.) * 100.,
+                (s.effective_speed - 1.) * 100.,
+                if self.engine.keylock_factor(id).is_some() {
+                    "Keylock"
+                } else {
+                    "coupled"
+                }
             );
             let pitch = if s.sync_factor != 1. {
                 format!("Sync {:+.3}% · {pitch}", (s.sync_factor - 1.) * 100.)
@@ -2650,12 +2808,12 @@ impl AudioController {
             };
             match id {
                 DeckId::A => {
-                    ui.set_left_pitch_percent(((s.requested_speed - 1.) * 100.) as f32);
+                    ui.set_left_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_left_pitch_caption(pitch.into());
                     ui.set_left_bpm_caption(bpm.into());
                 }
                 DeckId::B => {
-                    ui.set_right_pitch_percent(((s.requested_speed - 1.) * 100.) as f32);
+                    ui.set_right_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_right_pitch_caption(pitch.into());
                     ui.set_right_bpm_caption(bpm.into());
                 }
@@ -3050,6 +3208,54 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+    #[test]
+    fn keylock_gui_and_mc4000_prepare_update_disable_and_reject_replaced_sources() {
+        i_slint_backend_testing::init_no_event_loop();
+        fn finish_keylock(c: &AudioController, id: DeckId) {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while c.engine.keylock_factor(id).is_none()
+                || c.keylock_jobs.borrow()[AudioController::grid_index(id)].is_some()
+            {
+                c.poll_keylock();
+                assert!(Instant::now() < deadline, "Keylock preparation timed out");
+                std::thread::yield_now();
+            }
+        }
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let first = wav_file(4096, 96000);
+        let second = wav_file(8192, 48000);
+        engine.load_a(first.path()).unwrap();
+        engine.load_b(first.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        for id in [DeckId::A, DeckId::B] {
+            let channel = if id == DeckId::A { 0x90 } else { 0x91 };
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&[channel, 13, 127]).unwrap());
+            assert!(c.hold_nudge(id, 1, true).is_err());
+            c.fine_pitch(id, true).unwrap();
+            c.apply_pending_pitch();
+            c.fine_pitch(id, true).unwrap();
+            c.apply_pending_pitch();
+            finish_keylock(&c, id);
+            assert!((engine.keylock_factor(id).unwrap() - 1.0002).abs() < 1e-8);
+            c.start_keylock(id, 1.04).unwrap();
+            c.start_keylock(id, 0.96).unwrap();
+            finish_keylock(&c, id);
+            assert_eq!(engine.keylock_factor(id), Some(0.96));
+            c.start_keylock(id, 1.04).unwrap();
+            c.start_keylock(id, 1.02).unwrap();
+            match id {
+                DeckId::A => engine.load_a(second.path()).unwrap(),
+                DeckId::B => engine.load_b(second.path()).unwrap(),
+            }
+            finish_keylock(&c, id);
+            assert_eq!(engine.keylock_factor(id), Some(1.0));
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&[channel, 13, 127]).unwrap());
+            assert_eq!(engine.keylock_factor(id), None);
+        }
+    }
+
     #[test]
     fn bus_peak_caption_handles_unavailable_silence_invalid_and_full_scale() {
         assert_eq!(peak_display(None), ("BUS PEAK \u{2014}".into(), 0., false));

@@ -283,6 +283,7 @@ fn wrap_units(phase: u128, region: Option<FrameLoop>, format: RenderFormat) -> u
     }
 }
 pub(crate) struct DeckRenderer {
+    keylock: Option<Arc<drdj_keylock::PreparedKeylock>>,
     samples: PcmSource,
     control: Arc<RenderControl>,
     settings: Settings,
@@ -305,6 +306,7 @@ impl DeckRenderer {
         assert_eq!(control.format.output_rate, rate);
         assert_eq!(control.format.frames, samples.frames());
         Self {
+            keylock: None,
             samples,
             control,
             settings,
@@ -316,6 +318,10 @@ impl DeckRenderer {
             applied_trigger: 0,
             clock: None,
         }
+    }
+    pub fn with_keylock(mut self, clip: Option<Arc<drdj_keylock::PreparedKeylock>>) -> Self {
+        self.keylock = clip;
+        self
     }
     pub fn with_clock(mut self, clock: Arc<crate::render_bus::RenderClock>) -> Self {
         self.clock = Some(clock);
@@ -407,6 +413,12 @@ impl Iterator for DeckRenderer {
                 None
             };
             input_channel.map_or(0., |channel| {
+                if let Some(clip) = &self.keylock {
+                    return clip.sample_at_source(
+                        self.phase as f64 / f64::from(self.output_rate),
+                        channel,
+                    );
+                }
                 let frame = (self.phase / u128::from(self.output_rate)) as usize;
                 let next =
                     self.settings

@@ -61,6 +61,7 @@ impl MixerLevels {
 
 #[derive(Clone)]
 pub struct PreparedTrack {
+    keylock: Option<(f64, Arc<drdj_keylock::PreparedKeylock>)>,
     pub title: String,
     path: Arc<Path>,
     samples: PcmSource,
@@ -129,6 +130,7 @@ impl PreparedTrack {
         let tempo = crate::tempo::estimate(&samples, channels, rate);
         cancel.check()?;
         Ok(Self {
+            keylock: None,
             path: canonical.into(),
             title: path
                 .file_name()
@@ -384,6 +386,75 @@ impl DualDeckEngine {
             .retain(|track| !track.released.load(Ordering::Acquire));
     }
     /// Install prepared tracks; same-track commands reuse the existing renderer and Sink.
+    pub fn keylock_factor(&self, id: DeckId) -> Option<f64> {
+        self.decks[id.index()]
+            .borrow()
+            .track
+            .as_ref()
+            .and_then(|track| track.keylock.as_ref().map(|k| k.0))
+    }
+    pub fn prepare_keylock(
+        &self,
+        id: DeckId,
+        generation: u64,
+        tempo: f64,
+    ) -> Result<drdj_keylock::Job, String> {
+        let deck = self.decks[id.index()].borrow();
+        let track = deck.track.as_ref().ok_or("Load a track first")?;
+        drdj_keylock::Job::start(
+            generation,
+            track.samples.shared_samples(),
+            track.samples.channels(),
+            track.samples.sample_rate(),
+            tempo,
+        )
+        .map_err(|e| e.to_string())
+    }
+    pub fn adopt_keylock(
+        &self,
+        id: DeckId,
+        clip: Option<(f64, drdj_keylock::PreparedKeylock)>,
+    ) -> Result<(), String> {
+        let snapshot = self.snapshot(id);
+        let mut track = self.decks[id.index()]
+            .borrow()
+            .track
+            .clone()
+            .ok_or("No track loaded")?;
+        if let Some((_, ref clip)) = clip {
+            if clip.source_frames() != track.samples.frames() {
+                return Err("Keylock source changed".into());
+            }
+        }
+        let factor = clip
+            .as_ref()
+            .map_or(snapshot.requested_speed, |clip| clip.0);
+        track.keylock = clip.map(|(factor, clip)| (factor, Arc::new(clip)));
+        let mut source = track.samples.clone();
+        source
+            .try_seek(snapshot.position)
+            .map_err(|e| e.to_string())?;
+        // Validate before changing state; the replacement renderer starts at the prepared rate.
+        let speed = PlaybackSpeed::new(factor, track.samples.sample_rate())?;
+        {
+            let mut deck = self.decks[id.index()].borrow_mut();
+            deck.base_factor = factor;
+            deck.nudge = 0;
+            deck.speed = Some(speed);
+        }
+        self.replace_source(
+            id,
+            track,
+            source,
+            snapshot.position,
+            snapshot.playing,
+            snapshot.grid,
+        );
+        if snapshot.loop_active {
+            self.activate_loop(id)?;
+        }
+        Ok(())
+    }
     pub fn install(&self, id: DeckId, track: PreparedTrack) {
         let source = track.samples.clone();
         self.replace_source(id, track, source, Duration::ZERO, false, None);
@@ -426,11 +497,11 @@ impl DualDeckEngine {
         let region = source.loop_region();
         {
             let mut deck = self.decks[id.index()].borrow_mut();
-            if deck
-                .track
-                .as_ref()
-                .is_some_and(|old| Arc::ptr_eq(&old.detail, &track.detail))
-            {
+            if deck.track.as_ref().is_some_and(|old| {
+                Arc::ptr_eq(&old.detail, &track.detail)
+                    && old.keylock.as_ref().map(|k| Arc::as_ptr(&k.1))
+                        == track.keylock.as_ref().map(|k| Arc::as_ptr(&k.1))
+            }) {
                 if let Some(render) = &deck.render {
                     render.publish(
                         speed.output_rate().get(),
@@ -476,7 +547,8 @@ impl DualDeckEngine {
             self.output_channels,
             self.output_rate,
         )
-        .with_clock(Arc::clone(&self.render_clock));
+        .with_clock(Arc::clone(&self.render_clock))
+        .with_keylock(track.keylock.as_ref().map(|k| Arc::clone(&k.1)));
         let source_retired = Arc::new(AtomicBool::new(false));
         let (sink, queue) = Sink::new();
         let output = DeckOutput {
@@ -594,6 +666,9 @@ impl DualDeckEngine {
     }
     /// One-shot tempo matching from confirmed constant grids; no beat-phase alignment.
     pub fn tempo_match_factor(&self, id: DeckId) -> Result<f64, String> {
+        if self.keylock_factor(DeckId::A).is_some() || self.keylock_factor(DeckId::B).is_some() {
+            return Err("Sync with Keylock is not yet supported".into());
+        }
         let target = self.decks[id.index()].borrow();
         let reference = self.decks[1 - id.index()].borrow();
         let track = target
@@ -834,6 +909,11 @@ impl DualDeckEngine {
     fn set_rate_state(&self, id: DeckId, factor: f64, nudge: i32) -> Result<(), String> {
         let mut deck = self.decks[id.index()].borrow_mut();
         let track = deck.track.as_ref().ok_or("Load a track first")?;
+        if let Some((prepared, _)) = &track.keylock {
+            if nudge != 0 || (factor - prepared).abs() > 1e-10 {
+                return Err("Prepare the requested Keylock tempo first".into());
+            }
+        }
         let speed = PlaybackSpeed::nudged(factor, nudge, track.samples.sample_rate())?;
         if deck.base_factor == factor && deck.nudge == nudge && deck.sync_factor == 1. {
             return Ok(());
@@ -1242,6 +1322,81 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn keylock_preserves_pitch_source_position_and_transport_on_both_decks() {
+        use std::time::Instant;
+        let rate = 48000_u32;
+        let input: Vec<_> = (0..rate * 3)
+            .map(|i| {
+                ((std::f32::consts::TAU * 440.0 * i as f32 / rate as f32).sin() * 8000.0) as i16
+            })
+            .collect();
+        let file = crate::test_support::wav_samples(&input, rate, 1);
+        for (id, tempo) in [(DeckId::A, 1.25), (DeckId::B, 0.8)] {
+            let (mixer, mut output) = rodio::mixer::mixer(1, rate);
+            let engine = DualDeckEngine::from_mixer(mixer, 1, rate);
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            let job = engine.prepare_keylock(id, 1, tempo).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let prepared = loop {
+                if let Some(result) = job.poll().unwrap() {
+                    break result.unwrap();
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            // A nudge arriving during preparation must not leak into the adopted renderer.
+            engine.play(id);
+            engine.set_nudge(id, 1).unwrap();
+            engine
+                .adopt_keylock(id, Some((tempo, prepared.clip)))
+                .unwrap();
+            engine.play(id);
+            let pcm: Vec<_> = output.by_ref().take(rate as usize).collect();
+            let hz = pcm[12000..36000]
+                .windows(2)
+                .filter(|s| s[0] <= 0.0 && s[1] > 0.0)
+                .count() as f64
+                * 2.0;
+            assert!((hz - 440.0).abs() < 3.0, "{hz}");
+            assert!((engine.snapshot(id).position.as_secs_f64() - tempo).abs() < 0.02);
+            assert!((engine.snapshot(id).duration.as_secs_f64() - 3.0).abs() < 0.001);
+            engine
+                .seek_position(id, Duration::from_millis(1500))
+                .unwrap();
+            assert!((engine.snapshot(id).position.as_secs_f64() - 1.5).abs() < 0.001);
+            engine.pause(id);
+            output.by_ref().take(1000).for_each(drop);
+            let paused = engine.snapshot(id).position;
+            output.by_ref().take(1000).for_each(drop);
+            assert_eq!(engine.snapshot(id).position, paused);
+            engine.cue(id);
+            assert_eq!(engine.snapshot(id).position, Duration::ZERO);
+            engine.seek_position(id, Duration::from_secs(3)).unwrap();
+            output.by_ref().take(1000).for_each(drop);
+            assert!(!engine.snapshot(id).playing);
+            engine.play(id);
+            output.by_ref().take(1000).for_each(drop);
+            assert!(engine.snapshot(id).playing);
+            engine
+                .restore_loop(id, Duration::from_millis(250), Duration::from_millis(500))
+                .unwrap();
+            engine.activate_loop(id).unwrap();
+            output.by_ref().take(48000).for_each(drop);
+            let looped = engine.snapshot(id);
+            assert!(looped.loop_active);
+            assert!(
+                looped.position >= Duration::from_millis(250)
+                    && looped.position < Duration::from_millis(500)
+            );
+            engine.adopt_keylock(id, None).unwrap();
+            assert_eq!(engine.keylock_factor(id), None);
+            assert!(engine.snapshot(id).loop_active);
+            assert_eq!(engine.snapshot(id).loop_in, looped.loop_in);
+            assert_eq!(engine.snapshot(id).loop_out, looped.loop_out);
+        }
+    }
     #[test]
     fn continuous_bar_observation_detects_whole_beat_offset_without_mutating_decks() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
@@ -1920,6 +2075,7 @@ mod tests {
         fn track(rate: u32) -> PreparedTrack {
             let samples: Vec<_> = (0..1024).map(|i| i as f32 / 1000.).collect();
             PreparedTrack {
+                keylock: None,
                 path: Arc::from(Path::new("frame-loop.wav")),
                 title: "frame loop".into(),
                 overview: crate::waveform::peak_overview(&samples, 1).into(),
@@ -2017,6 +2173,7 @@ mod tests {
             engine.install(
                 DeckId::A,
                 PreparedTrack {
+                    keylock: None,
                     path: Arc::from(Path::new("ramp-nudge.wav")),
                     title: "ramp".into(),
                     overview: crate::waveform::peak_overview(&samples, 2).into(),
@@ -2222,6 +2379,7 @@ mod tests {
         engine.install(
             DeckId::A,
             PreparedTrack {
+                keylock: None,
                 path: Arc::from(Path::new("nudge-tone.wav")),
                 title: "nudge tone".into(),
                 overview: crate::waveform::peak_overview(&samples, 2).into(),
@@ -2278,6 +2436,7 @@ mod tests {
         engine.install(
             DeckId::A,
             PreparedTrack {
+                keylock: None,
                 path: Arc::from(Path::new("speed-loop.wav")),
                 title: "speed loop".into(),
                 overview: crate::waveform::peak_overview(&samples, 2).into(),
@@ -2345,6 +2504,7 @@ mod tests {
             engine.install(
                 DeckId::A,
                 PreparedTrack {
+                    keylock: None,
                     path: Arc::from(Path::new("speed-tone.wav")),
                     title: "speed tone".into(),
                     overview: crate::waveform::peak_overview(&samples, 2).into(),
@@ -2672,6 +2832,7 @@ mod tests {
         engine.install(
             DeckId::A,
             PreparedTrack {
+                keylock: None,
                 path: Arc::from(Path::new("loop-test.wav")),
                 title: "loop test".into(),
                 overview: crate::waveform::peak_overview(&samples, 2).into(),
@@ -2901,6 +3062,7 @@ mod tests {
         engine.install(
             DeckId::A,
             PreparedTrack {
+                keylock: None,
                 path: Arc::from(Path::new("synthetic-test.wav")),
                 title: "stereo step".into(),
                 overview: crate::waveform::peak_overview(&samples, 2).into(),

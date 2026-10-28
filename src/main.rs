@@ -221,6 +221,12 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 }
                 controller.tick();
+                if let Some(midi) = &mut midi {
+                    midi.keylock_feedback([
+                        controller.keylock_active(playback::DeckId::A),
+                        controller.keylock_active(playback::DeckId::B),
+                    ]);
+                }
                 return;
             }
             ui.set_left_position(transport::advance_position(

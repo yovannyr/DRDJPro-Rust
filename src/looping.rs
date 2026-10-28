@@ -90,6 +90,9 @@ impl PcmSource {
     pub fn set_playback_rate(&mut self, rate: std::num::NonZeroU32) {
         self.playback_rate = rate.get();
     }
+    pub(crate) fn shared_samples(&self) -> Arc<Vec<f32>> {
+        Arc::clone(&self.data)
+    }
     pub(crate) fn cursor_frame(&self) -> usize {
         self.cursor / usize::from(self.channels)
     }
