@@ -2,6 +2,7 @@ use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
 mod audio;
+mod audio_formats;
 mod beatgrid;
 mod cancellation;
 mod controller;
@@ -142,7 +143,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let controller = if let Some(engine) = &audio_engine {
         let picker: controller::TrackPicker = std::sync::Arc::new(|| {
             rfd::FileDialog::new()
-                .add_filter("MP3 / WAV audio", &["mp3", "wav"])
+                .add_filter("Audio files", audio_formats::EXTENSIONS)
                 .pick_file()
         });
         ui.set_status("Select a track for either deck".into());
@@ -152,7 +153,7 @@ fn main() -> Result<(), slint::PlatformError> {
             picker,
             std::sync::Arc::new(|| {
                 rfd::FileDialog::new()
-                    .add_filter("MP3 / WAV audio", &["mp3", "wav"])
+                    .add_filter("Audio files", audio_formats::EXTENSIONS)
                     .pick_files()
             }),
         );

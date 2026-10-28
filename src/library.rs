@@ -56,11 +56,7 @@ impl Catalog {
                 || !ids.insert(track.id)
                 || !track.path.is_absolute()
                 || !paths.insert(identity(&track.path))
-                || !track
-                    .path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("mp3") || e.eq_ignore_ascii_case("wav"))
+                || !crate::audio_formats::supported(&track.path)
             {
                 return Err("Invalid or duplicate library identity/path".into());
             }
@@ -89,10 +85,7 @@ pub(crate) fn inspect_paths_cancellable(
     };
     for path in paths.into_iter().take(MAX_IMPORT) {
         cancel.check()?;
-        let supported = path
-            .extension()
-            .and_then(|v| v.to_str())
-            .is_some_and(|v| v.eq_ignore_ascii_case("mp3") || v.eq_ignore_ascii_case("wav"));
+        let supported = crate::audio_formats::supported(&path);
         match std::fs::canonicalize(&path) {
             Ok(path) if supported && path.is_file() => {
                 result

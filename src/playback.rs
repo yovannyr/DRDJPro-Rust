@@ -93,12 +93,8 @@ impl PreparedTrack {
         cancel: &crate::cancellation::Cancellation,
     ) -> Result<Self, String> {
         cancel.check()?;
-        if !path
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s.eq_ignore_ascii_case("mp3") || s.eq_ignore_ascii_case("wav"))
-        {
-            return Err("Select an MP3 or WAV file".into());
+        if !crate::audio_formats::supported(path) {
+            return Err("Select a supported audio file".into());
         }
         let canonical = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
         let decoder = Decoder::try_from(File::open(&canonical).map_err(|e| e.to_string())?)

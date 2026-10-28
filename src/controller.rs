@@ -2048,7 +2048,7 @@ impl AudioController {
             return;
         }
         ui.set_loading(true);
-        ui.set_status("Select MP3/WAV; decoding runs in the background".into());
+        ui.set_status("Select an audio file; decoding runs in the background".into());
         let (tx, rx) = mpsc::sync_channel(1);
         let cancel = crate::cancellation::Cancellation::default();
         *self.pending_cancel.borrow_mut() = Some(cancel.clone());
@@ -2208,7 +2208,7 @@ impl AudioController {
         };
         ui.set_library_busy(true);
         self.import_crate.set(self.library.borrow().active_crate());
-        ui.set_status("Importing local MP3/WAV files…".into());
+        ui.set_status("Importing local audio files…".into());
         let (tx, rx) = mpsc::sync_channel(1);
         let cancel = crate::cancellation::Cancellation::default();
         *self.pending_cancel.borrow_mut() = Some(cancel.clone());
@@ -2476,7 +2476,7 @@ impl AudioController {
         ui.set_library_can_next_page(page_index + 1 < pages);
         ui.set_library_empty(
             if library.len() == 0 {
-                "Add MP3/WAV files to your library"
+                "Add audio files to your library"
             } else if rows.is_empty()
                 && library.active_crate() != 0
                 && ui.get_library_query().is_empty()
@@ -6136,6 +6136,102 @@ mod tests {
         assert!(ui.get_left_title().ends_with("tone-9s.mp3"));
         c.close_library().unwrap();
     }
+    #[test]
+    fn additional_audio_formats_import_restore_and_load_into_both_decks() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("formats.sqlite3");
+        let names = [
+            "format-aac.m4a",
+            "format-alac.m4a",
+            "format-flac.flac",
+            "format-aiff.aiff",
+            "format-vorbis.ogg",
+        ];
+        let mut paths = Vec::new();
+        for name in names {
+            let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name);
+            let destination = dir.path().join(name);
+            std::fs::copy(source, &destination).unwrap();
+            let analysis = crate::audio::analyze_file(&destination).unwrap();
+            assert_eq!(analysis.sample_rate, 48_000, "{name}");
+            assert_eq!(analysis.channels, 2, "{name}");
+            assert!((40_000..=52_000).contains(&analysis.frames), "{name}");
+            assert!(analysis.peak > 0.01, "{name}");
+            let metadata = crate::track_metadata::read(&destination);
+            assert!(metadata.error.is_none(), "{name}: {:?}", metadata.error);
+            if name != "format-aiff.aiff" {
+                assert_eq!(metadata.title, "Fixture Tone", "{name}");
+                assert_eq!(metadata.artist, "Fixture Artist", "{name}");
+            }
+            paths.push(destination);
+        }
+        let invalid = crate::test_support::TempFile::new("m4a", b"not a supported media container");
+        assert!(crate::audio::analyze_file(invalid.path()).is_err());
+        assert!(crate::playback::PreparedTrack::open(invalid.path()).is_err());
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48_000));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        c.import_paths(paths);
+        finish_import(&c);
+        finish_storage(&c);
+        assert_eq!(ui.get_library_rows().row_count(), names.len());
+        for (index, name) in names.iter().enumerate() {
+            let id = index as i32 + 1;
+            ui.invoke_select_library(id);
+            ui.invoke_load_library_left();
+            finish(&c);
+            assert!(ui.get_left_title().ends_with(name), "{name}");
+            ui.invoke_select_library(id);
+            ui.invoke_load_library_right();
+            finish(&c);
+            assert!(ui.get_right_title().ends_with(name), "{name}");
+            for (deck, crossfader) in [(DeckId::A, 0.0), (DeckId::B, 1.0)] {
+                engine.set_levels(MixerLevels {
+                    crossfader,
+                    channel_a: 1.0,
+                    channel_b: 1.0,
+                });
+                engine.play(deck);
+                let peak = output
+                    .by_ref()
+                    .take(24_000)
+                    .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+                assert!(peak > 0.001, "no rendered audio for {name} deck {deck:?}");
+                engine.pause(deck);
+            }
+        }
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        assert_eq!(ui.get_library_rows().row_count(), names.len());
+        ui.invoke_select_library(3);
+        ui.invoke_load_library_left();
+        finish(&c);
+        assert!(ui.get_left_title().ends_with("format-flac.flac"));
+        c.close_library().unwrap();
+    }
+
     #[test]
     fn metadata_table_search_sort_reload_and_paused_loading_preserve_identity() {
         use crate::test_support::{tagged_mp3, tagged_wav};
