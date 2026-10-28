@@ -67,6 +67,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Bibliothekssuche und Sortierung für alle Bibliotheksgrößen im Hintergrund mit revisionsgebundener Ergebnisprüfung; Projektionsaufbau bleibt synchron.
 - [x] ✅ Bibliotheksseiten mit höchstens 200 Tracks, global sortierten Treffern, Seitensteuerung und Tastaturwechsel; Seitenantworten stammen vom Hintergrundworker.
 - [ ] ☐ Weitere Bibliotheksskalierung: indexierte/paginierte Suche und große Ansichten unter realistischen Bedingungen qualifizieren.
+  - Reale USB-Musiksammlung auf Windows geprüft: 3.478 unterstützte Pfade, 60 Sekunden Zwei-Deck-Lauf mit auf null gesetzten GUI-Kanalfadern und Seiten-/Suchaktionen; Erststart mit ungelesenen Tags und 59 Metadatenfehler bleiben offene Befunde. Details und Grenzen siehe LOCAL_VALIDATION.md.
 - [x] ✅ Opus4: Handbuchabgleich: LOOP erhält die Position innerhalb der Grenzen, RELOOP springt zu In; OUT setzt weiterhin die Grenze. Transportzustand bleibt erhalten.
 - [x] ✅ Einmaliges Tempo-Matching aus zwei bestätigten manuellen Grids in beiden Decks, mit Pitch-Bereichs-/Transientenschutz und Headless-Tests.
 - [x] ✅ Einmaliger Beat-Phasen-Sync mit Tempo-Anpassung, bestätigten Grids, Track-/Transientenschutz und PCM-/Headless-Tests.
