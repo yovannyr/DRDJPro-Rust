@@ -13,6 +13,7 @@ mod legacy_catalog;
 mod library;
 mod library_store;
 mod looping;
+mod mc4000;
 mod opus_audio;
 mod peak_meter;
 mod phase_sync;
@@ -169,12 +170,56 @@ fn main() -> Result<(), slint::PlatformError> {
         None
     };
 
+    let mut midi = if controller.is_some() {
+        match mc4000::Input::connect() {
+            Ok(input) => {
+                if input.is_some() {
+                    ui.set_status("MC4000 connected: transport and mixer enabled".into());
+                }
+                input
+            }
+            Err(error) => {
+                ui.set_status(format!("MC4000 input unavailable: {error}").into());
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut midi_discovery = std::time::Instant::now();
     let timer = Timer::default();
     let closing_controller = controller.clone();
     let weak = ui.as_weak();
     timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
         if let Some(ui) = weak.upgrade() {
             if let Some(controller) = &controller {
+                if midi_discovery.elapsed() >= Duration::from_secs(2) {
+                    midi_discovery = std::time::Instant::now();
+                    match mc4000::present() {
+                        Ok(false) => {
+                            midi = None;
+                        }
+                        Ok(true) if midi.is_none() => match mc4000::Input::connect() {
+                            Ok(input) => {
+                                midi = input;
+                                if midi.is_some() {
+                                    ui.set_status("MC4000 connected".into());
+                                }
+                            }
+                            Err(error) => {
+                                ui.set_status(format!("MC4000 connection failed: {error}").into())
+                            }
+                        },
+                        _ => (),
+                    }
+                }
+                if let Some(midi) = &mut midi {
+                    if midi.poll(|command| mc4000::apply(&ui, command)) {
+                        ui.set_status(
+                            "MC4000 input queue overflow; a button action was dropped".into(),
+                        );
+                    }
+                }
                 controller.tick();
                 return;
             }

@@ -1709,6 +1709,14 @@ impl AudioController {
             stored_base,
             draft,
         });
+        let beats = self.grid_editors.borrow()[Self::grid_index(id)]
+            .as_ref()
+            .and_then(|e| e.draft.value())
+            .map_or(4, |grid| i32::from(grid.beats_per_bar()));
+        match id {
+            DeckId::A => ui.set_left_grid_draft_beats(beats),
+            DeckId::B => ui.set_right_grid_draft_beats(beats),
+        }
         self.set_grid_editing(id, true);
         Ok(())
     }
@@ -1719,6 +1727,14 @@ impl AudioController {
             .as_mut()
             .ok_or("Open Edit Grid first")?;
         if !matches!(action, GridAction::Clear) {
+            let meter_ui = self.ui.upgrade().ok_or("Window closed")?;
+            let beats = match id {
+                DeckId::A => meter_ui.get_left_grid_draft_beats(),
+                DeckId::B => meter_ui.get_right_grid_draft_beats(),
+            };
+            editor
+                .draft
+                .set_beats_per_bar(u8::try_from(beats).map_err(|_| "Invalid beats per bar")?)?;
             editor.draft.set_bpm(&Self::grid_bpm_text(&ui, id))?;
         }
         match action {
@@ -1759,6 +1775,14 @@ impl AudioController {
             {
                 return Err("Saved grid changed; cancel and reopen Edit Grid".into());
             }
+            let meter_ui = self.ui.upgrade().ok_or("Window closed")?;
+            let beats = match id {
+                DeckId::A => meter_ui.get_left_grid_draft_beats(),
+                DeckId::B => meter_ui.get_right_grid_draft_beats(),
+            };
+            editor
+                .draft
+                .set_beats_per_bar(u8::try_from(beats).map_err(|_| "Invalid beats per bar")?)?;
             editor.draft.set_bpm(&Self::grid_bpm_text(
                 &self.ui.upgrade().ok_or("Window closed")?,
                 id,

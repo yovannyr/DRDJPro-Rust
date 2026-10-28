@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 static STAGE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -161,8 +161,11 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     }
     if version >= 4 {
         let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-        let mut statement =
-            connection.prepare("SELECT track_id,bpm,anchor_ns FROM track_grids LIMIT ?1")?;
+        let mut statement = connection.prepare(if version >= 7 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar FROM track_grids LIMIT ?1"
+        } else {
+            "SELECT track_id,bpm,anchor_ns,4 FROM track_grids LIMIT ?1"
+        })?;
         let mut rows = statement.query([library::MAX_TRACKS as i64 + 1])?;
         let mut count = 0;
         while let Some(row) = rows.next()? {
@@ -177,6 +180,9 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
                 .map_err(|_| InspectError::Damaged("Negative grid anchor".into()))?;
             tracks[*index].grid = Some(
                 crate::beatgrid::BeatGrid::new(row.get(1)?, Duration::from_nanos(anchor))
+                    .and_then(|grid| {
+                        grid.with_beats_per_bar(row.get::<_, u8>(3).map_err(|e| e.to_string())?)
+                    })
                     .map_err(InspectError::Damaged)?,
             );
         }
@@ -412,6 +418,9 @@ fn write_hot_cues_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result
 fn create_grid_schema(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("CREATE TABLE track_grids(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,bpm REAL NOT NULL CHECK(bpm>=40 AND bpm<=240),anchor_ns INTEGER NOT NULL CHECK(anchor_ns>=0 AND anchor_ns<=604800000000000)) STRICT;").map_err(|e|e.to_string())
 }
+fn add_grid_meter(connection: &Connection) -> Result<(), String> {
+    connection.execute_batch("ALTER TABLE track_grids ADD COLUMN beats_per_bar INTEGER NOT NULL DEFAULT 4 CHECK(beats_per_bar BETWEEN 1 AND 16);").map_err(|e| e.to_string())
+}
 fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
     connection
         .execute("DELETE FROM track_grids", [])
@@ -420,7 +429,9 @@ fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String>
 }
 fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement = connection
-        .prepare("INSERT INTO track_grids(track_id,bpm,anchor_ns) VALUES(?1,?2,?3)")
+        .prepare(
+            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar) VALUES(?1,?2,?3,?4)",
+        )
         .map_err(|e| e.to_string())?;
     for track in tracks {
         if let Some(grid) = track.grid {
@@ -428,7 +439,8 @@ fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<()
                 .execute(rusqlite::params![
                     track.id,
                     grid.bpm(),
-                    grid.anchor().as_nanos() as i64
+                    grid.anchor().as_nanos() as i64,
+                    grid.beats_per_bar()
                 ])
                 .map_err(|e| e.to_string())?;
         }
@@ -558,6 +570,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     create_metadata_schema(&transaction)?;
     create_crate_schema(&transaction)?;
     create_grid_schema(&transaction)?;
+    add_grid_meter(&transaction)?;
     create_hot_cue_schema(&transaction)?;
     create_saved_loop_schema(&transaction)?;
     transaction
@@ -739,7 +752,10 @@ impl Store {
             if version < 5 {
                 create_hot_cue_schema(&tx)?;
             }
-            create_saved_loop_schema(&tx)?;
+            if version < 6 {
+                create_saved_loop_schema(&tx)?;
+            }
+            add_grid_meter(&tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
@@ -1505,7 +1521,7 @@ mod tests {
             } else {
                 store
                     .connection
-                    .pragma_update(None, "user_version", 7)
+                    .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
                     .unwrap();
             }
             drop(store);
@@ -1714,7 +1730,7 @@ mod tests {
             .connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         let meta = &library.visible()[0].metadata;
         assert_eq!(meta.title, "Old catalog title");
         assert_eq!(meta.artist, "Original artist");
@@ -2147,18 +2163,49 @@ mod tests {
                         .connection
                         .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                         .unwrap(),
-                    6
+                    SCHEMA_VERSION
                 );
             }
         }
     }
+    #[test]
+    fn schema_six_grids_upgrade_to_four_beats_and_save_new_meter() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        data.tracks[0].grid = Some(crate::beatgrid::BeatGrid::new(120.0, Duration::ZERO).unwrap());
+        store.save(&data).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE track_grids DROP COLUMN beats_per_bar; PRAGMA user_version=6;",
+            )
+            .unwrap();
+        drop(store);
+        let (mut store, library, _) = Store::open(db.clone()).unwrap();
+        let mut data = library.catalog();
+        assert_eq!(data.tracks[0].grid.unwrap().beats_per_bar(), 4);
+        data.tracks[0].grid = Some(data.tracks[0].grid.unwrap().with_beats_per_bar(7).unwrap());
+        store.save(&data).unwrap();
+        drop(store);
+        let (_, restored, _) = Store::open(db).unwrap();
+        assert_eq!(
+            restored.catalog().tracks[0].grid.unwrap().beats_per_bar(),
+            7
+        );
+    }
+
     #[test]
     fn fractional_grid_and_nanosecond_anchor_survive_restart_and_explicit_clear() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("library.sqlite3");
         let (mut store, _, _) = Store::open(db.clone()).unwrap();
         let mut data = catalog(dir.path().join("missing.wav"), 27);
-        let grid = crate::beatgrid::BeatGrid::new(128.5, Duration::new(1, 123456789)).unwrap();
+        let grid = crate::beatgrid::BeatGrid::new(128.5, Duration::new(1, 123456789))
+            .unwrap()
+            .with_beats_per_bar(3)
+            .unwrap();
         data.tracks[0].grid = Some(grid);
         let id = data.crates.create("Set").unwrap();
         data.crates.add(id, 27).unwrap();
@@ -2265,7 +2312,7 @@ mod tests {
                         .connection
                         .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                         .unwrap(),
-                    6
+                    SCHEMA_VERSION
                 );
             }
         }
@@ -2348,7 +2395,7 @@ mod tests {
             drop(store);
             let connection = connect(&db, false).unwrap();
             connection
-                .execute_batch("DROP TABLE track_saved_loops; DROP TABLE track_hot_cues; PRAGMA user_version=4;")
+                .execute_batch("ALTER TABLE track_grids DROP COLUMN beats_per_bar; DROP TABLE track_saved_loops; DROP TABLE track_hot_cues; PRAGMA user_version=4;")
                 .unwrap();
             if fail {
                 connection.execute_batch("CREATE TABLE track_hot_cues(preserve INTEGER); INSERT INTO track_hot_cues VALUES(99);").unwrap();
@@ -2381,7 +2428,7 @@ mod tests {
                         .connection
                         .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                         .unwrap(),
-                    6
+                    SCHEMA_VERSION
                 );
                 let saved = library.catalog();
                 assert_eq!(saved.tracks[0].grid, Some(grid));
@@ -2524,7 +2571,7 @@ mod tests {
             drop(store);
             let connection = connect(&db, false).unwrap();
             connection
-                .execute_batch("DROP TABLE track_saved_loops; PRAGMA user_version=5;")
+                .execute_batch("ALTER TABLE track_grids DROP COLUMN beats_per_bar; DROP TABLE track_saved_loops; PRAGMA user_version=5;")
                 .unwrap();
             if fail {
                 connection.execute_batch("CREATE TABLE track_saved_loops(preserve INTEGER); INSERT INTO track_saved_loops VALUES(99);").unwrap();
@@ -2554,7 +2601,7 @@ mod tests {
                         .connection
                         .pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                         .unwrap(),
-                    6
+                    SCHEMA_VERSION
                 );
                 library.catalog()
             };

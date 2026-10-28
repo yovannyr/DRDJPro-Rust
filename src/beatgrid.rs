@@ -1,4 +1,4 @@
-//! User-defined constant-tempo 4/4 grid; no automatic beat or tempo detection.
+//! User-defined constant-tempo grid; no automatic beat or tempo detection.
 use std::time::Duration;
 pub const MAX_ANCHOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -6,6 +6,7 @@ pub const MAX_ANCHOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 pub struct BeatGrid {
     bpm: f64,
     anchor: Duration,
+    beats_per_bar: u8,
 }
 
 #[derive(Debug)]
@@ -24,7 +25,21 @@ impl BeatGrid {
         if anchor > MAX_ANCHOR {
             return Err("Grid anchor exceeds seven days".into());
         }
-        Ok(Self { bpm, anchor })
+        Ok(Self {
+            bpm,
+            anchor,
+            beats_per_bar: 4,
+        })
+    }
+    pub fn with_beats_per_bar(mut self, beats: u8) -> Result<Self, String> {
+        if !(1..=16).contains(&beats) {
+            return Err("Beats per bar must be 1 through 16".into());
+        }
+        self.beats_per_bar = beats;
+        Ok(self)
+    }
+    pub fn beats_per_bar(self) -> u8 {
+        self.beats_per_bar
     }
     pub fn bpm(self) -> f64 {
         self.bpm
@@ -85,9 +100,10 @@ impl BeatGrid {
                 }
                 Some(GridLine {
                     percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
-                    downbeat: index.rem_euclid(4) == 0,
+                    downbeat: index.rem_euclid(i64::from(self.beats_per_bar)) == 0,
                     first: index == 0,
-                    bar: (index.div_euclid(4) + 1).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                    bar: (index.div_euclid(i64::from(self.beats_per_bar)) + 1)
+                        .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
                 })
             })
             .collect()
@@ -135,13 +151,20 @@ impl GridDraft {
     pub fn bpm(&self) -> f64 {
         self.bpm
     }
+    pub fn set_beats_per_bar(&mut self, beats: u8) -> Result<(), String> {
+        if let Some(grid) = self.value {
+            self.value = Some(grid.with_beats_per_bar(beats)?);
+        }
+        Ok(())
+    }
     pub fn set_bpm(&mut self, text: &str) -> Result<(), String> {
         let bpm = text
             .trim()
             .replace(',', ".")
             .parse::<f64>()
             .map_err(|_| "Enter a decimal BPM between 40 and 240")?;
-        let grid = BeatGrid::new(bpm, self.value.map_or(Duration::ZERO, BeatGrid::anchor))?;
+        let grid = BeatGrid::new(bpm, self.value.map_or(Duration::ZERO, BeatGrid::anchor))?
+            .with_beats_per_bar(self.value.map_or(4, |grid| grid.beats_per_bar))?;
         self.bpm = bpm;
         if self.value.is_some() {
             self.value = Some(grid);
@@ -152,7 +175,10 @@ impl GridDraft {
         if position > self.duration {
             return Err("Anchor is outside this track".into());
         }
-        self.value = Some(BeatGrid::new(self.bpm, position)?);
+        self.value = Some(
+            BeatGrid::new(self.bpm, position)?
+                .with_beats_per_bar(self.value.map_or(4, |grid| grid.beats_per_bar))?,
+        );
         Ok(())
     }
     pub fn nudge(&mut self, milliseconds: i32) -> Result<(), String> {
@@ -165,7 +191,8 @@ impl GridDraft {
         } else {
             grid.anchor().saturating_add(delta).min(self.duration)
         };
-        self.value = Some(BeatGrid::new(grid.bpm(), anchor)?);
+        self.value =
+            Some(BeatGrid::new(grid.bpm(), anchor)?.with_beats_per_bar(grid.beats_per_bar)?);
         Ok(())
     }
     pub fn clear(&mut self) {
@@ -176,6 +203,31 @@ impl GridDraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn variable_bar_lengths_preserve_downbeats_through_draft_edits() {
+        for beats in [3, 5, 7] {
+            let grid = BeatGrid::new(120.0, Duration::ZERO)
+                .unwrap()
+                .with_beats_per_bar(beats)
+                .unwrap();
+            let lines = grid.lines(Duration::ZERO, Duration::from_secs(8));
+            for (i, line) in lines.iter().enumerate() {
+                assert_eq!(line.downbeat, i % usize::from(beats) == 0);
+                assert_eq!(line.bar, (i / usize::from(beats)) as i32 + 1);
+            }
+            let mut draft =
+                GridDraft::new(Some(grid), 120.0, Duration::ZERO, Duration::from_secs(10)).unwrap();
+            draft.set_bpm("125").unwrap();
+            draft.anchor_here(Duration::from_secs(1)).unwrap();
+            draft.nudge(10).unwrap();
+            assert_eq!(draft.value().unwrap().beats_per_bar, beats);
+        }
+        assert!(BeatGrid::new(120.0, Duration::ZERO)
+            .unwrap()
+            .with_beats_per_bar(0)
+            .is_err());
+    }
+
     #[test]
     fn snap_handles_nonbinary_zero_beats_and_nanosecond_sides_of_midpoint() {
         for rate in [44100, 48000, 96000] {

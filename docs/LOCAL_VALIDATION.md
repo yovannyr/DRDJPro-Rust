@@ -946,3 +946,52 @@ Windows reported Realtek and USB audio endpoints; FFmpeg's DirectShow enumeratio
 ## Additional sync alignment periods (2026-10-28)
 
 Phase acquisition and continuous feedback accept 3-, 5- and 7-beat periods through the existing per-deck alignment selector. The original Beat and Bar4 indices remain unchanged. The UI labels these options as beat counts: the manual grid, bar numbering and storage still use the existing 4/4 representation. Targeted tests check selector roundtrips, half-period limits and exact target-frame/displacement examples for odd periods. This is partial variable-meter support; no persisted time signature, mixed-meter track, keylock or physical output acceptance is claimed.
+
+
+## Constant grid bar length and SQLite upgrade (2026-10-28)
+
+BeatGrid supports 1–16 quarter beats per bar. Downbeats and bar numbers use the configured length; BPM, anchor and nudge draft operations preserve it. The grid editor exposes a quarter-beats-per-bar input applied when editing/saving the draft. SQLite schema 7 adds a constrained beats_per_bar column; earlier versions read as four, and upgrade adds default four with the existing backup/transaction mechanism. Tests cover 3/5/7 grid lines, draft edits, schema-6 upgrade, saving seven and restarting, and a three-beat fractional-BPM grid roundtrip. Old migration fixtures were corrected to remove the new column when simulating old schemas; initial version assertions and duplicate-column errors were fixed. An overlapping test/link run hit an executable lock; final runs were sequential.
+
+Final fmt, strict Clippy, 215 regular tests (two explicitly ignored qualification tests), release build and diff check passed. No visual, hearing or hardware acceptance was performed. Constant quarter-beat counts do not establish mixed-meter tracks, arbitrary denominators or automatic selection of the separate Bar-Sync period. Keylock remains open. Independent review remains deferred; changes are local.
+
+
+## Keylock DSP prerequisite qualification (2026-10-28)
+
+A separate temporary Cargo project evaluated time stretching without changing application dependencies or audio behavior. signalsmith-stretch 0.1.3 failed its bindgen build because libclang was unavailable. ssstretch 0.1.0 initially failed its C++11 compatibility shim under MSVC; compiling with `/Zc:__cplusplus /std:c++17` resolved the build without modifying the dependency source. A release-mode synthetic mono 440 Hz, 3-second tone was processed at 0.8 and 1.25 tempo. Central-window positive zero-crossing measurements returned 440.000 Hz in both cases; output durations were 3.750 and 2.400 seconds, with finite samples. This is a narrow DSP feasibility check, not application keylock, arbitrary music quality, stereo, transient, seek, loop, device or listening qualification. No Keylock checkbox is marked complete. The application integration remains open.
+
+
+## Worker DSP crate for keylock (2026-10-28)
+
+The Cargo workspace now contains drdj-keylock, a worker-only whole-clip tempo adapter backed by vendored Signalsmith Stretch/Linear and their existing interleaved C wrapper, with licenses retained. A minimal handwritten FFI and exception boundary avoid libclang and compile through cc with C++17. Inputs/outputs are independently capped, buffer reservations are fallible and results checked for finite samples. Internal DSP memory remains additional. The component is not connected to deck playback.
+
+A synthetic opposite-polarity stereo tone verifies pitch preservation, output duration and stereo polarity at 0.8/1.25 tempo. Final workspace Clippy passed after correcting two lints; workspace tests passed (one DSP test plus 215 application tests, two ignored qualification tests); release workspace build passed. Runtime buffering, latency/source-coordinate mapping, transport integration and sound/device acceptance remain open. Independent review remains deferred.
+
+
+## Keylock source-coordinate adapter (2026-10-28)
+
+PreparedKeylock holds a worker-generated immutable output buffer and the original source frame count. Its interpolation API accepts original source coordinates and maps via the actual rounded output length; invalid coordinates/channel indices return silence. A deterministic ramp test verifies interpolation, final-frame clamping, end rejection and invalid coordinates, alongside the stereo frequency/duration test. Package Clippy, both tests and the package release build passed. Application dependency/render/worker/GUI integration has not been implemented; Keylock remains unavailable on the decks.
+
+
+## Physical MC4000 MIDI acquisition (2026-10-28)
+
+Windows reported MC4000 media/audio endpoints OK and a WinMM MIDI input named MC4000. Opening and starting that input succeeded. User-operated capture windows delivered 386 and 1,475 short MIDI messages. Observed deck-channel traffic included 0x90/0xB0 for A and 0x91/0xB1 for B; both windows contained several control types, so button actions cannot be individually attributed from timing alone. CC 0x1C on deck channels and CC 0x08 on channel 16 match the manufacturer manual channel-fader/crossfader assignments. The second window contained Cue/Sync/jog and pitch traffic, but no observed deck-B Play/Pause note 0x00. No transport mapping acceptance is claimed.
+
+The manufacturer command table is https://cdn.inmusicbrands.com/denondj/MC4000/MC4000-User-Guide-v1.2_00.pdf (appendix). Captures were receive-only and both input handles were closed; no MIDI output, audio playback or microphone recording was initiated. App MIDI dispatch, LED feedback, output routing and hardware endurance tests remain open.
+
+
+## MC4000 application input mapping (2026-10-28)
+
+The real-audio GUI opens the MIDI port named MC4000 at startup through midir 0.10.3. Official note 0 on channels 1/2 invokes existing Play/Pause actions; note 1 invokes the existing reset/Cue-to-zero action. Note releases, shifted notes and unrelated channels/controls are ignored. Deck CC28 drives channel levels, and channel-16 CC8 drives the crossfader. Callback code only parses messages, atomically coalesces the three fader values and tries a bounded 128-button queue. The UI timer polls levels then transport; overflow is reported in the status. No engine or GUI access occurs in the MIDI callback. The connection remains owned by the timer lifetime.
+
+Parser tests cover both deck channels, releases, invalid data, shift/unmapped commands and faders. A headless test verifies invocation of existing GUI actions and exact mixer endpoints. An explicit hardware test successfully opened and closed the attached MC4000 through the Rust input implementation. The final workspace tests passed: 217 application tests, two DSP tests; three special tests ignored by default, with the MC4000 test additionally invoked and passed. Initial final Clippy found a test-only unused import; it was removed and strict Clippy passed.
+
+Actual user-operated playback inside the new build, LED output, automatic hotplug/reconnection, pickup/soft takeover, jog/pitch/Sync mappings, headphone routing and hardware endurance remain open. The Cue mapping retains current app semantics and does not implement the full manufacturer temporary-cue hold/release behavior. A busy MIDI port reports a connection error; attaching/reconnecting requires restarting the app. No audio output routing or listening acceptance is established by this input implementation. Review remains deferred.
+
+Final MC4000 slice verification: workspace release build passed, all-workspace format check and diff check passed. Changes remain local and unreviewed.
+
+
+## MC4000 connection greeting (2026-10-28)
+
+Input owns an optional MC4000 MIDI output connection. The GUI timer advances a greeting using the documented All LEDs command (channel 1 CC117): 127/0 at 0/150/300/450/600/750 ms. Late polls skip elapsed steps and settle off rather than burst all messages. Dropping the connection requests all LEDs off. Input discovery runs every two seconds; observed absence releases the connection and later presence retries acquisition. An unplug/replug entirely between discovery polls is not detected. Output acquisition/send errors currently leave input usable but may prevent the animation; no persistent transport LED feedback is implemented.
+
+The deterministic test verifies all six greeting states, no repeat at the same step, final off, and a late first poll. Final workspace Clippy, format, tests (218 application tests plus two DSP tests; three explicit qualification tests ignored), release build and diff check passed. A native Windows release run with the isolated test catalog completed startup/page/search checks and closed with exit 0. No human observation of this startup animation or physical unplug/replug test is claimed; the user previously confirmed the standalone All LEDs On command on the same device. No playback was requested by the test. Review remains deferred.

@@ -362,6 +362,7 @@ component DetailWaveform inherits Rectangle {
     in property <bool> grid-editing;
     in property <bool> grid-controls-enabled;
     in-out property <string> grid-draft-bpm;
+    in-out property <int> grid-draft-beats: 4;
     callback edit-bpm(); callback anchor-grid(); callback earlier-grid(); callback later-grid(); callback save-grid(); callback cancel-grid();
     in property <string> grid-caption;
     in-out property <int> grid-bpm: 120;
@@ -392,6 +393,7 @@ component DetailWaveform inherits Rectangle {
             Text { text: root.deck-label + " GRID"; color: root.accent; width: 78px; font-size: 11px; vertical-alignment: center; }
             Button { text: "+"; width: 28px; accessible-label: root.deck-label + " zoom in"; enabled: root.enabled && root.detail-window > 2; clicked => { root.detail-window = max(2,root.detail-window/2); root.zoom(); } }
             Button { text: "−"; width: 28px; accessible-label: root.deck-label + " zoom out"; enabled: root.enabled && root.detail-window < 32; clicked => { root.detail-window = min(32,root.detail-window*2); root.zoom(); } }
+            SpinBox { width: 60px; minimum: 1; maximum: 16; value <=> root.grid-draft-beats; accessible-label: root.deck-label + " quarter beats per bar"; enabled: root.grid-controls-enabled; }
             LineEdit { width: 76px; text <=> root.grid-draft-bpm; accessible-label: root.deck-label + " draft BPM"; enabled: root.grid-controls-enabled; edited => { root.edit-bpm(); } accepted => { root.save-grid(); } }
             Button { text: "USE ~"; width: 58px; accessible-label: root.deck-label + " use draft BPM suggestion"; enabled: root.grid-controls-enabled && root.suggested-bpm > 0; clicked => { root.grid-draft-bpm = "" + root.suggested-bpm; root.edit-bpm(); } }
             Button { text: "SET 1"; width: 56px; accessible-label: root.deck-label + " anchor draft at playhead"; enabled: root.grid-controls-enabled; clicked => { root.anchor-grid(); } }
@@ -699,7 +701,9 @@ export component AppWindow inherits Window {
     in property <bool> left-grid-editing;
     in property <bool> right-grid-editing;
     in-out property <string> left-grid-draft-bpm;
+    in-out property <int> left-grid-draft-beats: 4;
     in-out property <string> right-grid-draft-bpm;
+    in-out property <int> right-grid-draft-beats: 4;
     callback edit-grid-bpm-left(); callback edit-grid-bpm-right();
     callback grid-anchor-left(); callback grid-anchor-right();
     callback grid-earlier-left(); callback grid-earlier-right();
@@ -862,7 +866,7 @@ export component AppWindow inherits Window {
                     detail-start: root.left-detail-start; detail-end: root.left-detail-end;
                     detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
                     grid-active: root.left-grid-active; grid-caption: root.left-grid-caption;
-                    grid-editing: root.left-grid-editing; grid-draft-bpm <=> root.left-grid-draft-bpm;
+                    grid-editing: root.left-grid-editing; grid-draft-bpm <=> root.left-grid-draft-bpm; grid-draft-beats <=> root.left-grid-draft-beats;
                     grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.left-busy;
                     edit-bpm => { root.edit-grid-bpm-left(); } anchor-grid => { root.grid-anchor-left(); }
                     earlier-grid => { root.grid-earlier-left(); } later-grid => { root.grid-later-left(); }
@@ -878,7 +882,7 @@ export component AppWindow inherits Window {
                     detail-start: root.right-detail-start; detail-end: root.right-detail-end;
                     detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
                     grid-active: root.right-grid-active; grid-caption: root.right-grid-caption;
-                    grid-editing: root.right-grid-editing; grid-draft-bpm <=> root.right-grid-draft-bpm;
+                    grid-editing: root.right-grid-editing; grid-draft-bpm <=> root.right-grid-draft-bpm; grid-draft-beats <=> root.right-grid-draft-beats;
                     grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.right-busy;
                     edit-bpm => { root.edit-grid-bpm-right(); } anchor-grid => { root.grid-anchor-right(); }
                     earlier-grid => { root.grid-earlier-right(); } later-grid => { root.grid-later-right(); }
