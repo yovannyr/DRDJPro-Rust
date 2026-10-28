@@ -2,7 +2,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 pub const MAX_IMPORT: usize = 5000;
@@ -258,7 +258,7 @@ struct SearchRecord {
 
 pub(crate) struct SearchProjection {
     tracks: Vec<SearchRecord>,
-    index: SearchIndex,
+    index: OnceLock<SearchIndex>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -274,7 +274,21 @@ pub(crate) struct SearchSpec {
 
 impl SearchProjection {
     pub(crate) fn search(&self, spec: &SearchSpec) -> Vec<i32> {
-        let candidates = self.index.candidates(&spec.query, self.tracks.len());
+        // Build the snapshot index only when the background search needs it.
+        // Short queries cannot use trigrams and do not pay for construction.
+        let candidates = if spec.query.len() < 3 {
+            None
+        } else {
+            self.index
+                .get_or_init(|| {
+                    let mut index = SearchIndex::default();
+                    for (position, track) in self.tracks.iter().enumerate() {
+                        index.add(position, &track.search);
+                    }
+                    index
+                })
+                .candidates(&spec.query, self.tracks.len())
+        };
         let all = 0..self.tracks.len();
         let mut matches: Vec<&SearchRecord> = match candidates {
             Some(indices) => indices
@@ -811,7 +825,7 @@ impl Library {
                     in_scope: self.active_crate == 0 || members.is_some_and(|m| m.contains(&t.id)),
                 })
                 .collect(),
-            index: self.search_index.clone(),
+            index: OnceLock::new(),
         }
     }
 
@@ -903,6 +917,44 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn projection_index_builds_on_search_thread_and_preserves_snapshot() {
+        let mut library = Library::default();
+        let path = PathBuf::from("snapshot.wav");
+        library.insert([path.clone()]);
+        library.set_metadata(
+            &path,
+            crate::track_metadata::TrackMetadata {
+                title: "Unsaved Original".into(),
+                ..Default::default()
+            },
+        );
+        library.set_query("original".into());
+        let spec = library.search_spec(7);
+        let projection = Arc::new(library.search_projection());
+        assert!(projection.index.get().is_none());
+        library.set_metadata(
+            &path,
+            crate::track_metadata::TrackMetadata {
+                title: "Unsaved Replacement".into(),
+                ..Default::default()
+            },
+        );
+        let snapshot = Arc::clone(&projection);
+        let old_results = std::thread::spawn(move || snapshot.search(&spec))
+            .join()
+            .unwrap();
+        assert_eq!(old_results.len(), 1);
+        assert!(projection.index.get().is_some());
+        library.set_query("replacement".into());
+        let current = library.search_projection();
+        assert!(current.index.get().is_none());
+        assert_eq!(current.search(&library.search_spec(7)).len(), 1);
+        library.set_query("original".into());
+        assert!(current.search(&library.search_spec(7)).is_empty());
+        assert!(library.has_changes());
+    }
+
     #[test]
     fn trigram_index_preserves_exact_search_on_mutations_and_fallback() {
         let dir = tempfile::tempdir().unwrap();
