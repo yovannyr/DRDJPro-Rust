@@ -319,3 +319,7 @@ Global QUANTIZE and the per-deck cue snap/Next grid/Auto Loop snap/step settings
 ## Audio output pair selector (2026-10-29)
 
 The global toolbar now exposes Audio output pair with the complete stereo pairs offered by the current stream. A mono/stereo-only output has one disabled option; a four-channel output can switch between OUT 1/2 and OUT 3/4. The selected destination receives the common post-fader mix. Selection is session-local and does not imply an independent deck cue/headphone mix or device-selection interface. Headless tests cover pair selection, invalid values, render-frame preservation, stereo samples and toolbar bounds at both supported sizes. Native listening evidence remains explicitly separate.
+
+## Output profile restore/status (2026-10-29)
+
+Audio output pair is restored from the current library database after guarded device matching. It remains disabled until preference restore finishes. An adjacent Audio output profile label keeps session-only or save/restore status visible independently of library status messages. The device binding uses unique backend/display-name/channel shape, not a hardware serial number. Full hardware-ID matching and device selection remain open. Restoring routes never resumes transport or loads tracks.

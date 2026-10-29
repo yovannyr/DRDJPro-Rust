@@ -16,6 +16,7 @@ mod looping;
 mod mc4000;
 mod media_input;
 mod opus_audio;
+mod output_preferences;
 mod output_routing;
 mod peak_meter;
 mod phase_sync;
@@ -244,15 +245,32 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let result = ui.run();
+    lifecycle_trace("GUI loop exited");
     timer.stop();
+    lifecycle_trace("timer stopped");
     if let Some(controller) = closing_controller {
+        lifecycle_trace("storage flush begin");
         if let Err(error) = controller.close_library() {
             return Err(slint::PlatformError::Other(format!(
                 "Library final save failed: {error}"
             )));
         }
+        lifecycle_trace("storage flush complete");
     }
+    lifecycle_trace("MIDI/timer release begin");
+    drop(timer);
+    lifecycle_trace("MIDI/timer release complete");
+    drop(ui);
+    lifecycle_trace("UI released");
+    drop(audio_engine);
+    lifecycle_trace("audio released");
     result
+}
+
+fn lifecycle_trace(stage: &str) {
+    if std::env::var_os("DRDJ_LIFECYCLE_TRACE").is_some() {
+        eprintln!("DrDJ lifecycle: {stage}");
+    }
 }
 
 fn wire_decks(ui: &AppWindow) {

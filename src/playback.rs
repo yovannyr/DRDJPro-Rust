@@ -313,6 +313,7 @@ pub struct DualDeckEngine {
     output_channels: u16,
     output_rate: u32,
     output_routing: Arc<crate::output_routing::RoutingControl>,
+    output_device_key: Option<crate::output_preferences::OutputDeviceKey>,
     retired: RefCell<Vec<RetiredTrack>>,
     // Shared producer timeline; completed-frame stamps are consumed by one-shot sync.
     render_clock: Arc<crate::render_bus::RenderClock>,
@@ -331,13 +332,38 @@ impl Drop for DualDeckEngine {
 }
 impl DualDeckEngine {
     pub fn open_default() -> Result<Self, Box<dyn Error>> {
-        let stream = OutputStreamBuilder::open_default_stream()?;
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+        let host = rodio::cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or("No default audio output device")?;
+        let name = device.name().ok();
+        let matches = name
+            .as_ref()
+            .and_then(|name| {
+                host.output_devices().ok().map(|devices| {
+                    devices
+                        .filter(|d| d.name().is_ok_and(|n| &n == name))
+                        .count()
+                })
+            })
+            .unwrap_or(0);
+        // Format fallback stays on this device: a different device cannot inherit its route.
+        let stream = OutputStreamBuilder::from_device(device)?.open_stream_or_fallback()?;
         let mut engine = Self::from_mixer(
             stream.mixer().clone(),
             stream.config().channel_count(),
             stream.config().sample_rate(),
         );
         engine._stream = Some(stream);
+        engine.output_device_key = name.and_then(|name| {
+            crate::output_preferences::OutputDeviceKey::unique(
+                host.id().name().into(),
+                name,
+                engine.output_channels,
+                matches,
+            )
+        });
         Ok(engine)
     }
     /// An injected renderer on another thread must be stopped/joined before this engine drops.
@@ -389,6 +415,7 @@ impl DualDeckEngine {
             output_channels,
             output_rate,
             output_routing,
+            output_device_key: None,
             retired: RefCell::new(Vec::new()),
             render_clock,
             clock_observer: RefCell::new(crate::render_bus::ClockObserver::default()),
@@ -866,6 +893,19 @@ impl DualDeckEngine {
     }
     pub fn output_channels(&self) -> u16 {
         self.output_routing.channels()
+    }
+    pub fn output_device_key(&self) -> Option<&crate::output_preferences::OutputDeviceKey> {
+        self.output_device_key.as_ref()
+    }
+    #[cfg(test)]
+    pub fn with_output_device_key(
+        mut self,
+        key: crate::output_preferences::OutputDeviceKey,
+    ) -> Self {
+        key.validate().unwrap();
+        assert_eq!(key.channels, self.output_channels);
+        self.output_device_key = Some(key);
+        self
     }
     pub fn output_pair(&self) -> u16 {
         self.output_routing.pair()

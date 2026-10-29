@@ -616,6 +616,7 @@ export component AppWindow inherits Window {
     in-out property <int> right-detail-window: 8;
     in property <bool> audio-enabled: false;
     in property <[string]> output-pair-options: ["OUT 1/2"];
+    in property <string> output-profile-status: "Session only";
     in-out property <int> output-pair-index: 0;
     callback output-pair-changed();
     changed output-pair-index => { root.output-pair-changed(); }
@@ -795,7 +796,8 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             height: 32px;
             Text { text: "DRDJ PRO"; color: #f1f4fa; font-size: 21px; font-weight: 800; vertical-alignment: center; }
-            ComboBox { width:110px; model:root.output-pair-options; current-index <=> root.output-pair-index; accessible-label:"Audio output pair"; accessible-description:"Stereo mix output pair on the current audio device"; enabled:root.audio-enabled && root.output-pair-options.length>1; selected => { root.output-pair-changed(); } }
+            ComboBox { width:110px; model:root.output-pair-options; current-index <=> root.output-pair-index; accessible-label:"Audio output pair"; accessible-description:"Stereo mix output pair on the current audio device"; enabled:root.quantize-preferences-ready && root.audio-enabled && root.output-pair-options.length>1; selected => { root.output-pair-changed(); } }
+            Text { width:100px; text:root.output-profile-status; accessible-label:"Audio output profile"; color:#9cacc1; font-size:10px; vertical-alignment:center; overflow:elide; }
             CheckBox { text: "QUANTIZE"; accessible-label: "Global Quantize"; accessible-description: "Enable selected cue and auto-loop quantization on both decks; disabling cancels queued cue triggers and retains deck preferences"; checked <=> root.quantize-enabled; enabled: root.quantize-preferences-ready; toggled => { root.quantize-mode-changed(); } }
             Text { text: "EXTENDED / " + (audio-enabled ? "INTERNAL AUDIO" : "SIMULATION · NO AUDIO"); color: #9cacc1; horizontal-alignment: right; vertical-alignment: center; }
         }

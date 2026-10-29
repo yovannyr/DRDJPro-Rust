@@ -1,6 +1,8 @@
 //! SQLite catalog storage. The worker owns every database/file operation.
 use crate::library::{self, Catalog, Library, SavedTrack};
+use crate::output_preferences::{OutputRoute, OutputRoutes, MAX_ROUTES_BYTES};
 use crate::preferences::QuantizePreferences;
+const OUTPUT_ROUTES_QUERY:&str="SELECT CASE WHEN length(CAST(value AS BLOB))<=65536 THEN value ELSE '' END FROM library_meta WHERE key='audio_output_routes_v1'";
 const QUANTIZE_PREFS_QUERY: &str = "SELECT CASE WHEN length(CAST(value AS BLOB))<=1024 THEN value ELSE '' END FROM library_meta WHERE key='quantize_preferences_v1'";
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
@@ -867,11 +869,45 @@ impl Store {
     fn save_delta(&mut self, delta: &crate::library::CatalogDelta) -> Result<(), String> {
         self.save_state(delta, None)
     }
+    fn read_output_routes(&self) -> Result<OutputRoutes, String> {
+        let value: Option<String> = self
+            .connection
+            .query_row(OUTPUT_ROUTES_QUERY, [], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(value) = value else {
+            return Ok(OutputRoutes::default());
+        };
+        let profiles: OutputRoutes = serde_json::from_str(&value)
+            .map_err(|e| format!("Invalid audio output profiles: {e}"))?;
+        profiles.validate()?;
+        Ok(profiles)
+    }
+    #[cfg(test)]
     fn save_state(
         &mut self,
         delta: &crate::library::CatalogDelta,
         preferences: Option<QuantizePreferences>,
     ) -> Result<(), String> {
+        self.save_all_state(delta, preferences, None)
+    }
+    fn save_all_state(
+        &mut self,
+        delta: &crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+    ) -> Result<(), String> {
+        let output_json = output
+            .map(|route| -> Result<String, String> {
+                let mut profiles = self.read_output_routes()?;
+                profiles.update(route)?;
+                let json = serde_json::to_string(&profiles).map_err(|e| e.to_string())?;
+                if json.len() > MAX_ROUTES_BYTES {
+                    return Err("Audio output profiles exceed size limit".into());
+                }
+                Ok(json)
+            })
+            .transpose()?;
         let preferences_json = preferences
             .map(|p| {
                 p.validate()?;
@@ -882,6 +918,7 @@ impl Store {
             && delta.crates.is_none()
             && delta.memberships.is_empty()
             && preferences.is_none()
+            && output_json.is_none()
         {
             return self.checkpoint(true);
         }
@@ -1040,6 +1077,9 @@ impl Store {
         if let Some(json) = preferences_json {
             tx.execute("INSERT INTO library_meta(key,value) VALUES('quantize_preferences_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [json]).map_err(|e| e.to_string())?;
         }
+        if let Some(json) = output_json {
+            tx.execute("INSERT INTO library_meta(key,value) VALUES('audio_output_routes_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|e|e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         self.has_tracks = self.has_tracks || added > 0;
         self.backup_pending = true;
@@ -1074,6 +1114,7 @@ pub struct LoadedLibrary {
     pub backfill_error: Option<String>,
     pub quantize_preferences: QuantizePreferences,
     pub preference_warning: Option<String>,
+    pub output_routes: Result<OutputRoutes, String>,
 }
 pub enum Event {
     Loaded(Result<Box<LoadedLibrary>, String>),
@@ -1085,10 +1126,15 @@ enum Command {
     Save(Catalog),
     #[cfg(test)]
     Close(Option<Catalog>),
-    SaveDelta(crate::library::CatalogDelta, Option<QuantizePreferences>),
+    SaveDelta(
+        crate::library::CatalogDelta,
+        Option<QuantizePreferences>,
+        Option<OutputRoute>,
+    ),
     CloseDelta(
         Option<crate::library::CatalogDelta>,
         Option<QuantizePreferences>,
+        Option<OutputRoute>,
     ),
 }
 pub struct Worker {
@@ -1124,6 +1170,7 @@ impl Worker {
                     backfill_error: store.backfill_error.take(),
                     quantize_preferences,
                     preference_warning,
+                    output_routes: store.read_output_routes(),
                 };
                 if events_tx.send(Event::Loaded(Ok(Box::new(loaded)))).is_err() {
                     return Ok(());
@@ -1152,20 +1199,20 @@ impl Worker {
                         }
                     };
                     match command {
-                        Command::SaveDelta(delta, preferences) => {
-                            let result = store.save_state(&delta, preferences);
+                        Command::SaveDelta(delta, preferences, output) => {
+                            let result = store.save_all_state(&delta, preferences, output);
                             retry_wait = result.is_err();
                             let _ = events_tx.send(Event::Saved(result));
                         }
-                        Command::CloseDelta(delta, preferences) => {
-                            if delta.is_some() || preferences.is_some() {
+                        Command::CloseDelta(delta, preferences, output) => {
+                            if delta.is_some() || preferences.is_some() || output.is_some() {
                                 let delta = delta.unwrap_or(crate::library::CatalogDelta {
                                     revision: 0,
                                     tracks: vec![],
                                     crates: None,
                                     memberships: vec![],
                                 });
-                                store.save_state(&delta, preferences)?;
+                                store.save_all_state(&delta, preferences, output)?;
                             }
                             return store.checkpoint(true);
                         }
@@ -1189,25 +1236,45 @@ impl Worker {
     pub fn save_delta(&self, delta: crate::library::CatalogDelta) -> Result<(), String> {
         self.save_state(delta, None)
     }
+    #[cfg(test)]
     pub fn save_state(
         &self,
         delta: crate::library::CatalogDelta,
         preferences: Option<QuantizePreferences>,
     ) -> Result<(), String> {
+        self.save_all_state(delta, preferences, None)
+    }
+    pub fn save_all_state(
+        &self,
+        delta: crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+    ) -> Result<(), String> {
         self.tx
-            .try_send(Command::SaveDelta(delta, preferences))
+            .try_send(Command::SaveDelta(delta, preferences, output))
             .map_err(|e| e.to_string())
     }
     #[cfg(test)]
     pub fn close_delta(self, delta: Option<crate::library::CatalogDelta>) -> Result<(), String> {
         self.close_state(delta, None)
     }
+    #[cfg(test)]
     pub fn close_state(
         self,
         delta: Option<crate::library::CatalogDelta>,
         preferences: Option<QuantizePreferences>,
     ) -> Result<(), String> {
-        let _ = self.tx.send(Command::CloseDelta(delta, preferences));
+        self.close_all_state(delta, preferences, None)
+    }
+    pub fn close_all_state(
+        self,
+        delta: Option<crate::library::CatalogDelta>,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+    ) -> Result<(), String> {
+        let _ = self
+            .tx
+            .send(Command::CloseDelta(delta, preferences, output));
         self.join
             .join()
             .map_err(|_| "Library worker panicked".to_string())?
@@ -1231,6 +1298,109 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_profiles_merge_and_roll_back_with_catalog_and_quantize() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let route = OutputRoute {
+            device: crate::output_preferences::OutputDeviceKey {
+                backend: "Test".into(),
+                name: "MC4000".into(),
+                channels: 4,
+            },
+            pair: 1,
+        };
+        let delta = library::CatalogDelta {
+            revision: 1,
+            tracks: catalog(dir.path().join("missing.wav"), 27).tracks,
+            crates: None,
+            memberships: vec![],
+        };
+        let prefs = QuantizePreferences {
+            enabled: false,
+            ..Default::default()
+        };
+        store.connection.execute_batch("CREATE TRIGGER reject_routes BEFORE INSERT ON library_meta WHEN NEW.key='audio_output_routes_v1' BEGIN SELECT RAISE(ABORT,'injected route failure'); END;").unwrap();
+        assert!(store
+            .save_all_state(&delta, Some(prefs), Some(route.clone()))
+            .is_err());
+        assert!(rows(&store).is_empty());
+        assert!(store.read_quantize_preferences().unwrap().enabled);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_routes")
+            .unwrap();
+        store
+            .save_all_state(&delta, Some(prefs), Some(route.clone()))
+            .unwrap();
+        let other = OutputRoute {
+            device: crate::output_preferences::OutputDeviceKey {
+                name: "Other".into(),
+                ..route.device.clone()
+            },
+            pair: 0,
+        };
+        let empty = library::CatalogDelta {
+            revision: 2,
+            tracks: vec![],
+            crates: None,
+            memberships: vec![],
+        };
+        store
+            .save_all_state(&empty, None, Some(other.clone()))
+            .unwrap();
+        drop(store);
+        let (store, _, _) = Store::open(db).unwrap();
+        let profiles = store.read_output_routes().unwrap();
+        assert_eq!(profiles.pair_for(&route.device), Some(1));
+        assert_eq!(profiles.pair_for(&other.device), Some(0));
+        assert_eq!(rows(&store), vec![27]);
+    }
+    #[test]
+    fn corrupt_output_profiles_are_bounded_and_preserved_while_catalog_loads() {
+        for raw in [
+            "{".to_string(),
+            r#"{"version":2,"routes":[]}"#.into(),
+            format!("x\0{}", "x".repeat(MAX_ROUTES_BYTES + 1)),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            store
+                .save(&catalog(dir.path().join("missing.wav"), 27))
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "INSERT INTO library_meta(key,value) VALUES('audio_output_routes_v1',?1)",
+                    [&raw],
+                )
+                .unwrap();
+            let bounded: String = store
+                .connection
+                .query_row(OUTPUT_ROUTES_QUERY, [], |r| r.get(0))
+                .unwrap();
+            assert!(bounded.len() <= MAX_ROUTES_BYTES);
+            drop(store);
+            let worker = Worker::start(db.clone()).unwrap();
+            let Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+                panic!("load")
+            };
+            assert_eq!(loaded.library.len(), 1);
+            assert!(loaded.output_routes.is_err());
+            worker.close_delta(None).unwrap();
+            let c = connect(&db, false).unwrap();
+            let preserved: String = c
+                .query_row(
+                    "SELECT value FROM library_meta WHERE key='audio_output_routes_v1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(preserved, raw);
+        }
+    }
     #[test]
     fn quantize_preferences_roundtrip_and_atomic_delta_rollback() {
         let dir = tempfile::tempdir().unwrap();

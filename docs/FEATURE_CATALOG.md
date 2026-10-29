@@ -183,3 +183,9 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | ID | Capability | Evidence | Remaining scope |
 | --- | --- | --- | --- |
 | R-OUTPUT-01 | Select the current stereo mix output pair within the existing device stream | Inline frame-frozen router tests for mono/stereo/odd and 4/6/8-channel streams; highest pair, invalid pair, default passthrough; actual controller/mixer stereo samples, unchanged source/tempo/gain, full-frame bus clock and zero-allocation warm pull with one unloaded deck; two-size toolbar geometry | Session-local routing; device selection, persistence by device, independent pre-fader cue/monitor mix/gain, platform and sustained hardware acceptance remain open |
+
+## Persistent output destinations (2026-10-29)
+
+| ID | Capability | Evidence | Remaining scope |
+| --- | --- | --- | --- |
+| R-OUTPUT-02 | Restore stereo pair for a uniquely named output device/backend/channel shape | Strict bounded profile model; same-device restart, different names/channel counts, ambiguous identity, multiple profiles, newest intent and close revert; transactional catalog/Quantize/profile rollback, Retry, corrupt/future data preservation and full-table fallback without blocking other saves | Name-based identity can match same-named replacement hardware; hardware IDs, device switching, sustained physical qualification and independent cue/monitor routing remain open |

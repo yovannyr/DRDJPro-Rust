@@ -216,6 +216,10 @@ pub struct AudioController {
     saved_quantize: Cell<crate::preferences::QuantizePreferences>,
     observed_quantize: Cell<crate::preferences::QuantizePreferences>,
     inflight_quantize: Cell<Option<crate::preferences::QuantizePreferences>>,
+    saved_output: RefCell<Option<crate::output_preferences::OutputRoute>>,
+    observed_output: RefCell<Option<crate::output_preferences::OutputRoute>>,
+    inflight_output: RefCell<Option<crate::output_preferences::OutputRoute>>,
+    output_profiles_writable: Cell<bool>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
     crate_editor: Cell<Option<i32>>,
@@ -275,6 +279,10 @@ impl AudioController {
             saved_quantize: Cell::new(Default::default()),
             observed_quantize: Cell::new(Default::default()),
             inflight_quantize: Cell::new(None),
+            saved_output: RefCell::new(None),
+            observed_output: RefCell::new(None),
+            inflight_output: RefCell::new(None),
+            output_profiles_writable: Cell::new(false),
             save_failed: Cell::new(false),
             initial_paths: RefCell::new(Vec::new()),
             crate_editor: Cell::new(None),
@@ -2404,6 +2412,14 @@ impl AudioController {
         if !self.storage_ready.get() || self.persistence.borrow().is_none() {
             return;
         }
+        let output = self.output_route();
+        if self.output_profiles_writable.get() && output != *self.observed_output.borrow() {
+            *self.observed_output.borrow_mut() = output;
+            self.library_changed();
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_output_profile_status("Route changed".into());
+            }
+        }
         match self.quantize_preferences() {
             Ok(prefs) if prefs != self.observed_quantize.get() => {
                 self.observed_quantize.set(prefs);
@@ -2416,6 +2432,82 @@ impl AudioController {
             }
             _ => {}
         }
+    }
+    fn output_route(&self) -> Option<crate::output_preferences::OutputRoute> {
+        self.engine.output_device_key().cloned().map(|device| {
+            crate::output_preferences::OutputRoute {
+                device,
+                pair: self.engine.output_pair(),
+            }
+        })
+    }
+    fn pending_output(
+        &self,
+        include_inflight: bool,
+    ) -> Option<crate::output_preferences::OutputRoute> {
+        if !self.output_profiles_writable.get() {
+            return None;
+        }
+        let current = self.output_route()?;
+        let changed = self.saved_output.borrow().as_ref() != Some(&current);
+        let inflight_changed = include_inflight
+            && self
+                .inflight_output
+                .borrow()
+                .as_ref()
+                .is_some_and(|p| p != &current);
+        (changed || inflight_changed).then_some(current)
+    }
+    fn restore_output_routes(
+        &self,
+        profiles: Result<crate::output_preferences::OutputRoutes, String>,
+    ) -> Option<String> {
+        let mut warning = None;
+        let pair = match profiles {
+            Ok(profiles) => match self.engine.output_device_key() {
+                Some(key) => {
+                    let saved = profiles.pair_for(key);
+                    let writable = saved.is_some()
+                        || profiles.routes.len() < crate::output_preferences::MAX_OUTPUT_PROFILES;
+                    self.output_profiles_writable.set(writable);
+                    if !writable {
+                        warning=Some("Audio device profile limit reached; existing profiles preserved, routing is session only".into());
+                    }
+                    saved.unwrap_or(0)
+                }
+                None => {
+                    self.output_profiles_writable.set(false);
+                    0
+                }
+            },
+            Err(error) => {
+                self.output_profiles_writable.set(false);
+                warning = Some(format!(
+                    "{error}; saved output profiles preserved, routing is session only"
+                ));
+                0
+            }
+        };
+        if let Err(error) = self.engine.set_output_pair(pair) {
+            self.output_profiles_writable.set(false);
+            warning = Some(error);
+            let _ = self.engine.set_output_pair(0);
+        }
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_output_pair_index(i32::from(self.engine.output_pair()));
+            ui.set_output_profile_status(
+                if self.output_profiles_writable.get() {
+                    "Profile ready"
+                } else {
+                    "Session only"
+                }
+                .into(),
+            );
+        }
+        let current = self.output_route();
+        *self.saved_output.borrow_mut() = current.clone();
+        *self.observed_output.borrow_mut() = current;
+        warning
     }
     fn poll_storage(&self) {
         let event = self
@@ -2438,8 +2530,10 @@ impl AudioController {
                             backfill_error,
                             quantize_preferences,
                             preference_warning,
+                            output_routes,
                         } = *loaded;
                         self.restore_quantize_preferences(quantize_preferences);
+                        let output_warning = self.restore_output_routes(output_routes);
                         self.library_generation.set(
                             self.library_generation
                                 .get()
@@ -2461,7 +2555,23 @@ impl AudioController {
                                 true,
                             );
                         } else if let Some(ui) = self.ui.upgrade() {
-                            ui.set_library_storage(preference_warning.map_or(note.clone(), |warning| format!("{note}; {warning}; default Quantize preferences active")).into());
+                            let warning = [
+                                preference_warning
+                                    .map(|w| format!("{w}; default Quantize preferences active")),
+                                output_warning,
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                            ui.set_library_storage(
+                                if warning.is_empty() {
+                                    note
+                                } else {
+                                    format!("{note}; {warning}")
+                                }
+                                .into(),
+                            );
                         }
                     }
                     Err(error) => {
@@ -2478,8 +2588,15 @@ impl AudioController {
                 self.saving.set(false);
                 let revision = self.inflight_revision.take();
                 let quantize = self.inflight_quantize.take();
+                let output = self.inflight_output.borrow_mut().take();
                 match result {
                     Ok(()) => {
+                        if output.is_some() {
+                            *self.saved_output.borrow_mut() = output;
+                            if let Some(ui) = self.ui.upgrade() {
+                                ui.set_output_profile_status("Profile saved".into());
+                            }
+                        }
                         if let Some(prefs) = quantize {
                             self.saved_quantize.set(prefs);
                         }
@@ -2488,6 +2605,7 @@ impl AudioController {
                         }
                         self.dirty.set(
                             self.library.borrow().has_changes()
+                                || self.pending_output(false).is_some()
                                 || self
                                     .quantize_preferences()
                                     .is_ok_and(|p| p != self.saved_quantize.get()),
@@ -2502,6 +2620,11 @@ impl AudioController {
                     Err(error) => {
                         self.dirty.set(true);
                         self.save_failed.set(true);
+                        if output.is_some() {
+                            if let Some(ui) = self.ui.upgrade() {
+                                ui.set_output_profile_status("Route not saved".into());
+                            }
+                        }
                         self.storage_error(&error, true);
                     }
                 }
@@ -2548,10 +2671,17 @@ impl AudioController {
                 return;
             }
         };
-        match worker.save_state(delta, preferences) {
+        let output = self.pending_output(false);
+        match worker.save_all_state(delta, preferences, output.clone()) {
             Ok(()) => {
                 self.inflight_revision.set(Some(revision));
                 self.inflight_quantize.set(preferences);
+                if output.is_some() {
+                    if let Some(ui) = self.ui.upgrade() {
+                        ui.set_output_profile_status("Saving route".into());
+                    }
+                }
+                *self.inflight_output.borrow_mut() = output;
                 self.dirty.set(false);
                 self.saving.set(true);
                 if let Some(ui) = self.ui.upgrade() {
@@ -2587,20 +2717,27 @@ impl AudioController {
         } else {
             None
         };
+        let output = if self.storage_ready.get() && self.persistence.borrow().is_some() {
+            self.pending_output(true)
+        } else {
+            None
+        };
         if let Some(worker) = self.persistence.borrow_mut().take() {
             let final_delta = (self.storage_ready.get()
                 && (preferences.is_some()
+                    || output.is_some()
                     || self.dirty.get()
                     || self.saving.get()
                     || self.library.borrow().has_changes()))
             .then(|| self.library.borrow().changes());
             let revision = final_delta.as_ref().map(|d| d.revision);
-            worker.close_state(final_delta, preferences)?;
+            worker.close_all_state(final_delta, preferences, output)?;
             if let Some(revision) = revision {
                 self.library.borrow_mut().acknowledge(revision);
             }
             self.inflight_revision.set(None);
             self.inflight_quantize.set(None);
+            self.inflight_output.borrow_mut().take();
             self.saving.set(false);
             self.dirty.set(false);
         }
@@ -7150,6 +7287,234 @@ mod tests {
         assert_eq!(c.library.borrow().len(), 0);
         assert_eq!(c.library.borrow().revision(), 0);
         assert!(!c.dirty.get());
+    }
+    #[test]
+    fn output_profiles_restore_matching_device_and_keep_other_profiles() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        for (name, channels, expected, edit) in [
+            (Some("MC4000"), 4, 0, true),
+            (Some("Other"), 4, 0, true),
+            (Some("MC4000"), 2, 0, false),
+            (None, 4, 0, false),
+            (Some("MC4000"), 4, 1, false),
+        ] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(channels, 48000);
+            let mut engine = DualDeckEngine::from_mixer(mixer, channels, 48000);
+            if let Some(name) = name {
+                engine =
+                    engine.with_output_device_key(crate::output_preferences::OutputDeviceKey {
+                        backend: "Test".into(),
+                        name: name.into(),
+                        channels,
+                    });
+            }
+            let engine = Rc::new(engine);
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            c.restore_library(Ok(db.clone()), vec![]);
+            assert_eq!(
+                control(&ui, "Audio output pair").accessible_enabled(),
+                Some(false)
+            );
+            finish_storage(&c);
+            assert_eq!(engine.output_pair(), expected);
+            assert_eq!(ui.get_output_pair_index(), i32::from(expected));
+            assert!(!engine.snapshot(DeckId::A).loaded);
+            assert!(!engine.snapshot(DeckId::B).playing);
+            if edit {
+                ui.set_output_pair_index(1);
+                ui.invoke_output_pair_changed();
+                c.save_library();
+                assert!(c.saving.get());
+                ui.set_output_pair_index(0);
+                ui.invoke_output_pair_changed();
+                finish_storage(&c);
+                assert_eq!(c.saved_output.borrow().as_ref().unwrap().pair, 0);
+                ui.set_output_pair_index(1);
+                ui.invoke_output_pair_changed();
+            }
+            c.close_library().unwrap();
+        }
+    }
+    #[test]
+    fn output_profile_close_revert_and_retry_preserve_latest_route() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        for retry in [false, true] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+            let engine = Rc::new(
+                DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
+                    crate::output_preferences::OutputDeviceKey {
+                        backend: "Test".into(),
+                        name: "MC4000".into(),
+                        channels: 4,
+                    },
+                ),
+            );
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            c.restore_library(Ok(db.clone()), vec![]);
+            finish_storage(&c);
+            assert_eq!(engine.output_pair(), 0);
+            if !retry {
+                ui.set_output_pair_index(1);
+                ui.invoke_output_pair_changed();
+                c.save_library();
+                assert!(c.saving.get());
+                ui.set_output_pair_index(0);
+                ui.invoke_output_pair_changed();
+                c.close_library().unwrap();
+            } else {
+                let connection = rusqlite::Connection::open(&db).unwrap();
+                connection.execute_batch("CREATE TRIGGER reject_routes BEFORE INSERT ON library_meta WHEN NEW.key='audio_output_routes_v1' BEGIN SELECT RAISE(ABORT,'injected route write'); END;").unwrap();
+                ui.set_output_pair_index(1);
+                ui.invoke_output_pair_changed();
+                finish_storage(&c);
+                assert!(c.save_failed.get());
+                assert_eq!(ui.get_output_profile_status(), "Route not saved");
+                connection
+                    .execute_batch("DROP TRIGGER reject_routes")
+                    .unwrap();
+                ui.invoke_retry_library_save();
+                finish_storage(&c);
+                assert!(!c.save_failed.get());
+                assert_eq!(c.saved_output.borrow().as_ref().unwrap().pair, 1);
+                c.close_library().unwrap();
+            }
+        }
+    }
+    #[test]
+    fn full_output_profiles_allow_other_saves_and_existing_device_updates() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        worker.events.recv().unwrap();
+        worker.close_delta(None).unwrap();
+        let mut profiles = crate::output_preferences::OutputRoutes::default();
+        for i in 0..32 {
+            profiles
+                .update(crate::output_preferences::OutputRoute {
+                    device: crate::output_preferences::OutputDeviceKey {
+                        backend: "Test".into(),
+                        name: format!("Device{i}"),
+                        channels: 4,
+                    },
+                    pair: 0,
+                })
+                .unwrap();
+        }
+        let raw = serde_json::to_string(&profiles).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_meta(key,value) VALUES('audio_output_routes_v1',?1)",
+                [&raw],
+            )
+            .unwrap();
+        for (name, session_only) in [("MC4000", true), ("Device0", false)] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+            let engine = Rc::new(
+                DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
+                    crate::output_preferences::OutputDeviceKey {
+                        backend: "Test".into(),
+                        name: name.into(),
+                        channels: 4,
+                    },
+                ),
+            );
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            c.restore_library(Ok(db.clone()), vec![]);
+            finish_storage(&c);
+            assert_eq!(c.output_profiles_writable.get(), !session_only);
+            ui.set_output_pair_index(1);
+            ui.invoke_output_pair_changed();
+            ui.set_quantize_enabled(!ui.get_quantize_enabled());
+            let file = wav_file(4096, 480);
+            c.library.borrow_mut().insert([file.path().to_path_buf()]);
+            c.library_changed();
+            finish_storage(&c);
+            assert!(!c.save_failed.get());
+            c.close_library().unwrap();
+            let saved: String = connection
+                .query_row(
+                    "SELECT value FROM library_meta WHERE key='audio_output_routes_v1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            if session_only {
+                assert_eq!(saved, raw);
+            } else {
+                let profiles: crate::output_preferences::OutputRoutes =
+                    serde_json::from_str(&saved).unwrap();
+                assert_eq!(profiles.routes.len(), 32);
+                assert_eq!(
+                    profiles.pair_for(engine.output_device_key().unwrap()),
+                    Some(1)
+                );
+            }
+        }
+    }
+    #[test]
+    fn corrupt_output_profile_stays_session_only_while_other_preferences_save() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Loaded(Ok(_))
+        ));
+        worker.close_delta(None).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        let raw = r#"{"version":2,"routes":[]}"#;
+        connection
+            .execute(
+                "INSERT INTO library_meta(key,value) VALUES('audio_output_routes_v1',?1)",
+                [raw],
+            )
+            .unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(
+            DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
+                crate::output_preferences::OutputDeviceKey {
+                    backend: "Test".into(),
+                    name: "MC4000".into(),
+                    channels: 4,
+                },
+            ),
+        );
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db), vec![]);
+        finish_storage(&c);
+        assert_eq!(ui.get_output_profile_status(), "Session only");
+        assert!(ui.get_library_storage().contains("preserved"));
+        ui.set_output_pair_index(1);
+        ui.invoke_output_pair_changed();
+        ui.set_quantize_enabled(false);
+        finish_storage(&c);
+        assert_eq!(engine.output_pair(), 1);
+        assert!(!c.saved_quantize.get().enabled);
+        assert!(!c.save_failed.get());
+        assert_eq!(ui.get_output_profile_status(), "Session only");
+        c.close_library().unwrap();
+        let preserved: String = connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='audio_output_routes_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, raw);
     }
     #[test]
     fn output_pair_selection_routes_stereo_without_changing_deck_state() {
