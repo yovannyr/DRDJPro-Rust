@@ -315,3 +315,7 @@ The CUES tools panel adds a per-deck quantization selector for 1/8, 1/4, 1/2, 1,
 ## Persistent Quantize settings (2026-10-29)
 
 Global QUANTIZE and the per-deck cue snap/Next grid/Auto Loop snap/step settings now restore from SQLite before preference controls become editable. Existing libraries with no settings keep the previous defaults. Controls remain available for session use if storage startup fails; save failures use the existing Retry indication. Restoring settings does not start playback, load tracks or restore an armed cue trigger. Headless restart/error/close tests cover this scope; native interaction and general device/performance preference parity remain open.
+
+## Audio output pair selector (2026-10-29)
+
+The global toolbar now exposes Audio output pair with the complete stereo pairs offered by the current stream. A mono/stereo-only output has one disabled option; a four-channel output can switch between OUT 1/2 and OUT 3/4. The selected destination receives the common post-fader mix. Selection is session-local and does not imply an independent deck cue/headphone mix or device-selection interface. Headless tests cover pair selection, invalid values, render-frame preservation, stereo samples and toolbar bounds at both supported sizes. Native listening evidence remains explicitly separate.

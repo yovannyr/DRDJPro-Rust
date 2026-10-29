@@ -177,3 +177,9 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | --- | --- | --- | --- |
 | R-QUANT-05 | Versioned global/deck Quantize settings in library SQLite, restored before editing | Restart with distinct deck flags/steps; newer edits before acknowledgement; final close flush and inflight revert; closing during restore; worker-only atomic delta/preference rollback, injected failure/Retry and invalid input rejection | No portable JSON preference export or unrelated transport/device settings; full reference/native acceptance open |
 | R-QUANT-06 | Malformed preferences use defaults and warn without losing the catalog or silently rewriting the original | Invalid JSON/version/unknown fields/step and oversize/embedded-NUL payloads; bounded production SQL read, worker load and unchanged original row after close | Existing SQLite backup/recovery applies to the database; subjective usability and native accessibility acceptance remain open |
+
+## Stereo output destination follow-up (2026-10-29)
+
+| ID | Capability | Evidence | Remaining scope |
+| --- | --- | --- | --- |
+| R-OUTPUT-01 | Select the current stereo mix output pair within the existing device stream | Inline frame-frozen router tests for mono/stereo/odd and 4/6/8-channel streams; highest pair, invalid pair, default passthrough; actual controller/mixer stereo samples, unchanged source/tempo/gain, full-frame bus clock and zero-allocation warm pull with one unloaded deck; two-size toolbar geometry | Session-local routing; device selection, persistence by device, independent pre-fader cue/monitor mix/gain, platform and sustained hardware acceptance remain open |

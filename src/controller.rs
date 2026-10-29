@@ -300,6 +300,32 @@ impl AudioController {
             displayed_details: RefCell::new([None, None]),
         });
         ui.set_audio_enabled(true);
+        let count = (controller.engine.output_channels() / 2).max(1);
+        ui.set_output_pair_options(slint::ModelRc::new(slint::VecModel::from(
+            (0..count)
+                .map(|pair| {
+                    slint::SharedString::from(if controller.engine.output_channels() == 1 {
+                        "OUT 1 (mono)".into()
+                    } else {
+                        format!("OUT {}/{}", pair * 2 + 1, pair * 2 + 2)
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )));
+        let weak = Rc::downgrade(&controller);
+        ui.on_output_pair_changed(move || {
+            if let Some(c) = weak.upgrade() {
+                if let Some(ui) = c.ui.upgrade() {
+                    let result = u16::try_from(ui.get_output_pair_index())
+                        .map_err(|_| "Invalid output pair".to_string())
+                        .and_then(|pair| c.engine.set_output_pair(pair));
+                    if let Err(error) = result {
+                        ui.set_output_pair_index(i32::from(c.engine.output_pair()));
+                        ui.set_status(error.into());
+                    }
+                }
+            }
+        });
         let weak = Rc::downgrade(&controller);
         ui.on_cancel_background_job(move || {
             if let Some(c) = weak.upgrade() {
@@ -7126,6 +7152,60 @@ mod tests {
         assert!(!c.dirty.get());
     }
     #[test]
+    fn output_pair_selection_routes_stereo_without_changing_deck_state() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 4, 48000));
+        let file = crate::test_support::wav_samples(&[12000_i16, -6000].repeat(48000), 48000, 2);
+        engine.load_a(file.path()).unwrap();
+        let _c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.set_crossfader(0.);
+        ui.invoke_mixer_changed();
+        engine.play(DeckId::A);
+        for _ in 0..4096 {
+            output.next();
+        }
+        let normal: [f32; 4] = std::array::from_fn(|_| output.next().unwrap());
+        assert!(normal[0] > 0.3 && normal[1] < -0.15);
+        assert_eq!(&normal[2..], &[0., 0.]);
+        let before = engine.snapshot(DeckId::A);
+        let gains = engine.output_volumes();
+        ui.set_output_pair_index(1);
+        ui.invoke_output_pair_changed();
+        assert_eq!(engine.output_pair(), 1);
+        let after = engine.snapshot(DeckId::A);
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.playing, before.playing);
+        assert_eq!(after.requested_speed, before.requested_speed);
+        assert_eq!(engine.output_volumes(), gains);
+        let clock = engine.rendered_frames();
+        let left = output.next().unwrap();
+        assert_eq!(engine.rendered_frames(), clock);
+        let routed: [f32; 4] = [
+            left,
+            output.next().unwrap(),
+            output.next().unwrap(),
+            output.next().unwrap(),
+        ];
+        assert_eq!(engine.rendered_frames(), clock + 1);
+        assert_eq!(routed, [0., 0., normal[0], normal[1]]);
+        ui.set_output_pair_index(99);
+        ui.invoke_output_pair_changed();
+        assert_eq!(ui.get_output_pair_index(), 1);
+        assert_eq!(engine.output_pair(), 1);
+        assert!(ui.get_status().contains("unavailable"));
+        let allocations = crate::looping::counted_allocations(|| {
+            for i in 0..10000 {
+                if i % 32 == 0 {
+                    engine.set_output_pair(((i / 32) % 2) as u16).unwrap();
+                }
+                output.next();
+            }
+        });
+        assert_eq!(allocations, 0);
+    }
+    #[test]
     fn quantize_preferences_restart_retains_latest_changes_and_close_flush() {
         i_slint_backend_testing::init_no_event_loop();
         let dir = tempfile::tempdir().unwrap();
@@ -8914,6 +8994,10 @@ mod tests {
         for (width, height) in [(850.0, 740.0), (1280.0, 860.0)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let quantize = control(&ui, "Global Quantize");
+            let output_pair = control(&ui, "Audio output pair");
+            assert!(output_pair.size().width > 0. && output_pair.size().height > 0.);
+            assert!(output_pair.absolute_position().x >= 0.);
+            assert!(output_pair.absolute_position().x + output_pair.size().width <= width + 0.1);
             assert!(quantize.size().width > 0. && quantize.size().height > 0.);
             assert!(quantize.absolute_position().x >= 0. && quantize.absolute_position().y >= 0.);
             assert!(quantize.absolute_position().x + quantize.size().width <= width + 0.1);

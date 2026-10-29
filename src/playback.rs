@@ -312,6 +312,7 @@ pub struct DualDeckEngine {
     mixer: Mixer,
     output_channels: u16,
     output_rate: u32,
+    output_routing: Arc<crate::output_routing::RoutingControl>,
     retired: RefCell<Vec<RetiredTrack>>,
     // Shared producer timeline; completed-frame stamps are consumed by one-shot sync.
     render_clock: Arc<crate::render_bus::RenderClock>,
@@ -357,11 +358,14 @@ impl DualDeckEngine {
         assert!(output_channels > 0 && output_rate > 0);
         // Both deck queues enter one fixed-format bus before the device/injected mixer.
         let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
+        let (deck_output, output_routing) = crate::output_routing::PairRouter::new(deck_output);
         let (bus, render_clock) = crate::render_bus::RenderBus::new(deck_output);
         mixer.add(bus);
         let mixer = deck_mixer;
         let decks = std::array::from_fn(|_| {
-            let sink = Sink::connect_new(&mixer);
+            // Ungeladene Decks benötigen keine leere Rodio-Queue im Audio-Mixer.
+            // Beim Laden installiert replace_source die echte, dauerhaft stille EOF-Quelle.
+            let (sink, _unused_output) = Sink::new();
             sink.pause();
             RefCell::new(Deck {
                 sink,
@@ -384,6 +388,7 @@ impl DualDeckEngine {
             mixer,
             output_channels,
             output_rate,
+            output_routing,
             retired: RefCell::new(Vec::new()),
             render_clock,
             clock_observer: RefCell::new(crate::render_bus::ClockObserver::default()),
@@ -858,6 +863,15 @@ impl DualDeckEngine {
     }
     pub fn output_rate(&self) -> u32 {
         self.output_rate
+    }
+    pub fn output_channels(&self) -> u16 {
+        self.output_routing.channels()
+    }
+    pub fn output_pair(&self) -> u16 {
+        self.output_routing.pair()
+    }
+    pub fn set_output_pair(&self, pair: u16) -> Result<(), String> {
+        self.output_routing.set_pair(pair)
     }
     pub fn rendered_frames(&self) -> u64 {
         self.render_clock.completed.load(Ordering::Acquire)

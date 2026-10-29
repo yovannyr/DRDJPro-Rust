@@ -16,6 +16,7 @@ mod looping;
 mod mc4000;
 mod media_input;
 mod opus_audio;
+mod output_routing;
 mod peak_meter;
 mod phase_sync;
 mod pitch_control;
