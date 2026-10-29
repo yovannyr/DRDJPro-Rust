@@ -1426,7 +1426,9 @@ impl DualDeckEngine {
     }
     pub fn set_eq(&self, id: DeckId, settings: crate::mixer_dsp::EqSettings) -> Result<(), String> {
         if !settings.valid() {
-            return Err("EQ requires finite trim -12..12 dB and bands -24..12 dB".into());
+            return Err(
+                "Mixer requires finite trim -12..12 dB, bands -24..12 dB and filter -1..1".into(),
+            );
         }
         if settings != self.eq_settings(id) {
             self.eq_controls[id.index()].publish(settings);

@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 pub(crate) const MAX_CHANNELS: u16 = 32;
+const STAGES: usize = 4;
+const COEFFICIENTS: usize = STAGES * 5 + 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct EqSettings {
@@ -15,17 +17,20 @@ pub(crate) struct EqSettings {
     pub low: f64,
     pub mid: f64,
     pub high: f64,
+    pub filter: f64,
 }
 impl EqSettings {
     pub fn valid(self) -> bool {
         self.trim.is_finite()
             && (-12. ..=12.).contains(&self.trim)
+            && self.filter.is_finite()
+            && (-1. ..=1.).contains(&self.filter)
             && [self.low, self.mid, self.high]
                 .iter()
                 .all(|v| v.is_finite() && (-24. ..=12.).contains(v))
     }
-    fn coefficients(self, rate: u32) -> [f64; 16] {
-        let mut result = [0.; 16];
+    fn coefficients(self, rate: u32) -> [f64; COEFFICIENTS] {
+        let mut result = [0.; COEFFICIENTS];
         for (index, (frequency, db)) in [(250_f64, self.low), (1000., self.mid), (4000., self.high)]
             .into_iter()
             .enumerate()
@@ -37,9 +42,34 @@ impl EqSettings {
                 rate,
             ));
         }
-        result[15] = 10_f64.powf(self.trim / 20.);
+        result[15..20].copy_from_slice(&filter(self.filter, rate));
+        result[20] = 10_f64.powf(self.trim / 20.);
         result
     }
+}
+
+// Butterworth LP/HP, logarithmic sweep. Exactly zero is a true bypass.
+fn filter(amount: f64, rate: u32) -> [f64; 5] {
+    if amount == 0. {
+        return [1., 0., 0., 0., 0.];
+    }
+    let upper = 20000_f64.min(f64::from(rate) * 0.45);
+    let lower = 20_f64.min(upper);
+    let frequency = if amount < 0. {
+        upper * (lower / upper).powf(-amount)
+    } else {
+        lower * (upper / lower).powf(amount)
+    };
+    let w = std::f64::consts::TAU * frequency / f64::from(rate);
+    let c = w.cos();
+    let alpha = w.sin() / std::f64::consts::SQRT_2;
+    let (b0, b1) = if amount < 0. {
+        ((1. - c) / 2., 1. - c)
+    } else {
+        ((1. + c) / 2., -(1. + c))
+    };
+    let a0 = 1. + alpha;
+    [b0 / a0, b1 / a0, b0 / a0, -2. * c / a0, (1. - alpha) / a0]
 }
 
 // RBJ/W3C Audio EQ Cookbook: low/high shelves S=1, peaking EQ Q=1/sqrt(2).
@@ -84,7 +114,7 @@ fn biquad(kind: usize, frequency: f64, db: f64, rate: u32) -> [f64; 5] {
 
 pub(crate) struct EqControl {
     sequence: AtomicU64,
-    values: [AtomicU64; 16],
+    values: [AtomicU64; COEFFICIENTS],
     rate: u32,
 }
 impl EqControl {
@@ -107,7 +137,7 @@ impl EqControl {
         }
         self.sequence.fetch_add(1, Ordering::SeqCst);
     }
-    fn read(&self) -> Option<[f64; 16]> {
+    fn read(&self) -> Option<[f64; COEFFICIENTS]> {
         let before = self.sequence.load(Ordering::SeqCst);
         if before & 1 != 0 {
             return None;
@@ -121,13 +151,13 @@ impl EqControl {
 }
 
 struct Bank {
-    coefficients: [f64; 16],
-    states: [[[f64; 2]; 3]; MAX_CHANNELS as usize],
+    coefficients: [f64; COEFFICIENTS],
+    states: [[[f64; 2]; STAGES]; MAX_CHANNELS as usize],
 }
 impl Bank {
     fn sample(&mut self, channel: usize, input: f32) -> f64 {
         let mut value = f64::from(input);
-        for (coefficients, state) in self.coefficients[..15]
+        for (coefficients, state) in self.coefficients[..STAGES * 5]
             .as_chunks::<5>()
             .0
             .iter()
@@ -143,7 +173,7 @@ impl Bank {
             }
             value = output;
         }
-        value * self.coefficients[15]
+        value * self.coefficients[STAGES * 5]
     }
 }
 
@@ -152,7 +182,7 @@ pub(crate) struct EqSource<S> {
     control: Arc<EqControl>,
     active: Bank,
     next: Bank,
-    wanted: [f64; 16],
+    wanted: [f64; COEFFICIENTS],
     channel: usize,
     channels: usize,
     fade: u32,
@@ -165,7 +195,7 @@ impl<S: Source> EqSource<S> {
             .read()
             .expect("source installed on the single control writer");
         let channels = usize::from(source.channels());
-        let states = [[[0.; 2]; 3]; MAX_CHANNELS as usize];
+        let states = [[[0.; 2]; STAGES]; MAX_CHANNELS as usize];
         let next = Bank {
             coefficients,
             states,
@@ -197,7 +227,7 @@ impl<S: Source> Iterator for EqSource<S> {
             }
             if self.fade == 0 && self.wanted != self.active.coefficients {
                 self.next.coefficients = self.wanted;
-                self.next.states.fill([[0.; 2]; 3]);
+                self.next.states.fill([[0.; 2]; STAGES]);
                 self.fade = 1;
             }
         }
@@ -295,12 +325,14 @@ mod tests {
             low: 12.,
             mid: -24.,
             high: 12.,
+            filter: -0.5,
         };
         let b = EqSettings {
             trim: 12.,
             low: -24.,
             mid: 12.,
             high: -24.,
+            filter: 0.5,
         };
         let expected = [
             EqSettings::default().coefficients(48000),
@@ -325,6 +357,42 @@ mod tests {
             control.read().is_none(),
             "busy writer never causes a retry loop"
         );
+    }
+    #[test]
+    fn bipolar_filter_response_bypass_and_extremes_are_measured() {
+        for rate in [44100, 48000, 96000] {
+            let low = EqSettings {
+                filter: -0.5,
+                ..Default::default()
+            };
+            let high = EqSettings {
+                filter: 0.5,
+                ..Default::default()
+            };
+            assert!(response(rate, 100., low).abs() < 0.1);
+            assert!(response(rate, 10000., low) < -40.);
+            assert!(response(rate, 40., high) < -40.);
+            assert!(response(rate, 5000., high).abs() < 0.1);
+            for amount in [-1., 1.] {
+                let value = response(
+                    rate,
+                    1000.,
+                    EqSettings {
+                        filter: amount,
+                        ..Default::default()
+                    },
+                );
+                assert!(value.is_finite() && value < -40.);
+            }
+        }
+        for invalid in [f64::NAN, f64::INFINITY, -1.01, 1.01] {
+            assert!(!EqSettings {
+                filter: invalid,
+                ..Default::default()
+            }
+            .valid());
+        }
+        assert_eq!(filter(0., 48000), [1., 0., 0., 0., 0.]);
     }
     #[test]
     fn eq_frequency_response_trim_and_neutral_are_measured() {
@@ -396,6 +464,7 @@ mod tests {
                         low: 12.,
                         mid: -24.,
                         high: 12.,
+                        filter: if frame % 200 == 0 { -0.5 } else { 0.5 },
                     });
                 }
                 let left = output.next().unwrap();

@@ -12,13 +12,14 @@ component EqStrip inherits Rectangle {
     in-out property <float> low;
     in-out property <float> mid;
     in-out property <float> high;
+    in-out property <float> filter;
     callback changed();
     background: #171d27;
     VerticalLayout {
         padding: 4px; spacing: 2px;
         HorizontalLayout {
             Text { text: "Deck " + root.deck + " EQ / TRIM"; color: #c8d4e4; }
-            Button { text: "RESET"; accessible-label: "Deck " + root.deck + " reset EQ"; clicked => { root.trim = 0; root.low = 0; root.mid = 0; root.high = 0; root.changed(); } }
+            Button { text: "RESET"; accessible-label: "Deck " + root.deck + " reset EQ"; clicked => { root.trim = 0; root.low = 0; root.mid = 0; root.high = 0; root.filter = 0; root.changed(); } }
         }
         HorizontalLayout {
             VerticalLayout {
@@ -36,6 +37,11 @@ component EqStrip inherits Rectangle {
             VerticalLayout {
                 Text { text: "HIGH " + round(root.high * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
                 Slider { minimum: -24; maximum: 12; value <=> root.high; accessible-label: "Deck " + root.deck + " high EQ dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: root.filter == 0 ? "FILTER OFF" : (root.filter < 0 ? "LP " : "HP ") + round(abs(root.filter)*100) + "%"; color: #c8d4e4; font-size: 10px; }
+                Slider { minimum: -1; maximum: 1; value <=> root.filter; accessible-label: "Deck " + root.deck + " bipolar filter"; changed => { root.changed(); } }
+                Button { text: "OFF"; accessible-label: "Deck " + root.deck + " filter off"; clicked => { root.filter = 0; root.changed(); } }
             }
         }
     }
@@ -682,10 +688,12 @@ export component AppWindow inherits Window {
     in-out property <float> eq-low-a: 0;
     in-out property <float> eq-mid-a: 0;
     in-out property <float> eq-high-a: 0;
+    in-out property <float> eq-filter-a: 0;
     in-out property <float> eq-trim-b: 0;
     in-out property <float> eq-low-b: 0;
     in-out property <float> eq-mid-b: 0;
     in-out property <float> eq-high-b: 0;
+    in-out property <float> eq-filter-b: 0;
     callback eq-changed(int);
     in-out property <bool> left-playing: false;
     in-out property <bool> right-playing: false;
@@ -958,11 +966,11 @@ export component AppWindow inherits Window {
             }
         }
         if root.eq-open : Rectangle {
-            height: 90px;
+            height: 120px;
             HorizontalLayout {
                 spacing: 8px;
-                EqStrip { deck: "A"; trim <=> root.eq-trim-a; low <=> root.eq-low-a; mid <=> root.eq-mid-a; high <=> root.eq-high-a; changed => { root.eq-changed(0); } }
-                EqStrip { deck: "B"; trim <=> root.eq-trim-b; low <=> root.eq-low-b; mid <=> root.eq-mid-b; high <=> root.eq-high-b; changed => { root.eq-changed(1); } }
+                EqStrip { deck: "A"; trim <=> root.eq-trim-a; low <=> root.eq-low-a; mid <=> root.eq-mid-a; high <=> root.eq-high-a; filter <=> root.eq-filter-a; changed => { root.eq-changed(0); } }
+                EqStrip { deck: "B"; trim <=> root.eq-trim-b; low <=> root.eq-low-b; mid <=> root.eq-mid-b; high <=> root.eq-high-b; filter <=> root.eq-filter-b; changed => { root.eq-changed(1); } }
             }
         }
         Rectangle {

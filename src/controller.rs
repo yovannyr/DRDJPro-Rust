@@ -2772,12 +2772,14 @@ impl AudioController {
                 low: ui.get_eq_low_a().into(),
                 mid: ui.get_eq_mid_a().into(),
                 high: ui.get_eq_high_a().into(),
+                filter: ui.get_eq_filter_a().into(),
             },
             DeckId::B => crate::mixer_dsp::EqSettings {
                 trim: ui.get_eq_trim_b().into(),
                 low: ui.get_eq_low_b().into(),
                 mid: ui.get_eq_mid_b().into(),
                 high: ui.get_eq_high_b().into(),
+                filter: ui.get_eq_filter_b().into(),
             },
         };
         if let Err(error) = self.engine.set_eq(id, settings) {
@@ -2788,12 +2790,14 @@ impl AudioController {
                     ui.set_eq_low_a(old.low as f32);
                     ui.set_eq_mid_a(old.mid as f32);
                     ui.set_eq_high_a(old.high as f32);
+                    ui.set_eq_filter_a(old.filter as f32);
                 }
                 DeckId::B => {
                     ui.set_eq_trim_b(old.trim as f32);
                     ui.set_eq_low_b(old.low as f32);
                     ui.set_eq_mid_b(old.mid as f32);
                     ui.set_eq_high_b(old.high as f32);
+                    ui.set_eq_filter_b(old.filter as f32);
                 }
             }
             ui.set_status(error.into());
@@ -5052,9 +5056,42 @@ mod tests {
             output.next();
         }
         assert!((output.next().unwrap() - 0.5 * 10_f32.powf(-12. / 20.)).abs() < 1e-4);
+        control(&ui, "Deck A bipolar filter").set_accessible_value("-0.5");
+        control(&ui, "Deck B bipolar filter").set_accessible_value("0.5");
+        assert_eq!(engine.eq_settings(DeckId::A).filter, -0.5);
+        assert_eq!(engine.eq_settings(DeckId::B).filter, 0.5);
+        for _ in 0..4000 {
+            output.next();
+        }
+        assert!(
+            output.next().unwrap().abs() < 1e-4,
+            "high-pass removes the DC input on deck B"
+        );
+        engine.pause(DeckId::A);
+        engine.load_a(wav.path()).unwrap();
+        assert_eq!(engine.eq_settings(DeckId::A).filter, -0.5);
+        control(&ui, "Deck B filter off").invoke_accessible_default_action();
+        assert_eq!(engine.eq_settings(DeckId::B).filter, 0.);
+        assert_eq!(engine.eq_settings(DeckId::B).mid, 12.);
+        ui.set_eq_filter_a(f32::INFINITY);
+        for _ in 0..4000 {
+            output.next();
+        }
+        assert!(
+            (output.next().unwrap() - 0.5 * 10_f32.powf(-12. / 20.)).abs() < 1e-4,
+            "filter off restores deck B without clearing EQ/trim"
+        );
+        ui.invoke_eq_changed(0);
+        assert_eq!(ui.get_eq_filter_a(), -0.5);
+        control(&ui, "Deck A reset EQ").invoke_accessible_default_action();
+        assert_eq!(engine.eq_settings(DeckId::A).filter, 0.);
         for (width, height) in [(850., 740.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["A", "B"] {
+                let item = control(&ui, &format!("Deck {deck} bipolar filter"));
+                assert!(item.size().width > 0. && item.size().height > 0.);
+                assert!(item.absolute_position().x + item.size().width <= width + 1.);
+                assert!(item.absolute_position().y + item.size().height <= height + 1.);
                 for name in ["trim", "low EQ", "mid EQ", "high EQ"] {
                     let item = control(&ui, &format!("Deck {deck} {name} dB"));
                     assert!(item.size().width > 0. && item.size().height > 0.);

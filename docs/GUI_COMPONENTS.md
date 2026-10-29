@@ -78,7 +78,7 @@ Classify each item as built-in, styled built-in, or custom only after a Slint pr
 | Audio device and settings panels | mostly built-in/styled | accessibility and validation |
 | Notifications, tooltips and dialogs | mostly built-in/styled | consistency and focus management |
 
-The mixer now has a Show mixer EQ button and a collapsible pair of deck strips. Each strip exposes accessible dB sliders for Trim (-12..12), Low/Mid/High (-24..12), displayed values and a per-deck Reset. Controls work before loading and retain deck settings when tracks change; they are session-local. Sliders are the current functional input, not a completed rotary-gesture/reference-layout acceptance. Headless bounds are checked at 850x740 and 1280x860; native visual/listening acceptance, filter, channel meters, MIDI knob mapping and effects remain open.
+The mixer now has a Show mixer EQ button and a collapsible pair of deck strips. Each strip exposes accessible dB sliders for Trim (-12..12), Low/Mid/High (-24..12), displayed values, a bipolar filter (-1..1) with LP/HP percent/OFF caption, a separate filter OFF button and a per-deck Reset for all controls. Controls work before loading and retain deck settings when tracks change; they are session-local. Sliders are the current functional input, not a completed rotary-gesture/reference-layout acceptance. Headless bounds are checked at 850x740 and 1280x860; native visual/listening acceptance, channel meters, MIDI knob mapping and effects remain open.
 
 ## Definition of done per control
 - State model and input events specified
