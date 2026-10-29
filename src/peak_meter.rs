@@ -1,6 +1,97 @@
 //! Latest complete 50ms producer sample peak, across all channels.
 //! No hardware/true-peak/freshness claim; stopped renderers retain their last window.
-use std::sync::atomic::{AtomicU64, Ordering};
+use rodio::Source;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
+#[derive(Default)]
+pub(crate) struct ClipLatch {
+    events: AtomicU64,
+    cleared: AtomicU64,
+}
+impl ClipLatch {
+    pub fn active(&self) -> bool {
+        let baseline = self.cleared.load(Ordering::Acquire);
+        self.events.load(Ordering::Acquire) != baseline
+    }
+    pub fn clear(&self) {
+        // Events completed after this observation survive the reset store.
+        let observed = self.events.load(Ordering::Acquire);
+        self.cleared.store(observed, Ordering::Release);
+    }
+}
+pub(crate) struct ChannelMeter {
+    window: AtomicU64,
+    clip: Arc<ClipLatch>,
+}
+impl ChannelMeter {
+    pub fn new(clip: Arc<ClipLatch>) -> Arc<Self> {
+        Arc::new(Self {
+            window: AtomicU64::new(0),
+            clip,
+        })
+    }
+    pub fn peak(&self) -> Option<f32> {
+        PeakAccumulator::read_peak(&self.window)
+    }
+}
+pub(crate) struct Metered<S> {
+    source: S,
+    meter: Arc<ChannelMeter>,
+    peak: PeakAccumulator,
+    channel: u16,
+    frame_clip: bool,
+}
+impl<S: Source> Metered<S> {
+    pub fn new(source: S, meter: Arc<ChannelMeter>) -> Self {
+        assert!(source.channels() > 0);
+        let peak = PeakAccumulator::new(source.sample_rate());
+        Self {
+            source,
+            meter,
+            peak,
+            channel: 0,
+            frame_clip: false,
+        }
+    }
+}
+impl<S: Source> Iterator for Metered<S> {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        let sample = self.source.next()?;
+        self.peak.sample(sample);
+        self.frame_clip |= !sample.is_finite() || sample.abs() >= 1.;
+        self.channel += 1;
+        if self.channel == self.source.channels() {
+            self.channel = 0;
+            if self.frame_clip {
+                self.meter.clip.events.fetch_add(1, Ordering::Release);
+            }
+            self.frame_clip = false;
+            self.peak.complete_frame(&self.meter.window);
+        }
+        Some(sample)
+    }
+}
+impl<S: Source> Source for Metered<S> {
+    fn channels(&self) -> u16 {
+        self.source.channels()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.source.sample_rate()
+    }
+    fn current_span_len(&self) -> Option<usize> {
+        self.source.current_span_len()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.source.total_duration()
+    }
+}
 
 pub(crate) struct PeakAccumulator {
     peak: f32,
@@ -69,6 +160,68 @@ impl PeakAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_meter_publishes_complete_frames_and_holds_clip_until_cleared() {
+        let clip = Arc::new(ClipLatch::default());
+        let state = ChannelMeter::new(Arc::clone(&clip));
+        let samples = vec![1.25, 0.25, 0.1, -0.1, 0.2, -0.2];
+        let source = rodio::buffer::SamplesBuffer::new(2, 20, samples.clone());
+        let mut output = Metered::new(source, Arc::clone(&state));
+        assert_eq!(output.next(), Some(1.25));
+        assert_eq!(state.peak(), None);
+        assert!(!clip.active());
+        assert_eq!(output.next(), Some(0.25));
+        assert_eq!(state.peak(), Some(1.25));
+        assert!(clip.active());
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let flag = Arc::new(ClipLatch::default());
+            let state = ChannelMeter::new(Arc::clone(&flag));
+            let source = rodio::buffer::SamplesBuffer::new(1, 20, vec![invalid, 0.]);
+            let mut output = Metered::new(source, Arc::clone(&state));
+            assert_eq!(output.next().unwrap().to_bits(), invalid.to_bits());
+            assert!(state.peak().unwrap().is_nan());
+            assert!(flag.active());
+            flag.clear();
+            assert_eq!(output.next(), Some(0.));
+            assert_eq!(state.peak(), Some(0.));
+            assert!(!flag.active());
+        }
+        assert_eq!(output.by_ref().take(2).collect::<Vec<_>>(), samples[2..4]);
+        assert_eq!(state.peak(), Some(0.1));
+        assert!(clip.active());
+        clip.clear();
+        assert!(!clip.active());
+        assert_eq!(output.collect::<Vec<_>>(), samples[4..]);
+        assert!(!clip.active());
+        // A new completed frame after reset's observation must not be erased by its store.
+        let observed = clip.events.load(Ordering::Acquire);
+        clip.events.fetch_add(1, Ordering::Release);
+        clip.cleared.store(observed, Ordering::Release);
+        assert!(clip.active());
+    }
+
+    #[test]
+    fn channel_meter_sample_and_isolated_render_drop_add_no_heap_operations() {
+        let clip = Arc::new(ClipLatch::default());
+        let meter = ChannelMeter::new(clip);
+        let worker_meter = Arc::clone(&meter);
+        let stats = std::thread::spawn(move || {
+            let mut source = Metered::new(rodio::source::SineWave::new(1000.), worker_meter);
+            crate::looping::measured_heap(|| {
+                for _ in 0..10000 {
+                    source.next();
+                }
+                drop(source);
+            })
+        })
+        .join()
+        .unwrap();
+        assert_eq!(stats.allocations, 0);
+        assert_eq!(stats.reallocations, 0);
+        assert_eq!(stats.deallocations, 0);
+        assert!(meter.peak().is_some());
+    }
 
     #[test]
     fn peak_windows_round_up_frames_preserve_overrange_and_reset_invalid_samples() {

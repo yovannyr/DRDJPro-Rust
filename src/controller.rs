@@ -430,6 +430,17 @@ impl AudioController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        ui.on_clear_channel_clip(move |deck| {
+            if let Some(c) = weak.upgrade() {
+                match deck {
+                    0 => c.engine.clear_channel_clip(DeckId::A),
+                    1 => c.engine.clear_channel_clip(DeckId::B),
+                    _ => (),
+                }
+                c.refresh();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         ui.on_import_library(move || {
             if let Some(c) = weak.upgrade() {
                 c.start_import(Arc::clone(&c.library_picker));
@@ -3289,6 +3300,30 @@ impl AudioController {
         ui.set_output_peak_caption(caption.into());
         ui.set_output_peak_level(level);
         ui.set_output_peak_warning(warning);
+        for (id, name) in [(DeckId::A, "A"), (DeckId::B, "B")] {
+            let (caption, level, invalid) = peak_display(self.engine.channel_peak(id));
+            let state = if self.engine.snapshot(id).playing {
+                "PRE"
+            } else {
+                "PRE LAST"
+            };
+            let caption = caption.replacen("BUS", &format!("{name} {state}"), 1);
+            let clipped = self.engine.channel_clipped(id);
+            match id {
+                DeckId::A => {
+                    ui.set_channel_a_peak_caption(caption.into());
+                    ui.set_channel_a_peak_level(level);
+                    ui.set_channel_a_clipped(clipped);
+                    ui.set_channel_a_peak_warning(invalid);
+                }
+                DeckId::B => {
+                    ui.set_channel_b_peak_caption(caption.into());
+                    ui.set_channel_b_peak_level(level);
+                    ui.set_channel_b_clipped(clipped);
+                    ui.set_channel_b_peak_warning(invalid);
+                }
+            }
+        }
         ui.set_background_job_active(
             self.pending.borrow().is_some() || self.pending_import.borrow().is_some(),
         );
@@ -4156,6 +4191,99 @@ mod tests {
         }
     }
 
+    #[test]
+    fn channel_meter_gui_is_pre_fader_independent_and_clip_hold_is_explicit() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let a = wav_file(16384, 48000 * 3);
+        let b = wav_file(4096, 48000 * 3);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            crossfader: 0.,
+            channel_a: 0.,
+            channel_b: 0.,
+        });
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let mut pull = || {
+            for _ in 0..10000 {
+                output.next();
+            }
+            c.tick();
+        };
+        pull();
+        assert_eq!(engine.output_peak(), Some(0.));
+        assert_eq!(engine.channel_peak(DeckId::A), Some(0.5));
+        assert_eq!(engine.channel_peak(DeckId::B), Some(0.125));
+        assert_eq!(ui.get_channel_a_peak_caption(), "A PRE PEAK -6.0 dBFS");
+        engine
+            .set_eq(
+                DeckId::A,
+                crate::mixer_dsp::EqSettings {
+                    trim: 12.,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        pull();
+        assert!(engine.channel_peak(DeckId::A).unwrap() > 1.9);
+        assert!(ui.get_channel_a_clipped());
+        assert!(!ui.get_channel_b_clipped());
+        assert_eq!(engine.output_peak(), Some(0.));
+        engine
+            .set_eq(DeckId::A, crate::mixer_dsp::EqSettings::default())
+            .unwrap();
+        pull();
+        assert_eq!(engine.channel_peak(DeckId::A), Some(0.5));
+        assert!(ui.get_channel_a_clipped());
+        ui.invoke_clear_channel_clip(1);
+        assert!(ui.get_channel_a_clipped());
+        ui.show().unwrap();
+        control(&ui, "Deck A clear clip hold").invoke_accessible_default_action();
+        assert!(!ui.get_channel_a_clipped());
+        engine
+            .set_eq(
+                DeckId::A,
+                crate::mixer_dsp::EqSettings {
+                    trim: 12.,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        pull();
+        assert!(ui.get_channel_a_clipped());
+        engine.pause(DeckId::A);
+        pull();
+        assert!(ui.get_channel_a_peak_caption().contains("LAST"));
+        engine.load_a(a.path()).unwrap();
+        c.tick();
+        assert_eq!(engine.channel_peak(DeckId::A), None);
+        assert!(
+            ui.get_channel_a_clipped(),
+            "clip history survives track replacement until clear"
+        );
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for deck in ["A", "B"] {
+                let meter = control(&ui, &format!("Deck {deck} pre-fader sample peak"));
+                assert!(meter.size().width > 100. && meter.size().height > 0.);
+                assert!(meter.absolute_position().x >= 0.);
+                assert!(meter.absolute_position().x + meter.size().width <= width + 1.);
+                assert!(
+                    meter.absolute_position().y + meter.size().height
+                        <= control(&ui, "Shared waveform area").absolute_position().y + 1.
+                );
+            }
+        }
+        control(&ui, "Deck A clear clip hold").invoke_accessible_default_action();
+        assert!(!engine.channel_clipped(DeckId::A));
+        finish_search(&c);
+        ui.hide().unwrap();
+    }
     #[test]
     fn bus_peak_gui_measures_actual_post_fader_mix_pause_and_silence() {
         i_slint_backend_testing::init_no_event_loop();

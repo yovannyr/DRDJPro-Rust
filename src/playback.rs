@@ -200,6 +200,7 @@ fn collect_pcm(
     Ok(data)
 }
 struct Deck {
+    meter: Option<Arc<crate::peak_meter::ChannelMeter>>,
     sink: Sink,
     source_retired: Option<Arc<AtomicBool>>,
     render: Option<Arc<RenderControl>>,
@@ -221,6 +222,7 @@ impl Drop for SourceRetirement {
 }
 struct RetiredTrack {
     _track: PreparedTrack,
+    _meter: Option<Arc<crate::peak_meter::ChannelMeter>>,
     released: Arc<AtomicBool>,
 }
 impl Deck {
@@ -316,6 +318,7 @@ pub struct DualDeckEngine {
     levels: Cell<MixerLevels>,
     eq_settings: [Cell<crate::mixer_dsp::EqSettings>; 2],
     eq_controls: [Arc<crate::mixer_dsp::EqControl>; 2],
+    clip_latches: [Arc<crate::peak_meter::ClipLatch>; 2],
     mixer: Mixer,
     output_channels: u16,
     output_rate: u32,
@@ -408,6 +411,7 @@ impl DualDeckEngine {
             let (sink, _unused_output) = Sink::new();
             sink.pause();
             RefCell::new(Deck {
+                meter: None,
                 sink,
                 source_retired: None,
                 render: None,
@@ -429,6 +433,9 @@ impl DualDeckEngine {
                 |_| Cell::new(crate::mixer_dsp::EqSettings::default()),
             ),
             eq_controls: std::array::from_fn(|_| crate::mixer_dsp::EqControl::new(output_rate)),
+            clip_latches: std::array::from_fn(
+                |_| Arc::new(crate::peak_meter::ClipLatch::default()),
+            ),
             mixer,
             output_channels,
             output_rate,
@@ -649,9 +656,11 @@ impl DualDeckEngine {
         sink.pause();
         let (a, b) = self.levels.get().volumes();
         sink.set_volume(if id == DeckId::A { a } else { b });
-        sink.append(crate::mixer_dsp::EqSource::new(
-            renderer,
-            Arc::clone(&self.eq_controls[id.index()]),
+        let meter =
+            crate::peak_meter::ChannelMeter::new(Arc::clone(&self.clip_latches[id.index()]));
+        sink.append(crate::peak_meter::Metered::new(
+            crate::mixer_dsp::EqSource::new(renderer, Arc::clone(&self.eq_controls[id.index()])),
+            Arc::clone(&meter),
         ));
         if playing {
             sink.play();
@@ -662,6 +671,7 @@ impl DualDeckEngine {
             &mut *self.decks[id.index()].borrow_mut(),
             Deck {
                 sink,
+                meter: Some(meter),
                 source_retired: Some(source_retired),
                 render: Some(render),
                 track: Some(track),
@@ -679,6 +689,7 @@ impl DualDeckEngine {
         if let (Some(track), Some(released)) = (old.track.take(), old.source_retired.take()) {
             self.retired.borrow_mut().push(RetiredTrack {
                 _track: track,
+                _meter: old.meter.take(),
                 released,
             });
         }
@@ -1407,6 +1418,19 @@ impl DualDeckEngine {
     /// Returns the latest complete producer window, not device/current freshness.
     pub fn output_peak(&self) -> Option<f32> {
         crate::peak_meter::PeakAccumulator::read_peak(&self.render_clock.peak_window)
+    }
+    pub fn channel_peak(&self, id: DeckId) -> Option<f32> {
+        self.decks[id.index()]
+            .borrow()
+            .meter
+            .as_ref()
+            .and_then(|m| m.peak())
+    }
+    pub fn channel_clipped(&self, id: DeckId) -> bool {
+        self.clip_latches[id.index()].active()
+    }
+    pub fn clear_channel_clip(&self, id: DeckId) {
+        self.clip_latches[id.index()].clear();
     }
     #[cfg(test)]
     pub fn output_volumes(&self) -> (f32, f32) {
@@ -2469,6 +2493,7 @@ mod tests {
             let track = PreparedTrack::open(file.path()).unwrap();
             let storage = track.samples.storage_weak();
             engine.install(DeckId::A, track);
+            let meter_storage = Arc::downgrade(engine.decks[0].borrow().meter.as_ref().unwrap());
             engine.play(DeckId::A);
             for _ in 0..warmup {
                 output.next();
@@ -2478,12 +2503,18 @@ mod tests {
             assert_eq!(engine.retired.borrow().len(), 1);
             assert!(storage.strong_count() >= 2);
             let observe = storage.clone();
+            let observe_meter = meter_storage.clone();
             let audio = std::thread::spawn(move || {
                 for _ in 0..1000 {
                     output.next();
                 }
                 // Destruction of the mixer also exercises retirement of a still queued source.
                 drop(output);
+                assert_eq!(
+                    observe_meter.strong_count(),
+                    1,
+                    "control plane retains retired meter allocation"
+                );
                 assert_eq!(
                     observe.strong_count(),
                     1,
@@ -2496,6 +2527,7 @@ mod tests {
             assert!(engine.retired.borrow()[0].released.load(Ordering::Acquire));
             engine.collect_retired();
             assert_eq!(storage.strong_count(), 0);
+            assert_eq!(meter_storage.strong_count(), 0);
             assert!(engine.retired.borrow().is_empty());
         }
     }
