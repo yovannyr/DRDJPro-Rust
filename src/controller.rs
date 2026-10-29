@@ -5130,7 +5130,8 @@ mod tests {
         finish_search(c);
     }
     fn finish_import(c: &AudioController) {
-        assert!(c.pending_import.borrow().is_some());
+        // Other wait helpers call tick() too and may already have consumed this result.
+        // This is an idempotent completion barrier, not an import-admission assertion.
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while c.pending_import.borrow().is_some() {
             assert!(std::time::Instant::now() < deadline);
@@ -5138,6 +5139,37 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         finish_search(c);
+    }
+    #[test]
+    fn import_completion_barrier_accepts_results_consumed_by_an_earlier_tick() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let wav = wav_file(8192, 48000);
+        c.import_paths(vec![wav.path().into()]);
+        assert!(
+            c.pending_import.borrow().is_some(),
+            "explicitly verify admission before polling"
+        );
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while c.pending_import.borrow().is_some() {
+            assert!(Instant::now() < deadline);
+            c.tick();
+            std::thread::yield_now();
+        }
+        finish_import(&c);
+        finish_import(&c);
+        assert_eq!(c.library.borrow().len(), 1);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert!(c.library.borrow().catalog().tracks[0].metadata.scanned);
+        assert!(!ui.get_library_busy());
     }
     fn finish_storage(c: &AudioController) {
         let until = Instant::now() + Duration::from_secs(15);
