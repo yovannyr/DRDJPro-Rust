@@ -745,7 +745,7 @@ impl Library {
             library
                 .keys
                 .insert(identity(&saved.path), library.tracks.len());
-            let enriched = available && !saved.metadata.scanned;
+            let enriched = available && saved.metadata.needs_refresh(&saved.path);
             let metadata = if enriched {
                 crate::track_metadata::read(&saved.path)
             } else {

@@ -14,6 +14,7 @@ mod library;
 mod library_store;
 mod looping;
 mod mc4000;
+mod media_input;
 mod opus_audio;
 mod peak_meter;
 mod phase_sync;

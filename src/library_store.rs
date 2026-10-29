@@ -795,11 +795,11 @@ impl Store {
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
         }
-        let pending: HashSet<_> = catalog
+        let pending: std::collections::HashMap<_, _> = catalog
             .tracks
             .iter()
-            .filter(|t| !t.metadata.scanned)
-            .map(|t| t.id)
+            .filter(|t| t.metadata.needs_refresh(&t.path))
+            .map(|t| (t.id, t.metadata.clone()))
             .collect();
         let mut library = Library::restore(catalog)?;
         let mut store = Self {
@@ -816,7 +816,7 @@ impl Store {
         if enriched
             .tracks
             .iter()
-            .any(|t| pending.contains(&t.id) && t.metadata.scanned)
+            .any(|t| pending.get(&t.id).is_some_and(|old| old != &t.metadata) && t.metadata.scanned)
         {
             // Reading succeeded. Optional enrichment persistence must not hide that catalog.
             store.backfill_error = store.save(&enriched).err();
@@ -2225,6 +2225,59 @@ mod tests {
             inspect(&store.connection).unwrap().unwrap().crates.entries[0].tracks,
             HashSet::from([2])
         );
+    }
+    #[test]
+    fn cached_id3_failure_is_retried_and_recovery_warning_persists() {
+        let tagged = crate::test_support::tagged_mp3("bad", "artist", "album");
+        let mut bytes = std::fs::read(tagged.path()).unwrap();
+        bytes[20] = 255;
+        let file = crate::test_support::TempFile::new("mp3", &bytes);
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(file.path().to_path_buf(), 27);
+        data.tracks[0].metadata.scanned = true;
+        data.tracks[0].metadata.error =
+            Some("malformed stream: id3v2: invalid text encoding".into());
+        store.save(&data).unwrap();
+        drop(store);
+        let (store, library, _) = Store::open(db.clone()).unwrap();
+        let cached = library.catalog().tracks[0].metadata.clone();
+        assert!(cached
+            .error
+            .as_deref()
+            .unwrap()
+            .starts_with(crate::media_input::TAG_WARNING));
+        assert!(cached.duration_ms.is_some());
+        assert!(!cached.needs_refresh(file.path()));
+        assert_eq!(
+            inspect(&store.connection).unwrap().unwrap().tracks[0].metadata,
+            cached
+        );
+        drop(store);
+        drop(file);
+        let (_, library, _) = Store::open(db).unwrap();
+        assert_eq!(library.catalog().tracks[0].metadata, cached);
+    }
+    #[test]
+    fn unavailable_cached_id3_failure_does_not_trigger_backfill_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("missing.mp3"), 27);
+        data.tracks[0].metadata.scanned = true;
+        data.tracks[0].metadata.error =
+            Some("malformed stream: id3v2: invalid text encoding".into());
+        store.save(&data).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER forbid_backfill BEFORE INSERT ON track_metadata BEGIN SELECT RAISE(ABORT,'unexpected write'); END;").unwrap();
+        drop(store);
+        let (store, library, _) = Store::open(db).unwrap();
+        assert!(store.backfill_error.is_none());
+        assert_eq!(
+            library.catalog().tracks[0].metadata,
+            data.tracks[0].metadata
+        );
+        assert!(!library.has_changes());
     }
     #[test]
     fn schema_two_upgrade_and_failed_upgrade_preserve_cached_metadata() {

@@ -4290,11 +4290,17 @@ mod tests {
         assert_eq!(c.library.borrow_mut().insert(paths.clone()), paths.len());
         let start = Instant::now();
         let mut errors = 0;
+        let mut tag_warnings = 0;
         let mut failure_groups = std::collections::BTreeMap::<String, usize>::new();
         let mut failures = Vec::new();
         for (index, path) in paths.iter().enumerate() {
             let metadata = crate::track_metadata::read(path);
-            errors += usize::from(metadata.error.is_some());
+            let tag_warning = metadata
+                .error
+                .as_deref()
+                .is_some_and(|error| error.starts_with(crate::media_input::TAG_WARNING));
+            tag_warnings += usize::from(tag_warning);
+            errors += usize::from(metadata.error.is_some() && !tag_warning);
             if let Some(error) = &metadata.error {
                 use std::io::Read;
                 *failure_groups.entry(error.clone()).or_default() += 1;
@@ -4312,6 +4318,7 @@ mod tests {
                 failures.push(serde_json::json!({
                     "path": path,
                     "error": error,
+                    "tag_warning": tag_warning,
                     "bytes": length,
                     "header": header,
                     "inspection_error": inspection_error,
@@ -4323,7 +4330,10 @@ mod tests {
             }
         }
         let metadata_time = start.elapsed();
-        assert_eq!(failure_groups.values().sum::<usize>(), errors);
+        assert_eq!(
+            failure_groups.values().sum::<usize>(),
+            errors + tag_warnings
+        );
         if let Some(report) = std::env::var_os("DRDJ_METADATA_REPORT") {
             // Nur ein explizites Diagnoseziel schreiben; Musikdateien bleiben unverändert.
             let report = std::fs::OpenOptions::new()
@@ -4336,6 +4346,8 @@ mod tests {
                 &serde_json::json!({
                     "files": paths.len(),
                     "inaccessible": inaccessible,
+                    "audio_probe_errors": errors,
+                    "skipped_tag_warnings": tag_warnings,
                     "error_groups": failure_groups,
                     "failures": failures,
                 }),
@@ -4376,7 +4388,7 @@ mod tests {
         finish_search(&c);
         assert_eq!(ui.get_library_rows().row_count(), 1);
         assert!(c.library.borrow().has_changes());
-        println!("real collection: files={} metadata_errors={} inaccessible={} metadata={:?} search_dispatch={:?} search_completion={:?} checked_rows={}", paths.len(), errors, inaccessible, metadata_time, dispatch, completion, expected.len());
+        println!("real collection: files={} metadata_errors={} skipped_tag_warnings={} inaccessible={} metadata={:?} search_dispatch={:?} search_completion={:?} checked_rows={}", paths.len(), errors, tag_warnings, inaccessible, metadata_time, dispatch, completion, expected.len());
     }
 
     #[test]

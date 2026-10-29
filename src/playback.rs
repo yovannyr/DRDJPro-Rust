@@ -6,7 +6,6 @@ use rodio::{mixer::Mixer, Decoder, OutputStream, OutputStreamBuilder, Sink, Sour
 use std::{
     cell::{Cell, RefCell},
     error::Error,
-    fs::File,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -101,7 +100,22 @@ impl PreparedTrack {
         let (channels, rate, samples) = if crate::opus_audio::is_opus(&canonical)? {
             crate::opus_audio::decode(&canonical, limit, cancel)?
         } else {
-            let decoder = Decoder::try_from(File::open(&canonical).map_err(|e| e.to_string())?)
+            let decode = |source: crate::media_input::AudioWindow| {
+                let len = source.len();
+                Decoder::builder()
+                    .with_data(std::io::BufReader::new(source))
+                    .with_byte_len(len)
+                    .with_seekable(true)
+                    .build()
+            };
+            let source =
+                crate::media_input::AudioWindow::whole(&canonical).map_err(|e| e.to_string())?;
+            let decoder = decode(source)
+                .or_else(|original| {
+                    crate::media_input::recovery_source(&canonical)
+                        .map_err(|_| original)
+                        .and_then(decode)
+                })
                 .map_err(|e| e.to_string())?;
             let channels = decoder.channels();
             let rate = decoder.sample_rate();

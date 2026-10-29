@@ -1,11 +1,6 @@
 //! Header/tag inspection on library/load workers; no PCM decode or tag writes.
-use std::{fs::File, path::Path};
-use symphonia::core::{
-    formats::FormatOptions,
-    io::MediaSourceStream,
-    meta::{Limit, MetadataOptions, MetadataRevision, StandardTagKey},
-    probe::Hint,
-};
+use std::path::Path;
+use symphonia::core::meta::{Limit, MetadataOptions, MetadataRevision, StandardTagKey};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrackMetadata {
     pub title: String,
@@ -19,6 +14,18 @@ pub struct TrackMetadata {
 pub const MAX_TEXT: usize = 512;
 pub const MAX_DURATION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 impl TrackMetadata {
+    /// Retry only legacy ID3 failures; successful recovery warnings remain cached.
+    pub(crate) fn needs_refresh(&self, path: &Path) -> bool {
+        !self.scanned
+            || (path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+                && matches!(
+                    self.error.as_deref(),
+                    Some("malformed stream: id3v2: invalid text encoding")
+                        | Some("unsupported feature: id3v2: compressed frames are not supported")
+                ))
+    }
     pub fn validate(&self) -> bool {
         [&self.title, &self.artist, &self.album]
             .iter()
@@ -87,15 +94,8 @@ pub(crate) fn read_cancellable(
         return Ok(metadata);
     }
     let result = (|| -> Result<TrackMetadata, Box<dyn std::error::Error>> {
-        let stream = MediaSourceStream::new(Box::new(File::open(path)?), Default::default());
-        let mut hint = Hint::new();
-        if let Some(extension) = path.extension().and_then(|s| s.to_str()) {
-            hint.with_extension(extension);
-        }
-        let mut probed = symphonia::default::get_probe().format(
-            &hint,
-            stream,
-            &FormatOptions::default(),
+        let (mut probed, warning) = crate::media_input::probe(
+            path,
             &MetadataOptions {
                 limit_metadata_bytes: Limit::Maximum(512 * 1024),
                 limit_visual_bytes: Limit::Maximum(0),
@@ -103,6 +103,7 @@ pub(crate) fn read_cancellable(
         )?;
         let mut output = TrackMetadata {
             scanned: true,
+            error: warning,
             ..Default::default()
         };
         if let Some(metadata) = probed.metadata.get() {

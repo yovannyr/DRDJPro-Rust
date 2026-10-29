@@ -1,13 +1,13 @@
 //! Offline decode verification for real DJ-library input files.
 //! This module does not open an audio device or perform playback.
-use std::{error::Error, fs::File, path::Path};
+use std::{error::Error, path::Path};
 
 use symphonia::{
     core::{
         audio::SampleBuffer, codecs::DecoderOptions, errors::Error as SymphoniaError,
-        formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint,
+        meta::MetadataOptions,
     },
-    default::{get_codecs, get_probe},
+    default::get_codecs,
 };
 
 #[derive(Debug, Clone)]
@@ -46,18 +46,7 @@ pub fn analyze_file(path: &Path) -> Result<AudioAnalysis, Box<dyn Error>> {
             rms: (sum / samples.len() as f64).sqrt() as f32,
         });
     }
-    let source = Box::new(File::open(path)?);
-    let stream = MediaSourceStream::new(source, Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|x| x.to_str()) {
-        hint.with_extension(ext);
-    }
-    let probed = get_probe().format(
-        &hint,
-        stream,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
-    )?;
+    let (probed, _) = crate::media_input::probe(path, &MetadataOptions::default())?;
     let mut format = probed.format;
     let track = format.default_track().ok_or("no default audio track")?;
     let track_id = track.id;
