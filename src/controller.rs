@@ -32,6 +32,11 @@ struct SyncSession {
     last_good: std::time::Instant,
     alignment: crate::phase_sync::Alignment,
 }
+struct PendingSync {
+    session: SyncSession,
+    tempo: f64,
+    prepared: bool,
+}
 struct NudgeSession {
     source: Arc<crate::waveform::DetailPeaks>,
     held: [bool; 2],
@@ -53,6 +58,8 @@ enum GridAction {
     Tempo,
     Anchor,
     Nudge(i32),
+    MeterSet,
+    MeterRemove,
     Clear,
 }
 struct DetailCache {
@@ -219,6 +226,7 @@ pub struct AudioController {
     keylock_jobs: RefCell<[Option<KeylockJob>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
     sync_session: RefCell<Option<SyncSession>>,
+    pending_sync: RefCell<Option<PendingSync>>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
@@ -274,6 +282,7 @@ impl AudioController {
             keylock_next: Cell::new([None, None]),
             nudges: RefCell::new([None, None]),
             sync_session: RefCell::new(None),
+            pending_sync: RefCell::new(None),
             cue_editors: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
@@ -838,6 +847,9 @@ impl AudioController {
         if self.pending_pitch.borrow().iter().any(Option::is_some) {
             return Err("Wait for pending pitch changes before matching tempo".into());
         }
+        if self.keylock_jobs.borrow().iter().any(Option::is_some) {
+            return Err("Wait for Keylock preparation before matching tempo".into());
+        }
         if self.nudges.borrow().iter().any(Option::is_some) {
             return Err("Release nudge on both decks before matching tempo".into());
         }
@@ -859,7 +871,12 @@ impl AudioController {
             return Ok(());
         }
         let follower = self.sync_session.borrow().as_ref().map(|s| s.target);
-        if follower == Some(id) {
+        let preparing = self
+            .pending_sync
+            .borrow()
+            .as_ref()
+            .map(|s| s.session.target);
+        if follower == Some(id) || preparing == Some(id) {
             self.stop_sync();
         }
         choices[Self::grid_index(id)] = alignment;
@@ -867,31 +884,32 @@ impl AudioController {
         Ok(())
     }
     fn stop_sync(&self) {
+        if let Some(pending) = self.pending_sync.borrow_mut().take() {
+            let index = Self::grid_index(pending.session.target);
+            self.keylock_jobs.borrow_mut()[index].take();
+            let mut next = self.keylock_next.get();
+            next[index] = None;
+            self.keylock_next.set(next);
+        }
         if let Some(session) = self.sync_session.borrow_mut().take() {
             let _ = self.engine.apply_sync_factor(session.target, 1.);
         }
     }
-    fn toggle_sync(&self, id: DeckId) -> Result<(), String> {
-        let existing = self.sync_session.borrow().as_ref().map(|s| s.target);
-        if let Some(target) = existing {
-            if target != id {
-                return Err("Stop the existing Sync follower first".into());
-            }
-            self.stop_sync();
-            return Ok(());
+    fn sync_start_ready(&self, id: DeckId) -> Result<f64, String> {
+        if self.keylock_requested(id) && !self.keylock_active(id) {
+            return Err("Wait for initial Keylock preparation".into());
         }
-        self.phase_sync_ready(id)?;
-        let alignment = self.alignments.get()[Self::grid_index(id)];
-        let (_, frame, _) = self
-            .engine
-            .sync_observation(id, alignment)
-            .ok_or("Wait for fresh playing deck frames before Sync")?;
-        self.engine.phase_sync_once(id, alignment)?;
+        let factor = self.tempo_match_target(id)?;
+        self.engine
+            .phase_sync_target_frame(id, self.alignments.get()[Self::grid_index(id)])?;
+        Ok(factor)
+    }
+    fn capture_sync(&self, id: DeckId, frame: u64) -> SyncSession {
         let snapshots = [
             self.engine.snapshot(DeckId::A),
             self.engine.snapshot(DeckId::B),
         ];
-        *self.sync_session.borrow_mut() = Some(SyncSession {
+        SyncSession {
             target: id,
             sources: [
                 snapshots[0].detail.clone().unwrap(),
@@ -905,9 +923,144 @@ impl AudioController {
             factor: 1.,
             last_frame: frame,
             last_good: self.engine.control_now(),
-            alignment,
-        });
+            alignment: self.alignments.get()[Self::grid_index(id)],
+        }
+    }
+    fn begin_sync_now(&self, id: DeckId) -> Result<(), String> {
+        self.phase_sync_ready(id)?;
+        let alignment = self.alignments.get()[Self::grid_index(id)];
+        let (_, frame, _) = self
+            .engine
+            .sync_observation(id, alignment)
+            .ok_or("Wait for fresh playing deck frames before Sync")?;
+        self.engine.phase_sync_once(id, alignment)?;
+        *self.sync_session.borrow_mut() = Some(self.capture_sync(id, frame));
         Ok(())
+    }
+    fn toggle_sync(&self, id: DeckId) -> Result<(), String> {
+        let preparing = self
+            .pending_sync
+            .borrow()
+            .as_ref()
+            .map(|s| s.session.target);
+        if let Some(target) = preparing {
+            if target != id {
+                return Err("Cancel the pending Sync follower first".into());
+            }
+            self.stop_sync();
+            return Ok(());
+        }
+        let existing = self.sync_session.borrow().as_ref().map(|s| s.target);
+        if let Some(target) = existing {
+            if target != id {
+                return Err("Stop the existing Sync follower first".into());
+            }
+            self.stop_sync();
+            return Ok(());
+        }
+        let factor = self.sync_start_ready(id)?;
+        let (_, frame, _) = self
+            .engine
+            .sync_observation(id, self.alignments.get()[Self::grid_index(id)])
+            .ok_or("Wait for fresh playing deck frames before Sync")?;
+        if self
+            .engine
+            .keylock_factor(id)
+            .is_some_and(|prepared| (prepared - factor).abs() > 1e-10)
+        {
+            self.start_keylock(id, factor)?;
+            *self.pending_sync.borrow_mut() = Some(PendingSync {
+                session: self.capture_sync(id, frame),
+                tempo: factor,
+                prepared: false,
+            });
+            return Ok(());
+        }
+        self.begin_sync_now(id)
+    }
+    fn pending_sync_valid(&self, pending: &PendingSync) -> bool {
+        let session = &pending.session;
+        let snapshots = [
+            self.engine.snapshot(DeckId::A),
+            self.engine.snapshot(DeckId::B),
+        ];
+        [DeckId::A, DeckId::B]
+            .into_iter()
+            .enumerate()
+            .all(|(i, id)| {
+                self.can_control_deck(id)
+                    && snapshots[i].playing
+                    && !snapshots[i].loop_active
+                    && snapshots[i].nudge_direction == 0
+                    && snapshots[i].grid == Some(session.grids[i])
+                    && snapshots[i]
+                        .detail
+                        .as_ref()
+                        .is_some_and(|s| Arc::ptr_eq(s, &session.sources[i]))
+                    && self.engine.command_version(id) == Some(session.versions[i])
+            })
+            && self.grid_editors.borrow().iter().all(Option::is_none)
+            && self.nudges.borrow().iter().all(Option::is_none)
+            && self.pending_pitch.borrow().iter().all(Option::is_none)
+            && self.keylock_requested(session.target)
+            && self
+                .engine
+                .tempo_match_factor(session.target)
+                .is_ok_and(|tempo| (tempo - pending.tempo).abs() < 1e-10)
+            && self.pitch_ranges.get()[Self::grid_index(session.target)].contains(pending.tempo)
+            && self.alignments.get()[Self::grid_index(session.target)] == session.alignment
+            && self
+                .engine
+                .control_now()
+                .checked_duration_since(session.last_good)
+                .is_some_and(|age| age <= std::time::Duration::from_secs(30))
+    }
+    fn cancel_invalid_pending_sync(&self) {
+        let invalid = self
+            .pending_sync
+            .borrow()
+            .as_ref()
+            .is_some_and(|s| !self.pending_sync_valid(s));
+        if invalid {
+            self.stop_sync();
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_status(
+                    "Pending Sync cancelled after input, transport or timeout change".into(),
+                );
+            }
+        }
+    }
+    fn poll_pending_sync(&self) {
+        self.cancel_invalid_pending_sync();
+        let Some(pending) = self.pending_sync.borrow_mut().take() else {
+            return;
+        };
+        if !pending.prepared
+            || self
+                .engine
+                .sync_observation(pending.session.target, pending.session.alignment)
+                .is_none()
+        {
+            *self.pending_sync.borrow_mut() = Some(pending);
+            return;
+        }
+        let result = if self
+            .engine
+            .keylock_factor(pending.session.target)
+            .is_some_and(|factor| (factor - pending.tempo).abs() < 1e-10)
+        {
+            self.begin_sync_now(pending.session.target)
+        } else {
+            Err("Pending Sync cancelled after Keylock tempo change".into())
+        };
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_status(
+                result
+                    .map(|()| "Sync follower active".to_string())
+                    .unwrap_or_else(|e| e)
+                    .into(),
+            );
+        }
     }
     fn maintain_sync(&self, now: std::time::Instant) {
         let Some(mut session) = self.sync_session.borrow_mut().take() else {
@@ -935,6 +1088,8 @@ impl AudioController {
             && self.grid_editors.borrow().iter().all(Option::is_none)
             && self.nudges.borrow().iter().all(Option::is_none)
             && self.pending_pitch.borrow().iter().all(Option::is_none)
+            && self.keylock_jobs.borrow().iter().all(Option::is_none)
+            && (!self.keylock_requested(session.target) || self.keylock_active(session.target))
             && now
                 .checked_duration_since(session.last_good)
                 .is_some_and(|age| age <= std::time::Duration::from_millis(100));
@@ -988,6 +1143,9 @@ impl AudioController {
         }
     }
     fn phase_sync_ready(&self, id: DeckId) -> Result<(), String> {
+        if self.keylock_requested(id) && !self.keylock_active(id) {
+            return Err("Wait for initial Keylock preparation".into());
+        }
         self.tempo_match_target(id)?;
         self.engine
             .phase_sync_frame(id, self.alignments.get()[Self::grid_index(id)])?;
@@ -995,8 +1153,12 @@ impl AudioController {
     }
     fn match_tempo(&self, id: DeckId) -> Result<(), String> {
         let factor = self.tempo_match_target(id)?;
-        // Apply on this control-thread turn, before any later pitch gesture.
-        self.engine.set_speed(id, factor)
+        if self.keylock_requested(id) {
+            // Preserve the current prepared rate until the worker result is adopted.
+            self.start_keylock(id, factor)
+        } else {
+            self.engine.set_speed(id, factor)
+        }
     }
     fn queue_pitch(&self, id: DeckId, percent: f32) -> Result<(), String> {
         self.pending_pitch.borrow_mut()[Self::grid_index(id)].take();
@@ -1088,8 +1250,12 @@ impl AudioController {
         if direction != -1 && direction != 1 {
             return Err("Invalid nudge direction".into());
         }
-        if held && self.keylock_requested(id) {
-            return Err("Nudge unavailable while Keylock is enabled or preparing".into());
+        if held
+            && self.keylock_requested(id)
+            && (self.keylock_jobs.borrow()[Self::grid_index(id)].is_some()
+                || !self.keylock_active(id))
+        {
+            return Err("Wait for Keylock preparation before nudging".into());
         }
         self.cancel_stale_nudges();
         let index = Self::grid_index(id);
@@ -1193,7 +1359,13 @@ impl AudioController {
                     if let Some(ui) = c.ui.upgrade() {
                         ui.set_status(
                             result
-                                .map(|()| "Sync follower updated".to_string())
+                                .map(|()| {
+                                    if c.pending_sync.borrow().is_some() {
+                                        "Preparing Keylock Sync; press again to cancel".to_string()
+                                    } else {
+                                        "Sync follower updated".to_string()
+                                    }
+                                })
                                 .unwrap_or_else(|e| e)
                                 .into(),
                         );
@@ -1235,7 +1407,11 @@ impl AudioController {
                     if let Some(ui) = c.ui.upgrade() {
                         ui.set_status(
                             result
-                                .map(|()| format!("Deck {id:?}: tempo matched; phase unchanged"))
+                                .map(|()| if c.keylock_requested(id) {
+                                    format!("Deck {id:?}: preparing Keylock tempo match; phase unchanged")
+                                } else {
+                                    format!("Deck {id:?}: tempo matched; phase unchanged")
+                                })
                                 .unwrap_or_else(|error| error)
                                 .into(),
                         );
@@ -1333,6 +1509,9 @@ impl AudioController {
         })
     }
     fn start_keylock(&self, id: DeckId, tempo: f64) -> Result<(), String> {
+        if self.pending_sync.borrow().is_some() {
+            self.stop_sync();
+        }
         if self.keylock_jobs.borrow()[Self::grid_index(id)].is_some() {
             let mut next = self.keylock_next.get();
             next[Self::grid_index(id)] = Some(tempo);
@@ -1354,6 +1533,7 @@ impl AudioController {
         Ok(())
     }
     fn poll_keylock(&self) {
+        self.cancel_invalid_pending_sync();
         for id in [DeckId::A, DeckId::B] {
             let index = Self::grid_index(id);
             let wanted = self.keylock_requested(id);
@@ -1363,6 +1543,9 @@ impl AudioController {
                 next[index] = None;
                 self.keylock_next.set(next);
                 if self.engine.keylock_factor(id).is_some() {
+                    // Mode changes cancel following explicitly: replacement render versions restart at zero.
+                    self.stop_sync();
+                    self.cancel_nudge(id);
                     let _ = self.engine.adopt_keylock(id, None);
                 }
                 continue;
@@ -1405,6 +1588,21 @@ impl AudioController {
                 result.and_then(|result| {
                     self.engine
                         .adopt_keylock(id, Some((result.tempo, result.clip)))
+                        .inspect(|()| {
+                            if let Some(pending) = self
+                                .pending_sync
+                                .borrow_mut()
+                                .as_mut()
+                                .filter(|s| s.session.target == id)
+                            {
+                                pending.prepared = true;
+                                pending.session.versions[Self::grid_index(id)] =
+                                    self.engine.command_version(id).unwrap();
+                            }
+                            if let Some(ui) = self.ui.upgrade() {
+                                ui.set_status(format!("Deck {id:?}: Keylock tempo ready").into());
+                            }
+                        })
                 })
             } else if self.keylock_jobs.borrow()[index].is_none()
                 && self.engine.keylock_factor(id).is_none()
@@ -1415,6 +1613,14 @@ impl AudioController {
             };
             if let Some(ui) = self.ui.upgrade() {
                 if let Err(error) = result {
+                    if self
+                        .pending_sync
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|s| s.session.target == id)
+                    {
+                        self.stop_sync();
+                    }
                     let enabled = self.engine.keylock_factor(id).is_some();
                     match id {
                         DeckId::A => ui.set_left_keylock(enabled),
@@ -1887,6 +2093,23 @@ impl AudioController {
             GridAction::Tempo => Ok(()),
             GridAction::Anchor => editor.draft.anchor_here(self.engine.snapshot(id).position),
             GridAction::Nudge(ms) => editor.draft.nudge(ms),
+            GridAction::MeterSet | GridAction::MeterRemove => {
+                let (bar, beats) = match id {
+                    DeckId::A => (ui.get_left_grid_meter_bar(), ui.get_left_grid_meter_beats()),
+                    DeckId::B => (
+                        ui.get_right_grid_meter_bar(),
+                        ui.get_right_grid_meter_beats(),
+                    ),
+                };
+                let bar = u32::try_from(bar).map_err(|_| "Invalid meter bar")?;
+                if matches!(action, GridAction::MeterSet) {
+                    editor
+                        .draft
+                        .set_meter_change(bar, u8::try_from(beats).map_err(|_| "Invalid meter")?)
+                } else {
+                    editor.draft.remove_meter_change(bar)
+                }
+            }
             GridAction::Clear => {
                 editor.draft.clear();
                 Ok(())
@@ -1979,6 +2202,8 @@ impl AudioController {
                 GridAction::Anchor,
                 GridAction::Nudge(-10),
                 GridAction::Nudge(10),
+                GridAction::MeterSet,
+                GridAction::MeterRemove,
                 GridAction::Clear,
             ] {
                 let weak = Rc::downgrade(self);
@@ -2004,6 +2229,10 @@ impl AudioController {
                     (DeckId::B, GridAction::Nudge(-10)) => ui.on_grid_earlier_right(change),
                     (DeckId::A, GridAction::Nudge(_)) => ui.on_grid_later_left(change),
                     (DeckId::B, GridAction::Nudge(_)) => ui.on_grid_later_right(change),
+                    (DeckId::A, GridAction::MeterSet) => ui.on_grid_meter_set_left(change),
+                    (DeckId::B, GridAction::MeterSet) => ui.on_grid_meter_set_right(change),
+                    (DeckId::A, GridAction::MeterRemove) => ui.on_grid_meter_remove_left(change),
+                    (DeckId::B, GridAction::MeterRemove) => ui.on_grid_meter_remove_right(change),
                     (DeckId::A, GridAction::Clear) => ui.on_clear_grid_left(change),
                     (DeckId::B, GridAction::Clear) => ui.on_clear_grid_right(change),
                 }
@@ -2313,6 +2542,7 @@ impl AudioController {
         self.cancel_stale_nudges();
         self.apply_pending_pitch();
         self.poll_keylock();
+        self.poll_pending_sync();
         self.poll_storage();
         self.poll_search();
         let import = self
@@ -2723,15 +2953,28 @@ impl AudioController {
         ui.set_left_alignment_index(self.alignments.get()[0].index());
         ui.set_right_alignment_index(self.alignments.get()[1].index());
         let follower = self.sync_session.borrow().as_ref().map(|s| s.target);
+        let preparing = self
+            .pending_sync
+            .borrow()
+            .as_ref()
+            .map(|s| s.session.target);
+        ui.set_left_sync_preparing(preparing == Some(DeckId::A));
+        ui.set_right_sync_preparing(preparing == Some(DeckId::B));
         ui.set_left_sync_active(follower == Some(DeckId::A));
         ui.set_right_sync_active(follower == Some(DeckId::B));
         ui.set_left_can_sync(
             follower == Some(DeckId::A)
-                || (follower.is_none() && self.phase_sync_ready(DeckId::A).is_ok()),
+                || preparing == Some(DeckId::A)
+                || (follower.is_none()
+                    && preparing.is_none()
+                    && self.sync_start_ready(DeckId::A).is_ok()),
         );
         ui.set_right_can_sync(
             follower == Some(DeckId::B)
-                || (follower.is_none() && self.phase_sync_ready(DeckId::B).is_ok()),
+                || preparing == Some(DeckId::B)
+                || (follower.is_none()
+                    && preparing.is_none()
+                    && self.sync_start_ready(DeckId::B).is_ok()),
         );
         ui.set_left_can_phase_sync(self.phase_sync_ready(DeckId::A).is_ok());
         ui.set_right_can_phase_sync(self.phase_sync_ready(DeckId::B).is_ok());
@@ -3086,8 +3329,22 @@ impl AudioController {
             let time = deck_time(s.position, s.duration);
             let caption = preview.map_or_else(
                 || "GRID OFF".into(),
-                |grid| format!("{} BPM · MANUAL 4/4", grid.bpm()),
+                |grid| format!("{} BPM · MANUAL {}/4", grid.bpm(), grid.beats_per_bar()),
             );
+            let meter_summary = preview.map_or_else(
+                || "No meter map".to_string(),
+                |grid| {
+                    let mut summary = format!("1: {}/4", grid.beats_per_bar());
+                    for change in grid.meter_changes() {
+                        summary.push_str(&format!(" · {}: {}/4", change.bar, change.beats));
+                    }
+                    summary
+                },
+            );
+            match id {
+                DeckId::A => ui.set_left_grid_meter_summary(meter_summary.into()),
+                DeckId::B => ui.set_right_grid_meter_summary(meter_summary.into()),
+            }
             let caption = if editing {
                 format!("DRAFT · {caption}")
             } else {
@@ -3221,15 +3478,39 @@ mod tests {
                 std::thread::yield_now();
             }
         }
+        fn wait_for_discardable_sync_result(c: &AudioController, id: DeckId) {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while !c.keylock_jobs.borrow()[AudioController::grid_index(id)]
+                .as_ref()
+                .unwrap()
+                .1
+                .is_finished()
+            {
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            // The result remains queued: cancellation must discard it before controller adoption.
+        }
         let ui = AppWindow::new().unwrap();
-        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
-        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
-        let first = wav_file(4096, 96000);
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let clock = Rc::new(Cell::new(Instant::now()));
+        let source_clock = Rc::clone(&clock);
+        let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            1,
+            48000,
+            Box::new(move || source_clock.get()),
+        ));
+        let tone: Vec<_> = (0..96000)
+            .map(|i| ((std::f32::consts::TAU * 440. * i as f32 / 48000.).sin() * 8000.) as i16)
+            .collect();
+        let first = crate::test_support::wav_samples(&tone, 48000, 1);
         let second = wav_file(8192, 48000);
         engine.load_a(first.path()).unwrap();
         engine.load_b(first.path()).unwrap();
         let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
         for id in [DeckId::A, DeckId::B] {
+            engine.set_speed(id, 1.).unwrap();
             let channel = if id == DeckId::A { 0x90 } else { 0x91 };
             crate::mc4000::apply(&ui, crate::mc4000::decode(&[channel, 13, 127]).unwrap());
             assert!(c.hold_nudge(id, 1, true).is_err());
@@ -3243,7 +3524,230 @@ mod tests {
             c.start_keylock(id, 0.96).unwrap();
             finish_keylock(&c, id);
             assert_eq!(engine.keylock_factor(id), Some(0.96));
+            let follower = if id == DeckId::A {
+                DeckId::B
+            } else {
+                DeckId::A
+            };
+            for deck in [DeckId::A, DeckId::B] {
+                engine
+                    .set_grid(
+                        deck,
+                        Some(
+                            crate::beatgrid::BeatGrid::new(
+                                if deck == follower { 118. } else { 120. },
+                                Duration::ZERO,
+                            )
+                            .unwrap(),
+                        ),
+                    )
+                    .unwrap();
+                engine.cue(deck);
+                engine.play(deck);
+            }
+            assert!((c.tempo_match_target(follower).unwrap() - 0.96 * 120. / 118.).abs() < 1e-10);
+            assert!(c.phase_sync_ready(id).is_err());
+            let version = engine.command_version(id);
+            assert!(engine.apply_sync_factor(id, 1.021).is_err());
+            assert!(engine
+                .phase_sync_once(id, crate::phase_sync::Alignment::Beat)
+                .is_err());
+            assert_eq!(engine.command_version(id), version);
+            assert_eq!(engine.snapshot(id).requested_speed, 0.96);
+            engine.apply_sync_factor(id, 1.01).unwrap();
+            assert_eq!(engine.snapshot(id).requested_speed, 0.96);
+            engine.apply_sync_factor(id, 1.).unwrap();
+            c.match_tempo(follower).unwrap();
+            c.refresh();
+            output.by_ref().take(1000).for_each(drop);
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(follower).unwrap();
+            // Measure only reference PCM while both decks render.
+            engine.set_levels(crate::playback::MixerLevels {
+                crossfader: if id == DeckId::A { 0. } else { 1. },
+                channel_a: 1.,
+                channel_b: 1.,
+            });
+            let before = engine.snapshot(id).position.as_secs_f64();
+            let mut reference_pcm = Vec::new();
+            for _ in 0..20 {
+                reference_pcm.extend(output.by_ref().take(1584));
+                clock.set(clock.get() + Duration::from_millis(33));
+                let phase = engine
+                    .sync_observation(follower, crate::phase_sync::Alignment::Beat)
+                    .unwrap()
+                    .0;
+                assert!(phase.abs() < 0.001, "Sync phase error: {phase}");
+                c.maintain_sync(clock.get());
+                assert!(c.sync_session.borrow().is_some(), "{}", ui.get_status());
+            }
+            let seconds = reference_pcm.len() as f64 / 48000.;
+            assert!(
+                (engine.snapshot(id).position.as_secs_f64() - before - seconds * 0.96).abs()
+                    < 0.001
+            );
+            {
+                let hz = reference_pcm[6000..30000]
+                    .windows(2)
+                    .filter(|s| s[0] <= 0. && s[1] > 0.)
+                    .count() as f64
+                    * 2.;
+                assert!((hz - 440.).abs() < 3., "Reference pitch changed: {hz}");
+            }
+            // Disabling Keylock on the reference must stop Sync even when render-version values repeat.
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&[channel, 13, 127]).unwrap());
+            assert!(c.sync_session.borrow().is_none());
+            assert_eq!(engine.snapshot(follower).sync_factor, 1.);
+            assert_eq!(engine.keylock_factor(id), None);
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&[channel, 13, 127]).unwrap());
+            finish_keylock(&c, id);
+            assert_eq!(engine.keylock_factor(id), Some(0.96));
+            c.refresh();
+            output.by_ref().take(1000).for_each(drop);
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            c.toggle_sync(follower).unwrap();
+            match id {
+                DeckId::A => ui.invoke_nudge_left(1, true),
+                DeckId::B => ui.invoke_nudge_right(1, true),
+            }
+            assert_eq!(engine.snapshot(id).nudge_direction, 1);
+            c.maintain_sync(clock.get());
+            assert!(c.sync_session.borrow().is_none());
+            match id {
+                DeckId::A => ui.invoke_nudge_left(1, false),
+                DeckId::B => ui.invoke_nudge_right(1, false),
+            }
+            assert_eq!(engine.snapshot(id).nudge_direction, 0);
+            match id {
+                DeckId::A => ui.invoke_nudge_left(-1, true),
+                DeckId::B => ui.invoke_nudge_right(-1, true),
+            }
+            assert_eq!(engine.snapshot(id).nudge_direction, -1);
+            c.cancel_nudge(id);
+            assert_eq!(engine.snapshot(id).nudge_direction, 0);
+            // Exercise automatic Keylock acquisition, late-result cancellation and fresh-frame gating.
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(119., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            for deck in [DeckId::A, DeckId::B] {
+                engine.cue(deck);
+                engine.play(deck);
+            }
+            c.refresh();
+            output.by_ref().take(1000).for_each(drop);
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            for cancellation in 0..4 {
+                match id {
+                    DeckId::A => ui.invoke_toggle_sync_left(),
+                    DeckId::B => ui.invoke_toggle_sync_right(),
+                }
+                assert!(c.pending_sync.borrow().is_some(), "{}", ui.get_status());
+                assert!(c.sync_session.borrow().is_none());
+                assert!(match id {
+                    DeckId::A => ui.get_left_sync_preparing(),
+                    DeckId::B => ui.get_right_sync_preparing(),
+                });
+                let before = engine.keylock_factor(id);
+                // Complete the native job without adopting it, then invalidate/cancel the request.
+                wait_for_discardable_sync_result(&c, id);
+                if cancellation == 0 {
+                    match id {
+                        DeckId::A => ui.invoke_toggle_sync_left(),
+                        DeckId::B => ui.invoke_toggle_sync_right(),
+                    }
+                } else {
+                    match cancellation {
+                        1 => engine.cue(follower),
+                        2 => clock.set(clock.get() + Duration::from_secs(31)),
+                        _ => match follower {
+                            DeckId::A => engine.load_a(first.path()).unwrap(),
+                            DeckId::B => engine.load_b(first.path()).unwrap(),
+                        },
+                    }
+                    c.poll_keylock();
+                    c.poll_pending_sync();
+                }
+                assert!(c.pending_sync.borrow().is_none());
+                assert!(c.sync_session.borrow().is_none());
+                assert_eq!(engine.keylock_factor(id), before);
+                assert!(c.keylock_jobs.borrow()[AudioController::grid_index(id)].is_none());
+                if cancellation == 3 {
+                    engine
+                        .set_grid(
+                            follower,
+                            Some(crate::beatgrid::BeatGrid::new(118., Duration::ZERO).unwrap()),
+                        )
+                        .unwrap();
+                }
+                engine.play(follower);
+                c.refresh();
+                output.by_ref().take(1000).for_each(drop);
+                clock.set(clock.get() + Duration::from_millis(1));
+                c.refresh();
+            }
+            match id {
+                DeckId::A => ui.invoke_toggle_sync_left(),
+                DeckId::B => ui.invoke_toggle_sync_right(),
+            }
+            assert!(c.pending_sync.borrow().is_some(), "{}", ui.get_status());
+            finish_keylock(&c, id);
+            c.poll_pending_sync();
+            assert!(
+                c.pending_sync.borrow().is_some(),
+                "Wait for first replacement frame"
+            );
+            assert!(c.sync_session.borrow().is_none());
+            output.by_ref().take(1000).for_each(drop);
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.poll_pending_sync();
+            assert!(c.pending_sync.borrow().is_none(), "{}", ui.get_status());
+            assert_eq!(c.sync_session.borrow().as_ref().unwrap().target, id);
+            let prepared = engine.keylock_factor(id).unwrap();
+            let mut pcm = Vec::new();
+            for _ in 0..20 {
+                pcm.extend(output.by_ref().take(1584));
+                clock.set(clock.get() + Duration::from_millis(33));
+                let phase = engine
+                    .sync_observation(id, crate::phase_sync::Alignment::Beat)
+                    .unwrap()
+                    .0;
+                assert!(phase.abs() < 0.001, "Keylock follower phase: {phase}");
+                c.maintain_sync(clock.get());
+                assert!(c.sync_session.borrow().is_some(), "{}", ui.get_status());
+                assert!((0.98..=1.02).contains(&engine.snapshot(id).sync_factor));
+                assert_eq!(engine.keylock_factor(id), Some(prepared));
+                assert_eq!(engine.snapshot(id).requested_speed, prepared);
+            }
+            let hz = pcm[6000..30000]
+                .windows(2)
+                .filter(|s| s[0] <= 0. && s[1] > 0.)
+                .count() as f64
+                * 2.;
+            assert!((hz - 440.).abs() < 3., "Keylock Sync pitch: {hz}");
+            c.refresh();
+            assert!(match id {
+                DeckId::A => ui.get_left_sync_active(),
+                DeckId::B => ui.get_right_sync_active(),
+            });
+            assert!(!match id {
+                DeckId::A => ui.get_left_sync_preparing(),
+                DeckId::B => ui.get_right_sync_preparing(),
+            });
+            clock.set(clock.get() + Duration::from_millis(101));
+            c.maintain_sync(clock.get());
+            assert!(c.sync_session.borrow().is_none());
+            assert_eq!(engine.snapshot(id).sync_factor, 1.);
             c.start_keylock(id, 1.04).unwrap();
+            assert!(c.hold_nudge(id, 1, true).is_err());
+            assert!(c.sync_session.borrow().is_none());
+            assert_eq!(engine.snapshot(follower).sync_factor, 1.);
+            assert!(c.tempo_match_target(follower).is_err());
             c.start_keylock(id, 1.02).unwrap();
             match id {
                 DeckId::A => engine.load_a(second.path()).unwrap(),
@@ -3251,6 +3755,33 @@ mod tests {
             }
             finish_keylock(&c, id);
             assert_eq!(engine.keylock_factor(id), Some(1.0));
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(125., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            let matched = c.tempo_match_target(id).unwrap();
+            let position = engine.snapshot(id).position;
+            c.refresh();
+            assert!(match id {
+                DeckId::A => ui.get_left_can_match_tempo(),
+                DeckId::B => ui.get_right_can_match_tempo(),
+            });
+            match id {
+                DeckId::A => ui.invoke_match_tempo_left(),
+                DeckId::B => ui.invoke_match_tempo_right(),
+            }
+            assert!(ui.get_status().contains("preparing Keylock tempo match"));
+            assert_eq!(engine.keylock_factor(id), Some(1.));
+            assert!(c.phase_sync_ready(id).is_err());
+            finish_keylock(&c, id);
+            assert!((engine.keylock_factor(id).unwrap() - matched).abs() < 1e-10);
+            assert_eq!(engine.snapshot(id).position, position);
+            assert!(ui.get_status().contains("Keylock tempo ready"));
+            assert!(engine
+                .phase_sync_once(id, crate::phase_sync::Alignment::Beat)
+                .is_err());
             crate::mc4000::apply(&ui, crate::mc4000::decode(&[channel, 13, 127]).unwrap());
             assert_eq!(engine.keylock_factor(id), None);
         }
@@ -7058,6 +7589,95 @@ mod tests {
         assert!(ui.get_right_title().ends_with(".wav"));
         assert!(!ui.get_right_playing());
         c.close_library().unwrap();
+    }
+    #[test]
+    fn mixed_meter_gui_preview_save_cancel_and_remove_on_both_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        for id in [DeckId::A, DeckId::B] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+            let file = wav_file(8192, 48000 * 10);
+            match id {
+                DeckId::A => engine.load_a(file.path()).unwrap(),
+                DeckId::B => engine.load_b(file.path()).unwrap(),
+            }
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            engine.play(id);
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            for save in [false, true] {
+                match id {
+                    DeckId::A => ui.invoke_grid_left(),
+                    DeckId::B => ui.invoke_grid_right(),
+                }
+                for (bar, beats) in [(2, 3), (3, 5)] {
+                    match id {
+                        DeckId::A => {
+                            ui.set_left_grid_meter_bar(bar);
+                            ui.set_left_grid_meter_beats(beats);
+                            ui.invoke_grid_meter_set_left();
+                        }
+                        DeckId::B => {
+                            ui.set_right_grid_meter_bar(bar);
+                            ui.set_right_grid_meter_beats(beats);
+                            ui.invoke_grid_meter_set_right();
+                        }
+                    }
+                }
+                assert!(engine.snapshot(id).grid.unwrap().meter_changes().is_empty());
+                let draft = c.grid_editors.borrow()[AudioController::grid_index(id)]
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .value()
+                    .unwrap();
+                assert_eq!(draft.bar_start_beat(4).unwrap(), 12);
+                assert!(match id {
+                    DeckId::A => ui.get_left_grid_meter_summary(),
+                    DeckId::B => ui.get_right_grid_meter_summary(),
+                }
+                .contains("3: 5/4"));
+                match (id, save) {
+                    (DeckId::A, false) => ui.invoke_cancel_grid_left(),
+                    (DeckId::B, false) => ui.invoke_cancel_grid_right(),
+                    (DeckId::A, true) => ui.invoke_save_grid_left(),
+                    (DeckId::B, true) => ui.invoke_save_grid_right(),
+                }
+                assert_eq!(
+                    engine.snapshot(id).grid.unwrap().meter_changes().len(),
+                    if save { 2 } else { 0 }
+                );
+            }
+            let path = engine.snapshot(id).path.unwrap();
+            assert_eq!(c.library.borrow().grid(&path), engine.snapshot(id).grid);
+            let before = engine.snapshot(id).position;
+            match id {
+                DeckId::A => {
+                    ui.invoke_grid_left();
+                    ui.set_left_grid_meter_bar(2);
+                    ui.invoke_grid_meter_remove_left();
+                    ui.invoke_save_grid_left();
+                }
+                DeckId::B => {
+                    ui.invoke_grid_right();
+                    ui.set_right_grid_meter_bar(2);
+                    ui.invoke_grid_meter_remove_right();
+                    ui.invoke_save_grid_right();
+                }
+            }
+            assert_eq!(
+                engine.snapshot(id).grid.unwrap().bar_start_beat(3).unwrap(),
+                8
+            );
+            assert_eq!(engine.snapshot(id).position, before);
+            assert!(engine.snapshot(id).playing);
+        }
     }
     #[test]
     fn grid_editor_drafts_invalid_input_cancel_and_clear_preserve_transport() {

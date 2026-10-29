@@ -563,7 +563,15 @@ impl DualDeckEngine {
         )
         .with_clock(Arc::clone(&self.render_clock))
         .with_handoff(handoff)
-        .with_keylock(track.keylock.as_ref().map(|k| Arc::clone(&k.1)));
+        .with_keylock(track.keylock.as_ref().map(|k| {
+            (
+                Arc::clone(&k.1),
+                PlaybackSpeed::new(k.0, track.samples.sample_rate())
+                    .expect("Prepared tempo was validated")
+                    .output_rate()
+                    .get(),
+            )
+        }));
         let source_retired = Arc::new(AtomicBool::new(false));
         let (sink, queue) = Sink::new();
         let output = DeckOutput {
@@ -681,9 +689,6 @@ impl DualDeckEngine {
     }
     /// One-shot tempo matching from confirmed constant grids; no beat-phase alignment.
     pub fn tempo_match_factor(&self, id: DeckId) -> Result<f64, String> {
-        if self.keylock_factor(DeckId::A).is_some() || self.keylock_factor(DeckId::B).is_some() {
-            return Err("Sync with Keylock is not yet supported".into());
-        }
         let target = self.decks[id.index()].borrow();
         let reference = self.decks[1 - id.index()].borrow();
         let track = target
@@ -751,6 +756,21 @@ impl DualDeckEngine {
         id: DeckId,
         alignment: crate::phase_sync::Alignment,
     ) -> Result<usize, String> {
+        let factor = self.tempo_match_factor(id)?;
+        if self
+            .keylock_factor(id)
+            .is_some_and(|prepared| (prepared - factor).abs() > 1e-10)
+        {
+            return Err("Prepare the matched Keylock tempo before phase Sync".into());
+        }
+        self.phase_sync_target_frame(id, alignment)
+    }
+    // Pure acquisition validation also works before a Keylock tempo buffer is ready.
+    pub(crate) fn phase_sync_target_frame(
+        &self,
+        id: DeckId,
+        alignment: crate::phase_sync::Alignment,
+    ) -> Result<usize, String> {
         self.tempo_match_factor(id)?;
         let own = self.decks[id.index()].borrow();
         let reference = self.decks[1 - id.index()].borrow();
@@ -785,6 +805,15 @@ impl DualDeckEngine {
         let factor = self.tempo_match_factor(id)?;
         let frame = self.phase_sync_frame(id, alignment)?;
         let mut deck = self.decks[id.index()].borrow_mut();
+        // Validate the exact captured factor before mutation: a reference correction can expire while reading phase frames.
+        if deck
+            .track
+            .as_ref()
+            .and_then(|track| track.keylock.as_ref())
+            .is_some_and(|(prepared, _)| (prepared - factor).abs() > 1e-10)
+        {
+            return Err("Prepare the matched Keylock tempo before phase Sync".into());
+        }
         let rate = deck.track.as_ref().unwrap().samples.sample_rate();
         let speed = PlaybackSpeed::new(factor, rate)?;
         // Rate and seek become one coherent command at the next output-frame boundary.
@@ -851,6 +880,13 @@ impl DualDeckEngine {
         }
         let mut deck = self.decks[id.index()].borrow_mut();
         let track = deck.track.as_ref().ok_or("Load a track first")?;
+        if track
+            .keylock
+            .as_ref()
+            .is_some_and(|(prepared, _)| (deck.base_factor - prepared).abs() > 1e-10)
+        {
+            return Err("Prepare the Keylock base tempo before applying Sync correction".into());
+        }
         if factor != 1. && (!deck.playing() || deck.loop_active || deck.nudge != 0) {
             return Err("Sync correction requires playing without loops or nudge".into());
         }
@@ -925,7 +961,7 @@ impl DualDeckEngine {
         let mut deck = self.decks[id.index()].borrow_mut();
         let track = deck.track.as_ref().ok_or("Load a track first")?;
         if let Some((prepared, _)) = &track.keylock {
-            if nudge != 0 || (factor - prepared).abs() > 1e-10 {
+            if (factor - prepared).abs() > 1e-10 {
                 return Err("Prepare the requested Keylock tempo first".into());
             }
         }
@@ -1221,8 +1257,8 @@ impl DualDeckEngine {
         if deck.track.is_none() {
             return Err("Load a track before setting its grid".into());
         }
-        if grid.is_some_and(|grid| grid.anchor() > deck.track.as_ref().unwrap().duration()) {
-            return Err("Grid anchor is outside this track".into());
+        if let Some(grid) = grid {
+            grid.validate_duration(deck.track.as_ref().unwrap().duration())?;
         }
         if let Some(render) = &deck.render {
             render.cancel_trigger();
@@ -1380,6 +1416,49 @@ mod tests {
             assert!((hz - 440.0).abs() < 3.0, "{hz}");
             assert!((engine.snapshot(id).position.as_secs_f64() - before - tempo).abs() < 0.02);
             assert!((engine.snapshot(id).duration.as_secs_f64() - 3.0).abs() < 0.001);
+            for direction in [-1, 1] {
+                engine
+                    .seek_position(id, Duration::from_millis(250))
+                    .unwrap();
+                let position = engine.snapshot(id).position.as_secs_f64();
+                engine.set_nudge(id, direction).unwrap();
+                let nudged: Vec<_> = output.by_ref().take(24000).collect();
+                let hz = nudged[4800..24000]
+                    .windows(2)
+                    .filter(|s| s[0] <= 0. && s[1] > 0.)
+                    .count() as f64
+                    / 0.4;
+                assert!((hz - 440.).abs() < 3., "Keylock nudge pitch: {hz}");
+                let expected = tempo * (1. + f64::from(direction) * 0.02) * 0.5;
+                assert!(
+                    (engine.snapshot(id).position.as_secs_f64() - position - expected).abs()
+                        < 0.001
+                );
+                assert_eq!(engine.snapshot(id).requested_speed, tempo);
+                engine.set_nudge(id, 0).unwrap();
+                output.by_ref().take(4800).for_each(drop);
+                assert_eq!(engine.snapshot(id).nudge_direction, 0);
+                assert!((engine.snapshot(id).effective_speed - tempo).abs() < 1e-10);
+            }
+            engine
+                .seek_position(id, Duration::from_millis(250))
+                .unwrap();
+            engine.apply_sync_factor(id, 1.02).unwrap();
+            let corrected: Vec<_> = output.by_ref().take(24000).collect();
+            assert_eq!(
+                engine.snapshot(id).sync_factor,
+                1.,
+                "Render deadline must expire without GUI ticks"
+            );
+            let expected = 0.25 + tempo * (0.1 * 1.02 + 0.4);
+            assert!((engine.snapshot(id).position.as_secs_f64() - expected).abs() < 0.001);
+            let hz = corrected[4800..24000]
+                .windows(2)
+                .filter(|s| s[0] <= 0. && s[1] > 0.)
+                .count() as f64
+                / 0.4;
+            assert!((hz - 440.).abs() < 3., "Keylock Sync deadline pitch: {hz}");
+            assert_eq!(engine.snapshot(id).requested_speed, tempo);
             let changed_tempo = if tempo > 1. { 0.8 } else { 1.25 };
             let job = engine.prepare_keylock(id, 2, changed_tempo).unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -1390,6 +1469,7 @@ mod tests {
                 assert!(Instant::now() < deadline);
                 std::thread::yield_now();
             };
+            let previous = output.next().unwrap();
             // The intermediate disabled renderer is deliberately never pulled.
             engine.adopt_keylock(id, None).unwrap();
             engine
@@ -1397,7 +1477,7 @@ mod tests {
                 .unwrap();
             let handoff: Vec<_> = output.by_ref().take(300).collect();
             assert!(
-                (handoff[0] - pcm.last().unwrap()).abs() < 1e-6,
+                (handoff[0] - previous).abs() < 1e-6,
                 "Keylock tempo handoff"
             );
             engine

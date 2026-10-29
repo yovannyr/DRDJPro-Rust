@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 static STAGE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -161,10 +161,12 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     }
     if version >= 4 {
         let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-        let mut statement = connection.prepare(if version >= 7 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar FROM track_grids LIMIT ?1"
+        let mut statement = connection.prepare(if version >= 8 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,meter_changes FROM track_grids LIMIT ?1"
+        } else if version >= 7 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,'[]' FROM track_grids LIMIT ?1"
         } else {
-            "SELECT track_id,bpm,anchor_ns,4 FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,4,'[]' FROM track_grids LIMIT ?1"
         })?;
         let mut rows = statement.query([library::MAX_TRACKS as i64 + 1])?;
         let mut count = 0;
@@ -185,6 +187,29 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
                     })
                     .map_err(InspectError::Damaged)?,
             );
+            let json: String = row.get(4)?;
+            if json.len() > 2048 {
+                return Err(InspectError::Damaged("Oversized meter map".into()));
+            }
+            let changes: Vec<crate::beatgrid::MeterChange> =
+                serde_json::from_str(&json).map_err(|e| InspectError::Damaged(e.to_string()))?;
+            if changes.len() > crate::beatgrid::MAX_METER_CHANGES {
+                return Err(InspectError::Damaged("Too many meter changes".into()));
+            }
+            let mut last = 1;
+            let mut grid = tracks[*index].grid.unwrap();
+            for change in changes {
+                if change.bar <= last {
+                    return Err(InspectError::Damaged(
+                        "Unsorted or duplicate meter changes".into(),
+                    ));
+                }
+                last = change.bar;
+                grid = grid
+                    .with_meter_change(change.bar, change.beats)
+                    .map_err(InspectError::Damaged)?;
+            }
+            tracks[*index].grid = Some(grid);
         }
     }
     if version >= 5 {
@@ -421,6 +446,9 @@ fn create_grid_schema(connection: &Connection) -> Result<(), String> {
 fn add_grid_meter(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("ALTER TABLE track_grids ADD COLUMN beats_per_bar INTEGER NOT NULL DEFAULT 4 CHECK(beats_per_bar BETWEEN 1 AND 16);").map_err(|e| e.to_string())
 }
+fn add_grid_meter_changes(connection: &Connection) -> Result<(), String> {
+    connection.execute_batch("ALTER TABLE track_grids ADD COLUMN meter_changes TEXT NOT NULL DEFAULT '[]' CHECK(length(meter_changes)<=2048);").map_err(|e| e.to_string())
+}
 fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
     connection
         .execute("DELETE FROM track_grids", [])
@@ -430,7 +458,7 @@ fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String>
 fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement = connection
         .prepare(
-            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar) VALUES(?1,?2,?3,?4)",
+            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar,meter_changes) VALUES(?1,?2,?3,?4,?5)",
         )
         .map_err(|e| e.to_string())?;
     for track in tracks {
@@ -440,7 +468,8 @@ fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<()
                     track.id,
                     grid.bpm(),
                     grid.anchor().as_nanos() as i64,
-                    grid.beats_per_bar()
+                    grid.beats_per_bar(),
+                    serde_json::to_string(grid.meter_changes()).map_err(|e| e.to_string())?
                 ])
                 .map_err(|e| e.to_string())?;
         }
@@ -571,6 +600,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     create_crate_schema(&transaction)?;
     create_grid_schema(&transaction)?;
     add_grid_meter(&transaction)?;
+    add_grid_meter_changes(&transaction)?;
     create_hot_cue_schema(&transaction)?;
     create_saved_loop_schema(&transaction)?;
     transaction
@@ -755,7 +785,12 @@ impl Store {
             if version < 6 {
                 create_saved_loop_schema(&tx)?;
             }
-            add_grid_meter(&tx)?;
+            if version < 7 {
+                add_grid_meter(&tx)?;
+            }
+            if version < 8 {
+                add_grid_meter_changes(&tx)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
@@ -1152,6 +1187,87 @@ mod tests {
         let bytes = serde_json::to_vec(catalog).unwrap();
         fs::write(path, &bytes).unwrap();
         bytes
+    }
+    #[test]
+    fn malformed_meter_maps_are_rejected_instead_of_merged_or_discarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        data.tracks[0].grid = Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap());
+        store.save(&data).unwrap();
+        for json in [
+            "[",
+            r#"[{"bar":2,"beats":0}]"#,
+            r#"[{"bar":1,"beats":3}]"#,
+            r#"[{"bar":2,"beats":3},{"bar":2,"beats":5}]"#,
+            r#"[{"bar":3,"beats":3},{"bar":2,"beats":5}]"#,
+            r#"[{"bar":2,"beats":3,"unknown":true}]"#,
+        ] {
+            store
+                .connection
+                .execute("UPDATE track_grids SET meter_changes=?1", [json])
+                .unwrap();
+            assert!(
+                matches!(inspect(&store.connection), Err(InspectError::Damaged(_))),
+                "{json}"
+            );
+        }
+        let excessive: Vec<_> = (2..=18)
+            .map(|bar| crate::beatgrid::MeterChange { bar, beats: 3 })
+            .collect();
+        store
+            .connection
+            .execute(
+                "UPDATE track_grids SET meter_changes=?1",
+                [serde_json::to_string(&excessive).unwrap()],
+            )
+            .unwrap();
+        assert!(matches!(
+            inspect(&store.connection),
+            Err(InspectError::Damaged(_))
+        ));
+    }
+    #[test]
+    fn schema_seven_upgrade_preserves_grid_and_persists_mixed_meter_deltas() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        let base = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_beats_per_bar(3)
+            .unwrap();
+        data.tracks[0].grid = Some(base);
+        store.save(&data).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE track_grids DROP COLUMN meter_changes; PRAGMA user_version=7;",
+            )
+            .unwrap();
+        drop(store);
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let path = library.catalog().tracks[0].path.clone();
+        assert_eq!(library.grid(&path), Some(base));
+        let mixed = base
+            .with_meter_change(2, 5)
+            .unwrap()
+            .with_meter_change(7, 4)
+            .unwrap();
+        library.set_grid(&path, Some(mixed)).unwrap();
+        store.save_delta(&library.changes()).unwrap();
+        drop(store);
+        let (mut store, library, _) = Store::open(db.clone()).unwrap();
+        assert_eq!(library.grid(&path), Some(mixed));
+        let mut data = library.catalog();
+        data.tracks[0].grid = Some(mixed.without_meter_change(2).unwrap());
+        store.save(&data).unwrap();
+        drop(store);
+        let (_, library, _) = Store::open(db).unwrap();
+        assert_eq!(
+            library.grid(&path).unwrap().meter_changes(),
+            &[crate::beatgrid::MeterChange { bar: 7, beats: 4 }]
+        );
     }
     #[test]
     fn due_checkpoint_failure_retains_pending_backup_and_empty_delta_retries_it() {
@@ -2179,7 +2295,7 @@ mod tests {
         store
             .connection
             .execute_batch(
-                "ALTER TABLE track_grids DROP COLUMN beats_per_bar; PRAGMA user_version=6;",
+                "ALTER TABLE track_grids DROP COLUMN meter_changes; ALTER TABLE track_grids DROP COLUMN beats_per_bar; PRAGMA user_version=6;",
             )
             .unwrap();
         drop(store);
@@ -2205,6 +2321,10 @@ mod tests {
         let grid = crate::beatgrid::BeatGrid::new(128.5, Duration::new(1, 123456789))
             .unwrap()
             .with_beats_per_bar(3)
+            .unwrap()
+            .with_meter_change(2, 5)
+            .unwrap()
+            .with_meter_change(9, 7)
             .unwrap();
         data.tracks[0].grid = Some(grid);
         let id = data.crates.create("Set").unwrap();
@@ -2395,7 +2515,7 @@ mod tests {
             drop(store);
             let connection = connect(&db, false).unwrap();
             connection
-                .execute_batch("ALTER TABLE track_grids DROP COLUMN beats_per_bar; DROP TABLE track_saved_loops; DROP TABLE track_hot_cues; PRAGMA user_version=4;")
+                .execute_batch("ALTER TABLE track_grids DROP COLUMN meter_changes; ALTER TABLE track_grids DROP COLUMN beats_per_bar; DROP TABLE track_saved_loops; DROP TABLE track_hot_cues; PRAGMA user_version=4;")
                 .unwrap();
             if fail {
                 connection.execute_batch("CREATE TABLE track_hot_cues(preserve INTEGER); INSERT INTO track_hot_cues VALUES(99);").unwrap();
@@ -2571,7 +2691,7 @@ mod tests {
             drop(store);
             let connection = connect(&db, false).unwrap();
             connection
-                .execute_batch("ALTER TABLE track_grids DROP COLUMN beats_per_bar; DROP TABLE track_saved_loops; PRAGMA user_version=5;")
+                .execute_batch("ALTER TABLE track_grids DROP COLUMN meter_changes; ALTER TABLE track_grids DROP COLUMN beats_per_bar; DROP TABLE track_saved_loops; PRAGMA user_version=5;")
                 .unwrap();
             if fail {
                 connection.execute_batch("CREATE TABLE track_saved_loops(preserve INTEGER); INSERT INTO track_saved_loops VALUES(99);").unwrap();

@@ -1,4 +1,5 @@
-//! Worker-only whole-clip tempo processing; never call from an audio callback.
+//! Worker-prepared tempo processing with bounded allocation-free render corrections.
+pub mod micro;
 extern "C" {
     fn drdj_stretch_clip(
         input: *mut f32,
@@ -119,6 +120,7 @@ impl Drop for WorkerSlot {
 }
 pub struct Job {
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
     receiver: std::sync::mpsc::Receiver<Result<PreparedResult, &'static str>>,
 }
 impl Job {
@@ -139,6 +141,8 @@ impl Job {
         let slot = WorkerSlot;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let token = cancel.clone();
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = finished.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("keylock-prepare".into())
@@ -161,8 +165,17 @@ impl Job {
                 };
                 drop(_slot);
                 let _ = sender.send(result);
+                done.store(true, std::sync::atomic::Ordering::Release);
             })?;
-        Ok(Self { cancel, receiver })
+        Ok(Self {
+            cancel,
+            finished,
+            receiver,
+        })
+    }
+    /// True after processing and result publication, without consuming the queued result.
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(std::sync::atomic::Ordering::Acquire)
     }
     pub fn cancel(&self) {
         self.cancel
@@ -189,18 +202,19 @@ mod tests {
         let input = std::sync::Arc::new(vec![0.0; 48000]);
         let job = super::Job::start(42, input, 1, 48000, 1.25).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if let Some(result) = job.poll().unwrap() {
-                let result = result.unwrap();
-                assert_eq!(result.generation, 42);
-                assert_eq!(result.tempo, 1.25);
-                assert_eq!(result.clip.source_frames(), 48000);
-                assert_eq!(result.clip.output_frames(), 38400);
-                break;
-            }
+        while !job.is_finished() {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
+        let result = job
+            .poll()
+            .unwrap()
+            .expect("Completion must leave the result queued")
+            .unwrap();
+        assert_eq!(result.generation, 42);
+        assert_eq!(result.tempo, 1.25);
+        assert_eq!(result.clip.source_frames(), 48000);
+        assert_eq!(result.clip.output_frames(), 38400);
     }
     #[test]
     fn prepared_coordinates_cover_source_end_and_reject_invalid_seeks() {

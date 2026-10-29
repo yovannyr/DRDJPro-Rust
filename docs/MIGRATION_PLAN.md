@@ -8,7 +8,7 @@ Release requires a traceable disposition and acceptance evidence for every FEATU
 
 Deliver in reviewed, bounded slices with working behavior and regression evidence. Keep the existing executable name during development for CI/command compatibility; its historical name does not define the product scope.
 
-## Fortschritt auf einen Blick (2026-10-27)
+## Fortschritt auf einen Blick (2026-10-28)
 
 ✅ = im beschriebenen Umfang implementiert und lokal geprüft. ☐ = noch offen. Die Häkchen kennzeichnen einzelne Arbeitspakete; keine der sechs Gesamtphasen ist bereits vollständig abgenommen. Historische Checkpoints weiter unten dokumentieren den damaligen Stand.
 
@@ -25,14 +25,14 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ PCM-Waveform-Übersicht, folgende Detailansicht, Zoom und approximative Frequenzfarben.
 - [x] ✅ Fokusgebundener Plus-/Minus-Tastaturzoom der Detail-Waveforms mit Grenzen2–32s und Schutz fokussierter Texteingaben; native Fokusabnahme offen.
 - [x] ✅ Experimenteller BPM-Vorschlag mit begrenzter Offline-Analyse; keine automatische musikalische Ausrichtung.
-- [x] ✅ Manueller konstanter 4/4-Beatgrid-Editor mit Vorschau, Save/Cancel, Anker, Slip und SQLite-Speicherung.
+- [x] ✅ Manueller konstanter BPM-Grid-Editor mit Grundtakt und bis zu 16 Taktlängenwechseln (Viertelnoten-Zähleinheit), Vorschau, Save/Cancel, Anker, Slip und SQLite-Speicherung.
 - [x] ✅ SQLite-Bibliothek mit stabilen Track-IDs, JSON-Migration, Transaktionen, Backup/Recovery und Speichern beim Beenden.
 - [x] ✅ Metadaten für Titel/Artist/Album/Dauer sowie Suche und Sortierung.
 - [x] ✅ Flache Crates erstellen, umbenennen, löschen und Tracks zuordnen.
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Lokaler Zwischenstand geprüft: 210 Tests (zusätzlich ein expliziter realer Sammlungstest), `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Lokaler Zwischenstand geprüft: 231 Tests bestanden, drei Qualifikationstests übersprungen, `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -91,7 +91,12 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Konstante Taktlänge von 1–16 Viertelschlägen im Grid-Modell, Grid-Editor und SQLite-Schema 7; bestehende Grids bleiben bei 4. Gemischte Taktarten und andere Nenner bleiben offen.
   - [x] ✅ Software-Keylock an beiden Decks: GUI und MC4000-Taste, asynchrone Tempovorbereitung, Quellzeit, Seek/Cue/Pause/EOF und Loop-Erhalt automatisiert geprüft.
   - [x] ✅ Keylock-Umschaltungen im laufenden Deck über 5 ms geglättet; Stereo, Pause/Seek sowie Ein-/Aus-/Tempoübernahme mit Offline-PCM geprüft. Musikalische Hörabnahme bleibt offen.
-  - [ ] ☐ Gemischte Taktarten, Keylock zusammen mit kontinuierlichem Sync/Nudge, hörbare Übergänge und physische Hardware-Langzeitabnahme bleiben offen.
+  - [x] ✅ Keylock-Referenzdeck unterstützt Tempo-/Phasen- und kontinuierlichen Sync eines Decks mit gekoppelter Geschwindigkeit; beide Richtungen mit Quellzeit-, Tonhöhen- und Abbruchtests geprüft.
+  - [x] ✅ Einmaliges Tempo-Matching mit aktivem Keylock-Zieldeck: asynchrone Vorbereitung, bisheriges Tempo bis zur Übernahme und unveränderte Quellposition; GUI-Callback auf A/B geprüft.
+  - [x] ✅ Momentanes ±2%-Nudge mit vorbereitetem Keylock auf A/B: begrenzte Stereo-Overlap/Add-Verarbeitung, Tonhöhen-/Quellzeit-/Neutral-Return- und GUI-Tests; allokationsfreien Renderpfad lokal vermessen.
+  - [x] ✅ Kontinuierlicher Keylock-Follower auf A/B: automatische asynchrone Tempo-Vorbereitung, frische Renderframes, ±2%-Korrektur und 100-ms-Render-Deadline; Tonhöhen-, Quellzeit- und Abbruchtests. Musikalische/transiente Abnahme bleibt offen.
+  - [x] ✅ Taktlängenwechsel innerhalb eines Tracks (Viertelnoten-Zähleinheit, bis zu 16 Wechsel): fortlaufende Taktnummern/Downbeats, Grid-Vorschau und Save/Cancel/Löschen auf A/B sowie SQLite-Schema 8 mit Neustart- und Migrationstests.
+  - [ ] ☐ Andere Taktart-Nenner, automatisch meterabhängige Sync-Ausrichtung, musikalische/transiente Hörabnahme und physische Hardware-Langzeitabnahme bleiben offen.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
 - [x] ✅ Gemessener Post-Fader-Bus-Sample-Peak aus vollständigen50-ms-Renderfenstern mit dBFS-Anzeige; kein True-Peak-/Lautheits-/Hardware-Nachweis.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.

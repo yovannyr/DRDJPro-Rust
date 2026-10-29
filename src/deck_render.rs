@@ -308,6 +308,9 @@ struct Handoff {
 pub(crate) struct DeckRenderer {
     handoff: Option<Handoff>,
     keylock: Option<Arc<drdj_keylock::PreparedKeylock>>,
+    keylock_rate: u32,
+    micro: drdj_keylock::micro::MicroStretch,
+    keylock_frame: [f32; 2],
     samples: PcmSource,
     control: Arc<RenderControl>,
     settings: Settings,
@@ -332,6 +335,9 @@ impl DeckRenderer {
         Self {
             handoff: None,
             keylock: None,
+            keylock_rate: rate,
+            micro: drdj_keylock::micro::MicroStretch::new(rate),
+            keylock_frame: [0.; 2],
             samples,
             control,
             settings,
@@ -355,8 +361,11 @@ impl DeckRenderer {
         });
         self
     }
-    pub fn with_keylock(mut self, clip: Option<Arc<drdj_keylock::PreparedKeylock>>) -> Self {
-        self.keylock = clip;
+    pub fn with_keylock(mut self, clip: Option<(Arc<drdj_keylock::PreparedKeylock>, u32)>) -> Self {
+        if let Some((clip, rate)) = clip {
+            self.keylock = Some(clip);
+            self.keylock_rate = rate;
+        }
         self
     }
     pub fn with_clock(mut self, clock: Arc<crate::render_bus::RenderClock>) -> Self {
@@ -417,6 +426,7 @@ impl DeckRenderer {
         }
         self.phase = self.wrap(self.phase);
         if self.phase != prior_phase || self.applied_seek != prior_seek {
+            self.micro.reset();
             self.publish_position();
         }
     }
@@ -441,6 +451,24 @@ impl Iterator for DeckRenderer {
         };
         let end = self.samples.frames() as u128 * u128::from(self.output_rate);
         let finished = self.settings.region.is_none() && self.phase >= end;
+        if self.channel == 0 && !self.settings.paused && !finished {
+            if let Some(clip) = &self.keylock {
+                let region = self.settings.region;
+                self.keylock_frame = self.micro.frame(
+                    self.phase as f64 / f64::from(self.output_rate),
+                    f64::from(self.keylock_rate) / f64::from(self.output_rate),
+                    applied_rate != self.keylock_rate,
+                    self.samples.channels(),
+                    |frame, channel| {
+                        let frame = region.map_or(frame, |r| {
+                            r.start as f64
+                                + (frame - r.start as f64).rem_euclid((r.end - r.start) as f64)
+                        });
+                        clip.sample_at_source(frame, channel)
+                    },
+                );
+            }
+        }
         let value = if self.settings.paused || finished {
             0.
         } else {
@@ -454,11 +482,8 @@ impl Iterator for DeckRenderer {
                 None
             };
             input_channel.map_or(0., |channel| {
-                if let Some(clip) = &self.keylock {
-                    return clip.sample_at_source(
-                        self.phase as f64 / f64::from(self.output_rate),
-                        channel,
-                    );
+                if self.keylock.is_some() {
+                    return self.keylock_frame[usize::from(channel)];
                 }
                 let frame = (self.phase / u128::from(self.output_rate)) as usize;
                 let next =
@@ -534,6 +559,71 @@ impl Source for DeckRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn keylock_micro_render_is_stereo_coherent_and_allocation_free() {
+        for (rate, output_rate) in [(48000, 48000), (44100, 48000)] {
+            let data: Vec<_> = (0..rate * 2)
+                .flat_map(|i| {
+                    let a = (std::f32::consts::TAU * 440. * i as f32 / rate as f32).sin() * 0.2;
+                    [a, -a]
+                })
+                .collect();
+            let clip =
+                Arc::new(drdj_keylock::PreparedKeylock::prepare(&data, 2, rate, 1.).unwrap());
+            let pcm = PcmSource::new(2, rate, data);
+            let control = RenderControl::new(
+                rate,
+                true,
+                None,
+                SeekFrame {
+                    time: Duration::ZERO,
+                    frame: 0,
+                },
+                RenderFormat {
+                    source_rate: rate,
+                    output_rate,
+                    frames: (rate * 2) as usize,
+                },
+            );
+            let mut renderer = DeckRenderer::new(pcm, control.clone(), 2, output_rate)
+                .with_keylock(Some((clip, rate)));
+            let mut maximum = Duration::ZERO;
+            let allocations = crate::looping::counted_allocations(|| {
+                for block in 0..80 {
+                    if block % 20 == 0 {
+                        control.publish(
+                            (f64::from(rate) * if block % 40 == 0 { 1.02 } else { 0.98 }).round()
+                                as u32,
+                            true,
+                            None,
+                            None,
+                        );
+                    }
+                    let start = std::time::Instant::now();
+                    for _ in 0..512 {
+                        let a = renderer.next().unwrap();
+                        let b = renderer.next().unwrap();
+                        assert!(a.is_finite() && (a + b).abs() < 1e-6);
+                    }
+                    maximum = maximum.max(start.elapsed());
+                }
+            });
+            assert_eq!(allocations, 0);
+            println!("Keylock micro source={rate} output={output_rate}: 80 stereo blocks x512 frames; max block {maximum:?}; nominal budget {:.3}ms; allocations={allocations}", 512000. / f64::from(output_rate));
+            control.publish(rate, false, None, None);
+            assert!(renderer.by_ref().take(200).all(|v| v == 0.));
+            control.publish(
+                rate,
+                true,
+                None,
+                Some(SeekFrame {
+                    time: Duration::from_millis(500),
+                    frame: (rate / 2) as usize,
+                }),
+            );
+            assert!(renderer.by_ref().take(200).all(f32::is_finite));
+        }
+    }
     #[test]
     fn handoff_dezips_stereo_for_five_ms_and_respects_silence_and_seek() {
         fn renderer(values: [f32; 2], playing: bool) -> (Arc<RenderControl>, DeckRenderer) {
