@@ -88,6 +88,11 @@ pub(crate) fn inspect_paths_cancellable(
         let supported = crate::audio_formats::supported(&path);
         match std::fs::canonicalize(&path) {
             Ok(path) if supported && path.is_file() => {
+                // AppleDouble enthält Finder-Metadaten, keine Audioquelle.
+                if crate::audio_formats::is_apple_double(&path) {
+                    result.rejected += 1;
+                    continue;
+                }
                 result.metadata.push((
                     path.clone(),
                     crate::track_metadata::read_cancellable(&path, cancel)?,
@@ -1836,6 +1841,36 @@ mod tests {
         let mut library = Library::default();
         library.insert(batch.paths);
         assert_eq!(library.len(), 1);
+    }
+    #[test]
+    fn import_filters_apple_double_signatures_without_rejecting_audio_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = crate::test_support::wav_file(1, 100);
+        let audio = dir.path().join("._real.wav");
+        std::fs::copy(wav.path(), &audio).unwrap();
+        let mut paths = vec![audio.clone()];
+        for (name, bytes) in [
+            ("._sidecar.m4a", &[0, 5, 22, 7, 0, 2, 0, 0][..]),
+            ("renamed.mp3", &[0, 5, 22, 7, 0, 1, 0, 0][..]),
+            ("._short.m4a", &[0, 5, 22, 7][..]),
+            ("._unknown.m4a", &[0, 5, 22, 7, 0, 3, 0, 0][..]),
+            ("._ordinary.m4a", b"ordinary".as_slice()),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            paths.push(path);
+        }
+        let batch = inspect_paths(paths);
+        assert_eq!(batch.rejected, 2);
+        assert_eq!(batch.paths.len(), 4);
+        assert_eq!(batch.metadata.len(), 4);
+        assert_eq!(batch.paths[0], std::fs::canonicalize(&audio).unwrap());
+        assert!(batch.metadata[0].1.error.is_none());
+        assert!(batch.metadata[1..].iter().all(|(_, m)| m.error.is_some()));
+        assert_eq!(
+            std::fs::read(&audio).unwrap(),
+            std::fs::read(wav.path()).unwrap()
+        );
     }
     #[test]
     fn crate_filter_composes_with_search_and_removal_retains_global_tracks() {

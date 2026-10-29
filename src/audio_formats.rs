@@ -1,6 +1,17 @@
 //! Supported extensions; actual decoding still validates the container and codec.
 use std::path::Path;
 
+/// Worker-only signature check; a filename prefix alone never rejects audio.
+pub(crate) fn is_apple_double(path: &Path) -> bool {
+    use std::io::Read;
+    let mut header = [0; 8];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .is_ok()
+        && header[..4] == [0, 5, 22, 7]
+        && matches!(header[4..], [0, 1, 0, 0] | [0, 2, 0, 0])
+}
+
 pub const EXTENSIONS: &[&str] = &[
     "mp3", "wav", "m4a", "flac", "aif", "aiff", "ogg", "oga", "opus",
 ];

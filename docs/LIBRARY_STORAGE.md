@@ -159,6 +159,10 @@ All database operations stay in the existing storage worker. Optional preference
 
 The controller compares observed, acknowledged and inflight immutable preference snapshots. Changes made before the earlier save is acknowledged remain pending; success acknowledges only the captured snapshot. Close flushes the latest settings even without another GUI tick, including a revert to the previously acknowledged value while a different value is inflight. Closing before restore completes never replaces saved settings with UI defaults. Preference controls are temporarily disabled during restore. Corrupt preference warnings do not force a catalog reset or an automatic default write. Transport/playback, pending cue requests, active Sync/nudge ownership, Keylock jobs and loaded-track identities are not persisted by this model.
 
+## AppleDouble import filtering (2026-10-29)
+
+Import workers reject AppleDouble magic 0x00051607 with version 0x00010000 or 0x00020000 before audio metadata probing. Only eight header bytes are read; a filename starting with ._ alone is never excluded. Rejected entries use the existing import rejection count and do not enter the catalog or metadata batch. Short headers, unknown versions and read failures retain the existing audio inspection/error path. Existing saved entries are not removed, and no file is edited. This check is deliberately separate from the extension-only supported() predicate used by catalog validation.
+
 ## Guarded output route profiles (2026-10-29)
 
 The existing library_meta key audio_output_routes_v1 optionally holds version 1 output profiles: at most 32 entries, each with backend, exact device display name, actual channel count and stereo pair. This is a name/format binding, not a hardware serial/endpoint ID. At stream startup a key is enabled only if that device name occurs exactly once among the current backend's output devices. Profiles do not transfer across different names, backends or channel counts. Identically named replacement hardware across separate sessions cannot be distinguished; stable hardware IDs and device selection remain open.
