@@ -4290,15 +4290,59 @@ mod tests {
         assert_eq!(c.library.borrow_mut().insert(paths.clone()), paths.len());
         let start = Instant::now();
         let mut errors = 0;
+        let mut failure_groups = std::collections::BTreeMap::<String, usize>::new();
+        let mut failures = Vec::new();
         for (index, path) in paths.iter().enumerate() {
             let metadata = crate::track_metadata::read(path);
             errors += usize::from(metadata.error.is_some());
+            if let Some(error) = &metadata.error {
+                use std::io::Read;
+                *failure_groups.entry(error.clone()).or_default() += 1;
+                let inspection = (|| -> std::io::Result<_> {
+                    let mut file = std::fs::File::open(path)?;
+                    let length = file.metadata()?.len();
+                    let mut header = [0_u8; 10];
+                    let count = file.read(&mut header)?;
+                    Ok((length, header[..count].to_vec()))
+                })();
+                let (length, header, inspection_error) = match inspection {
+                    Ok((length, header)) => (Some(length), Some(header), None),
+                    Err(error) => (None, None, Some(error.to_string())),
+                };
+                failures.push(serde_json::json!({
+                    "path": path,
+                    "error": error,
+                    "bytes": length,
+                    "header": header,
+                    "inspection_error": inspection_error,
+                }));
+            }
             c.library.borrow_mut().set_metadata(path, metadata);
             if (index + 1) % 1000 == 0 {
                 eprintln!("metadata processed: {}", index + 1);
             }
         }
         let metadata_time = start.elapsed();
+        assert_eq!(failure_groups.values().sum::<usize>(), errors);
+        if let Some(report) = std::env::var_os("DRDJ_METADATA_REPORT") {
+            // Nur ein explizites Diagnoseziel schreiben; Musikdateien bleiben unverändert.
+            let report = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(report)
+                .expect("diagnostic report must use a new path");
+            serde_json::to_writer_pretty(
+                report,
+                &serde_json::json!({
+                    "files": paths.len(),
+                    "inaccessible": inaccessible,
+                    "error_groups": failure_groups,
+                    "failures": failures,
+                }),
+            )
+            .unwrap();
+        }
+        println!("metadata failure groups: {failure_groups:?}");
         ui.set_library_query(".mp3".into());
         let start = Instant::now();
         c.publish_library();
