@@ -16,7 +16,7 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Group | Overview numbers | Source detail | Rust status / implication |
 | --- | --- | --- | --- |
 | Workspace/display/deck selection | 4, 5, 29 | Manual pp. 21, 26, 29 | Open: Vertical, Horizontal, Extended, Stack and Library; active deck selection. Implement one usable reference layout before adding other modes. |
-| Global tools/panels | 2, 3, 6, 7, 8, 9, 10, 20, 21, 22, 23 | Overview numbered sections; manual p. 21 for Quantize | Open: Link, Quantize, Flip, recording, FX, sampler, video, MIDI, account/help/setup. Product-specific identity and capability gates need separate scopes. |
+| Global tools/panels | 2, 3, 6, 7, 8, 9, 10, 20, 21, 22, 23 | Overview numbered sections; manual p. 21 for Quantize | Partial: global Quantize gates opted-in cue placement, scheduled cue triggers and Auto Loop snap on both decks. Link, Flip, recording, FX, sampler, video, MIDI, account/help/setup remain open. Full reference/native acceptance remains open. |
 | Master/system status | 19, 26, 27, 28 | Overview numbered sections | Open: master output, actual dropout warning, clock and CPU telemetry; never animate invented measurements. |
 | Playback mode | 1 | Overview section 1 | Only internal software playback exists. REL/ABS/THRU/changeover depend on actual DVS/input routing/hardware and must not appear as working modes yet. |
 | Track metadata/BPM/key | 11, 24, 25, 59 | Manual pp. 25–26 | Filename and experimental BPM candidate exist. Artist/key tags, distinct original/current BPM and pitch-derived display remain open; absent metadata stays absent. |

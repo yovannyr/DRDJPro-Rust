@@ -32,7 +32,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Lokaler Zwischenstand geprüft: 239 Tests bestanden, vier Qualifikationstests standardmäßig übersprungen; die ID3-Sammlung separat erfolgreich geprüft. `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Lokaler Zwischenstand geprüft: 241 Tests bestanden, vier Qualifikationstests standardmäßig übersprungen; die ID3-Sammlung separat erfolgreich geprüft. `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -104,7 +104,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Sync: einmaliges Matching/Phase und begrenzter kontinuierlicher Follower; Keylock-Ziel mit asynchroner Vorbereitung und Abbruchschutz.
   - [x] ✅ Software-Keylock und momentanes pitch-erhaltendes Nudge auf A/B; Offline-Signal-/Quellzeittests vorhanden.
   - [x] ✅ Wählbare Cue-Quantisierung pro Deck: ⅛/¼/½/1/2/4 Beats für neue Cue-Positionen und geplanten Recall; exakter gespeicherter Zielpunkt, Rasterwechsel-Abbruch, Track-Endschutz und Headless-Tests.
-  - [ ] ☐ Globale Quantize-Bedienung gemäß Übersichtspunkt 3, vollständiger Referenzabgleich und gemeinsame/persistente Präferenzen; meterabhängiger Sync und musikalische/native Abnahme bleiben offen (siehe Qualifikationspaket darüber).
+  - [x] ✅ Globale Quantize-Freigabe in der Toolbar gemäß Übersichtspunkt 3: Cue-Einrasten, geplante Cue-Trigger und Auto-Loop-Einrasten auf beiden Decks; Ausschalten verwirft wartende Trigger und erhält Deck-Optionen/Schrittweiten. Headless-Aktions-, Zustands- und Geometrieprüfungen.
+  - [ ] ☐ Vollständiger Referenzabgleich und gemeinsame/persistente Präferenzen; meterabhängiger Sync und musikalische/native Abnahme bleiben offen (siehe Qualifikationspaket darüber).
 - [x] ✅ Gemessener Post-Fader-Bus-Sample-Peak aus vollständigen50-ms-Renderfenstern mit dBFS-Anzeige; kein True-Peak-/Lautheits-/Hardware-Nachweis.
 - [ ] ☐ Mixer-DSP: EQ, Filter, Gain/Meter und Effekte.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.

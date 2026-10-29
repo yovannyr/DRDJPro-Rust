@@ -1693,9 +1693,12 @@ impl AudioController {
                                                 DeckId::B => ui.get_right_auto_loop_index(),
                                             })
                                             .unwrap_or(-1);
-                                    let snap = c.ui.upgrade().is_some_and(|ui| match id {
-                                        DeckId::A => ui.get_left_auto_loop_snap(),
-                                        DeckId::B => ui.get_right_auto_loop_snap(),
+                                    let snap = c.ui.upgrade().is_some_and(|ui| {
+                                        ui.get_quantize_enabled()
+                                            && match id {
+                                                DeckId::A => ui.get_left_auto_loop_snap(),
+                                                DeckId::B => ui.get_right_auto_loop_snap(),
+                                            }
                                     });
                                     usize::try_from(index)
                                         .ok()
@@ -1862,10 +1865,11 @@ impl AudioController {
                     return Err("Saved cue is outside the loaded track; delete and reset it".into());
                 }
                 let ui = self.ui.upgrade().ok_or("Window closed")?;
-                let scheduled = match id {
-                    DeckId::A => ui.get_left_quantize_triggers(),
-                    DeckId::B => ui.get_right_quantize_triggers(),
-                };
+                let scheduled = ui.get_quantize_enabled()
+                    && match id {
+                        DeckId::A => ui.get_left_quantize_triggers(),
+                        DeckId::B => ui.get_right_quantize_triggers(),
+                    };
                 if scheduled {
                     if self.sync_session.borrow().is_some()
                         || self.pending_pitch.borrow()[Self::grid_index(id)].is_some()
@@ -1900,10 +1904,11 @@ impl AudioController {
                 return Err("A cue needs a playable position before the end of the track".into());
             }
             let ui = self.ui.upgrade().ok_or("Window closed")?;
-            let quantize = match id {
-                DeckId::A => ui.get_left_quantize_cues(),
-                DeckId::B => ui.get_right_quantize_cues(),
-            };
+            let quantize = ui.get_quantize_enabled()
+                && match id {
+                    DeckId::A => ui.get_left_quantize_cues(),
+                    DeckId::B => ui.get_right_quantize_cues(),
+                };
             let position = if quantize {
                 if self.grid_editors.borrow()[Self::grid_index(id)].is_some() {
                     return Err("Save or cancel the grid draft first".into());
@@ -1947,6 +1952,18 @@ impl AudioController {
         Ok(())
     }
     fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
+        let engine = Rc::clone(&self.engine);
+        let weak_ui = ui.as_weak();
+        ui.on_quantize_mode_changed(move || {
+            if weak_ui
+                .upgrade()
+                .is_some_and(|ui| !ui.get_quantize_enabled())
+            {
+                // Globales Bypass verwirft nur wartende Trigger, keine Deck-Präferenzen.
+                engine.cancel_scheduled_cue(DeckId::A);
+                engine.cancel_scheduled_cue(DeckId::B);
+            }
+        });
         for id in [DeckId::A, DeckId::B] {
             let engine = Rc::clone(&self.engine);
             let cancel = move || engine.cancel_scheduled_cue(id);
@@ -7006,6 +7023,228 @@ mod tests {
         assert!(!c.dirty.get());
     }
     #[test]
+    fn programmatic_global_quantize_off_cancels_both_queued_cues() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let file = wav_file(4096, 48000 * 3);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.change_hot_cue(DeckId::A, 0, false).unwrap();
+        ui.set_left_quantize_triggers(true);
+        ui.set_right_quantize_triggers(true);
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+            engine
+                .seek_position(id, Duration::from_millis(200))
+                .unwrap();
+            engine.play(id);
+        }
+        for _ in 0..128 {
+            output.next();
+        }
+        for id in [DeckId::A, DeckId::B] {
+            c.change_hot_cue(id, 0, false).unwrap();
+        }
+        let before = [
+            engine.snapshot(DeckId::A).position,
+            engine.snapshot(DeckId::B).position,
+        ];
+        ui.set_quantize_enabled(false);
+        slint::platform::update_timers_and_animations();
+        for _ in 0..48000 * 2 {
+            output.next();
+        }
+        for (index, id) in [DeckId::A, DeckId::B].into_iter().enumerate() {
+            let expected = before[index] + Duration::from_secs(1);
+            assert!(engine.snapshot(id).position.abs_diff(expected) < Duration::from_millis(2));
+        }
+        ui.set_quantize_enabled(true);
+        slint::platform::update_timers_and_animations();
+        engine.apply_sync_factor(DeckId::A, 1.01).unwrap();
+        engine.set_nudge(DeckId::B, 1).unwrap();
+        let active = [engine.snapshot(DeckId::A), engine.snapshot(DeckId::B)];
+        ui.set_quantize_enabled(false);
+        slint::platform::update_timers_and_animations();
+        for (index, id) in [DeckId::A, DeckId::B].into_iter().enumerate() {
+            let current = engine.snapshot(id);
+            assert_eq!(current.position, active[index].position);
+            assert_eq!(current.effective_speed, active[index].effective_speed);
+            assert_eq!(current.sync_factor, active[index].sync_factor);
+            assert_eq!(current.nudge_direction, active[index].nudge_direction);
+            assert!(current.playing);
+        }
+    }
+    #[test]
+    fn global_quantize_bypasses_both_decks_preserves_preferences_and_cancels_triggers() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let a = wav_file(4096, 48000 * 8);
+        let b = wav_file(8192, 48000 * 8);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+        }
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        for id in [DeckId::A, DeckId::B] {
+            let path = engine.snapshot(id).path.unwrap();
+            c.library.borrow_mut().insert([path.to_path_buf()]);
+            c.library
+                .borrow_mut()
+                .set_hot_cue(
+                    &path,
+                    0,
+                    Some(
+                        crate::hot_cues::HotCue::new(
+                            Duration::from_secs(1),
+                            "saved".into(),
+                            0xffffff,
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .unwrap();
+        }
+        ui.set_left_quantize_cues(true);
+        ui.set_right_quantize_cues(true);
+        ui.set_left_quantize_triggers(true);
+        ui.set_right_quantize_triggers(true);
+        ui.set_left_auto_loop_snap(true);
+        ui.set_right_auto_loop_snap(true);
+        ui.set_left_quantize_step(0);
+        ui.set_right_quantize_step(5);
+        c.tick();
+        ui.show().unwrap();
+        slint::platform::update_timers_and_animations();
+        assert!(ui.get_quantize_enabled());
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .seek_position(id, Duration::from_millis(200))
+                .unwrap();
+            engine.play(id);
+        }
+        for _ in 0..128 {
+            output.next();
+        }
+        for id in [DeckId::A, DeckId::B] {
+            c.change_hot_cue(id, 0, false).unwrap();
+        }
+        let before = [engine.snapshot(DeckId::A), engine.snapshot(DeckId::B)];
+        let gains = engine.output_volumes();
+        control(&ui, "Global Quantize").invoke_accessible_default_action();
+        assert!(!ui.get_quantize_enabled());
+        for (index, id) in [DeckId::A, DeckId::B].into_iter().enumerate() {
+            let current = engine.snapshot(id);
+            assert_eq!(current.position, before[index].position);
+            assert_eq!(current.grid, before[index].grid);
+            assert_eq!(current.requested_speed, before[index].requested_speed);
+            assert!(current.playing);
+        }
+        // Do not process change handlers first: the toolbar event must cancel immediately.
+        for _ in 0..48000 * 2 * 2 {
+            output.next();
+        }
+        for (index, id) in [DeckId::A, DeckId::B].into_iter().enumerate() {
+            let expected = before[index].position + Duration::from_secs(2);
+            assert!(engine.snapshot(id).position.abs_diff(expected) < Duration::from_millis(2));
+        }
+        assert_eq!(engine.output_volumes(), gains);
+        assert!(ui.get_left_quantize_cues() && ui.get_right_quantize_cues());
+        assert!(ui.get_left_quantize_triggers() && ui.get_right_quantize_triggers());
+        assert!(ui.get_left_auto_loop_snap() && ui.get_right_auto_loop_snap());
+        assert_eq!(
+            (ui.get_left_quantize_step(), ui.get_right_quantize_step()),
+            (0, 5)
+        );
+        for (id, label) in [(DeckId::A, "DECK A"), (DeckId::B, "DECK B")] {
+            assert_eq!(
+                control(&ui, &format!("{label} quantize new cues")).accessible_enabled(),
+                Some(false)
+            );
+            assert_eq!(
+                control(&ui, &format!("{label} quantization step")).accessible_enabled(),
+                Some(false)
+            );
+            engine.pause(id);
+            engine
+                .seek_position(id, Duration::from_nanos(1_123_456_789))
+                .unwrap();
+            let raw = engine.snapshot(id).position;
+            c.change_hot_cue(id, 1, false).unwrap();
+            let path = engine.snapshot(id).path.unwrap();
+            assert_eq!(
+                c.library.borrow().hot_cues(&path).slots()[1]
+                    .as_ref()
+                    .unwrap()
+                    .position(),
+                raw
+            );
+            c.change_hot_cue(id, 0, false).unwrap();
+            assert_eq!(engine.snapshot(id).position, Duration::from_secs(1));
+            engine
+                .seek_position(id, Duration::from_millis(850))
+                .unwrap();
+            match id {
+                DeckId::A => ui.invoke_auto_loop_left(),
+                DeckId::B => ui.invoke_auto_loop_right(),
+            }
+            assert_eq!(
+                engine.snapshot(id).loop_in,
+                Some(Duration::from_millis(850))
+            );
+        }
+        control(&ui, "Global Quantize").invoke_accessible_default_action();
+        assert!(ui.get_quantize_enabled());
+        for id in [DeckId::A, DeckId::B] {
+            assert_eq!(
+                engine.snapshot(id).loop_in,
+                Some(Duration::from_millis(850))
+            );
+            engine.exit_loop(id).unwrap();
+            engine
+                .seek_position(id, Duration::from_millis(850))
+                .unwrap();
+            match id {
+                DeckId::A => ui.invoke_auto_loop_left(),
+                DeckId::B => ui.invoke_auto_loop_right(),
+            }
+            assert_eq!(engine.snapshot(id).loop_in, Some(Duration::from_secs(1)));
+            engine.exit_loop(id).unwrap();
+            engine
+                .seek_position(id, Duration::from_millis(1350))
+                .unwrap();
+            c.change_hot_cue(id, 2, false).unwrap();
+            let path = engine.snapshot(id).path.unwrap();
+            let expected = match id {
+                DeckId::A => Duration::from_millis(1375),
+                DeckId::B => Duration::from_secs(2),
+            };
+            assert_eq!(
+                c.library.borrow().hot_cues(&path).slots()[2]
+                    .as_ref()
+                    .unwrap()
+                    .position(),
+                expected
+            );
+        }
+        ui.hide().unwrap();
+    }
+    #[test]
     fn quantization_selector_cancels_pending_recall_and_keeps_other_deck_choice() {
         i_slint_backend_testing::init_no_event_loop();
         for id in [DeckId::A, DeckId::B] {
@@ -8422,6 +8661,11 @@ mod tests {
         assert_eq!(ui.get_status(), "Library import cancelled");
         for (width, height) in [(850.0, 740.0), (1280.0, 860.0)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
+            let quantize = control(&ui, "Global Quantize");
+            assert!(quantize.size().width > 0. && quantize.size().height > 0.);
+            assert!(quantize.absolute_position().x >= 0. && quantize.absolute_position().y >= 0.);
+            assert!(quantize.absolute_position().x + quantize.size().width <= width + 0.1);
+            assert!(quantize.absolute_position().y + quantize.size().height <= height + 0.1);
             let shared = control(&ui, "Shared waveform area");
             let library = control(&ui, "Track library area");
             let status = control(&ui, "Application status");

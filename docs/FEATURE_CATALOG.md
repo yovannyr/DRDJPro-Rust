@@ -163,3 +163,10 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | --- | --- | --- | --- |
 | R-QUANT-01 | Per-deck 1/8, 1/4, 1/2, 1, 2, 4 beat cue placement/trigger lattice | Exact tie and anchor tests at 44.1/48/96 kHz, fractional BPM, strict-future source-frame rounding, one-Hz edge, invalid inputs; both-deck actual controller/PCM workflows for all six steps, exact saved cue recall and EOF rejection | Manual quarter-beat grids only; global Quantize mode, persisted preferences, loop quantization and musical/native acceptance remain open |
 | R-QUANT-02 | Queued trigger cancellation on bound step change; independent deck choices | Generated UI property change, Slint change-handler processing and rendered source timeline; enabled-control and two-size geometry checks | Native dropdown/keyboard/focus and physical hardware acceptance not established |
+
+## Global Quantize follow-up (2026-10-29)
+
+| ID | Capability | Evidence | Remaining scope |
+| --- | --- | --- | --- |
+| R-QUANT-03 | Toolbar master gating opted-in cue snap, scheduled recall and Auto Loop snap on A/B, preserving preferences | Actual accessible toolbar action, immediate dual-trigger cancellation verified by rendered source progression; programmatic property cancellation; retained flags/steps, exact unsnapped cues, immediate paused recall, playhead auto-loops, restored snap behavior | Default-on session master; global/deck preference persistence, full reference parity and native/hardware acceptance remain open |
+| R-QUANT-04 | Master toggle preserves unrelated performance state | Unchanged source position, playing state, grid, base tempo and gains; preserved active engine Sync correction and nudge; existing loop bounds retained when re-enabling; toolbar geometry at 850x740 and 1280x860 | Headless checks do not establish visual, keyboard/focus, musical or physical audio acceptance |
