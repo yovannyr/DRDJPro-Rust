@@ -2578,6 +2578,59 @@ mod tests {
         );
     }
     #[test]
+    fn cached_unrecognized_nonempty_source_is_not_retried_after_migration() {
+        let file = crate::test_support::TempFile::new("mp3", &[0; 512]);
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(file.path().to_path_buf(), 27);
+        data.tracks[0].metadata.scanned = true;
+        data.tracks[0].metadata.error =
+            Some("unsupported feature: core (probe): no suitable format reader found".into());
+        store.save(&data).unwrap();
+        drop(store);
+        let (store, library, _) = Store::open(db.clone()).unwrap();
+        let cached = library.catalog().tracks[0].metadata.clone();
+        assert!(cached
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Audio format not recognized or damaged"));
+        assert!(!cached.needs_refresh(file.path()));
+        store.connection.execute_batch("CREATE TRIGGER reject_rescan BEFORE INSERT ON track_metadata BEGIN SELECT RAISE(ABORT,'unexpected backfill'); END;").unwrap();
+        drop(store);
+        let (_, library, _) = Store::open(db).unwrap();
+        assert_eq!(library.catalog().tracks[0].metadata, cached);
+    }
+    #[test]
+    fn cached_empty_source_failure_is_replaced_and_persisted() {
+        let file = crate::test_support::TempFile::new("wav", b"");
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(file.path().to_path_buf(), 27);
+        data.tracks[0].metadata.scanned = true;
+        data.tracks[0].metadata.error =
+            Some("unsupported feature: core (probe): no suitable format reader found".into());
+        store.save(&data).unwrap();
+        drop(store);
+        let (store, library, _) = Store::open(db.clone()).unwrap();
+        let cached = library.catalog().tracks[0].metadata.clone();
+        assert!(cached
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Audio file is empty (0 bytes)"));
+        assert!(!cached.needs_refresh(file.path()));
+        assert_eq!(
+            inspect(&store.connection).unwrap().unwrap().tracks[0].metadata,
+            cached
+        );
+        drop(store);
+        let (_, library, _) = Store::open(db).unwrap();
+        assert_eq!(library.catalog().tracks[0].metadata, cached);
+    }
+    #[test]
     fn cached_id3_failure_is_retried_and_recovery_warning_persists() {
         let tagged = crate::test_support::tagged_mp3("bad", "artist", "album");
         let mut bytes = std::fs::read(tagged.path()).unwrap();

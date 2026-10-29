@@ -159,6 +159,10 @@ All database operations stay in the existing storage worker. Optional preference
 
 The controller compares observed, acknowledged and inflight immutable preference snapshots. Changes made before the earlier save is acknowledged remain pending; success acknowledges only the captured snapshot. Close flushes the latest settings even without another GUI tick, including a revert to the previously acknowledged value while a different value is inflight. Closing before restore completes never replaces saved settings with UI defaults. Preference controls are temporarily disabled during restore. Corrupt preference warnings do not force a catalog reset or an automatic default write. Transport/playback, pending cue requests, active Sync/nudge ownership, Keylock jobs and loaded-track identities are not persisted by this model.
 
+## Source diagnostic backfill (2026-10-29)
+
+Legacy no-reader and unsupported-WAVE metadata errors are now eligible for worker backfill alongside the previous ID3 errors. Empty/tag-limited, unrecognized and invalid-WAVE failures receive stable new messages so a permanent no-reader failure does not cause an unchanged expensive parser retry at every restart. Successful MPEG-WAVE warnings remain cached. The existing availability guard and before/after comparison still prevent writes for unavailable/unchanged entries. SQLite restart regressions cover empty files and permanent nonempty junk, including a trigger rejecting an unexpected second backfill. No schema migration is required.
+
 ## AppleDouble import filtering (2026-10-29)
 
 Import workers reject AppleDouble magic 0x00051607 with version 0x00010000 or 0x00020000 before audio metadata probing. Only eight header bytes are read; a filename starting with ._ alone is never excluded. Rejected entries use the existing import rejection count and do not enter the catalog or metadata batch. Short headers, unknown versions and read failures retain the existing audio inspection/error path. Existing saved entries are not removed, and no file is edited. This check is deliberately separate from the extension-only supported() predicate used by catalog validation.

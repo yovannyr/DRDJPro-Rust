@@ -111,12 +111,17 @@ impl PreparedTrack {
             let source =
                 crate::media_input::AudioWindow::whole(&canonical).map_err(|e| e.to_string())?;
             let decoder = decode(source)
+                .map_err(|e| e.to_string())
                 .or_else(|original| {
-                    crate::media_input::recovery_source(&canonical)
-                        .map_err(|_| original)
-                        .and_then(decode)
-                })
-                .map_err(|e| e.to_string())?;
+                    let source = match crate::media_input::recovery_source(&canonical) {
+                        Ok(source) => source,
+                        Err(symphonia::core::errors::Error::Unsupported(
+                            "original parser accepted source",
+                        )) => return Err(original),
+                        Err(error) => return Err(error.to_string()),
+                    };
+                    decode(source).map_err(|e| e.to_string())
+                })?;
             let channels = decoder.channels();
             let rate = decoder.sample_rate();
             if channels == 0 || rate == 0 {

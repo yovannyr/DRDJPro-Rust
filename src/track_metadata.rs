@@ -14,16 +14,18 @@ pub struct TrackMetadata {
 pub const MAX_TEXT: usize = 512;
 pub const MAX_DURATION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 impl TrackMetadata {
-    /// Retry only legacy ID3 failures; successful recovery warnings remain cached.
+    /// Retry supported legacy parser failures; successful warnings remain cached.
     pub(crate) fn needs_refresh(&self, path: &Path) -> bool {
         !self.scanned
-            || (path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+            || (crate::audio_formats::supported(path)
                 && matches!(
                     self.error.as_deref(),
                     Some("malformed stream: id3v2: invalid text encoding")
                         | Some("unsupported feature: id3v2: compressed frames are not supported")
+                        | Some("unsupported feature: wav: unsupported wave format")
+                        | Some(
+                            "unsupported feature: core (probe): no suitable format reader found"
+                        )
                 ))
     }
     pub fn validate(&self) -> bool {

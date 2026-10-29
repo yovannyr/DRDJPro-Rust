@@ -4538,6 +4538,7 @@ mod tests {
         let mut pending = vec![root];
         let mut paths = Vec::new();
         let mut inaccessible = 0_usize;
+        let mut sidecars = 0_usize;
         while let Some(dir) = pending.pop() {
             let entries = match std::fs::read_dir(dir) {
                 Ok(entries) => entries,
@@ -4558,7 +4559,11 @@ mod tests {
                 if kind.is_dir() {
                     pending.push(entry.path());
                 } else if kind.is_file() && crate::audio_formats::supported(&entry.path()) {
-                    paths.push(entry.path());
+                    if crate::audio_formats::is_apple_double(&entry.path()) {
+                        sidecars += 1;
+                    } else {
+                        paths.push(entry.path());
+                    }
                 }
             }
         }
@@ -4582,6 +4587,7 @@ mod tests {
         let start = Instant::now();
         let mut errors = 0;
         let mut tag_warnings = 0;
+        let mut container_warnings = 0;
         let mut failure_groups = std::collections::BTreeMap::<String, usize>::new();
         let mut failures = Vec::new();
         for (index, path) in paths.iter().enumerate() {
@@ -4591,7 +4597,10 @@ mod tests {
                 .as_deref()
                 .is_some_and(|error| error.starts_with(crate::media_input::TAG_WARNING));
             tag_warnings += usize::from(tag_warning);
-            errors += usize::from(metadata.error.is_some() && !tag_warning);
+            let container_warning =
+                metadata.error.as_deref() == Some(crate::media_input::WAVE_WARNING);
+            container_warnings += usize::from(container_warning);
+            errors += usize::from(metadata.error.is_some() && !tag_warning && !container_warning);
             if let Some(error) = &metadata.error {
                 use std::io::Read;
                 *failure_groups.entry(error.clone()).or_default() += 1;
@@ -4610,6 +4619,7 @@ mod tests {
                     "path": path,
                     "error": error,
                     "tag_warning": tag_warning,
+                    "container_warning": container_warning,
                     "bytes": length,
                     "header": header,
                     "inspection_error": inspection_error,
@@ -4623,7 +4633,7 @@ mod tests {
         let metadata_time = start.elapsed();
         assert_eq!(
             failure_groups.values().sum::<usize>(),
-            errors + tag_warnings
+            errors + tag_warnings + container_warnings
         );
         if let Some(report) = std::env::var_os("DRDJ_METADATA_REPORT") {
             // Nur ein explizites Diagnoseziel schreiben; Musikdateien bleiben unverändert.
@@ -4637,8 +4647,10 @@ mod tests {
                 &serde_json::json!({
                     "files": paths.len(),
                     "inaccessible": inaccessible,
+                    "excluded_apple_double": sidecars,
                     "audio_probe_errors": errors,
                     "skipped_tag_warnings": tag_warnings,
+                    "container_warnings": container_warnings,
                     "error_groups": failure_groups,
                     "failures": failures,
                 }),
