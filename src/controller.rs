@@ -213,6 +213,9 @@ pub struct AudioController {
     dirty: Cell<bool>,
     saving: Cell<bool>,
     inflight_revision: Cell<Option<u64>>,
+    saved_quantize: Cell<crate::preferences::QuantizePreferences>,
+    observed_quantize: Cell<crate::preferences::QuantizePreferences>,
+    inflight_quantize: Cell<Option<crate::preferences::QuantizePreferences>>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
     crate_editor: Cell<Option<i32>>,
@@ -269,6 +272,9 @@ impl AudioController {
             dirty: Cell::new(false),
             saving: Cell::new(false),
             inflight_revision: Cell::new(None),
+            saved_quantize: Cell::new(Default::default()),
+            observed_quantize: Cell::new(Default::default()),
+            inflight_quantize: Cell::new(None),
             save_failed: Cell::new(false),
             initial_paths: RefCell::new(Vec::new()),
             crate_editor: Cell::new(None),
@@ -2306,6 +2312,7 @@ impl AudioController {
                 *self.initial_paths.borrow_mut() = initial_paths;
                 if let Some(ui) = self.ui.upgrade() {
                     ui.set_library_busy(true);
+                    ui.set_quantize_preferences_ready(false);
                     ui.set_library_storage("Restoring library…".into());
                 }
             }
@@ -2327,6 +2334,63 @@ impl AudioController {
         self.dirty.set(true);
         self.save_failed.set(false);
     }
+    fn quantize_preferences(&self) -> Result<crate::preferences::QuantizePreferences, String> {
+        use crate::preferences::{DeckQuantizePreferences, QuantizePreferences};
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let step = |value| u8::try_from(value).map_err(|_| "Invalid quantization step".to_string());
+        let prefs = QuantizePreferences {
+            version: 1,
+            enabled: ui.get_quantize_enabled(),
+            decks: [
+                DeckQuantizePreferences {
+                    cues: ui.get_left_quantize_cues(),
+                    triggers: ui.get_left_quantize_triggers(),
+                    auto_loop_snap: ui.get_left_auto_loop_snap(),
+                    step: step(ui.get_left_quantize_step())?,
+                },
+                DeckQuantizePreferences {
+                    cues: ui.get_right_quantize_cues(),
+                    triggers: ui.get_right_quantize_triggers(),
+                    auto_loop_snap: ui.get_right_auto_loop_snap(),
+                    step: step(ui.get_right_quantize_step())?,
+                },
+            ],
+        };
+        prefs.validate()?;
+        Ok(prefs)
+    }
+    fn restore_quantize_preferences(&self, prefs: crate::preferences::QuantizePreferences) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_left_quantize_cues(prefs.decks[0].cues);
+            ui.set_right_quantize_cues(prefs.decks[1].cues);
+            ui.set_left_quantize_triggers(prefs.decks[0].triggers);
+            ui.set_right_quantize_triggers(prefs.decks[1].triggers);
+            ui.set_left_auto_loop_snap(prefs.decks[0].auto_loop_snap);
+            ui.set_right_auto_loop_snap(prefs.decks[1].auto_loop_snap);
+            ui.set_left_quantize_step(i32::from(prefs.decks[0].step));
+            ui.set_right_quantize_step(i32::from(prefs.decks[1].step));
+            ui.set_quantize_enabled(prefs.enabled);
+        }
+        self.saved_quantize.set(prefs);
+        self.observed_quantize.set(prefs);
+    }
+    fn observe_quantize_preferences(&self) {
+        if !self.storage_ready.get() || self.persistence.borrow().is_none() {
+            return;
+        }
+        match self.quantize_preferences() {
+            Ok(prefs) if prefs != self.observed_quantize.get() => {
+                self.observed_quantize.set(prefs);
+                self.library_changed();
+            }
+            Err(error) => {
+                self.save_failed.set(true);
+                self.dirty.set(true);
+                self.storage_error(&error, true);
+            }
+            _ => {}
+        }
+    }
     fn poll_storage(&self) {
         let event = self
             .persistence
@@ -2338,6 +2402,7 @@ impl AudioController {
                 self.storage_ready.set(true);
                 if let Some(ui) = self.ui.upgrade() {
                     ui.set_library_busy(false);
+                    ui.set_quantize_preferences_ready(true);
                 }
                 match result {
                     Ok(loaded) => {
@@ -2345,7 +2410,10 @@ impl AudioController {
                             library,
                             note,
                             backfill_error,
+                            quantize_preferences,
+                            preference_warning,
                         } = *loaded;
+                        self.restore_quantize_preferences(quantize_preferences);
                         self.library_generation.set(
                             self.library_generation
                                 .get()
@@ -2367,7 +2435,7 @@ impl AudioController {
                                 true,
                             );
                         } else if let Some(ui) = self.ui.upgrade() {
-                            ui.set_library_storage(note.into());
+                            ui.set_library_storage(preference_warning.map_or(note.clone(), |warning| format!("{note}; {warning}; default Quantize preferences active")).into());
                         }
                     }
                     Err(error) => {
@@ -2383,12 +2451,21 @@ impl AudioController {
             Some(Ok(crate::library_store::Event::Saved(result))) => {
                 self.saving.set(false);
                 let revision = self.inflight_revision.take();
+                let quantize = self.inflight_quantize.take();
                 match result {
                     Ok(()) => {
+                        if let Some(prefs) = quantize {
+                            self.saved_quantize.set(prefs);
+                        }
                         if let Some(revision) = revision {
                             self.library.borrow_mut().acknowledge(revision);
                         }
-                        self.dirty.set(self.library.borrow().has_changes());
+                        self.dirty.set(
+                            self.library.borrow().has_changes()
+                                || self
+                                    .quantize_preferences()
+                                    .is_ok_and(|p| p != self.saved_quantize.get()),
+                        );
                         self.save_failed.set(false);
 
                         if let Some(ui) = self.ui.upgrade() {
@@ -2415,6 +2492,7 @@ impl AudioController {
                 self.saving.set(false);
                 if let Some(ui) = self.ui.upgrade() {
                     ui.set_library_busy(false);
+                    ui.set_quantize_preferences_ready(true);
                 }
                 self.storage_error("Storage worker stopped; session only", false);
             }
@@ -2422,6 +2500,7 @@ impl AudioController {
         }
     }
     fn save_library(&self) {
+        self.observe_quantize_preferences();
         if !self.storage_ready.get()
             || !self.dirty.get()
             || self.saving.get()
@@ -2435,9 +2514,18 @@ impl AudioController {
         };
         let delta = self.library.borrow().changes();
         let revision = delta.revision;
-        match worker.save_delta(delta) {
+        let preferences = match self.quantize_preferences() {
+            Ok(prefs) => (prefs != self.saved_quantize.get()).then_some(prefs),
+            Err(error) => {
+                self.storage_error(&error, true);
+                self.save_failed.set(true);
+                return;
+            }
+        };
+        match worker.save_state(delta, preferences) {
             Ok(()) => {
                 self.inflight_revision.set(Some(revision));
+                self.inflight_quantize.set(preferences);
                 self.dirty.set(false);
                 self.saving.set(true);
                 if let Some(ui) = self.ui.upgrade() {
@@ -2462,16 +2550,31 @@ impl AudioController {
         for id in [DeckId::A, DeckId::B] {
             self.cancel_nudge(id);
         }
+        let preferences = if self.storage_ready.get() && self.persistence.borrow().is_some() {
+            let prefs = self.quantize_preferences()?;
+            (prefs != self.saved_quantize.get()
+                || self
+                    .inflight_quantize
+                    .get()
+                    .is_some_and(|inflight| inflight != prefs))
+            .then_some(prefs)
+        } else {
+            None
+        };
         if let Some(worker) = self.persistence.borrow_mut().take() {
             let final_delta = (self.storage_ready.get()
-                && (self.dirty.get() || self.saving.get() || self.library.borrow().has_changes()))
+                && (preferences.is_some()
+                    || self.dirty.get()
+                    || self.saving.get()
+                    || self.library.borrow().has_changes()))
             .then(|| self.library.borrow().changes());
             let revision = final_delta.as_ref().map(|d| d.revision);
-            worker.close_delta(final_delta)?;
+            worker.close_state(final_delta, preferences)?;
             if let Some(revision) = revision {
                 self.library.borrow_mut().acknowledge(revision);
             }
             self.inflight_revision.set(None);
+            self.inflight_quantize.set(None);
             self.saving.set(false);
             self.dirty.set(false);
         }
@@ -7021,6 +7124,155 @@ mod tests {
         assert_eq!(c.library.borrow().len(), 0);
         assert_eq!(c.library.borrow().revision(), 0);
         assert!(!c.dirty.get());
+    }
+    #[test]
+    fn quantize_preferences_restart_retains_latest_changes_and_close_flush() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), vec![]);
+        assert_eq!(
+            control(&ui, "Global Quantize").accessible_enabled(),
+            Some(false)
+        );
+        finish_storage(&c);
+        assert_eq!(
+            c.quantize_preferences().unwrap(),
+            crate::preferences::QuantizePreferences::default()
+        );
+        assert_eq!(
+            control(&ui, "Global Quantize").accessible_enabled(),
+            Some(true)
+        );
+        ui.set_quantize_enabled(false);
+        ui.set_left_quantize_cues(true);
+        ui.set_right_quantize_triggers(true);
+        ui.set_left_quantize_step(0);
+        ui.set_right_quantize_step(5);
+        c.save_library();
+        assert!(c.saving.get());
+        ui.set_left_quantize_triggers(true);
+        ui.set_left_auto_loop_snap(true);
+        ui.set_right_auto_loop_snap(true);
+        ui.set_right_quantize_cues(true);
+        finish_storage(&c);
+        assert_eq!(c.saved_quantize.get(), c.quantize_preferences().unwrap());
+        assert!(!c.dirty.get());
+        // A last change without another GUI tick must still be flushed on close.
+        ui.set_right_quantize_step(2);
+        let expected = c.quantize_preferences().unwrap();
+        c.close_library().unwrap();
+        let ui2 = AppWindow::new().unwrap();
+        let (mixer, _output2) = rodio::mixer::mixer(2, 48000);
+        let engine2 = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let c2 = AudioController::wire(&ui2, engine2.clone(), Arc::new(|| None), Arc::new(|| None));
+        c2.restore_library(Ok(db), vec![]);
+        finish_storage(&c2);
+        assert_eq!(c2.quantize_preferences().unwrap(), expected);
+        assert!(!engine2.snapshot(DeckId::A).loaded && !engine2.snapshot(DeckId::B).playing);
+        assert!(!c2.dirty.get());
+        c2.close_library().unwrap();
+    }
+    #[test]
+    fn quantize_preference_failure_retry_and_invalid_value_preserve_committed_state() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), vec![]);
+        finish_storage(&c);
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_preferences BEFORE INSERT ON library_meta WHEN NEW.key='quantize_preferences_v1' BEGIN SELECT RAISE(ABORT,'injected preference write'); END;").unwrap();
+        ui.set_quantize_enabled(false);
+        ui.set_left_quantize_step(0);
+        let expected = c.quantize_preferences().unwrap();
+        finish_storage(&c);
+        assert!(c.save_failed.get() && c.dirty.get());
+        assert!(ui.get_library_save_failed());
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM library_meta WHERE key='quantize_preferences_v1'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        connection
+            .execute_batch("DROP TRIGGER reject_preferences")
+            .unwrap();
+        ui.invoke_retry_library_save();
+        finish_storage(&c);
+        assert!(!c.save_failed.get() && !c.dirty.get());
+        assert_eq!(c.saved_quantize.get(), expected);
+        ui.set_left_quantize_step(99);
+        finish_storage(&c);
+        assert!(c.save_failed.get());
+        let persisted: String = connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='quantize_preferences_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<crate::preferences::QuantizePreferences>(&persisted).unwrap(),
+            expected
+        );
+        ui.set_left_quantize_step(3);
+        finish_storage(&c);
+        assert!(!c.save_failed.get());
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn quantize_preference_close_preserves_revert_and_does_not_overwrite_during_restore() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        for closing_during_restore in [false, true] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+            let c = AudioController::wire(
+                &ui,
+                Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000)),
+                Arc::new(|| None),
+                Arc::new(|| None),
+            );
+            c.restore_library(Ok(db.clone()), vec![]);
+            if !closing_during_restore {
+                finish_storage(&c);
+                ui.set_quantize_enabled(false);
+                c.save_library();
+                assert!(c.saving.get());
+                ui.set_quantize_enabled(true);
+            } else {
+                ui.set_quantize_enabled(false);
+            }
+            c.close_library().unwrap();
+            let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+            let crate::library_store::Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap()
+            else {
+                panic!("restore")
+            };
+            assert!(loaded.quantize_preferences.enabled);
+            worker.close_delta(None).unwrap();
+        }
     }
     #[test]
     fn programmatic_global_quantize_off_cancels_both_queued_cues() {

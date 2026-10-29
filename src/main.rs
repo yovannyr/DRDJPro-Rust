@@ -21,6 +21,7 @@ mod phase_sync;
 mod pitch_control;
 mod playback;
 mod playback_speed;
+mod preferences;
 mod render_bus;
 mod saved_loops;
 mod sync_control;

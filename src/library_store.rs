@@ -1,5 +1,7 @@
 //! SQLite catalog storage. The worker owns every database/file operation.
 use crate::library::{self, Catalog, Library, SavedTrack};
+use crate::preferences::QuantizePreferences;
+const QUANTIZE_PREFS_QUERY: &str = "SELECT CASE WHEN length(CAST(value AS BLOB))<=1024 THEN value ELSE '' END FROM library_meta WHERE key='quantize_preferences_v1'";
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
     collections::{HashMap, HashSet},
@@ -847,8 +849,40 @@ impl Store {
         self.backup_pending = false;
         Ok(())
     }
+    fn read_quantize_preferences(&self) -> Result<QuantizePreferences, String> {
+        let value: Option<String> = self
+            .connection
+            .query_row(QUANTIZE_PREFS_QUERY, [], |row| row.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(value) = value else {
+            return Ok(QuantizePreferences::default());
+        };
+        let preferences: QuantizePreferences = serde_json::from_str(&value)
+            .map_err(|e| format!("Invalid Quantize preferences: {e}"))?;
+        preferences.validate()?;
+        Ok(preferences)
+    }
+    #[cfg(test)]
     fn save_delta(&mut self, delta: &crate::library::CatalogDelta) -> Result<(), String> {
-        if delta.tracks.is_empty() && delta.crates.is_none() && delta.memberships.is_empty() {
+        self.save_state(delta, None)
+    }
+    fn save_state(
+        &mut self,
+        delta: &crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+    ) -> Result<(), String> {
+        let preferences_json = preferences
+            .map(|p| {
+                p.validate()?;
+                serde_json::to_string(&p).map_err(|e| e.to_string())
+            })
+            .transpose()?;
+        if delta.tracks.is_empty()
+            && delta.crates.is_none()
+            && delta.memberships.is_empty()
+            && preferences.is_none()
+        {
             return self.checkpoint(true);
         }
         Catalog {
@@ -1003,6 +1037,9 @@ impl Store {
             tx.execute(sql, rusqlite::params![crate_id, track_id])
                 .map_err(|e| e.to_string())?;
         }
+        if let Some(json) = preferences_json {
+            tx.execute("INSERT INTO library_meta(key,value) VALUES('quantize_preferences_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [json]).map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         self.has_tracks = self.has_tracks || added > 0;
         self.backup_pending = true;
@@ -1035,6 +1072,8 @@ pub struct LoadedLibrary {
     pub library: Library,
     pub note: String,
     pub backfill_error: Option<String>,
+    pub quantize_preferences: QuantizePreferences,
+    pub preference_warning: Option<String>,
 }
 pub enum Event {
     Loaded(Result<Box<LoadedLibrary>, String>),
@@ -1046,8 +1085,11 @@ enum Command {
     Save(Catalog),
     #[cfg(test)]
     Close(Option<Catalog>),
-    SaveDelta(crate::library::CatalogDelta),
-    CloseDelta(Option<crate::library::CatalogDelta>),
+    SaveDelta(crate::library::CatalogDelta, Option<QuantizePreferences>),
+    CloseDelta(
+        Option<crate::library::CatalogDelta>,
+        Option<QuantizePreferences>,
+    ),
 }
 pub struct Worker {
     tx: SyncSender<Command>,
@@ -1071,10 +1113,17 @@ impl Worker {
                         return Err(error);
                     }
                 };
+                let (quantize_preferences, preference_warning) =
+                    match store.read_quantize_preferences() {
+                        Ok(prefs) => (prefs, None),
+                        Err(error) => (QuantizePreferences::default(), Some(error)),
+                    };
                 let loaded = LoadedLibrary {
                     library,
                     note,
                     backfill_error: store.backfill_error.take(),
+                    quantize_preferences,
+                    preference_warning,
                 };
                 if events_tx.send(Event::Loaded(Ok(Box::new(loaded)))).is_err() {
                     return Ok(());
@@ -1103,14 +1152,20 @@ impl Worker {
                         }
                     };
                     match command {
-                        Command::SaveDelta(delta) => {
-                            let result = store.save_delta(&delta);
+                        Command::SaveDelta(delta, preferences) => {
+                            let result = store.save_state(&delta, preferences);
                             retry_wait = result.is_err();
                             let _ = events_tx.send(Event::Saved(result));
                         }
-                        Command::CloseDelta(delta) => {
-                            if let Some(delta) = delta {
-                                store.save_delta(&delta)?;
+                        Command::CloseDelta(delta, preferences) => {
+                            if delta.is_some() || preferences.is_some() {
+                                let delta = delta.unwrap_or(crate::library::CatalogDelta {
+                                    revision: 0,
+                                    tracks: vec![],
+                                    crates: None,
+                                    memberships: vec![],
+                                });
+                                store.save_state(&delta, preferences)?;
                             }
                             return store.checkpoint(true);
                         }
@@ -1130,13 +1185,29 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         Ok(Self { tx, events, join })
     }
+    #[cfg(test)]
     pub fn save_delta(&self, delta: crate::library::CatalogDelta) -> Result<(), String> {
+        self.save_state(delta, None)
+    }
+    pub fn save_state(
+        &self,
+        delta: crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+    ) -> Result<(), String> {
         self.tx
-            .try_send(Command::SaveDelta(delta))
+            .try_send(Command::SaveDelta(delta, preferences))
             .map_err(|e| e.to_string())
     }
+    #[cfg(test)]
     pub fn close_delta(self, delta: Option<crate::library::CatalogDelta>) -> Result<(), String> {
-        let _ = self.tx.send(Command::CloseDelta(delta));
+        self.close_state(delta, None)
+    }
+    pub fn close_state(
+        self,
+        delta: Option<crate::library::CatalogDelta>,
+        preferences: Option<QuantizePreferences>,
+    ) -> Result<(), String> {
+        let _ = self.tx.send(Command::CloseDelta(delta, preferences));
         self.join
             .join()
             .map_err(|_| "Library worker panicked".to_string())?
@@ -1160,6 +1231,116 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quantize_preferences_roundtrip_and_atomic_delta_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        assert_eq!(
+            store.read_quantize_preferences().unwrap(),
+            QuantizePreferences::default()
+        );
+        let mut prefs = QuantizePreferences {
+            enabled: false,
+            ..Default::default()
+        };
+        prefs.decks[0].cues = true;
+        prefs.decks[0].step = 0;
+        prefs.decks[1].triggers = true;
+        prefs.decks[1].auto_loop_snap = true;
+        prefs.decks[1].step = 5;
+        let data = catalog(dir.path().join("missing.wav"), 27);
+        let delta = library::CatalogDelta {
+            revision: 1,
+            tracks: data.tracks,
+            crates: None,
+            memberships: vec![],
+        };
+        store.connection.execute_batch("CREATE TRIGGER reject_prefs BEFORE INSERT ON library_meta WHEN NEW.key='quantize_preferences_v1' BEGIN SELECT RAISE(ABORT,'injected preference failure'); END;").unwrap();
+        assert!(store.save_state(&delta, Some(prefs)).is_err());
+        assert!(rows(&store).is_empty());
+        assert_eq!(
+            store.read_quantize_preferences().unwrap(),
+            QuantizePreferences::default()
+        );
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_prefs")
+            .unwrap();
+        store.save_state(&delta, Some(prefs)).unwrap();
+        assert_eq!(rows(&store), vec![27]);
+        drop(store);
+        let (store, _, _) = Store::open(db.clone()).unwrap();
+        assert_eq!(store.read_quantize_preferences().unwrap(), prefs);
+        drop(store);
+        let worker = Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            Event::Loaded(Ok(_))
+        ));
+        prefs.enabled = true;
+        worker.close_state(None, Some(prefs)).unwrap();
+        let (store, _, _) = Store::open(db).unwrap();
+        assert_eq!(store.read_quantize_preferences().unwrap(), prefs);
+    }
+    #[test]
+    fn malformed_quantize_preferences_warn_without_catalog_loss_or_rewrite() {
+        let mut invalid_step = serde_json::to_value(QuantizePreferences::default()).unwrap();
+        invalid_step["decks"][0]["step"] = 6.into();
+        let mut future = serde_json::to_value(QuantizePreferences::default()).unwrap();
+        future["version"] = 2.into();
+        let mut unknown = serde_json::to_value(QuantizePreferences::default()).unwrap();
+        unknown["extra"] = true.into();
+        for raw in [
+            "[".to_string(),
+            "{}".into(),
+            "x".repeat(1025),
+            format!("x\0{}", "x".repeat(1_000_000)),
+            invalid_step.to_string(),
+            future.to_string(),
+            unknown.to_string(),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            store
+                .save(&catalog(dir.path().join("missing.wav"), 27))
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "INSERT INTO library_meta(key,value) VALUES('quantize_preferences_v1',?1)",
+                    [&raw],
+                )
+                .unwrap();
+            let bounded: String = store
+                .connection
+                .query_row(QUANTIZE_PREFS_QUERY, [], |row| row.get(0))
+                .unwrap();
+            assert!(
+                bounded.len() <= 1024,
+                "untrusted preference payload must be bounded before reading into Rust"
+            );
+            drop(store);
+            let worker = Worker::start(db.clone()).unwrap();
+            let Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+                panic!("catalog must remain readable")
+            };
+            assert_eq!(loaded.library.len(), 1);
+            assert!(loaded.preference_warning.is_some());
+            assert_eq!(loaded.quantize_preferences, QuantizePreferences::default());
+            worker.close_delta(None).unwrap();
+            let connection = connect(&db, false).unwrap();
+            let preserved: String = connection
+                .query_row(
+                    "SELECT value FROM library_meta WHERE key='quantize_preferences_v1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(preserved, raw);
+        }
+    }
     fn catalog(path: PathBuf, id: i32) -> Catalog {
         Catalog {
             version: 1,

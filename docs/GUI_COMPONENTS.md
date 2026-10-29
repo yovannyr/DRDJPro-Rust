@@ -311,3 +311,7 @@ A test at the existing 100,000-track limit exercises the library model and acces
 ## Cue quantization step checkpoint (2026-10-29)
 
 The CUES tools panel adds a per-deck quantization selector for 1/8, 1/4, 1/2, 1, 2 or 4 beats. The existing KEYLOCK/trigger row remains compact; trigger text is Next grid and its accessible description explains scheduled recall. QUANT uses the selected nearest step for new slots; Next grid uses the next selected step for occupied slots and preserves their saved timestamp. Changing the bound step cancels a queued trigger. Default is one beat; no new global toggle or persistent preference is implied. Headless property/engine and two-size geometry evidence is separate from native dropdown/focus/usability acceptance.
+
+## Persistent Quantize settings (2026-10-29)
+
+Global QUANTIZE and the per-deck cue snap/Next grid/Auto Loop snap/step settings now restore from SQLite before preference controls become editable. Existing libraries with no settings keep the previous defaults. Controls remain available for session use if storage startup fails; save failures use the existing Retry indication. Restoring settings does not start playback, load tracks or restore an armed cue trigger. Headless restart/error/close tests cover this scope; native interaction and general device/performance preference parity remain open.

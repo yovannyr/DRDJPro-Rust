@@ -184,6 +184,7 @@ component CompactDeck inherits Rectangle {
     in property <[HotCueRow]> hot-cues;
     in-out property <bool> quantize-cues: false;
     in property <bool> quantize-enabled: true;
+    in property <bool> quantize-preferences-ready: true;
     in-out property <bool> quantize-triggers: false;
     in-out property <int> quantize-step: 3;
     changed quantize-step => { root.cancel-trigger(); }
@@ -297,7 +298,7 @@ component CompactDeck inherits Rectangle {
         }
         if root.tools-panel == 2 : HorizontalLayout {
             height: 26px; spacing: 2px;
-            CheckBox { text: "BEAT SNAP"; checked <=> root.auto-loop-snap; accessible-label: root.deck-label + " auto loop beat snap"; enabled: root.quantize-enabled && loaded && !loading && grid-active; }
+            CheckBox { text: "BEAT SNAP"; checked <=> root.auto-loop-snap; accessible-label: root.deck-label + " auto loop beat snap"; enabled: root.quantize-preferences-ready && root.quantize-enabled && loaded && !loading && grid-active; }
             Text { text: root.quantize-enabled && root.auto-loop-snap ? "Nearest beat · manual grid" : "Start at playhead"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
         }
         if root.tools-panel == 3 : VerticalLayout {
@@ -338,13 +339,13 @@ component CompactDeck inherits Rectangle {
             SpinBox { minimum: 1; maximum: 8; value <=> root.delete-slot; accessible-label: deck-label + " delete hot cue slot"; }
             Button { text: "EDIT"; accessible-label: deck-label + " edit hot cue"; enabled: loaded && !loading; clicked => { root.edit-hot-cue(root.delete-slot - 1); } }
             Button { text: "DELETE"; accessible-label: deck-label + " delete hot cue"; enabled: loaded && !loading; clicked => { root.delete-hot-cue(root.delete-slot - 1); } }
-            CheckBox { text:"Snap cues"; accessible-label:root.deck-label+" quantize new cues"; accessible-description:root.quantize-enabled ? "Set new cues on nearest selected manual grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-cues; enabled:root.quantize-enabled && (root.quantize-cues || (root.loaded && !root.loading && root.grid-active)); }
+            CheckBox { text:"Snap cues"; accessible-label:root.deck-label+" quantize new cues"; accessible-description:root.quantize-enabled ? "Set new cues on nearest selected manual grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-cues; enabled:root.quantize-preferences-ready && root.quantize-enabled && (root.quantize-cues || (root.loaded && !root.loading && root.grid-active)); }
         }
         if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 22px;
             CheckBox { text: "KEYLOCK"; checked <=> root.keylock; accessible-label: root.deck-label + " keylock"; enabled: root.loaded && !root.loading; toggled => { root.keylock-change(); } }
-            CheckBox { text: "Next grid"; accessible-label: root.deck-label + " quantize cue triggers"; accessible-description: root.quantize-enabled ? "Recall saved cue at next selected grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-triggers; enabled: root.quantize-enabled && root.loaded && !root.loading; toggled => { root.cancel-trigger(); } }
-            ComboBox { width: 90px; model: ["1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.quantize-step; accessible-label: root.deck-label + " quantization step"; enabled: root.quantize-enabled && root.loaded && !root.loading; }
+            CheckBox { text: "Next grid"; accessible-label: root.deck-label + " quantize cue triggers"; accessible-description: root.quantize-enabled ? "Recall saved cue at next selected grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-triggers; enabled: root.quantize-preferences-ready && root.quantize-enabled && root.loaded && !root.loading; toggled => { root.cancel-trigger(); } }
+            ComboBox { width: 90px; model: ["1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.quantize-step; accessible-label: root.deck-label + " quantization step"; enabled: root.quantize-preferences-ready && root.quantize-enabled && root.loaded && !root.loading; }
         }
         if root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 26px; spacing: 2px;
@@ -615,6 +616,7 @@ export component AppWindow inherits Window {
     in-out property <int> right-detail-window: 8;
     in property <bool> audio-enabled: false;
     in-out property <bool> quantize-enabled: true;
+    in property <bool> quantize-preferences-ready: true;
     callback quantize-mode-changed();
     changed quantize-enabled => { root.quantize-mode-changed(); }
     in property <bool> loading: false;
@@ -789,7 +791,7 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             height: 32px;
             Text { text: "DRDJ PRO"; color: #f1f4fa; font-size: 21px; font-weight: 800; vertical-alignment: center; }
-            CheckBox { text: "QUANTIZE"; accessible-label: "Global Quantize"; accessible-description: "Enable selected cue and auto-loop quantization on both decks; disabling cancels queued cue triggers and retains deck preferences"; checked <=> root.quantize-enabled; toggled => { root.quantize-mode-changed(); } }
+            CheckBox { text: "QUANTIZE"; accessible-label: "Global Quantize"; accessible-description: "Enable selected cue and auto-loop quantization on both decks; disabling cancels queued cue triggers and retains deck preferences"; checked <=> root.quantize-enabled; enabled: root.quantize-preferences-ready; toggled => { root.quantize-mode-changed(); } }
             Text { text: "EXTENDED / " + (audio-enabled ? "INTERNAL AUDIO" : "SIMULATION · NO AUDIO"); color: #9cacc1; horizontal-alignment: right; vertical-alignment: center; }
         }
         HorizontalLayout {
@@ -816,6 +818,7 @@ export component AppWindow inherits Window {
                 hot-cues: root.left-hot-cues;
                 quantize-cues <=> root.left-quantize-cues;
                 quantize-enabled: root.quantize-enabled;
+                quantize-preferences-ready: root.quantize-preferences-ready;
                 quantize-triggers <=> root.left-quantize-triggers;
                 quantize-step <=> root.left-quantize-step;
                 keylock <=> root.left-keylock; keylock-change => { root.keylock-left(); }
@@ -851,6 +854,7 @@ export component AppWindow inherits Window {
                 hot-cues: root.right-hot-cues;
                 quantize-cues <=> root.right-quantize-cues;
                 quantize-enabled: root.quantize-enabled;
+                quantize-preferences-ready: root.quantize-preferences-ready;
                 quantize-triggers <=> root.right-quantize-triggers;
                 quantize-step <=> root.right-quantize-step;
                 keylock <=> root.right-keylock; keylock-change => { root.keylock-right(); }

@@ -170,3 +170,10 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | --- | --- | --- | --- |
 | R-QUANT-03 | Toolbar master gating opted-in cue snap, scheduled recall and Auto Loop snap on A/B, preserving preferences | Actual accessible toolbar action, immediate dual-trigger cancellation verified by rendered source progression; programmatic property cancellation; retained flags/steps, exact unsnapped cues, immediate paused recall, playhead auto-loops, restored snap behavior | Default-on session master; global/deck preference persistence, full reference parity and native/hardware acceptance remain open |
 | R-QUANT-04 | Master toggle preserves unrelated performance state | Unchanged source position, playing state, grid, base tempo and gains; preserved active engine Sync correction and nudge; existing loop bounds retained when re-enabling; toolbar geometry at 850x740 and 1280x860 | Headless checks do not establish visual, keyboard/focus, musical or physical audio acceptance |
+
+## Persistent Quantize preferences (2026-10-29)
+
+| ID | Capability | Evidence | Remaining scope |
+| --- | --- | --- | --- |
+| R-QUANT-05 | Versioned global/deck Quantize settings in library SQLite, restored before editing | Restart with distinct deck flags/steps; newer edits before acknowledgement; final close flush and inflight revert; closing during restore; worker-only atomic delta/preference rollback, injected failure/Retry and invalid input rejection | No portable JSON preference export or unrelated transport/device settings; full reference/native acceptance open |
+| R-QUANT-06 | Malformed preferences use defaults and warn without losing the catalog or silently rewriting the original | Invalid JSON/version/unknown fields/step and oversize/embedded-NUL payloads; bounded production SQL read, worker load and unchanged original row after close | Existing SQLite backup/recovery applies to the database; subjective usability and native accessibility acceptance remain open |
