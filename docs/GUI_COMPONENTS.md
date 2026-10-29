@@ -307,3 +307,7 @@ The existing ListView now obtains LibraryRow data on demand from an ordered stab
 ## 100,000-track headless library workflow (2026-10-27)
 
 A test at the existing 100,000-track limit exercises the library model and accessible search/sort/selection callbacks; two model-row requests were observed before explicit first/last lookups in one standalone run. Paths and metadata are synthetic. This does not constitute native visual/scrolling/screen-reader acceptance or establish responsiveness with real media and device loads. Indexed/paged search remains open.
+
+## Cue quantization step checkpoint (2026-10-29)
+
+The CUES tools panel adds a per-deck quantization selector for 1/8, 1/4, 1/2, 1, 2 or 4 beats. The existing KEYLOCK/trigger row remains compact; trigger text is Next grid and its accessible description explains scheduled recall. QUANT uses the selected nearest step for new slots; Next grid uses the next selected step for occupied slots and preserves their saved timestamp. Changing the bound step cancels a queued trigger. Default is one beat; no new global toggle or persistent preference is implied. Headless property/engine and two-size geometry evidence is separate from native dropdown/focus/usability acceptance.

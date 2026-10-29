@@ -156,3 +156,10 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | R-PITCH-06 | Separate base pitch and temporary0.98/1/1.02 nudge engine state | Composition/rate/limit tests, current-base release after a pitch edit, phase/loop/grid/gain/deck preservation, pause/seek/Cue/new-source and EOF release, steady stereo-tone frequency direction/base checks | Engine-only; native momentary GUI cancellation, live transition/physical timing, keylock/Sync open |
 
 - R-PITCH-07: Momentary nudge GUI/control-plane: fifth deck panel, pointer/Space/Return hold/release, direct focus and panel cancellation, source-bound held flags, busy/transport/EOF/shutdown neutralization. Headless input/geometry/state evidence; native visual/listening/live-transition/latency qualification remains open. Manual-grid tempo matching is next; phase Sync/keylock remain separate.
+
+## Selectable cue quantization follow-up (2026-10-29)
+
+| ID | Capability | Evidence | Remaining scope |
+| --- | --- | --- | --- |
+| R-QUANT-01 | Per-deck 1/8, 1/4, 1/2, 1, 2, 4 beat cue placement/trigger lattice | Exact tie and anchor tests at 44.1/48/96 kHz, fractional BPM, strict-future source-frame rounding, one-Hz edge, invalid inputs; both-deck actual controller/PCM workflows for all six steps, exact saved cue recall and EOF rejection | Manual quarter-beat grids only; global Quantize mode, persisted preferences, loop quantization and musical/native acceptance remain open |
+| R-QUANT-02 | Queued trigger cancellation on bound step change; independent deck choices | Generated UI property change, Slint change-handler processing and rendered source timeline; enabled-control and two-size geometry checks | Native dropdown/keyboard/focus and physical hardware acceptance not established |

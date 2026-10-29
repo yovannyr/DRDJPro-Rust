@@ -184,6 +184,8 @@ component CompactDeck inherits Rectangle {
     in property <[HotCueRow]> hot-cues;
     in-out property <bool> quantize-cues: false;
     in-out property <bool> quantize-triggers: false;
+    in-out property <int> quantize-step: 3;
+    changed quantize-step => { root.cancel-trigger(); }
     in-out property <bool> keylock: false;
     callback keylock-change();
     callback cancel-trigger();
@@ -335,12 +337,13 @@ component CompactDeck inherits Rectangle {
             SpinBox { minimum: 1; maximum: 8; value <=> root.delete-slot; accessible-label: deck-label + " delete hot cue slot"; }
             Button { text: "EDIT"; accessible-label: deck-label + " edit hot cue"; enabled: loaded && !loading; clicked => { root.edit-hot-cue(root.delete-slot - 1); } }
             Button { text: "DELETE"; accessible-label: deck-label + " delete hot cue"; enabled: loaded && !loading; clicked => { root.delete-hot-cue(root.delete-slot - 1); } }
-            CheckBox { text:"QUANT"; accessible-label:root.deck-label+" quantize new cues"; accessible-description:"Set new cues on nearest confirmed manual beat"; checked <=> root.quantize-cues; enabled:root.quantize-cues || (root.loaded && !root.loading && root.grid-active); }
+            CheckBox { text:"QUANT"; accessible-label:root.deck-label+" quantize new cues"; accessible-description:"Set new cues on nearest selected manual grid step"; checked <=> root.quantize-cues; enabled:root.quantize-cues || (root.loaded && !root.loading && root.grid-active); }
         }
         if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 22px;
             CheckBox { text: "KEYLOCK"; checked <=> root.keylock; accessible-label: root.deck-label + " keylock"; enabled: root.loaded && !root.loading; toggled => { root.keylock-change(); } }
-            CheckBox { text: "Trigger on next beat"; accessible-label: root.deck-label + " quantize cue triggers"; checked <=> root.quantize-triggers; enabled: root.loaded && !root.loading; toggled => { root.cancel-trigger(); } }
+            CheckBox { text: "Next grid"; accessible-label: root.deck-label + " quantize cue triggers"; accessible-description: "Recall saved cue at next selected grid step"; checked <=> root.quantize-triggers; enabled: root.loaded && !root.loading; toggled => { root.cancel-trigger(); } }
+            ComboBox { width: 90px; model: ["1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.quantize-step; accessible-label: root.deck-label + " quantization step"; enabled: root.loaded && !root.loading; }
         }
         if root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
             height: 26px; spacing: 2px;
@@ -635,6 +638,7 @@ export component AppWindow inherits Window {
     in property <[HotCueRow]> left-hot-cues;
     in-out property <bool> left-quantize-cues: false;
     in-out property <bool> left-quantize-triggers: false;
+    in-out property <int> left-quantize-step: 3;
     in-out property <bool> left-keylock: false;
     callback keylock-left();
     callback cancel-trigger-left();
@@ -672,6 +676,7 @@ export component AppWindow inherits Window {
     in property <[HotCueRow]> right-hot-cues;
     in-out property <bool> right-quantize-cues: false;
     in-out property <bool> right-quantize-triggers: false;
+    in-out property <int> right-quantize-step: 3;
     in-out property <bool> right-keylock: false;
     callback keylock-right();
     callback cancel-trigger-right();
@@ -806,6 +811,7 @@ export component AppWindow inherits Window {
                 hot-cues: root.left-hot-cues;
                 quantize-cues <=> root.left-quantize-cues;
                 quantize-triggers <=> root.left-quantize-triggers;
+                quantize-step <=> root.left-quantize-step;
                 keylock <=> root.left-keylock; keylock-change => { root.keylock-left(); }
                 cancel-trigger => { root.cancel-trigger-left(); }
                 cue-editing: root.left-cue-editing; cue-name <=> root.left-cue-name; cue-rgb <=> root.left-cue-rgb;
@@ -839,6 +845,7 @@ export component AppWindow inherits Window {
                 hot-cues: root.right-hot-cues;
                 quantize-cues <=> root.right-quantize-cues;
                 quantize-triggers <=> root.right-quantize-triggers;
+                quantize-step <=> root.right-quantize-step;
                 keylock <=> root.right-keylock; keylock-change => { root.keylock-right(); }
                 cancel-trigger => { root.cancel-trigger-right(); }
                 cue-editing: root.right-cue-editing; cue-name <=> root.right-cue-name; cue-rgb <=> root.right-cue-rgb;

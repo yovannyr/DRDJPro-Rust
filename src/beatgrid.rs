@@ -2,6 +2,41 @@
 use std::time::Duration;
 pub const MAX_METER_CHANGES: usize = 16;
 const MAX_BAR: u32 = 1_000_000;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantizeStep {
+    Eighth,
+    Quarter,
+    Half,
+    Beat,
+    Two,
+    Four,
+}
+impl TryFrom<i32> for QuantizeStep {
+    type Error = String;
+    fn try_from(index: i32) -> Result<Self, String> {
+        match index {
+            0 => Ok(Self::Eighth),
+            1 => Ok(Self::Quarter),
+            2 => Ok(Self::Half),
+            3 => Ok(Self::Beat),
+            4 => Ok(Self::Two),
+            5 => Ok(Self::Four),
+            _ => Err("Invalid quantization step".into()),
+        }
+    }
+}
+impl QuantizeStep {
+    fn ratio(self) -> (i128, i128) {
+        match self {
+            Self::Eighth => (1, 8),
+            Self::Quarter => (1, 4),
+            Self::Half => (1, 2),
+            Self::Beat => (1, 1),
+            Self::Two => (2, 1),
+            Self::Four => (4, 1),
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MeterChange {
@@ -150,14 +185,41 @@ impl BeatGrid {
     }
     /// Nearest whole-beat source frame; ties choose the later beat. Exclude negative beats.
     pub fn nearest_beat_frame(self, position: Duration, rate: u32) -> Result<usize, String> {
+        self.quantized_frame(position, rate, QuantizeStep::Beat, false)
+    }
+    pub fn nearest_quantized_frame(
+        self,
+        position: Duration,
+        rate: u32,
+        step: QuantizeStep,
+    ) -> Result<usize, String> {
+        self.quantized_frame(position, rate, step, false)
+    }
+    /// Strictly later representable source frame on the selected anchored lattice.
+    pub fn next_quantized_frame(
+        self,
+        position: Duration,
+        rate: u32,
+        step: QuantizeStep,
+    ) -> Result<usize, String> {
+        self.quantized_frame(position, rate, step, true)
+    }
+    fn quantized_frame(
+        self,
+        position: Duration,
+        rate: u32,
+        step: QuantizeStep,
+        next: bool,
+    ) -> Result<usize, String> {
         if rate == 0 {
             return Err("Invalid source sample rate".into());
         }
         // BPM is a bounded positive normal f64. Preserve its exact binary rational
         // value so floor/ceil cannot cross a mathematical beat or nanosecond tie.
         let bits = self.bpm.to_bits();
-        let mantissa = i128::from((bits & ((1_u64 << 52) - 1)) | (1_u64 << 52));
-        let denominator = 60_000_000_000_i128 << (1075 - ((bits >> 52) & 0x7ff));
+        let (step_numerator, step_denominator) = step.ratio();
+        let mantissa = i128::from((bits & ((1_u64 << 52) - 1)) | (1_u64 << 52)) * step_denominator;
+        let denominator = (60_000_000_000_i128 << (1075 - ((bits >> 52) & 0x7ff))) * step_numerator;
         let anchor = (self.anchor.as_nanos() as i128)
             .checked_mul(mantissa)
             .ok_or("Aligned beat arithmetic overflow")?;
@@ -165,21 +227,35 @@ impl BeatGrid {
             .checked_mul(mantissa)
             .ok_or("Aligned beat arithmetic overflow")?;
         let lower = delta.div_euclid(denominator);
-        let index = (lower + i128::from(delta.rem_euclid(denominator) * 2 >= denominator))
+        let index = (lower + i128::from(next || delta.rem_euclid(denominator) * 2 >= denominator))
             .max(-(anchor / denominator));
-        let time = anchor
-            .checked_add(
-                index
-                    .checked_mul(denominator)
-                    .ok_or("Aligned beat arithmetic overflow")?,
-            )
-            .ok_or("Aligned beat arithmetic overflow")?;
-        let numerator = time
-            .checked_mul(i128::from(rate))
-            .ok_or("Aligned beat arithmetic overflow")?;
-        let divisor = mantissa * 1_000_000_000;
-        let frame = numerator / divisor + i128::from((numerator % divisor) * 2 >= divisor);
-        usize::try_from(frame).map_err(|_| "Aligned beat exceeds source-frame range".into())
+        let to_frame = |index: i128| -> Result<usize, String> {
+            let time = anchor
+                .checked_add(
+                    index
+                        .checked_mul(denominator)
+                        .ok_or("Aligned beat arithmetic overflow")?,
+                )
+                .ok_or("Aligned beat arithmetic overflow")?;
+            let numerator = time
+                .checked_mul(i128::from(rate))
+                .ok_or("Aligned beat arithmetic overflow")?;
+            let divisor = mantissa * 1_000_000_000;
+            let frame = numerator / divisor + i128::from((numerator % divisor) * 2 >= divisor);
+            usize::try_from(frame).map_err(|_| "Aligned beat exceeds source-frame range".into())
+        };
+        if !next {
+            return to_frame(index);
+        }
+        // At extremely low rates several grid points can round onto one frame.
+        // The shortest step is 1/32 s; 32 advances cover a whole frame even at 1 Hz.
+        for offset in 0..=32 {
+            let frame = to_frame(index + offset)?;
+            if crate::looping::frame_time(frame, rate) > position {
+                return Ok(frame);
+            }
+        }
+        Err("No later representable quantization frame".into())
     }
     /// Return only the visible lines. The supported 32 s/240 BPM view has at most 129.
     pub fn lines(self, start: Duration, end: Duration) -> Vec<GridLine> {
@@ -566,5 +642,69 @@ mod tests {
         assert_eq!(bars, vec![(0, false), (1, true), (2, false)]);
         assert_eq!(lines.iter().filter(|line| line.first).count(), 1);
         assert!(BeatGrid::new(120., MAX_ANCHOR + Duration::from_nanos(1)).is_err());
+    }
+    #[test]
+    fn quantization_steps_preserve_ties_anchors_and_strict_future_frames() {
+        for rate in [44100, 48000, 96000] {
+            let grid = BeatGrid::new(120., Duration::from_secs(2)).unwrap();
+            for index in 0..6 {
+                let step = QuantizeStep::try_from(index).unwrap();
+                let (n, d) = step.ratio();
+                let period_ns = (500_000_000 * n / d) as u64;
+                let midpoint = Duration::from_nanos(2_000_000_000 + period_ns / 2);
+                let later = ((2_000_000_000 + period_ns) as u128 * u128::from(rate) + 500_000_000)
+                    / 1_000_000_000;
+                assert_eq!(
+                    grid.nearest_quantized_frame(midpoint, rate, step).unwrap() as u128,
+                    later
+                );
+                let earlier = grid
+                    .nearest_quantized_frame(midpoint - Duration::from_nanos(1), rate, step)
+                    .unwrap();
+                assert_eq!(earlier, rate as usize * 2);
+                for position in [
+                    Duration::ZERO,
+                    Duration::from_nanos(1),
+                    midpoint,
+                    MAX_ANCHOR,
+                ] {
+                    let next = grid.next_quantized_frame(position, rate, step).unwrap();
+                    assert!(crate::looping::frame_time(next, rate) > position);
+                }
+            }
+            let grid = BeatGrid::new(123.456, Duration::from_nanos(123456789)).unwrap();
+            for index in 0..6 {
+                let step = QuantizeStep::try_from(index).unwrap();
+                for position in [
+                    Duration::ZERO,
+                    Duration::from_millis(355),
+                    Duration::from_secs(120),
+                ] {
+                    let frame = grid.nearest_quantized_frame(position, rate, step).unwrap();
+                    let (n, d) = step.ratio();
+                    let period = 60. / grid.bpm() * n as f64 / d as f64;
+                    let tick = ((position.as_secs_f64() - grid.anchor().as_secs_f64()) / period)
+                        .round()
+                        .max((-grid.anchor().as_secs_f64() / period).ceil());
+                    let expected = ((grid.anchor().as_secs_f64() + tick * period) * f64::from(rate))
+                        .round() as usize;
+                    assert_eq!(frame, expected);
+                }
+            }
+        }
+        let grid = BeatGrid::new(240., Duration::from_nanos(1)).unwrap();
+        assert_eq!(
+            grid.next_quantized_frame(Duration::ZERO, 1, QuantizeStep::Eighth)
+                .unwrap(),
+            1
+        );
+        assert!(grid
+            .next_quantized_frame(Duration::ZERO, 0, QuantizeStep::Beat)
+            .is_err());
+        assert!(grid
+            .nearest_quantized_frame(Duration::MAX, 48000, QuantizeStep::Eighth)
+            .is_err());
+        assert!(QuantizeStep::try_from(-1).is_err());
+        assert!(QuantizeStep::try_from(6).is_err());
     }
 }

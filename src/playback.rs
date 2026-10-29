@@ -674,7 +674,12 @@ impl DualDeckEngine {
             render.cancel_trigger();
         }
     }
-    pub fn schedule_cue(&self, id: DeckId, target: Duration) -> Result<(), String> {
+    pub fn schedule_cue(
+        &self,
+        id: DeckId,
+        target: Duration,
+        step: crate::beatgrid::QuantizeStep,
+    ) -> Result<(), String> {
         let deck = self.decks[id.index()].borrow();
         let track = deck.track.as_ref().ok_or("No track loaded")?;
         if !deck.playing() || deck.loop_active || deck.nudge != 0 || deck.sync_factor != 1.0 {
@@ -686,17 +691,13 @@ impl DualDeckEngine {
         let render = deck.render.as_ref().ok_or("Missing renderer")?;
         let rate = track.samples.sample_rate();
         let position = render.position();
-        let mut at = grid.nearest_beat_frame(position, rate)?;
-        if frame_time(at, rate) <= position {
-            at = grid
-                .nearest_beat_frame(position + Duration::from_secs_f64(60.0 / grid.bpm()), rate)?;
-        }
+        let at = grid.next_quantized_frame(position, rate, step)?;
         if target >= track.duration() {
             return Err("Cue is outside the loaded track".into());
         }
         let target_frame = (target.as_nanos() * u128::from(rate) / 1_000_000_000) as usize;
         if at >= track.samples.frames() || target_frame >= track.samples.frames() {
-            return Err("Scheduled cue or next beat is outside the loaded track".into());
+            return Err("Scheduled cue or next grid step is outside the loaded track".into());
         }
         render.schedule_trigger(at, target_frame);
         Ok(())
