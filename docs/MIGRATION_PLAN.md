@@ -12,6 +12,8 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 
 ✅ = im beschriebenen Umfang implementiert und lokal geprüft. ☐ = noch offen. Die Häkchen kennzeichnen einzelne Arbeitspakete; keine der sechs Gesamtphasen ist bereits vollständig abgenommen. Historische Checkpoints weiter unten dokumentieren den damaligen Stand.
 
+🛠 = implementiert und statisch reviewt, aber noch nicht getestet. Nutzeranweisung 2026-10-29: die nächsten drei FX-Teilschritte implementieren, danach committen/pushen; Testausführung erst am 2026-10-30. Der letzte vollständig getestete Stand bleibt 80a8665 (271 bestandene Tests); die folgenden FX-Änderungen erweitern diesen Nachweis noch nicht.
+
 ### Erledigte Arbeitspakete
 
 - [x] ✅ Alle 59 nummerierten UI-Referenzpunkte im Komponenten-Inventar erfasst; vollständiger Code-/Referenztest-Abgleich bleibt offen.
@@ -116,6 +118,9 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Bipolarer Filter je Deck: Mitte aus, links Tiefpass, rechts Hochpass; logarithmischer Sweep, feste Güte 1/√2, fünf Millisekunden Überblendung und separate OFF-Taste. Frequenzgang, Endpunkte, neutrale Stellung und Anbindung an beide Decks automatisiert geprüft; sitzungsbezogen.
   - [x] ✅ Unabhängige A/B-Sample-Peak-Meter nach EQ/Filter/Trim und vor den Fadern, aus vollständigen 50-ms-Fenstern. Clip-Hold für ≥0 dBFS oder ungültige Samples bis zum manuellen Löschen, auch über Trackwechsel hinweg; Reset-Rennen, A/B-Signal, stumme Fader, GUI und Freigabe alter Messzustände geprüft. Vorhandener Post-Fader-Bus-Sample-Peak bleibt separat; keine True-Peak-/Lautheits-/Hardware-Abnahme.
   - [ ] ☐ Effekte mit Bypass und Dry/Wet, Parameter-/Preset-Speicherung sowie Controller-Anbindung und musikalische/native Abnahme. Trim/EQ sind bisher sitzungsbezogen; kein Full-Kill-EQ und kein Limiter.
+    - [ ] 🛠 FX1 implementiert: ein post-fader Delay je Deck mit 20–1000 ms, Feedback 0–85%, Dry/Wet, Bypass und FX-Overlay. Begrenzte fallible Pufferreservierung, fünf Millisekunden Parameter-/Tap-Überblendung, ausklingende Fahnen bei Pause/Trackwechsel. Tests und native Abnahme zurückgestellt.
+    - [ ] 🛠 FX2 implementiert: aktuelle Delay-Parameter und acht gemeinsame Preset-Slots im SQLite-Worker; begrenztes JSON, gemeinsame Transaktion, Restore-/Ack-/Close-Snapshots und Session-only bei ungültigen gespeicherten FX-Daten. Geschriebene Regressionen noch nicht ausgeführt.
+    - [ ] 🛠 FX3 implementiert: MC4000-FX1-Taster für Bypass, drei FX-Regler für Dry/Wet/Feedback/Zeit und Beats-Encoder für 10-ms-Schritte; getrennte Deck-Bänke und coalescierte Reglerwerte. MIDI-Adressen aus Herstellerhandbuch, physischer Test noch offen; kein Beat-Sync/Tap und keine drei unabhängigen Effektslots behauptet.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
   - [x] ✅ Ausgabepaar des bestehenden Stereo-Mixes in der Toolbar wählen: 1/2, 3/4 und weitere verfügbare Paare; Übernahme an vollständigen Framegrenzen, ohne Seek/Reload und mit Headless-Signal-/Zustands-/Allokationstests. Auswahl gilt für die laufende Sitzung.
   - [x] ✅ Ausgabepaar profilgebunden speichern und beim Start wiederherstellen: Backend, eindeutiger Gerätename und Kanalzahl müssen passen; mehrdeutige/unbekannte Geräte sowie defekte oder volle Profiltabellen bleiben sicher sitzungsbezogen. Neustart-, Retry-, Close-/Save-Ack- und Transaktionstests.

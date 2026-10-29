@@ -11,6 +11,9 @@ pub enum Command {
     Cue(usize),
     Fader(usize, u8),
     Crossfader(u8),
+    FxToggle(usize),
+    FxKnob(usize, usize, u8),
+    FxTimeStep(usize, i8),
 }
 pub fn decode(bytes: &[u8]) -> Option<Command> {
     if bytes.len() != 3 || bytes[1] > 127 || bytes[2] > 127 {
@@ -18,6 +21,20 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
     }
     let channel = bytes[0] & 15;
     match (bytes[0] & 0xf0, channel, bytes[1], bytes[2]) {
+        (0x90, 8..=9, 0, 1..=127) => Some(Command::FxToggle((channel - 8) as usize)),
+        (0xb0, 8..=9, 0..=2, value) => Some(Command::FxKnob(
+            (channel - 8) as usize,
+            bytes[1] as usize,
+            value,
+        )),
+        (0xb0, 8..=9, 3, 1..=127) => Some(Command::FxTimeStep(
+            (channel - 8) as usize,
+            if bytes[2] < 64 {
+                bytes[2] as i8
+            } else {
+                (i16::from(bytes[2]) - 128) as i8
+            },
+        )),
         (0x90, 0..=1, 13, 1..=127) => Some(Command::Keylock(channel as usize)),
         (0x90, 0..=1, 0, 1..=127) => Some(Command::Toggle(channel as usize)),
         (0x90, 0..=1, 1, 1..=127) => Some(Command::Cue(channel as usize)),
@@ -92,6 +109,7 @@ pub struct Input {
     greeting: Greeting,
     buttons: Receiver<Command>,
     levels: Arc<[AtomicU8; 3]>,
+    fx_levels: Arc<[AtomicU8; 6]>,
     overflow: Arc<AtomicBool>,
 }
 impl Input {
@@ -108,6 +126,8 @@ impl Input {
         let (sender, buttons) = mpsc::sync_channel(128);
         let levels = Arc::new(std::array::from_fn(|_| AtomicU8::new(128)));
         let values = levels.clone();
+        let fx_levels = Arc::new(std::array::from_fn(|_| AtomicU8::new(128)));
+        let fx_values = Arc::clone(&fx_levels);
         let overflow = Arc::new(AtomicBool::new(false));
         let failed = overflow.clone();
         let connection = midi
@@ -117,6 +137,9 @@ impl Input {
                 move |_, data, _| {
                     if let Some(command) = decode(data) {
                         match command {
+                            Command::FxKnob(deck, knob, value) => {
+                                fx_values[deck * 3 + knob].store(value, Ordering::Release)
+                            }
                             Command::Fader(deck, value) => {
                                 values[deck].store(value, Ordering::Release)
                             }
@@ -148,6 +171,7 @@ impl Input {
             _connection: connection,
             buttons,
             levels,
+            fx_levels,
             overflow,
         }))
     }
@@ -173,6 +197,12 @@ impl Input {
                 });
             }
         }
+        for index in 0..6 {
+            let value = self.fx_levels[index].swap(128, Ordering::AcqRel);
+            if value < 128 {
+                apply(Command::FxKnob(index / 3, index % 3, value));
+            }
+        }
         for _ in 0..128 {
             match self.buttons.try_recv() {
                 Ok(command) => apply(command),
@@ -190,7 +220,43 @@ impl Drop for Input {
     }
 }
 pub fn apply(ui: &crate::AppWindow, command: Command) {
+    if matches!(
+        &command,
+        Command::FxToggle(_) | Command::FxKnob(_, _, _) | Command::FxTimeStep(_, _)
+    ) && !ui.get_quantize_preferences_ready()
+    {
+        return;
+    }
     match command {
+        Command::FxToggle(deck) => {
+            if deck == 0 {
+                ui.set_fx_active_a(!ui.get_fx_active_a());
+            } else {
+                ui.set_fx_active_b(!ui.get_fx_active_b());
+            }
+            ui.invoke_fx_changed(deck as i32);
+        }
+        Command::FxKnob(deck, knob, value) => {
+            let value = f32::from(value) / 127.;
+            match (deck, knob) {
+                (0, 0) => ui.set_fx_wet_a(value * 100.),
+                (_, 0) => ui.set_fx_wet_b(value * 100.),
+                (0, 1) => ui.set_fx_feedback_a(value * 85.),
+                (_, 1) => ui.set_fx_feedback_b(value * 85.),
+                (0, 2) => ui.set_fx_time_a(20. + value * 980.),
+                (_, 2) => ui.set_fx_time_b(20. + value * 980.),
+                _ => return,
+            }
+            ui.invoke_fx_changed(deck as i32);
+        }
+        Command::FxTimeStep(deck, step) => {
+            if deck == 0 {
+                ui.set_fx_time_a((ui.get_fx_time_a() + f32::from(step) * 10.).clamp(20., 1000.));
+            } else {
+                ui.set_fx_time_b((ui.get_fx_time_b() + f32::from(step) * 10.).clamp(20., 1000.));
+            }
+            ui.invoke_fx_changed(deck as i32);
+        }
         Command::Keylock(0) => {
             ui.set_left_keylock(!ui.get_left_keylock());
             ui.invoke_keylock_left();
@@ -220,6 +286,31 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fx_banks_decode_and_reach_separate_gui_parameters() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        ui.set_quantize_preferences_ready(true);
+        assert_eq!(decode(&[0x98, 0, 127]), Some(Command::FxToggle(0)));
+        assert_eq!(decode(&[0xb9, 3, 127]), Some(Command::FxTimeStep(1, -1)));
+        assert_eq!(decode(&[0xb8, 3, 2]), Some(Command::FxTimeStep(0, 2)));
+        assert_eq!(decode(&[0x98, 0, 0]), None);
+        assert_eq!(decode(&[0x98, 11, 127]), None);
+        apply(&ui, decode(&[0x98, 0, 127]).unwrap());
+        assert!(ui.get_fx_active_a());
+        assert!(!ui.get_fx_active_b());
+        apply(&ui, decode(&[0xb9, 0, 127]).unwrap());
+        assert_eq!(ui.get_fx_wet_b(), 100.);
+        apply(&ui, decode(&[0xb8, 1, 127]).unwrap());
+        assert_eq!(ui.get_fx_feedback_a(), 85.);
+        apply(&ui, decode(&[0xb9, 2, 127]).unwrap());
+        assert_eq!(ui.get_fx_time_b(), 1000.);
+        apply(&ui, decode(&[0xb9, 3, 127]).unwrap());
+        assert_eq!(ui.get_fx_time_b(), 990.);
+        ui.set_quantize_preferences_ready(false);
+        apply(&ui, Command::FxToggle(1));
+        assert!(!ui.get_fx_active_b());
+    }
     #[test]
     fn greeting_runs_five_circuits_then_keeps_all_leds_on() {
         assert_eq!(LED_PATH[0], [0x94, 0x14, 1]);

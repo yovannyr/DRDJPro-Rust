@@ -891,12 +891,42 @@ impl Store {
     ) -> Result<(), String> {
         self.save_all_state(delta, preferences, None)
     }
+    #[cfg(test)]
     fn save_all_state(
         &mut self,
         delta: &crate::library::CatalogDelta,
         preferences: Option<QuantizePreferences>,
         output: Option<OutputRoute>,
     ) -> Result<(), String> {
+        self.save_session_state(delta, preferences, output, None)
+    }
+    fn read_fx_preferences(&self) -> Result<crate::delay_fx::FxPreferences, String> {
+        let raw:Option<String>=self.connection.query_row("SELECT CASE WHEN length(CAST(value AS BLOB))<=8192 THEN value ELSE '' END FROM library_meta WHERE key='delay_fx_v1'",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        let Some(raw) = raw else {
+            return Ok(Default::default());
+        };
+        let state: crate::delay_fx::FxPreferences = serde_json::from_str(&raw)
+            .map_err(|e| format!("Invalid saved delay preferences: {e}"))?;
+        state.validate()?;
+        Ok(state)
+    }
+    fn save_session_state(
+        &mut self,
+        delta: &crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+    ) -> Result<(), String> {
+        let fx_json = fx
+            .map(|value| -> Result<String, String> {
+                value.validate()?;
+                let json = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+                if json.len() > 8192 {
+                    return Err("Delay preferences exceed size limit".into());
+                }
+                Ok(json)
+            })
+            .transpose()?;
         let output_json = output
             .map(|route| -> Result<String, String> {
                 let mut profiles = self.read_output_routes()?;
@@ -919,6 +949,7 @@ impl Store {
             && delta.memberships.is_empty()
             && preferences.is_none()
             && output_json.is_none()
+            && fx_json.is_none()
         {
             return self.checkpoint(true);
         }
@@ -1080,6 +1111,9 @@ impl Store {
         if let Some(json) = output_json {
             tx.execute("INSERT INTO library_meta(key,value) VALUES('audio_output_routes_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|e|e.to_string())?;
         }
+        if let Some(json) = fx_json {
+            tx.execute("INSERT INTO library_meta(key,value) VALUES('delay_fx_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|e|e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         self.has_tracks = self.has_tracks || added > 0;
         self.backup_pending = true;
@@ -1109,6 +1143,7 @@ impl Store {
 }
 
 pub struct LoadedLibrary {
+    pub fx_preferences: Result<crate::delay_fx::FxPreferences, String>,
     pub library: Library,
     pub note: String,
     pub backfill_error: Option<String>,
@@ -1130,11 +1165,13 @@ enum Command {
         crate::library::CatalogDelta,
         Option<QuantizePreferences>,
         Option<OutputRoute>,
+        Option<crate::delay_fx::FxPreferences>,
     ),
     CloseDelta(
         Option<crate::library::CatalogDelta>,
         Option<QuantizePreferences>,
         Option<OutputRoute>,
+        Option<crate::delay_fx::FxPreferences>,
     ),
 }
 pub struct Worker {
@@ -1165,6 +1202,7 @@ impl Worker {
                         Err(error) => (QuantizePreferences::default(), Some(error)),
                     };
                 let loaded = LoadedLibrary {
+                    fx_preferences: store.read_fx_preferences(),
                     library,
                     note,
                     backfill_error: store.backfill_error.take(),
@@ -1199,20 +1237,24 @@ impl Worker {
                         }
                     };
                     match command {
-                        Command::SaveDelta(delta, preferences, output) => {
-                            let result = store.save_all_state(&delta, preferences, output);
+                        Command::SaveDelta(delta, preferences, output, fx) => {
+                            let result = store.save_session_state(&delta, preferences, output, fx);
                             retry_wait = result.is_err();
                             let _ = events_tx.send(Event::Saved(result));
                         }
-                        Command::CloseDelta(delta, preferences, output) => {
-                            if delta.is_some() || preferences.is_some() || output.is_some() {
+                        Command::CloseDelta(delta, preferences, output, fx) => {
+                            if delta.is_some()
+                                || preferences.is_some()
+                                || output.is_some()
+                                || fx.is_some()
+                            {
                                 let delta = delta.unwrap_or(crate::library::CatalogDelta {
                                     revision: 0,
                                     tracks: vec![],
                                     crates: None,
                                     memberships: vec![],
                                 });
-                                store.save_all_state(&delta, preferences, output)?;
+                                store.save_session_state(&delta, preferences, output, fx)?;
                             }
                             return store.checkpoint(true);
                         }
@@ -1244,14 +1286,24 @@ impl Worker {
     ) -> Result<(), String> {
         self.save_all_state(delta, preferences, None)
     }
+    #[cfg(test)]
     pub fn save_all_state(
         &self,
         delta: crate::library::CatalogDelta,
         preferences: Option<QuantizePreferences>,
         output: Option<OutputRoute>,
     ) -> Result<(), String> {
+        self.save_session_state(delta, preferences, output, None)
+    }
+    pub fn save_session_state(
+        &self,
+        delta: crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+    ) -> Result<(), String> {
         self.tx
-            .try_send(Command::SaveDelta(delta, preferences, output))
+            .try_send(Command::SaveDelta(delta, preferences, output, fx))
             .map_err(|e| e.to_string())
     }
     #[cfg(test)]
@@ -1266,15 +1318,25 @@ impl Worker {
     ) -> Result<(), String> {
         self.close_all_state(delta, preferences, None)
     }
+    #[cfg(test)]
     pub fn close_all_state(
         self,
         delta: Option<crate::library::CatalogDelta>,
         preferences: Option<QuantizePreferences>,
         output: Option<OutputRoute>,
     ) -> Result<(), String> {
+        self.close_session_state(delta, preferences, output, None)
+    }
+    pub fn close_session_state(
+        self,
+        delta: Option<crate::library::CatalogDelta>,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+    ) -> Result<(), String> {
         let _ = self
             .tx
-            .send(Command::CloseDelta(delta, preferences, output));
+            .send(Command::CloseDelta(delta, preferences, output, fx));
         self.join
             .join()
             .map_err(|_| "Library worker panicked".to_string())?
@@ -1297,6 +1359,74 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fx_preferences_roundtrip_and_combined_transaction_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut fx = crate::delay_fx::FxPreferences::default();
+        fx.decks[0].enabled = true;
+        fx.decks[0].time_ms = 500;
+        fx.presets[7] = Some(fx.decks[0]);
+        let empty = crate::library::CatalogDelta {
+            revision: 0,
+            tracks: vec![],
+            crates: None,
+            memberships: vec![],
+        };
+        store
+            .save_session_state(&empty, None, None, Some(fx.clone()))
+            .unwrap();
+        assert_eq!(store.read_fx_preferences().unwrap(), fx);
+        store.connection.execute_batch("CREATE TRIGGER reject_fx BEFORE INSERT ON library_meta WHEN NEW.key='delay_fx_v1' BEGIN SELECT RAISE(ABORT,'injected FX failure'); END;").unwrap();
+        let mut changed = fx.clone();
+        changed.decks[1].wet = 0.8;
+        let prefs = crate::preferences::QuantizePreferences {
+            enabled: false,
+            ..Default::default()
+        };
+        assert!(store
+            .save_session_state(&empty, Some(prefs), None, Some(changed))
+            .is_err());
+        assert_eq!(store.read_fx_preferences().unwrap(), fx);
+        assert!(store.read_quantize_preferences().unwrap().enabled);
+        drop(store);
+        let (_, loaded, _) = Store::open(db).unwrap();
+        assert_eq!(loaded.len(), 0);
+    }
+    #[test]
+    fn oversized_fx_row_is_bounded_and_preserved_by_unrelated_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db).unwrap();
+        let raw = format!("\0{}", "x".repeat(100000));
+        store
+            .connection
+            .execute(
+                "INSERT INTO library_meta(key,value) VALUES('delay_fx_v1',?1)",
+                [&raw],
+            )
+            .unwrap();
+        assert!(store.read_fx_preferences().is_err());
+        let empty = crate::library::CatalogDelta {
+            revision: 0,
+            tracks: vec![],
+            crates: None,
+            memberships: vec![],
+        };
+        store
+            .save_session_state(&empty, Some(Default::default()), None, None)
+            .unwrap();
+        let saved: String = store
+            .connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='delay_fx_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, raw);
+    }
     use super::*;
     #[test]
     fn output_profiles_merge_and_roll_back_with_catalog_and_quantize() {

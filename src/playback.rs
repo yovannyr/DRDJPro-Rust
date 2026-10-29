@@ -319,7 +319,10 @@ pub struct DualDeckEngine {
     eq_settings: [Cell<crate::mixer_dsp::EqSettings>; 2],
     eq_controls: [Arc<crate::mixer_dsp::EqControl>; 2],
     clip_latches: [Arc<crate::peak_meter::ClipLatch>; 2],
-    mixer: Mixer,
+    mixers: [Mixer; 2],
+    fx_settings: [Cell<crate::delay_fx::DelaySettings>; 2],
+    fx_controls: [Arc<crate::delay_fx::DelayControl>; 2],
+    _fx_rings: [Arc<crate::delay_fx::DelayRing>; 2],
     output_channels: u16,
     output_rate: u32,
     output_routing: Arc<crate::output_routing::RoutingControl>,
@@ -363,11 +366,12 @@ impl DualDeckEngine {
         if stream.config().channel_count() > crate::mixer_dsp::MAX_CHANNELS {
             return Err("Mixer DSP supports output devices with at most 32 channels".into());
         }
-        let mut engine = Self::from_mixer(
+        let mut engine = Self::try_from_mixer_with_clock(
             stream.mixer().clone(),
             stream.config().channel_count(),
             stream.config().sample_rate(),
-        );
+            Box::new(std::time::Instant::now),
+        )?;
         engine._stream = Some(stream);
         engine.output_device_key = name.and_then(|name| {
             crate::output_preferences::OutputDeviceKey::unique(
@@ -380,6 +384,7 @@ impl DualDeckEngine {
         Ok(engine)
     }
     /// An injected renderer on another thread must be stopped/joined before this engine drops.
+    #[cfg(test)]
     pub(crate) fn from_mixer(mixer: Mixer, output_channels: u16, output_rate: u32) -> Self {
         Self::from_mixer_with_clock(
             mixer,
@@ -388,12 +393,22 @@ impl DualDeckEngine {
             Box::new(std::time::Instant::now),
         )
     }
+    #[cfg(test)]
     pub(crate) fn from_mixer_with_clock(
         mixer: Mixer,
         output_channels: u16,
         output_rate: u32,
         control_clock: Box<dyn Fn() -> std::time::Instant>,
     ) -> Self {
+        Self::try_from_mixer_with_clock(mixer, output_channels, output_rate, control_clock)
+            .expect("injected output format supports bounded delay buffers")
+    }
+    fn try_from_mixer_with_clock(
+        mixer: Mixer,
+        output_channels: u16,
+        output_rate: u32,
+        control_clock: Box<dyn Fn() -> std::time::Instant>,
+    ) -> Result<Self, String> {
         assert!(
             output_channels > 0
                 && output_channels <= crate::mixer_dsp::MAX_CHANNELS
@@ -403,8 +418,21 @@ impl DualDeckEngine {
         let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
         let (deck_output, output_routing) = crate::output_routing::PairRouter::new(deck_output);
         let (bus, render_clock) = crate::render_bus::RenderBus::new(deck_output);
+        let fx_controls = std::array::from_fn(|_| crate::delay_fx::DelayControl::new());
+        let fx_rings = [
+            crate::delay_fx::DelayRing::new(output_rate, output_channels)?,
+            crate::delay_fx::DelayRing::new(output_rate, output_channels)?,
+        ];
+        let mixers = std::array::from_fn(|index| {
+            let (input, output) = rodio::mixer::mixer(output_channels, output_rate);
+            deck_mixer.add(crate::delay_fx::DelaySource::new(
+                output,
+                Arc::clone(&fx_controls[index]),
+                Arc::clone(&fx_rings[index]),
+            ));
+            input
+        });
         mixer.add(bus);
-        let mixer = deck_mixer;
         let decks = std::array::from_fn(|_| {
             // Ungeladene Decks benötigen keine leere Rodio-Queue im Audio-Mixer.
             // Beim Laden installiert replace_source die echte, dauerhaft stille EOF-Quelle.
@@ -436,7 +464,12 @@ impl DualDeckEngine {
             clip_latches: std::array::from_fn(
                 |_| Arc::new(crate::peak_meter::ClipLatch::default()),
             ),
-            mixer,
+            mixers,
+            fx_settings: std::array::from_fn(|_| {
+                Cell::new(crate::delay_fx::DelaySettings::default())
+            }),
+            fx_controls,
+            _fx_rings: fx_rings,
             output_channels,
             output_rate,
             output_routing,
@@ -448,7 +481,7 @@ impl DualDeckEngine {
             _stream: None,
         };
         engine.set_levels(MixerLevels::default());
-        engine
+        Ok(engine)
     }
     /// Control-plane reclamation after the source queue acknowledges destruction.
     pub fn collect_retired(&self) {
@@ -665,7 +698,7 @@ impl DualDeckEngine {
         if playing {
             sink.play();
         }
-        self.mixer.add(output);
+        self.mixers[id.index()].add(output);
 
         let mut old = std::mem::replace(
             &mut *self.decks[id.index()].borrow_mut(),
@@ -1448,6 +1481,21 @@ impl DualDeckEngine {
     pub fn eq_settings(&self, id: DeckId) -> crate::mixer_dsp::EqSettings {
         self.eq_settings[id.index()].get()
     }
+    pub fn fx_settings(&self, id: DeckId) -> crate::delay_fx::DelaySettings {
+        self.fx_settings[id.index()].get()
+    }
+    pub fn set_fx(
+        &self,
+        id: DeckId,
+        settings: crate::delay_fx::DelaySettings,
+    ) -> Result<(), String> {
+        settings.validate()?;
+        if settings != self.fx_settings(id) {
+            self.fx_controls[id.index()].publish(settings);
+            self.fx_settings[id.index()].set(settings);
+        }
+        Ok(())
+    }
     pub fn set_eq(&self, id: DeckId, settings: crate::mixer_dsp::EqSettings) -> Result<(), String> {
         if !settings.valid() {
             return Err(
@@ -1500,6 +1548,53 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn delay_decks_are_independent_and_tail_survives_pause_and_replacement() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let a = wav_file(16384, 48000 * 3);
+        let b = wav_file(4096, 48000 * 3);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        engine
+            .set_fx(
+                DeckId::A,
+                crate::delay_fx::DelaySettings {
+                    enabled: true,
+                    time_ms: 20,
+                    feedback: 0.,
+                    wet: 1.,
+                },
+            )
+            .unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        for _ in 0..10000 {
+            output.next();
+        }
+        assert!((output.next().unwrap() - 0.3125).abs() < 1e-5);
+        assert_eq!(engine.channel_peak(DeckId::A), Some(0.5));
+        assert_eq!(engine.channel_peak(DeckId::B), Some(0.125));
+        engine.pause(DeckId::A);
+        for _ in 0..240 {
+            output.next();
+        }
+        assert!((output.next().unwrap() - 0.3125).abs() < 1e-5);
+        for _ in 0..3000 {
+            output.next();
+        }
+        assert!((output.next().unwrap() - 0.0625).abs() < 1e-5);
+        engine.play(DeckId::A);
+        for _ in 0..10000 {
+            output.next();
+        }
+        engine.load_a(b.path()).unwrap();
+        for _ in 0..240 {
+            output.next();
+        }
+        assert!((output.next().unwrap() - 0.3125).abs() < 1e-5);
+        assert!(!engine.snapshot(DeckId::A).playing);
+    }
     use super::*;
     use crate::test_support::{fixture, wav_file};
     #[test]

@@ -6,6 +6,35 @@ export struct CrateRow { id: int, name: string, count: int }
 export struct BeatLine { position: float, downbeat: bool, first: bool, bar: int }
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
 
+component FxStrip inherits Rectangle {
+    in property <string> deck;
+    in property <bool> ready;
+    in-out property <bool> active;
+    in-out property <float> time:250;
+    in-out property <float> feedback:30;
+    in-out property <float> wet:25;
+    in-out property <int> slot:1;
+    callback changed();
+    callback preset(int,bool);
+    background:#171d27;
+    VerticalLayout {
+        padding:8px;spacing:6px;
+        Text {text:"Deck "+root.deck+" DELAY";color:#edf2fa;}
+        CheckBox {text:"Enabled (unchecked = bypass)";checked <=> root.active;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay enabled";toggled=>{root.changed();}}
+        Text {text:"Time "+round(root.time)+" ms";color:#c8d4e4;}
+        Slider {minimum:20;maximum:1000;value <=> root.time;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay time";changed=>{root.changed();}}
+        Text {text:"Feedback "+round(root.feedback)+"%";color:#c8d4e4;}
+        Slider {minimum:0;maximum:85;value <=> root.feedback;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay feedback";changed=>{root.changed();}}
+        Text {text:"Dry/Wet "+round(root.wet)+"%";color:#c8d4e4;}
+        Slider {minimum:0;maximum:100;value <=> root.wet;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay dry wet";changed=>{root.changed();}}
+        HorizontalLayout {
+            SpinBox {minimum:1;maximum:8;value <=> root.slot;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay preset slot";}
+            Button {text:"LOAD";enabled:root.ready;accessible-label:"Deck "+root.deck+" load delay preset";clicked=>{root.preset(root.slot - 1,false);}}
+            Button {text:"SAVE";enabled:root.ready;accessible-label:"Deck "+root.deck+" save delay preset";clicked=>{root.preset(root.slot - 1,true);}}
+        }
+    }
+}
+
 component ChannelMeter inherits Rectangle {
     in property <string> deck;
     in property <string> caption;
@@ -719,6 +748,20 @@ export component AppWindow inherits Window {
     in-out property <float> eq-filter-b: 0;
     callback eq-changed(int);
     callback clear-channel-clip(int);
+    in-out property <bool> fx-open:false;
+    in-out property <bool> fx-active-a:false;
+    in-out property <bool> fx-active-b:false;
+    in-out property <float> fx-time-a:250;
+    in-out property <float> fx-time-b:250;
+    in-out property <float> fx-feedback-a:30;
+    in-out property <float> fx-feedback-b:30;
+    in-out property <float> fx-wet-a:25;
+    in-out property <float> fx-wet-b:25;
+    in-out property <int> fx-slot-a:1;
+    in-out property <int> fx-slot-b:1;
+    in property <string> fx-status:"FX session only";
+    callback fx-changed(int);
+    callback fx-preset(int,int,bool);
     in property <string> channel-a-peak-caption: "A PRE —";
     in property <string> channel-b-peak-caption: "B PRE —";
     in property <float> channel-a-peak-level;
@@ -967,6 +1010,7 @@ export component AppWindow inherits Window {
                 padding: 4px; spacing: 8px;
                 Text { text: "A"; color: #36c9ef; vertical-alignment: center; }
                 Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.eq-open = !root.eq-open; } }
+                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{root.fx-open=!root.fx-open;}}
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -1094,5 +1138,19 @@ export component AppWindow inherits Window {
             }
         }
         Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
+    }
+    if root.fx-open : Rectangle {
+        x:16px;y:60px;width:parent.width - 32px;height:340px;
+        background:#0b1119;border-width:1px;border-color:#53657d;
+        accessible-role:groupbox;accessible-label:"Delay effects panel";
+        VerticalLayout {
+            padding:8px;spacing:6px;
+            HorizontalLayout {Text {text:root.fx-status;color:#edf2fa;} Button {text:"CLOSE FX";accessible-label:"Close delay effects";clicked=>{root.fx-open=false;}}}
+            HorizontalLayout {
+                spacing:8px;
+                FxStrip {deck:"A";ready:root.quantize-preferences-ready;active <=> root.fx-active-a;time <=> root.fx-time-a;feedback <=> root.fx-feedback-a;wet <=> root.fx-wet-a;slot <=> root.fx-slot-a;changed=>{root.fx-changed(0);}preset(slot,save)=>{root.fx-preset(0,slot,save);}}
+                FxStrip {deck:"B";ready:root.quantize-preferences-ready;active <=> root.fx-active-b;time <=> root.fx-time-b;feedback <=> root.fx-feedback-b;wet <=> root.fx-wet-b;slot <=> root.fx-slot-b;changed=>{root.fx-changed(1);}preset(slot,save)=>{root.fx-preset(1,slot,save);}}
+            }
+        }
     }
 }

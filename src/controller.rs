@@ -220,6 +220,11 @@ pub struct AudioController {
     observed_output: RefCell<Option<crate::output_preferences::OutputRoute>>,
     inflight_output: RefCell<Option<crate::output_preferences::OutputRoute>>,
     output_profiles_writable: Cell<bool>,
+    fx_state: RefCell<crate::delay_fx::FxPreferences>,
+    saved_fx: RefCell<crate::delay_fx::FxPreferences>,
+    observed_fx: RefCell<crate::delay_fx::FxPreferences>,
+    inflight_fx: RefCell<Option<crate::delay_fx::FxPreferences>>,
+    fx_writable: Cell<bool>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
     crate_editor: Cell<Option<i32>>,
@@ -283,6 +288,11 @@ impl AudioController {
             observed_output: RefCell::new(None),
             inflight_output: RefCell::new(None),
             output_profiles_writable: Cell::new(false),
+            fx_state: RefCell::new(Default::default()),
+            saved_fx: RefCell::new(Default::default()),
+            observed_fx: RefCell::new(Default::default()),
+            inflight_fx: RefCell::new(None),
+            fx_writable: Cell::new(false),
             save_failed: Cell::new(false),
             initial_paths: RefCell::new(Vec::new()),
             crate_editor: Cell::new(None),
@@ -438,6 +448,26 @@ impl AudioController {
                     _ => (),
                 }
                 c.refresh();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_fx_changed(move |deck| {
+            if let Some(c) = weak.upgrade() {
+                match deck {
+                    0 => c.apply_fx(DeckId::A),
+                    1 => c.apply_fx(DeckId::B),
+                    _ => (),
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_fx_preset(move |deck, slot, save| {
+            if let Some(c) = weak.upgrade() {
+                match deck {
+                    0 => c.fx_preset(DeckId::A, slot, save),
+                    1 => c.fx_preset(DeckId::B, slot, save),
+                    _ => (),
+                }
             }
         });
         let weak = Rc::downgrade(&controller);
@@ -2359,6 +2389,10 @@ impl AudioController {
         self.refresh();
     }
     pub fn restore_library(&self, path: Result<PathBuf, String>, initial_paths: Vec<PathBuf>) {
+        self.fx_writable.set(false);
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_fx_status("FX session only".into());
+        }
         let result = path.and_then(crate::library_store::Worker::start);
         match result {
             Ok(worker) => {
@@ -2369,6 +2403,7 @@ impl AudioController {
                     ui.set_library_busy(true);
                     ui.set_quantize_preferences_ready(false);
                     ui.set_library_storage("Restoring library…".into());
+                    ui.set_fx_status("Restoring FX…".into());
                 }
             }
             Err(error) => {
@@ -2433,6 +2468,13 @@ impl AudioController {
         if !self.storage_ready.get() || self.persistence.borrow().is_none() {
             return;
         }
+        if self.fx_writable.get() && *self.fx_state.borrow() != *self.observed_fx.borrow() {
+            *self.observed_fx.borrow_mut() = self.fx_state.borrow().clone();
+            self.library_changed();
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_fx_status("FX changed".into());
+            }
+        }
         let output = self.output_route();
         if self.output_profiles_writable.get() && output != *self.observed_output.borrow() {
             *self.observed_output.borrow_mut() = output;
@@ -2461,6 +2503,50 @@ impl AudioController {
                 pair: self.engine.output_pair(),
             }
         })
+    }
+    fn pending_fx(&self, include_inflight: bool) -> Option<crate::delay_fx::FxPreferences> {
+        if !self.fx_writable.get() {
+            return None;
+        }
+        let current = self.fx_state.borrow();
+        let changed = *current != *self.saved_fx.borrow()
+            || (include_inflight
+                && self
+                    .inflight_fx
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|inflight| inflight != &*current));
+        changed.then(|| current.clone())
+    }
+    fn restore_fx(&self, state: Result<crate::delay_fx::FxPreferences, String>) -> Option<String> {
+        let (value, warning) = match state {
+            Ok(value) => {
+                self.fx_writable.set(true);
+                (value, None)
+            }
+            Err(error) => {
+                self.fx_writable.set(false);
+                (Default::default(), Some(error))
+            }
+        };
+        for (id, setting) in [DeckId::A, DeckId::B].into_iter().zip(value.decks) {
+            let _ = self.engine.set_fx(id, setting);
+            self.put_fx_ui(id, setting);
+        }
+        *self.fx_state.borrow_mut() = value.clone();
+        *self.saved_fx.borrow_mut() = value.clone();
+        *self.observed_fx.borrow_mut() = value;
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_fx_status(
+                if warning.is_some() {
+                    "FX session only (saved data invalid)"
+                } else {
+                    "FX ready"
+                }
+                .into(),
+            );
+        }
+        warning
     }
     fn pending_output(
         &self,
@@ -2552,9 +2638,11 @@ impl AudioController {
                             quantize_preferences,
                             preference_warning,
                             output_routes,
+                            fx_preferences,
                         } = *loaded;
                         self.restore_quantize_preferences(quantize_preferences);
                         let output_warning = self.restore_output_routes(output_routes);
+                        let fx_warning = self.restore_fx(fx_preferences);
                         self.library_generation.set(
                             self.library_generation
                                 .get()
@@ -2580,6 +2668,7 @@ impl AudioController {
                                 preference_warning
                                     .map(|w| format!("{w}; default Quantize preferences active")),
                                 output_warning,
+                                fx_warning,
                             ]
                             .into_iter()
                             .flatten()
@@ -2597,6 +2686,10 @@ impl AudioController {
                     }
                     Err(error) => {
                         self.persistence.borrow_mut().take();
+                        self.fx_writable.set(false);
+                        if let Some(ui) = self.ui.upgrade() {
+                            ui.set_fx_status("FX session only (storage unavailable)".into());
+                        }
                         self.storage_error(&format!("{error}; session only"), false);
                     }
                 }
@@ -2610,8 +2703,22 @@ impl AudioController {
                 let revision = self.inflight_revision.take();
                 let quantize = self.inflight_quantize.take();
                 let output = self.inflight_output.borrow_mut().take();
+                let fx = self.inflight_fx.borrow_mut().take();
                 match result {
                     Ok(()) => {
+                        if let Some(value) = fx {
+                            *self.saved_fx.borrow_mut() = value;
+                            if let Some(ui) = self.ui.upgrade() {
+                                ui.set_fx_status(
+                                    if self.pending_fx(false).is_some() {
+                                        "FX changed"
+                                    } else {
+                                        "FX saved"
+                                    }
+                                    .into(),
+                                );
+                            }
+                        }
                         if output.is_some() {
                             *self.saved_output.borrow_mut() = output;
                             if let Some(ui) = self.ui.upgrade() {
@@ -2627,6 +2734,7 @@ impl AudioController {
                         self.dirty.set(
                             self.library.borrow().has_changes()
                                 || self.pending_output(false).is_some()
+                                || self.pending_fx(false).is_some()
                                 || self
                                     .quantize_preferences()
                                     .is_ok_and(|p| p != self.saved_quantize.get()),
@@ -2639,6 +2747,11 @@ impl AudioController {
                         }
                     }
                     Err(error) => {
+                        if fx.is_some() {
+                            if let Some(ui) = self.ui.upgrade() {
+                                ui.set_fx_status("FX not saved; Retry library save".into());
+                            }
+                        }
                         self.dirty.set(true);
                         self.save_failed.set(true);
                         if output.is_some() {
@@ -2658,11 +2771,13 @@ impl AudioController {
             }
             Some(Err(TryRecvError::Disconnected)) => {
                 self.persistence.borrow_mut().take();
+                self.fx_writable.set(false);
                 self.storage_ready.set(true);
                 self.saving.set(false);
                 if let Some(ui) = self.ui.upgrade() {
                     ui.set_library_busy(false);
                     ui.set_quantize_preferences_ready(true);
+                    ui.set_fx_status("FX session only (storage unavailable)".into());
                 }
                 self.storage_error("Storage worker stopped; session only", false);
             }
@@ -2693,10 +2808,12 @@ impl AudioController {
             }
         };
         let output = self.pending_output(false);
-        match worker.save_all_state(delta, preferences, output.clone()) {
+        let fx = self.pending_fx(false);
+        match worker.save_session_state(delta, preferences, output.clone(), fx.clone()) {
             Ok(()) => {
                 self.inflight_revision.set(Some(revision));
                 self.inflight_quantize.set(preferences);
+                *self.inflight_fx.borrow_mut() = fx;
                 if output.is_some() {
                     if let Some(ui) = self.ui.upgrade() {
                         ui.set_output_profile_status("Saving route".into());
@@ -2744,20 +2861,27 @@ impl AudioController {
             None
         };
         if let Some(worker) = self.persistence.borrow_mut().take() {
+            let fx = if self.storage_ready.get() {
+                self.pending_fx(true)
+            } else {
+                None
+            };
             let final_delta = (self.storage_ready.get()
                 && (preferences.is_some()
                     || output.is_some()
+                    || fx.is_some()
                     || self.dirty.get()
                     || self.saving.get()
                     || self.library.borrow().has_changes()))
             .then(|| self.library.borrow().changes());
             let revision = final_delta.as_ref().map(|d| d.revision);
-            worker.close_all_state(final_delta, preferences, output)?;
+            worker.close_session_state(final_delta, preferences, output, fx)?;
             if let Some(revision) = revision {
                 self.library.borrow_mut().acknowledge(revision);
             }
             self.inflight_revision.set(None);
             self.inflight_quantize.set(None);
+            self.inflight_fx.borrow_mut().take();
             self.inflight_output.borrow_mut().take();
             self.saving.set(false);
             self.dirty.set(false);
@@ -2813,6 +2937,94 @@ impl AudioController {
             }
             ui.set_status(error.into());
         }
+    }
+    fn put_fx_ui(&self, id: DeckId, value: crate::delay_fx::DelaySettings) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        match id {
+            DeckId::A => {
+                ui.set_fx_active_a(value.enabled);
+                ui.set_fx_time_a(value.time_ms as f32);
+                ui.set_fx_feedback_a(value.feedback * 100.);
+                ui.set_fx_wet_a(value.wet * 100.);
+            }
+            DeckId::B => {
+                ui.set_fx_active_b(value.enabled);
+                ui.set_fx_time_b(value.time_ms as f32);
+                ui.set_fx_feedback_b(value.feedback * 100.);
+                ui.set_fx_wet_b(value.wet * 100.);
+            }
+        }
+    }
+    fn apply_fx(&self, id: DeckId) {
+        if !self.storage_ready.get() {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let (enabled, time, feedback, wet) = match id {
+            DeckId::A => (
+                ui.get_fx_active_a(),
+                ui.get_fx_time_a(),
+                ui.get_fx_feedback_a(),
+                ui.get_fx_wet_a(),
+            ),
+            DeckId::B => (
+                ui.get_fx_active_b(),
+                ui.get_fx_time_b(),
+                ui.get_fx_feedback_b(),
+                ui.get_fx_wet_b(),
+            ),
+        };
+        let result = if !time.is_finite() || !(20. ..=1000.).contains(&time) {
+            Err("Invalid delay time".into())
+        } else {
+            self.engine.set_fx(
+                id,
+                crate::delay_fx::DelaySettings {
+                    enabled,
+                    time_ms: time.round() as u16,
+                    feedback: feedback / 100.,
+                    wet: wet / 100.,
+                },
+            )
+        };
+        if let Err(error) = result {
+            self.put_fx_ui(id, self.engine.fx_settings(id));
+            ui.set_status(error.into());
+        } else {
+            self.fx_state.borrow_mut().decks[Self::grid_index(id)] = self.engine.fx_settings(id);
+            self.observe_quantize_preferences();
+        }
+    }
+    fn fx_preset(&self, id: DeckId, slot: i32, save: bool) {
+        if !self.storage_ready.get() {
+            return;
+        }
+        let Ok(slot) = usize::try_from(slot) else {
+            return;
+        };
+        if slot >= 8 {
+            return;
+        }
+        if save {
+            self.fx_state.borrow_mut().presets[slot] = Some(self.engine.fx_settings(id));
+        } else {
+            let value = self.fx_state.borrow().presets[slot];
+            let Some(value) = value else {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status("Delay preset slot is empty".into());
+                }
+                return;
+            };
+            if self.engine.set_fx(id, value).is_ok() {
+                self.put_fx_ui(id, value);
+                self.fx_state.borrow_mut().decks[Self::grid_index(id)] = value;
+            }
+        }
+        self.observe_quantize_preferences();
     }
     fn request_load(&self, id: DeckId) {
         self.start_load(id, Arc::clone(&self.picker));
@@ -4191,6 +4403,96 @@ mod tests {
         }
     }
 
+    #[test]
+    fn delay_preferences_presets_latest_ack_and_close_restore() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), vec![]);
+        finish_storage(&c);
+        ui.set_fx_active_a(true);
+        ui.set_fx_wet_a(40.);
+        ui.invoke_fx_changed(0);
+        ui.invoke_fx_preset(0, 7, true);
+        c.save_library();
+        assert!(c.inflight_fx.borrow().is_some());
+        ui.set_fx_time_b(600.);
+        ui.invoke_fx_changed(1);
+        finish_storage(&c);
+        ui.set_fx_wet_a(80.);
+        ui.invoke_fx_changed(0);
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output2) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db), vec![]);
+        finish_storage(&c);
+        assert_eq!(engine.fx_settings(DeckId::A).wet, 0.8);
+        assert_eq!(engine.fx_settings(DeckId::B).time_ms, 600);
+        ui.invoke_fx_preset(0, 7, false);
+        assert_eq!(engine.fx_settings(DeckId::A).wet, 0.4);
+        assert!(engine.fx_settings(DeckId::A).enabled);
+        assert_eq!(engine.fx_settings(DeckId::B).time_ms, 600);
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn malformed_fx_preferences_remain_session_only_without_blocking_quantize() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Loaded(Ok(_))
+        ));
+        worker.close_delta(None).unwrap();
+        let sql = rusqlite::Connection::open(&db).unwrap();
+        let raw = "{\"version\":2}";
+        sql.execute(
+            "INSERT INTO library_meta(key,value) VALUES('delay_fx_v1',?1)",
+            [raw],
+        )
+        .unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db), vec![]);
+        finish_storage(&c);
+        ui.set_fx_active_a(true);
+        ui.invoke_fx_changed(0);
+        ui.set_quantize_enabled(false);
+        finish_storage(&c);
+        assert!(engine.fx_settings(DeckId::A).enabled);
+        assert!(ui.get_fx_status().contains("session only"));
+        c.close_library().unwrap();
+        let saved: String = sql
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='delay_fx_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, raw);
+        let quantize: String = sql
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='quantize_preferences_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !serde_json::from_str::<crate::preferences::QuantizePreferences>(&quantize)
+                .unwrap()
+                .enabled
+        );
+    }
     #[test]
     fn channel_meter_gui_is_pre_fader_independent_and_clip_hold_is_explicit() {
         i_slint_backend_testing::init_no_event_loop();

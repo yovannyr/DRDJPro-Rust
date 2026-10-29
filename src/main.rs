@@ -8,6 +8,7 @@ mod cancellation;
 mod controller;
 mod crates;
 mod deck_render;
+mod delay_fx;
 mod hot_cues;
 mod legacy_catalog;
 mod library;
