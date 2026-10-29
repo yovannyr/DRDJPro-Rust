@@ -46,6 +46,8 @@ const LED_PATH: [[u8; 3]; 16] = [
     [0x90, 0, 127],
 ];
 const GREETING_STEPS: usize = LED_PATH.len() * 5;
+const ALL_LEDS_OFF: [u8; 3] = [0xb0, 0x75, 0];
+const ALL_LEDS_ON: [u8; 3] = [0xb0, 0x75, 127];
 /// Five circuits in 5.2 seconds. Each step switches the previous LED off first.
 struct Greeting {
     started: std::time::Instant,
@@ -61,7 +63,7 @@ impl Greeting {
         let off = self
             .last
             .filter(|&last| last < GREETING_STEPS)
-            .map_or([0xb0, 0x75, 0], |last| {
+            .map_or(ALL_LEDS_OFF, |last| {
                 let mut message = LED_PATH[last % LED_PATH.len()];
                 message[2] = 0;
                 message
@@ -72,7 +74,7 @@ impl Greeting {
             if step < GREETING_STEPS {
                 LED_PATH[step % LED_PATH.len()]
             } else {
-                [0xb0, 0x75, 0]
+                ALL_LEDS_ON
             },
         ])
     }
@@ -87,7 +89,6 @@ pub fn present() -> Result<bool, String> {
 pub struct Input {
     _connection: midir::MidiInputConnection<()>,
     output: Option<midir::MidiOutputConnection>,
-    keylock_leds: [Option<bool>; 2],
     greeting: Greeting,
     buttons: Receiver<Command>,
     levels: Arc<[AtomicU8; 3]>,
@@ -140,7 +141,6 @@ impl Input {
         let output = port.and_then(|port| midi_out.connect(&port, "DrDJ MC4000 LEDs").ok());
         Ok(Some(Self {
             output,
-            keylock_leds: [None, None],
             greeting: Greeting {
                 started: std::time::Instant::now(),
                 last: None,
@@ -150,24 +150,6 @@ impl Input {
             levels,
             overflow,
         }))
-    }
-    pub fn keylock_feedback(&mut self, active: [bool; 2]) {
-        if self.greeting.last != Some(GREETING_STEPS) {
-            return;
-        }
-        for (index, enabled) in active.into_iter().enumerate() {
-            if self.keylock_leds[index] == Some(enabled) {
-                continue;
-            }
-            if let Some(output) = &mut self.output {
-                if output
-                    .send(&[0x90 + index as u8, 13, if enabled { 127 } else { 0 }])
-                    .is_ok()
-                {
-                    self.keylock_leds[index] = Some(enabled);
-                }
-            }
-        }
     }
     pub fn poll(&mut self, mut apply: impl FnMut(Command)) -> bool {
         if let Some(messages) = self.greeting.messages(std::time::Instant::now()) {
@@ -203,7 +185,7 @@ impl Input {
 impl Drop for Input {
     fn drop(&mut self) {
         if let Some(output) = &mut self.output {
-            let _ = output.send(&[0xb0, 0x75, 0]);
+            let _ = output.send(&ALL_LEDS_OFF);
         }
     }
 }
@@ -239,7 +221,7 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 mod tests {
     use super::*;
     #[test]
-    fn greeting_runs_five_circuits_one_light_at_a_time_and_finishes_off() {
+    fn greeting_runs_five_circuits_then_keeps_all_leds_on() {
         assert_eq!(LED_PATH[0], [0x94, 0x14, 1]);
         assert_eq!(LED_PATH[4], [0x9f, 0x21, 127]);
         assert_eq!(LED_PATH[8], [0x95, 0x17, 1]);
@@ -269,7 +251,7 @@ mod tests {
             .messages(start + std::time::Duration::from_millis(5200))
             .unwrap();
         assert_eq!(messages[0][2], 0);
-        assert_eq!(messages[1], [0xb0, 0x75, 0]);
+        assert_eq!(messages[1], ALL_LEDS_ON);
         assert_eq!(
             greeting.messages(start + std::time::Duration::from_secs(10)),
             None
@@ -280,8 +262,18 @@ mod tests {
         };
         assert_eq!(
             late.messages(start + std::time::Duration::from_secs(10)),
-            Some([[0xb0, 0x75, 0]; 2])
+            Some([ALL_LEDS_OFF, ALL_LEDS_ON])
         );
+        for time in [11, 60, 3600, 86400] {
+            assert_eq!(
+                greeting.messages(start + std::time::Duration::from_secs(time)),
+                None
+            );
+            assert_eq!(
+                late.messages(start + std::time::Duration::from_secs(time)),
+                None
+            );
+        }
     }
     #[test]
     fn mapped_commands_reach_existing_gui_actions_and_mixer_values() {

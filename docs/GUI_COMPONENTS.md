@@ -325,3 +325,7 @@ The global toolbar now exposes Audio output pair with the complete stereo pairs 
 ## Output profile restore/status (2026-10-29)
 
 Audio output pair is restored from the current library database after guarded device matching. It remains disabled until preference restore finishes. An adjacent Audio output profile label keeps session-only or save/restore status visible independently of library status messages. The device binding uses unique backend/display-name/channel shape, not a hardware serial number. Full hardware-ID matching and device selection remain open. Restoring routes never resumes transport or loads tracks.
+
+## MC4000 startup and running illumination (2026-10-29)
+
+The five-round 5.2-second startup choreography now ends with the documented All LEDs On command. LEDs then stay illuminated for the connection lifetime; no periodic off or Keylock-state LED messages follow. Keylock controls and GUI state remain functional, but its LED no longer indicates enabled/disabled state in this illumination mode. Normal controller release/application shutdown requests All LEDs Off; process crashes or a failed/disconnected MIDI output cannot guarantee a final hardware reset. Reconnection creates a fresh startup sequence. Automated tests cover the emitted schedule and late polls; no new physical LED or unplug/replug acceptance is claimed.
