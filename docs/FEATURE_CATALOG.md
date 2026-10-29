@@ -195,3 +195,9 @@ The stereo regression test exposed Rodio queue startup metadata describing mono/
 | ID | Capability | Evidence | Remaining scope |
 | --- | --- | --- | --- |
 | R-FORMAT-03 | MPEG Layer-3 WAVE data through metadata, offline analysis and deck preparation; readable empty/tag-limited diagnostics | Reference PCM/duration comparisons; both deck installations; strict RIFF/chunk/read bounds; wrong-codec rejection; cached diagnostic restart regressions | Container tags omitted with warning; other compressed WAVE codecs, RF64/RIFX and native listening qualification remain open |
+
+## Mixer DSP foundation (2026-10-29)
+
+| ID | Capability | Evidence | Remaining scope |
+| --- | --- | --- | --- |
+| R-MIXER-01 | Deck trim and three-band EQ with GUI reset before existing faders | Measured sine response at 44.1/48/96 kHz; neutral/stereo/frame-boundary and latest-intent tests; coherent concurrent snapshots, busy-writer bounded read, sample/replacement/drop heap measurements; GUI actions, A/B signal, reload and transport/fader preservation | Session-only, 32 output channels maximum; filter, individual meters, effects, hardware knob mapping, full-kill and native listening/layout qualification open |

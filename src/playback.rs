@@ -314,6 +314,8 @@ impl DeckSnapshot {
 pub struct DualDeckEngine {
     decks: [RefCell<Deck>; 2],
     levels: Cell<MixerLevels>,
+    eq_settings: [Cell<crate::mixer_dsp::EqSettings>; 2],
+    eq_controls: [Arc<crate::mixer_dsp::EqControl>; 2],
     mixer: Mixer,
     output_channels: u16,
     output_rate: u32,
@@ -355,6 +357,9 @@ impl DualDeckEngine {
             .unwrap_or(0);
         // Format fallback stays on this device: a different device cannot inherit its route.
         let stream = OutputStreamBuilder::from_device(device)?.open_stream_or_fallback()?;
+        if stream.config().channel_count() > crate::mixer_dsp::MAX_CHANNELS {
+            return Err("Mixer DSP supports output devices with at most 32 channels".into());
+        }
         let mut engine = Self::from_mixer(
             stream.mixer().clone(),
             stream.config().channel_count(),
@@ -386,7 +391,11 @@ impl DualDeckEngine {
         output_rate: u32,
         control_clock: Box<dyn Fn() -> std::time::Instant>,
     ) -> Self {
-        assert!(output_channels > 0 && output_rate > 0);
+        assert!(
+            output_channels > 0
+                && output_channels <= crate::mixer_dsp::MAX_CHANNELS
+                && output_rate > 0
+        );
         // Both deck queues enter one fixed-format bus before the device/injected mixer.
         let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
         let (deck_output, output_routing) = crate::output_routing::PairRouter::new(deck_output);
@@ -416,6 +425,10 @@ impl DualDeckEngine {
         let engine = Self {
             decks,
             levels: Cell::new(MixerLevels::default()),
+            eq_settings: std::array::from_fn(
+                |_| Cell::new(crate::mixer_dsp::EqSettings::default()),
+            ),
+            eq_controls: std::array::from_fn(|_| crate::mixer_dsp::EqControl::new(output_rate)),
             mixer,
             output_channels,
             output_rate,
@@ -636,7 +649,10 @@ impl DualDeckEngine {
         sink.pause();
         let (a, b) = self.levels.get().volumes();
         sink.set_volume(if id == DeckId::A { a } else { b });
-        sink.append(renderer);
+        sink.append(crate::mixer_dsp::EqSource::new(
+            renderer,
+            Arc::clone(&self.eq_controls[id.index()]),
+        ));
         if playing {
             sink.play();
         }
@@ -1404,6 +1420,19 @@ impl DualDeckEngine {
         let (a, b) = levels.volumes();
         self.decks[0].borrow().sink.set_volume(a);
         self.decks[1].borrow().sink.set_volume(b);
+    }
+    pub fn eq_settings(&self, id: DeckId) -> crate::mixer_dsp::EqSettings {
+        self.eq_settings[id.index()].get()
+    }
+    pub fn set_eq(&self, id: DeckId, settings: crate::mixer_dsp::EqSettings) -> Result<(), String> {
+        if !settings.valid() {
+            return Err("EQ requires finite trim -12..12 dB and bands -24..12 dB".into());
+        }
+        if settings != self.eq_settings(id) {
+            self.eq_controls[id.index()].publish(settings);
+            self.eq_settings[id.index()].set(settings);
+        }
+        Ok(())
     }
     pub fn wait_for_end(&self) {
         // EOF renderers remain installed for race-free seeks/restart. Their queues never end.

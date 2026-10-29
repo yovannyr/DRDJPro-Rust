@@ -6,6 +6,41 @@ export struct CrateRow { id: int, name: string, count: int }
 export struct BeatLine { position: float, downbeat: bool, first: bool, bar: int }
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
 
+component EqStrip inherits Rectangle {
+    in property <string> deck;
+    in-out property <float> trim;
+    in-out property <float> low;
+    in-out property <float> mid;
+    in-out property <float> high;
+    callback changed();
+    background: #171d27;
+    VerticalLayout {
+        padding: 4px; spacing: 2px;
+        HorizontalLayout {
+            Text { text: "Deck " + root.deck + " EQ / TRIM"; color: #c8d4e4; }
+            Button { text: "RESET"; accessible-label: "Deck " + root.deck + " reset EQ"; clicked => { root.trim = 0; root.low = 0; root.mid = 0; root.high = 0; root.changed(); } }
+        }
+        HorizontalLayout {
+            VerticalLayout {
+                Text { text: "TRIM " + round(root.trim * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
+                Slider { minimum: -12; maximum: 12; value <=> root.trim; accessible-label: "Deck " + root.deck + " trim dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: "LOW " + round(root.low * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
+                Slider { minimum: -24; maximum: 12; value <=> root.low; accessible-label: "Deck " + root.deck + " low EQ dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: "MID " + round(root.mid * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
+                Slider { minimum: -24; maximum: 12; value <=> root.mid; accessible-label: "Deck " + root.deck + " mid EQ dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: "HIGH " + round(root.high * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
+                Slider { minimum: -24; maximum: 12; value <=> root.high; accessible-label: "Deck " + root.deck + " high EQ dB"; changed => { root.changed(); } }
+            }
+        }
+    }
+}
+
 component WaveformStrip inherits Rectangle {
     in property <string> deck-label;
     in property <bool> overview;
@@ -642,6 +677,16 @@ export component AppWindow inherits Window {
     in-out property <float> channel-a: 1;
     in-out property <float> channel-b: 1;
     in-out property <float> crossfader: 0.5;
+    in-out property <bool> eq-open: false;
+    in-out property <float> eq-trim-a: 0;
+    in-out property <float> eq-low-a: 0;
+    in-out property <float> eq-mid-a: 0;
+    in-out property <float> eq-high-a: 0;
+    in-out property <float> eq-trim-b: 0;
+    in-out property <float> eq-low-b: 0;
+    in-out property <float> eq-mid-b: 0;
+    in-out property <float> eq-high-b: 0;
+    callback eq-changed(int);
     in-out property <bool> left-playing: false;
     in-out property <bool> right-playing: false;
     in-out property <float> left-position: 0;
@@ -881,6 +926,7 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding: 4px; spacing: 8px;
                 Text { text: "A"; color: #36c9ef; vertical-alignment: center; }
+                Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.eq-open = !root.eq-open; } }
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -909,6 +955,14 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                     }
                 }
+            }
+        }
+        if root.eq-open : Rectangle {
+            height: 90px;
+            HorizontalLayout {
+                spacing: 8px;
+                EqStrip { deck: "A"; trim <=> root.eq-trim-a; low <=> root.eq-low-a; mid <=> root.eq-mid-a; high <=> root.eq-high-a; changed => { root.eq-changed(0); } }
+                EqStrip { deck: "B"; trim <=> root.eq-trim-b; low <=> root.eq-low-b; mid <=> root.eq-mid-b; high <=> root.eq-high-b; changed => { root.eq-changed(1); } }
             }
         }
         Rectangle {

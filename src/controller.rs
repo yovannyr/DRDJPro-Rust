@@ -420,6 +420,16 @@ impl AudioController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        ui.on_eq_changed(move |deck| {
+            if let Some(c) = weak.upgrade() {
+                match deck {
+                    0 => c.apply_eq(DeckId::A),
+                    1 => c.apply_eq(DeckId::B),
+                    _ => (),
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         ui.on_import_library(move || {
             if let Some(c) = weak.upgrade() {
                 c.start_import(Arc::clone(&c.library_picker));
@@ -2752,6 +2762,43 @@ impl AudioController {
             });
         }
     }
+    fn apply_eq(&self, id: DeckId) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let settings = match id {
+            DeckId::A => crate::mixer_dsp::EqSettings {
+                trim: ui.get_eq_trim_a().into(),
+                low: ui.get_eq_low_a().into(),
+                mid: ui.get_eq_mid_a().into(),
+                high: ui.get_eq_high_a().into(),
+            },
+            DeckId::B => crate::mixer_dsp::EqSettings {
+                trim: ui.get_eq_trim_b().into(),
+                low: ui.get_eq_low_b().into(),
+                mid: ui.get_eq_mid_b().into(),
+                high: ui.get_eq_high_b().into(),
+            },
+        };
+        if let Err(error) = self.engine.set_eq(id, settings) {
+            let old = self.engine.eq_settings(id);
+            match id {
+                DeckId::A => {
+                    ui.set_eq_trim_a(old.trim as f32);
+                    ui.set_eq_low_a(old.low as f32);
+                    ui.set_eq_mid_a(old.mid as f32);
+                    ui.set_eq_high_a(old.high as f32);
+                }
+                DeckId::B => {
+                    ui.set_eq_trim_b(old.trim as f32);
+                    ui.set_eq_low_b(old.low as f32);
+                    ui.set_eq_mid_b(old.mid as f32);
+                    ui.set_eq_high_b(old.high as f32);
+                }
+            }
+            ui.set_status(error.into());
+        }
+    }
     fn request_load(&self, id: DeckId) {
         self.start_load(id, Arc::clone(&self.picker));
     }
@@ -4942,6 +4989,83 @@ mod tests {
         );
         assert!(!engine.snapshot(DeckId::A).playing);
         assert!(!engine.snapshot(DeckId::B).playing);
+    }
+
+    #[test]
+    fn eq_gui_routes_both_decks_resets_and_preserves_transport_and_faders() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let wav = crate::test_support::wav_file(16384, 48000);
+        engine.load_a(wav.path()).unwrap();
+        engine.load_b(wav.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.set_audio_enabled(true);
+        ui.show().unwrap();
+        control(&ui, "Show mixer EQ").invoke_accessible_default_action();
+        assert!(ui.get_eq_open());
+        control(&ui, "Deck A trim dB").set_accessible_value("-6");
+        control(&ui, "Deck B trim dB").set_accessible_value("-12");
+        assert_eq!(engine.eq_settings(DeckId::A).trim, -6.);
+        assert_eq!(engine.eq_settings(DeckId::B).trim, -12.);
+        ui.set_crossfader(0.);
+        ui.invoke_mixer_changed();
+        engine.play(DeckId::A);
+        for _ in 0..1000 {
+            output.next();
+        }
+        let expected = 0.5 * 10_f32.powf(-6. / 20.);
+        assert!((output.next().unwrap() - expected).abs() < 1e-5);
+        output.next();
+        let before = engine.snapshot(DeckId::A);
+        let volumes = engine.output_volumes();
+        control(&ui, "Deck A low EQ dB").set_accessible_value("-24");
+        control(&ui, "Deck B mid EQ dB").set_accessible_value("12");
+        control(&ui, "Deck B high EQ dB").set_accessible_value("6");
+        assert_eq!(engine.eq_settings(DeckId::A).low, -24.);
+        assert_eq!(engine.eq_settings(DeckId::B).mid, 12.);
+        assert_eq!(engine.eq_settings(DeckId::B).high, 6.);
+        assert_eq!(engine.snapshot(DeckId::A).position, before.position);
+        assert_eq!(engine.snapshot(DeckId::A).playing, before.playing);
+        assert_eq!(engine.output_volumes(), volumes);
+        control(&ui, "Deck A reset EQ").invoke_accessible_default_action();
+        assert_eq!(
+            engine.eq_settings(DeckId::A),
+            crate::mixer_dsp::EqSettings::default()
+        );
+        assert_eq!(engine.eq_settings(DeckId::B).trim, -12.);
+        ui.set_eq_low_a(f32::NAN);
+        ui.invoke_eq_changed(0);
+        assert_eq!(ui.get_eq_low_a(), 0.);
+        assert_eq!(
+            engine.eq_settings(DeckId::A),
+            crate::mixer_dsp::EqSettings::default()
+        );
+        engine.pause(DeckId::B);
+        engine.load_b(wav.path()).unwrap();
+        assert_eq!(engine.eq_settings(DeckId::B).mid, 12.);
+        ui.set_crossfader(1.);
+        ui.invoke_mixer_changed();
+        engine.play(DeckId::B);
+        for _ in 0..4000 {
+            output.next();
+        }
+        assert!((output.next().unwrap() - 0.5 * 10_f32.powf(-12. / 20.)).abs() < 1e-4);
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for deck in ["A", "B"] {
+                for name in ["trim", "low EQ", "mid EQ", "high EQ"] {
+                    let item = control(&ui, &format!("Deck {deck} {name} dB"));
+                    assert!(item.size().width > 0. && item.size().height > 0.);
+                    assert!(item.absolute_position().x >= 0.);
+                    assert!(item.absolute_position().x + item.size().width <= width + 1.);
+                    assert!(item.absolute_position().y + item.size().height <= height + 1.);
+                }
+            }
+        }
+        finish_search(&c);
+        ui.hide().unwrap();
     }
 
     fn control(ui: &AppWindow, label: &str) -> ElementHandle {

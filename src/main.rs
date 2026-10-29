@@ -15,6 +15,7 @@ mod library_store;
 mod looping;
 mod mc4000;
 mod media_input;
+mod mixer_dsp;
 mod opus_audio;
 mod output_preferences;
 mod output_routing;
