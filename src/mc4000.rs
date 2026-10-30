@@ -102,12 +102,32 @@ impl Greeting {
 }
 pub fn present() -> Result<bool, String> {
     let midi = midir::MidiInput::new("DrDJ discovery").map_err(|e| e.to_string())?;
-    Ok(midi.ports().iter().any(|port| {
-        midi.port_name(port)
-            .is_ok_and(|name| name.trim().eq_ignore_ascii_case("MC4000"))
-    }))
+    let names = midi
+        .ports()
+        .iter()
+        .map(|port| midi.port_name(port).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(unique_port(&names)?.is_some())
+}
+// Keine Auswahl nach Listenreihenfolge: mehrere gleichnamige Controller sind mehrdeutig.
+fn unique_port(names: &[String]) -> Result<Option<usize>, String> {
+    let mut matching = names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.trim().eq_ignore_ascii_case("MC4000"));
+    let found = matching.next().map(|(index, _)| index);
+    if matching.next().is_some() {
+        return Err("Multiple MC4000 ports; connection is ambiguous".into());
+    }
+    Ok(found)
 }
 type TraceRecord = (u64, [u8; 3], usize);
+// Auch bei unverändertem Portnamen alte Handles und Eingabequeues gezielt freigeben.
+pub fn release_for_reconnect<T>(connection: &mut Option<T>, requested: bool) {
+    if requested {
+        *connection = None;
+    }
+}
 struct InputTrace {
     receiver: Receiver<TraceRecord>,
     overflow: Arc<AtomicBool>,
@@ -127,13 +147,15 @@ impl Input {
     pub fn connect() -> Result<Option<Self>, String> {
         let mut midi = midir::MidiInput::new("DrDJ MC4000").map_err(|e| e.to_string())?;
         midi.ignore(midir::Ignore::All);
-        let port = midi.ports().into_iter().find(|p| {
-            midi.port_name(p)
-                .is_ok_and(|name| name.trim().eq_ignore_ascii_case("MC4000"))
-        });
-        let Some(port) = port else {
+        let ports = midi.ports();
+        let names = ports
+            .iter()
+            .map(|port| midi.port_name(port).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let Some(index) = unique_port(&names)? else {
             return Ok(None);
         };
+        let port = &ports[index];
         let (sender, buttons) = mpsc::sync_channel(128);
         let levels = Arc::new(std::array::from_fn(|_| AtomicU8::new(128)));
         let values = levels.clone();
@@ -147,7 +169,7 @@ impl Input {
         let trace_failed = trace_overflow.clone();
         let connection = midi
             .connect(
-                &port,
+                port,
                 "DrDJ MC4000 input",
                 move |timestamp, data, _| {
                     if trace_enabled {
@@ -187,13 +209,8 @@ impl Input {
                 (),
             )
             .map_err(|e| e.to_string())?;
-        let midi_out = midir::MidiOutput::new("DrDJ MC4000 LEDs").map_err(|e| e.to_string())?;
-        let port = midi_out.ports().into_iter().find(|port| {
-            midi_out
-                .port_name(port)
-                .is_ok_and(|name| name.trim().eq_ignore_ascii_case("MC4000"))
-        });
-        let output = port.and_then(|port| midi_out.connect(&port, "DrDJ MC4000 LEDs").ok());
+        // Ein fehlender LED-Port darf den bereits geöffneten Eingang nicht verwerfen.
+        let output = open_output().ok().flatten();
         Ok(Some(Self {
             output,
             greeting: Greeting {
@@ -214,6 +231,27 @@ impl Input {
     }
     pub fn discard_buttons_before(&mut self, instant: std::time::Instant) {
         self.accept_buttons_after = self.accept_buttons_after.max(instant);
+    }
+    pub fn refresh_output(&mut self) -> Result<(), String> {
+        let available = (|| {
+            let midi = midir::MidiOutput::new("DrDJ LED discovery").map_err(|e| e.to_string())?;
+            let names = midi
+                .ports()
+                .iter()
+                .map(|port| midi.port_name(port).map_err(|e| e.to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(unique_port(&names)?.is_some())
+        })();
+        if reconcile_output(&mut self.output, available, open_output)? {
+            self.greeting = Greeting {
+                started: std::time::Instant::now(),
+                last: None,
+            };
+        }
+        Ok(())
+    }
+    pub fn leds_connected(&self) -> bool {
+        self.output.is_some()
     }
     pub fn poll(&mut self, mut apply: impl FnMut(Command)) -> bool {
         if let Some(InputTrace { receiver, overflow }) = &self.trace {
@@ -262,6 +300,41 @@ impl Input {
         dispatch_buttons(&self.buttons, self.accept_buttons_after, &mut apply);
         self.overflow.swap(false, Ordering::AcqRel)
     }
+}
+fn reconcile_output<T>(
+    output: &mut Option<T>,
+    available: Result<bool, String>,
+    open: impl FnOnce() -> Result<Option<T>, String>,
+) -> Result<bool, String> {
+    match available {
+        Err(error) => {
+            *output = None;
+            Err(error)
+        }
+        Ok(false) => {
+            *output = None;
+            Ok(false)
+        }
+        Ok(true) if output.is_some() => Ok(false),
+        Ok(true) => {
+            *output = open()?;
+            Ok(output.is_some())
+        }
+    }
+}
+fn open_output() -> Result<Option<midir::MidiOutputConnection>, String> {
+    let midi = midir::MidiOutput::new("DrDJ MC4000 LEDs").map_err(|e| e.to_string())?;
+    let ports = midi.ports();
+    let names = ports
+        .iter()
+        .map(|port| midi.port_name(port).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(index) = unique_port(&names)? else {
+        return Ok(None);
+    };
+    midi.connect(&ports[index], "DrDJ MC4000 LEDs")
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 fn dispatch_buttons(
     buttons: &Receiver<(std::time::Instant, Command)>,
@@ -367,6 +440,55 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_reconnect_releases_old_handles_without_observed_absence() {
+        let old = std::rc::Rc::new(());
+        let weak = std::rc::Rc::downgrade(&old);
+        let mut connection = Some(old);
+        release_for_reconnect(&mut connection, false);
+        assert!(weak.upgrade().is_some());
+        release_for_reconnect(&mut connection, true);
+        assert!(weak.upgrade().is_none());
+        assert!(connection.is_none());
+        assert!(
+            reconcile_output(&mut connection, Ok(true), || Ok(Some(std::rc::Rc::new(())))).unwrap()
+        );
+        assert!(weak.upgrade().is_none());
+    }
+    #[test]
+    fn hotplug_output_retries_failed_open_and_restarts_only_on_recovery() {
+        let mut output = Some(1);
+        assert!(!reconcile_output(&mut output, Ok(true), || panic!(
+            "existing output must be retained"
+        ))
+        .unwrap());
+        assert!(!reconcile_output(&mut output, Ok(false), || panic!(
+            "missing output must not open"
+        ))
+        .unwrap());
+        assert_eq!(output, None);
+        assert!(reconcile_output(&mut output, Ok(true), || Err("busy".into())).is_err());
+        assert_eq!(output, None);
+        assert!(reconcile_output(&mut output, Ok(true), || Ok(Some(2))).unwrap());
+        assert_eq!(output, Some(2));
+        assert!(
+            reconcile_output(&mut output, Err("ambiguous".into()), || panic!(
+                "ambiguous output must not open"
+            ))
+            .is_err()
+        );
+        assert_eq!(output, None);
+        assert!(reconcile_output(&mut output, Ok(true), || Ok(Some(3))).unwrap());
+    }
+    #[test]
+    fn port_selection_rejects_duplicates_instead_of_selecting_by_order() {
+        assert_eq!(unique_port(&["Other".into()]).unwrap(), None);
+        assert_eq!(
+            unique_port(&["Other".into(), " mc4000 ".into()]).unwrap(),
+            Some(1)
+        );
+        assert!(unique_port(&["MC4000".into(), "mc4000".into()]).is_err());
+    }
     #[test]
     fn commands_received_during_output_change_do_not_replay_after_commit() {
         let (tx, rx) = mpsc::sync_channel(128);

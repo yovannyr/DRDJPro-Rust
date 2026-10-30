@@ -228,24 +228,46 @@ fn main() -> Result<(), slint::PlatformError> {
     timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
         if let Some(ui) = weak.upgrade() {
             if let Some(controller) = &controller {
-                if midi_discovery.elapsed() >= Duration::from_secs(2) {
+                let reconnect = ui.get_controller_reconnect_requested();
+                ui.set_controller_reconnect_requested(false);
+                mc4000::release_for_reconnect(&mut midi, reconnect);
+                if reconnect || midi_discovery.elapsed() >= Duration::from_secs(2) {
                     midi_discovery = std::time::Instant::now();
                     match mc4000::present() {
                         Ok(false) => {
                             midi = None;
+                            ui.set_controller_status("MC4000 disconnected".into());
                         }
                         Ok(true) if midi.is_none() => match mc4000::Input::connect() {
                             Ok(input) => {
                                 midi = input;
                                 if midi.is_some() {
                                     ui.set_status("MC4000 connected".into());
+                                } else {
+                                    ui.set_controller_status("MC4000 disconnected".into());
                                 }
                             }
-                            Err(error) => {
-                                ui.set_status(format!("MC4000 connection failed: {error}").into())
-                            }
+                            Err(error) => ui.set_controller_status(
+                                format!("MC4000 connection failed: {error}").into(),
+                            ),
                         },
+                        Err(error) => {
+                            midi = None;
+                            ui.set_controller_status(
+                                format!("MC4000 discovery failed: {error}").into(),
+                            );
+                        }
                         _ => (),
+                    }
+                    if let Some(input) = &mut midi {
+                        let message = match input.refresh_output() {
+                            Err(error) => format!("MC4000 input connected; LED retry: {error}"),
+                            Ok(()) if input.leds_connected() => {
+                                "MC4000 input + LEDs connected".into()
+                            }
+                            Ok(()) => "MC4000 input connected; LEDs unavailable (retrying)".into(),
+                        };
+                        ui.set_controller_status(message.into());
                     }
                 }
                 if let Some(midi) = &mut midi {

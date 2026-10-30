@@ -148,6 +148,9 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ MC4000-MIDI-Grundsteuerung: Play/Pause A/B, vorhandenes Cue-to-zero, Channel-Fader und Crossfader an GUI/Engine angeschlossen; Parser-/GUI-Tests und reales Öffnen/Schließen geprüft.
   - [x] ✅ MC4000-LED-Begrüßung beim Verbinden: Lauflicht über Hot-Cue-/Sampler-Pads und Transporttasten, fünf Runden in etwa 5,2 Sekunden, danach alle LEDs dauerhaft an bis zur regulären Freigabe des Controllers. Dauerlicht ersetzt das Keylock-LED-Zustandsfeedback; Keylock bleibt in der GUI sichtbar. Port-Erkennung alle zwei Sekunden und Wiederverbindungsversuch eingebaut; Zeitfolge und später erster Aufruf automatisiert geprüft. Nutzer bestätigt Animation und anschließendes Dauerlicht am echten Controller (2026-10-29); echter Ab-/Ansteckzyklus und physisches Ausschalten beim Beenden bleiben offen.
   - [ ] ☐ Hotplug, LED-Feedback, weitere Regler, vollständige Cue-Semantik und tatsächliche Bedienabnahme der Anwendung mit Hardware.
+    - [x] ✅ MIDI-/LED-Verbindungsverwaltung: eindeutige Portwahl, Fehler-/Trennungsstatus, separate LED-Wiederverbindung mit neuer Startanimation; RECONNECT MIDI verwirft alte Handles/Queues auch ohne beobachtete Abwesenheit. Automatisierte Port-/Retry-/Freigabetests; Dauerlicht bleibt erhalten.
+    - [ ] ☐ Physischer USB-Ab-/Anstecktest und Bedienung nach Wiederverbindung; automatische Erkennung schneller USB-Wechsel und Audio-Stream-Wiederherstellung bleiben offen.
+    - [ ] ☐ Weitere Regler, vollständige Transport-Cue-Drück-/Loslass-Semantik und vollständige Hardware-Bedienabnahme.
 - [ ] ☐ Erweiterte Bibliothek: Sub-/Smart-Crates, History, Relocation und Session-Wiederherstellung.
 - [ ] ☐ Erweiterte Grid-Funktionen: variable Tempi, Warp-Marker und Taktartwechsel.
 - [ ] ☐ Cue-Tastatur-/Hold-Verhalten und Prüfung überlappender Marker.

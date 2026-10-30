@@ -729,6 +729,8 @@ export component AppWindow inherits Window {
     in property <string> left-time: "SIMULATION";
     in property <string> right-time: "SIMULATION";
     in property <string> status;
+    in property <string> controller-status;
+    in-out property <bool> controller-reconnect-requested: false;
     in property<string> output-peak-caption:"BUS PEAK —";
     in property<float> output-peak-level:0;
     in property<bool> output-peak-warning:false;
@@ -1166,7 +1168,10 @@ export component AppWindow inherits Window {
         }
             }
         }
-        Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
+        HorizontalLayout { height: 24px; spacing: 6px;
+            Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
+            Text { accessible-role: text; accessible-label: "Application status"; accessible-description: root.controller-status + " | " + root.status; text: root.controller-status == "" ? root.status : root.controller-status + " | " + root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+        }
     }
     if root.audio-device-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:250px;background:#0b1119;border-width:1px;border-color:#53657d;
