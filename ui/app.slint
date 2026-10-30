@@ -626,7 +626,7 @@ component TrackLibrary inherits Rectangle {
     in property <bool> can-load-right;
     in property <int> selection: -1;
     in-out property <string> query;
-    callback import-files(); callback search(); callback select-track(int); callback move-selection(int);
+    callback import-files(); callback import-folder(); callback search(); callback select-track(int); callback move-selection(int);
     callback sort-column(int); callback load-left(); callback load-right();
     callback retry-save();
     background: #121821; border-color: #303b4b; border-width: 1px;
@@ -635,6 +635,7 @@ component TrackLibrary inherits Rectangle {
         HorizontalLayout {
             Text { text: "LOCAL LIBRARY"; color: #e4ebf6; font-weight: 700; vertical-alignment: center; }
             Button { text: busy ? "WORKING…" : "ADD FILES"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
+            Button { text: "ADD FOLDER"; enabled: !busy; accessible-label: "Import library folder"; clicked => { root.import-folder(); } }
             LineEdit { text <=> query; placeholder-text: "Search title, artist, album or path"; accessible-label: "Library search"; edited => { root.search(); } }
             Button { text: "X"; width: 30px; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
             Button { text: "LOAD A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
@@ -963,7 +964,7 @@ export component AppWindow inherits Window {
     in property <bool> library-busy: false;
     in property <int> selected-track: -1;
     in-out property <string> library-query;
-    callback import-library(); callback library-search(); callback select-library(int);
+    callback import-library(); callback import-library-folder(); callback library-search(); callback select-library(int);
     callback move-library-selection(int); callback sort-library(int);
     callback load-library-left(); callback load-library-right();
     in property <[CrateRow]> crate-rows;
@@ -1200,7 +1201,7 @@ export component AppWindow inherits Window {
             busy: root.loading || root.library-busy || !root.audio-enabled;
             can-load-left: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.left-playing;
             can-load-right: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.right-playing;
-            import-files => { root.import-library(); } search => { root.library-search(); }
+            import-files => { root.import-library(); } import-folder => { root.import-library-folder(); } search => { root.library-search(); }
             select-track(id) => { root.select-library(id); } move-selection(delta) => { root.move-library-selection(delta); }
             sort-column(field) => { root.sort-library(field); }
             load-left => { root.load-library-left(); } load-right => { root.load-library-right(); }

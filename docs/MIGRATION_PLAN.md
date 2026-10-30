@@ -18,6 +18,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 
 - [x] ✅ Alle 59 nummerierten UI-Referenzpunkte im Komponenten-Inventar erfasst; vollständiger Code-/Referenztest-Abgleich bleibt offen.
 - [x] ✅ Reale MP3/WAV-Auswahl und Hintergrund-Loading für Deck A/B.
+- [x] ✅ Bibliothek: einzelne Dateien oder Ordner rekursiv importieren; unterstützte Audiodateien in Unterordnern werden über den bestehenden Hintergrund-Worker ergänzt, mit Deduplizierung, sichtbaren Skip-Zählern sowie Scan-/Importgrenzen.
 - [x] ✅ M4A (AAC-LC/ALAC), FLAC, AIFF/AIF und Ogg/Vorbis durch Dateiauswahl, Bibliothek und beide Decks; Weitere Codecs bleiben offen.
 - [x] ✅ Ogg/Opus (Mono und Stereo) durch Dateiauswahl, Bibliothek und beide Decks; verkettete Streams und Mehrkanal bleiben offen.
 - [x] ✅ Play/Pause, Cue-to-zero, Positionsanzeige und Seek; Schutz vor Ersetzen eines spielenden Decks.

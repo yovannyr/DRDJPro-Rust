@@ -73,6 +73,7 @@ struct DetailCache {
 }
 pub type TrackPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub type LibraryPicker = Arc<dyn Fn() -> Option<Vec<PathBuf>> + Send + Sync>;
+pub type LibraryFolderPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 struct LibraryRows {
     library: std::rc::Weak<std::cell::RefCell<crate::library::Library>>,
     generation: std::rc::Weak<std::cell::Cell<u64>>,
@@ -219,6 +220,7 @@ pub struct AudioController {
     engine: Rc<RefCell<Rc<DualDeckEngine>>>,
     picker: TrackPicker,
     library_picker: LibraryPicker,
+    library_folder_picker: RefCell<Option<LibraryFolderPicker>>,
     library: Rc<RefCell<crate::library::Library>>,
     library_generation: Rc<Cell<u64>>,
     library_page: Cell<usize>,
@@ -335,6 +337,7 @@ impl AudioController {
             engine: Rc::new(RefCell::new(engine)),
             picker,
             library_picker,
+            library_folder_picker: RefCell::new(None),
             library: Rc::new(RefCell::new(crate::library::Library::default())),
             library_generation: Rc::new(Cell::new(0)),
             library_page: Cell::new(0),
@@ -675,6 +678,12 @@ impl AudioController {
         ui.on_import_library(move || {
             if let Some(c) = weak.upgrade() {
                 c.start_import(Arc::clone(&c.library_picker));
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_import_library_folder(move || {
+            if let Some(c) = weak.upgrade() {
+                c.start_folder_import();
             }
         });
         let weak = Rc::downgrade(&controller);
@@ -3965,6 +3974,32 @@ impl AudioController {
         self.start_import(Arc::new(move || Some(paths.clone())));
     }
     fn start_import(&self, picker: LibraryPicker) {
+        self.start_import_work(move |cancel| {
+            picker().map(|paths| crate::library::inspect_paths_cancellable(paths, cancel))
+        });
+    }
+    pub fn set_library_folder_picker(&self, picker: LibraryFolderPicker) {
+        *self.library_folder_picker.borrow_mut() = Some(picker);
+    }
+    fn start_folder_import(&self) {
+        let Some(picker) = self.library_folder_picker.borrow().clone() else {
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_status("Folder picker is unavailable".into());
+            }
+            return;
+        };
+        self.start_import_work(move |cancel| {
+            picker().map(|root| crate::library::inspect_directory_cancellable(&root, cancel))
+        });
+    }
+    fn start_import_work(
+        &self,
+        work: impl FnOnce(
+                &crate::cancellation::Cancellation,
+            ) -> Option<Result<crate::library::ImportBatch, String>>
+            + Send
+            + 'static,
+    ) {
         if !self.storage_ready.get()
             || self.pending.borrow().is_some()
             || self.pending_import.borrow().is_some()
@@ -3983,9 +4018,7 @@ impl AudioController {
         match std::thread::Builder::new()
             .name("library-import".into())
             .spawn(move || {
-                let _ = tx.send(
-                    picker().map(|paths| crate::library::inspect_paths_cancellable(paths, &cancel)),
-                );
+                let _ = tx.send(work(&cancel));
             }) {
             Ok(_) => *self.pending_import.borrow_mut() = Some(rx),
             Err(err) => {
@@ -11955,6 +11988,47 @@ mod tests {
         assert!(!ui.get_right_grid_active());
         assert_eq!(ui.get_right_beats().row_count(), 0);
         ui.hide().unwrap();
+    }
+    #[test]
+    fn library_folder_button_imports_nested_audio_in_background() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let nested = folder.path().join("set").join("disc");
+        std::fs::create_dir_all(&nested).unwrap();
+        let audio = nested.join("track.wav");
+        let source = wav_file(8192, 48_000);
+        std::fs::copy(source.path(), &audio).unwrap();
+        std::fs::write(folder.path().join("readme.txt"), b"not audio").unwrap();
+        let selected = folder.path().to_owned();
+        c.set_library_folder_picker(Arc::new(move || Some(selected.clone())));
+
+        ui.show().unwrap();
+        control(&ui, "Import library folder").invoke_accessible_default_action();
+        assert!(ui.get_library_busy());
+        finish_import(&c);
+
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert!(ui.get_status().contains("Added 1 tracks"));
+        assert!(ui.get_status().contains("1 skipped"));
+        assert!(audio.is_file());
+        for width in [850.0, 1280.0] {
+            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            let button = control(&ui, "Import library folder");
+            let library = control(&ui, "Track library area");
+            assert!(button.absolute_position().x >= library.absolute_position().x);
+            assert!(
+                button.absolute_position().x + button.size().width
+                    <= library.absolute_position().x + library.size().width
+            );
+        }
     }
     #[test]
     fn keyboard_zoom_is_focus_scoped_bounded_and_preserves_audio_state() {

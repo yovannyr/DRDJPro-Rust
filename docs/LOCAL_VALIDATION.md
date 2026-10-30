@@ -1530,3 +1530,9 @@ Final cargo fmt --all --check and cargo clippy --workspace --locked --all-target
 Scope limitation: current Windows Winit backend has no Explorer/native file-drop forwarding into Slint DropArea. Internal library -> deck loading is implemented; external Explorer drop/native interaction/visual acceptance are not inferred from the headless pointer tests. No dependency upgrade or Windows hook was added.
 
 Final cargo build --workspace --release --locked exited 0 (1m 30s). git diff --check exited 0; no runtime source changes followed the final checks.
+
+## Recursive library folder import (2026-10-30)
+
+Added an **ADD FOLDER** library action alongside the existing individual-file picker. The selected root and nested folders are scanned on the cancellable library worker; supported files flow through the existing canonicalization, metadata inspection, duplicate handling, and active-crate assignment. Unsupported/unreadable entries are included in the skipped count. Symlink directories are not followed. Each scan fails explicitly rather than importing a traversal-order subset when it exceeds 100,000 directory entries or 5,000 supported audio files.
+
+Headless coverage imports a nested valid WAV through the actual toolbar callback, confirms the unsupported-file count and source preservation, and checks button geometry at 850x740 and 1280x740. Scanner tests verify recursion/filtering, invalid roots and explicit supported-file-limit rejection. Targeted results: folder scanner tests 2 passed; controller/UI integration test 1 passed. Final gates exited 0: cargo fmt --check; cargo test --quiet (324 passed, six ignored); cargo clippy --all-targets -- -D warnings; cargo build --release. No native picker interaction, physical listening or user-corpus scan is claimed.

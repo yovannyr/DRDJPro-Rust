@@ -7,3 +7,5 @@ Mit `DRDJ_LIBRARY_PERF_PATH` kann ein neuer absoluter JSON-Berichtspfad für ein
 ## Audio-Dateien
 
 Der lokale Import und beide Decks unterstützen MP3, WAV, M4A mit AAC-LC oder ALAC, FLAC, AIFF/AIF Ogg/Vorbis (OGG/OGA) und Ogg/Opus (OPUS/OGG/OGA, Mono oder Stereo). Die tatsächliche Unterstützung hängt vom enthaltenen Codec ab; beschädigte, verschlüsselte oder anders codierte Dateien können beim Laden abgelehnt werden. Verkettete oder multiplexierte Opus-Streams und Opus mit mehr als zwei Kanälen werden derzeit abgelehnt. Die Codecs wurden mit synthetischen Fixtures headless geprüft; eine Hör- oder Geräteabnahme ist damit nicht verbunden.
+
+Die lokale Bibliothek kann über **ADD FILES** einzelne Dateien oder über **ADD FOLDER** einen Ordner einschließlich seiner Unterordner importieren. Der Ordner wird im Hintergrund durchsucht; nicht unterstützte Dateien werden übersprungen und im Ergebnis mitgezählt. Pro Ordnerimport gelten die Grenzen von 5.000 unterstützten Audiodateien und 100.000 Verzeichniseinträgen. Symlink-Verzeichnisse werden nicht verfolgt; die Quelldateien werden nicht verschoben oder verändert.

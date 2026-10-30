@@ -6,6 +6,7 @@ use std::{
 };
 
 pub const MAX_IMPORT: usize = 5000;
+const MAX_DIRECTORY_ENTRIES: usize = 100_000;
 pub(crate) const MAX_TRACKS: usize = 100_000;
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,6 +104,84 @@ pub(crate) fn inspect_paths_cancellable(
         }
     }
     cancel.check()?;
+    Ok(result)
+}
+pub(crate) fn inspect_directory_cancellable(
+    root: &Path,
+    cancel: &crate::cancellation::Cancellation,
+) -> Result<ImportBatch, String> {
+    let root = std::fs::canonicalize(root)
+        .map_err(|error| format!("Cannot open library folder {}: {error}", root.display()))?;
+    if !root.is_dir() {
+        return Err("Select a folder to import".into());
+    }
+
+    let mut pending = vec![root.clone()];
+    let mut paths = Vec::new();
+    let mut rejected = 0_usize;
+    let mut visited = 0_usize;
+    while let Some(directory) = pending.pop() {
+        cancel.check()?;
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if directory == root => {
+                return Err(format!(
+                    "Cannot read library folder {}: {error}",
+                    directory.display()
+                ));
+            }
+            Err(_) => {
+                rejected += 1;
+                continue;
+            }
+        };
+        let mut children = Vec::new();
+        for entry in entries {
+            cancel.check()?;
+            visited += 1;
+            if visited > MAX_DIRECTORY_ENTRIES {
+                return Err(format!(
+                    "Folder scan exceeds the {MAX_DIRECTORY_ENTRIES}-entry safety limit; choose a smaller folder"
+                ));
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    rejected += 1;
+                    continue;
+                }
+            };
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(_) => {
+                    rejected += 1;
+                    continue;
+                }
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                children.push(path);
+            } else if kind.is_file() {
+                if crate::audio_formats::supported(&path) {
+                    paths.push(path);
+                    if paths.len() > MAX_IMPORT {
+                        return Err(format!(
+                            "Folder contains more than {MAX_IMPORT} supported audio files; choose a smaller folder"
+                        ));
+                    }
+                } else {
+                    rejected += 1;
+                }
+            } else {
+                rejected += 1;
+            }
+        }
+        children.sort();
+        pending.extend(children.into_iter().rev());
+    }
+    paths.sort();
+    let mut result = inspect_paths_cancellable(paths, cancel)?;
+    result.rejected += rejected;
     Ok(result)
 }
 
@@ -1841,6 +1920,54 @@ mod tests {
         let mut library = Library::default();
         library.insert(batch.paths);
         assert_eq!(library.len(), 1);
+    }
+    #[test]
+    fn folder_import_recursively_finds_supported_audio_and_counts_skipped_files() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("nested").join("deeper");
+        std::fs::create_dir_all(&nested).unwrap();
+        let wav = crate::test_support::wav_file(1, 100);
+        let audio_path = nested.join("track.wav");
+        std::fs::copy(wav.path(), &audio_path).unwrap();
+        std::fs::write(root.path().join("notes.txt"), b"not audio").unwrap();
+        std::fs::write(nested.join("._sidecar.wav"), [0, 5, 22, 7, 0, 1, 0, 0]).unwrap();
+
+        let batch = inspect_directory_cancellable(
+            root.path(),
+            &crate::cancellation::Cancellation::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            batch.paths,
+            vec![std::fs::canonicalize(audio_path).unwrap()]
+        );
+        assert_eq!(batch.metadata.len(), 1);
+        assert_eq!(batch.rejected, 2);
+    }
+
+    #[test]
+    fn folder_import_requires_a_directory_and_enforces_supported_file_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("not-a-folder.txt");
+        std::fs::write(&file, b"not a folder").unwrap();
+        let cancel = crate::cancellation::Cancellation::default();
+        assert!(matches!(
+            inspect_directory_cancellable(&file, &cancel),
+            Err(error) if error.contains("Select a folder")
+        ));
+        assert!(matches!(
+            inspect_directory_cancellable(&root.path().join("missing"), &cancel),
+            Err(error) if error.contains("Cannot open library folder")
+        ));
+
+        for index in 0..=MAX_IMPORT {
+            std::fs::write(root.path().join(format!("{index:04}.wav")), []).unwrap();
+        }
+        assert!(matches!(
+            inspect_directory_cancellable(root.path(), &cancel),
+            Err(error) if error.contains("more than 5000 supported audio files")
+        ));
     }
     #[test]
     fn import_filters_apple_double_signatures_without_rejecting_audio_names() {

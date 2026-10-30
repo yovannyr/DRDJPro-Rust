@@ -225,6 +225,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     .pick_files()
             }),
         );
+        controller.set_library_folder_picker(std::sync::Arc::new(|| {
+            rfd::FileDialog::new().pick_folder()
+        }));
         if let Some(performance) = &performance {
             controller.record_library_performance(Rc::clone(performance));
         }
