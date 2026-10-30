@@ -1511,6 +1511,7 @@ mod tests {
             device: Some(crate::audio_devices::DeviceSelector {
                 backend: "Test".into(),
                 name: "MC4000".into(),
+                endpoint_id: None,
             }),
         };
         worker.save_startup_audio(preference.clone()).unwrap();

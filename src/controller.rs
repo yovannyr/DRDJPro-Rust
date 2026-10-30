@@ -3554,6 +3554,7 @@ impl AudioController {
                     device: Some(crate::audio_devices::DeviceSelector {
                         backend: key.backend.clone(),
                         name: key.name.clone(),
+                        endpoint_id: key.endpoint_id.clone(),
                     }),
                 };
                 *self.recovery_key.borrow_mut() = Some(key);
@@ -3592,6 +3593,7 @@ impl AudioController {
                     .get(index - 1)
                     .ok_or("Invalid audio device selection")?;
                 crate::audio_devices::unique_choice(&choices, &choice.selector)?;
+                crate::audio_devices::validate_new_startup_choice(&choice.selector)?;
                 Some(choice.selector.clone())
             };
             Ok(crate::audio_devices::StartupSelection { version: 1, device })
@@ -3726,8 +3728,17 @@ impl AudioController {
                 let mut names = vec![slint::SharedString::from("System default")];
                 names.extend(choices.iter().map(|choice| {
                     format!(
-                        "{} — {} ({} ch)",
-                        choice.selector.backend, choice.selector.name, choice.channels
+                        "{} — {} ({} ch){}",
+                        choice.selector.backend,
+                        choice.selector.name,
+                        choice.channels,
+                        if choice.selector.backend == "WASAPI"
+                            && choice.selector.endpoint_id.is_none()
+                        {
+                            " — stable ID unavailable"
+                        } else {
+                            ""
+                        }
                     )
                     .into()
                 }));
@@ -3758,16 +3769,31 @@ impl AudioController {
             .device
             .as_ref()
             .and_then(|selector| {
-                choices
+                let matches: Vec<_> = choices
                     .iter()
-                    .position(|choice| &choice.selector == selector)
+                    .enumerate()
+                    .filter(|(_, choice)| {
+                        choice.selector.backend == selector.backend
+                            && match selector.endpoint_id.as_ref() {
+                                Some(id) => choice.selector.endpoint_id.as_ref() == Some(id),
+                                None => choice.selector.name == selector.name,
+                            }
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                if matches.len() == 1 {
+                    matches.first().copied()
+                } else {
+                    None
+                }
             })
             .map_or(0, |i| i + 1);
         ui.set_audio_device_choice(index as i32);
         let status=match &saved.device {
             Some(selector)=>match crate::audio_devices::unique_choice(&choices,selector) {
-                Ok(())=>"Selection applies at next program start; current playback stays on the active output".to_string(),
-                Err(error)=>format!("Saved output {}: {error}. Original selection is preserved until explicit save",selector.name),
+            Ok(()) if selector.endpoint_id.is_some()=>"ID-bound selection applies at next program start; current playback stays on the active output".to_string(),
+            Ok(())=>"Legacy name-bound selection applies at next program start; save again to bind the available endpoint ID".to_string(),
+            Err(error)=>format!("Saved output {}: {error}. Original selection is preserved until explicit save",selector.name),
             },
             None=>"System default selected for next program start; current playback stays on the active output".to_string(),
         };
@@ -3792,6 +3818,7 @@ impl AudioController {
                     .get(index - 1)
                     .ok_or("Invalid audio device selection")?;
                 crate::audio_devices::unique_choice(&choices, &choice.selector)?;
+                crate::audio_devices::validate_new_startup_choice(&choice.selector)?;
                 Some(choice.selector.clone())
             };
             self.persistence
@@ -8971,6 +8998,7 @@ mod tests {
         let selected = crate::audio_devices::DeviceSelector {
             backend: "Test".into(),
             name: "Speakers".into(),
+            endpoint_id: Some("stable-endpoint".into()),
         };
         let worker = crate::library_store::Worker::start(db.clone()).unwrap();
         worker.events.recv().unwrap();
@@ -8992,7 +9020,11 @@ mod tests {
             Arc::new(|| None),
             Arc::new(move || {
                 Ok(vec![crate::audio_devices::DeviceChoice {
-                    selector: selector.clone(),
+                    selector: crate::audio_devices::DeviceSelector {
+                        backend: selector.backend.clone(),
+                        name: "Renamed speakers".into(),
+                        endpoint_id: selector.endpoint_id.clone(),
+                    },
                     channels: 2,
                 }])
             }),
@@ -9009,6 +9041,7 @@ mod tests {
         assert_eq!(ui.get_audio_device_choice(), 0);
         finish_storage(&c);
         assert_eq!(ui.get_audio_device_choice(), 1);
+        assert!(ui.get_audio_device_status().contains("ID-bound"));
         c.device_choices.borrow_mut().clear();
         c.sync_saved_device_choice();
         assert!(ui.get_audio_device_status().contains("Speakers"));
@@ -9036,6 +9069,7 @@ mod tests {
                 selector: crate::audio_devices::DeviceSelector {
                     backend: "Test".into(),
                     name: "Speakers".into(),
+                    endpoint_id: None,
                 },
                 channels: 2,
             }])
@@ -9076,6 +9110,39 @@ mod tests {
                 .unwrap()
                 .name,
             "Speakers"
+        );
+        c.device_choices.borrow_mut().clear();
+        c.device_choices
+            .borrow_mut()
+            .push(crate::audio_devices::DeviceChoice {
+                selector: crate::audio_devices::DeviceSelector {
+                    backend: "WASAPI".into(),
+                    name: "Speakers".into(),
+                    endpoint_id: None,
+                },
+                channels: 2,
+            });
+        ui.set_audio_device_choice(1);
+        ui.invoke_audio_device_save();
+        assert!(ui
+            .get_audio_device_status()
+            .contains("could not identify this output uniquely"));
+        assert!(!c.startup_audio_saving.get());
+        assert_eq!(
+            crate::library_store::read_startup_audio(&db)
+                .unwrap()
+                .device
+                .unwrap()
+                .name,
+            "Speakers"
+        );
+        assert_eq!(
+            crate::library_store::read_startup_audio(&db)
+                .unwrap()
+                .device
+                .unwrap()
+                .backend,
+            "Test"
         );
         assert_eq!(engine.output_channels(), 4);
         assert!(engine.snapshot(DeckId::A).playing);

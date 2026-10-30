@@ -72,6 +72,15 @@ pub fn unique_id(entries: &[(String, String)], name: &str) -> Option<String> {
     .then(|| id.clone())
 }
 
+pub fn unique_name<'a>(entries: &'a [(String, String)], endpoint_id: &str) -> Option<&'a str> {
+    let mut matching = entries.iter().filter(|(_, id)| id == endpoint_id);
+    let (name, id) = matching.next()?;
+    (matching.next().is_none()
+        && !name.is_empty()
+        && unique_id(entries, name).as_deref() == Some(id.as_str()))
+    .then_some(name.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "windows")]
@@ -84,6 +93,7 @@ mod tests {
         let selector = crate::audio_devices::DeviceSelector {
             backend: "WASAPI".into(),
             name: "Lautsprecher (MC4000)".into(),
+            endpoint_id: Some(expected.clone()),
         };
         let engine = crate::playback::DualDeckEngine::open_selected(Some(&selector)).unwrap();
         let key = engine.output_device_key().unwrap();
@@ -103,11 +113,36 @@ mod tests {
         );
         assert_eq!(unique_id(std::slice::from_ref(&entry), "Missing"), None);
         assert_eq!(
-            unique_id(&[entry.clone(), (entry.0, "endpoint-b".into())], "Speakers"),
+            unique_id(
+                &[entry.clone(), (entry.0.clone(), "endpoint-b".into())],
+                "Speakers"
+            ),
             None
         );
         assert_eq!(
             unique_id(&[("Speakers".into(), "bad\nid".into())], "Speakers"),
+            None
+        );
+        assert_eq!(
+            super::unique_name(std::slice::from_ref(&entry), "endpoint-a"),
+            Some("Speakers")
+        );
+        assert_eq!(
+            super::unique_name(std::slice::from_ref(&entry), "missing"),
+            None
+        );
+        assert_eq!(
+            super::unique_name(
+                &[entry.clone(), ("Other".into(), "endpoint-a".into())],
+                "endpoint-a"
+            ),
+            None
+        );
+        assert_eq!(
+            super::unique_name(
+                &[entry.clone(), ("Speakers".into(), "endpoint-b".into())],
+                "endpoint-a"
+            ),
             None
         );
     }
