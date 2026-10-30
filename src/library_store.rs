@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 12;
 fn startup_selection(
     connection: &Connection,
 ) -> Result<crate::audio_devices::StartupSelection, String> {
@@ -207,14 +207,16 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     }
     if version >= 4 {
         let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-        let mut statement = connection.prepare(if version >= 10 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,meter_changes,tempo_changes FROM track_grids LIMIT ?1"
+        let mut statement = connection.prepare(if version >= 12 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,base_meter_denominator,meter_changes,tempo_changes FROM track_grids LIMIT ?1"
+        } else if version >= 10 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,meter_changes,tempo_changes FROM track_grids LIMIT ?1"
         } else if version >= 8 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,meter_changes,'[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,meter_changes,'[]' FROM track_grids LIMIT ?1"
         } else if version >= 7 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,'[]','[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,'[]','[]' FROM track_grids LIMIT ?1"
         } else {
-            "SELECT track_id,bpm,anchor_ns,4,'[]','[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,4,4,'[]','[]' FROM track_grids LIMIT ?1"
         })?;
         let mut rows = statement.query([library::MAX_TRACKS as i64 + 1])?;
         let mut count = 0;
@@ -231,11 +233,14 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
             tracks[*index].grid = Some(
                 crate::beatgrid::BeatGrid::new(row.get(1)?, Duration::from_nanos(anchor))
                     .and_then(|grid| {
-                        grid.with_beats_per_bar(row.get::<_, u8>(3).map_err(|e| e.to_string())?)
+                        grid.with_time_signature(
+                            row.get::<_, u8>(3).map_err(|e| e.to_string())?,
+                            row.get::<_, u8>(4).map_err(|e| e.to_string())?,
+                        )
                     })
                     .map_err(InspectError::Damaged)?,
             );
-            let json: String = row.get(4)?;
+            let json: String = row.get(5)?;
             if json.len() > 2048 {
                 return Err(InspectError::Damaged("Oversized meter map".into()));
             }
@@ -254,10 +259,10 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
                 }
                 last = change.bar;
                 grid = grid
-                    .with_meter_change(change.bar, change.beats)
+                    .with_time_signature_change(change.bar, change.beats, change.denominator)
                     .map_err(InspectError::Damaged)?;
             }
-            let json: String = row.get(5)?;
+            let json: String = row.get(6)?;
             if json.len() > 4096 {
                 return Err(InspectError::Damaged("Oversized tempo map".into()));
             }
@@ -522,6 +527,21 @@ fn create_grid_schema(connection: &Connection) -> Result<(), String> {
 fn add_grid_meter(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("ALTER TABLE track_grids ADD COLUMN beats_per_bar INTEGER NOT NULL DEFAULT 4 CHECK(beats_per_bar BETWEEN 1 AND 16);").map_err(|e| e.to_string())
 }
+fn add_grid_base_meter_denominator(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(track_grids)")
+        .map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let name: String = row.get(1).map_err(|e| e.to_string())?;
+        if name == "base_meter_denominator" {
+            return Ok(());
+        }
+    }
+    drop(rows);
+    drop(statement);
+    connection.execute_batch("ALTER TABLE track_grids ADD COLUMN base_meter_denominator INTEGER NOT NULL DEFAULT 4 CHECK(base_meter_denominator IN (2,4,8,16));").map_err(|e| e.to_string())
+}
 fn add_grid_meter_changes(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("ALTER TABLE track_grids ADD COLUMN meter_changes TEXT NOT NULL DEFAULT '[]' CHECK(length(meter_changes)<=2048);").map_err(|e| e.to_string())
 }
@@ -549,7 +569,7 @@ fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String>
 fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement = connection
         .prepare(
-            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar,meter_changes,tempo_changes) VALUES(?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar,base_meter_denominator,meter_changes,tempo_changes) VALUES(?1,?2,?3,?4,?5,?6,?7)",
         )
         .map_err(|e| e.to_string())?;
     for track in tracks {
@@ -560,6 +580,7 @@ fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<()
                     grid.bpm(),
                     grid.anchor().as_nanos() as i64,
                     grid.beats_per_bar(),
+                    grid.meter_denominator(),
                     serde_json::to_string(grid.meter_changes()).map_err(|e| e.to_string())?,
                     serde_json::to_string(grid.tempo_changes()).map_err(|e| e.to_string())?
                 ])
@@ -714,6 +735,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     add_grid_meter(&transaction)?;
     add_grid_meter_changes(&transaction)?;
     add_grid_tempo_changes(&transaction)?;
+    add_grid_base_meter_denominator(&transaction)?;
     create_hot_cue_schema(&transaction)?;
     create_saved_loop_schema(&transaction)?;
     transaction
@@ -913,6 +935,9 @@ impl Store {
             }
             if version < 10 {
                 add_grid_tempo_changes(&tx)?;
+            }
+            if version < 12 {
+                add_grid_base_meter_denominator(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
@@ -2008,7 +2033,11 @@ mod tests {
             );
         }
         let excessive: Vec<_> = (2..=18)
-            .map(|bar| crate::beatgrid::MeterChange { bar, beats: 3 })
+            .map(|bar| crate::beatgrid::MeterChange {
+                bar,
+                beats: 3,
+                denominator: 4,
+            })
             .collect();
         store
             .connection
@@ -2106,6 +2135,102 @@ mod tests {
             variable.tempo_changes()
         );
     }
+
+    #[test]
+    fn schema_ten_meter_maps_default_missing_denominators_to_quarters() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_time_signature_change(2, 3, 4)
+            .unwrap();
+        data.tracks[0].grid = Some(grid);
+        store.save(&data).unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE track_grids SET meter_changes='[{\"bar\":2,\"beats\":3}]'",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .pragma_update(None, "user_version", 10)
+            .unwrap();
+        drop(store);
+
+        let (store, library, _) = Store::open(db).unwrap();
+        let restored = library.catalog().tracks[0].grid.unwrap();
+        assert_eq!(restored.meter_changes()[0].denominator, 4);
+        assert_eq!(restored.bar_start_beat(2).unwrap(), 4.);
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn base_meter_denominators_survive_restart() {
+        for denominator in [2, 8, 16] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("library.sqlite3");
+            let path = dir.path().join("missing.wav");
+            let (mut store, _, _) = Store::open(db.clone()).unwrap();
+            let mut data = catalog(path.clone(), 27);
+            let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+                .unwrap()
+                .with_time_signature(3, denominator)
+                .unwrap();
+            data.tracks[0].grid = Some(grid);
+            store.save(&data).unwrap();
+            drop(store);
+
+            let (_, restored, _) = Store::open(db).unwrap();
+            let restored_grid = restored.grid(&path).unwrap();
+            assert_eq!(restored_grid, grid);
+            assert_eq!(
+                restored_grid.bar_start_beat(2).unwrap(),
+                f64::from(3 * 4) / f64::from(denominator)
+            );
+        }
+    }
+
+    #[test]
+    fn schema_eleven_upgrade_defaults_base_meter_denominator_to_quarters() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_time_signature(3, 4)
+            .unwrap();
+        data.tracks[0].grid = Some(grid);
+        store.save(&data).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE track_grids DROP COLUMN base_meter_denominator; PRAGMA user_version=11;",
+            )
+            .unwrap();
+        drop(store);
+
+        let (store, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.catalog().tracks[0].grid, Some(grid));
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
     #[test]
     fn schema_seven_upgrade_preserves_grid_and_persists_mixed_meter_deltas() {
         let dir = tempfile::tempdir().unwrap();
@@ -2114,7 +2239,7 @@ mod tests {
         let mut data = catalog(dir.path().join("missing.wav"), 27);
         let base = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
             .unwrap()
-            .with_beats_per_bar(3)
+            .with_time_signature(3, 4)
             .unwrap();
         data.tracks[0].grid = Some(base);
         store.save(&data).unwrap();
@@ -2129,9 +2254,9 @@ mod tests {
         let path = library.catalog().tracks[0].path.clone();
         assert_eq!(library.grid(&path), Some(base));
         let mixed = base
-            .with_meter_change(2, 5)
+            .with_time_signature_change(2, 5, 4)
             .unwrap()
-            .with_meter_change(7, 4)
+            .with_time_signature_change(7, 4, 4)
             .unwrap();
         library.set_grid(&path, Some(mixed)).unwrap();
         store.save_delta(&library.changes()).unwrap();
@@ -2145,7 +2270,11 @@ mod tests {
         let (_, library, _) = Store::open(db).unwrap();
         assert_eq!(
             library.grid(&path).unwrap().meter_changes(),
-            &[crate::beatgrid::MeterChange { bar: 7, beats: 4 }]
+            &[crate::beatgrid::MeterChange {
+                bar: 7,
+                beats: 4,
+                denominator: 4,
+            }]
         );
     }
     #[test]
@@ -3403,7 +3532,13 @@ mod tests {
         let (mut store, library, _) = Store::open(db.clone()).unwrap();
         let mut data = library.catalog();
         assert_eq!(data.tracks[0].grid.unwrap().beats_per_bar(), 4);
-        data.tracks[0].grid = Some(data.tracks[0].grid.unwrap().with_beats_per_bar(7).unwrap());
+        data.tracks[0].grid = Some(
+            data.tracks[0]
+                .grid
+                .unwrap()
+                .with_time_signature(7, 4)
+                .unwrap(),
+        );
         store.save(&data).unwrap();
         drop(store);
         let (_, restored, _) = Store::open(db).unwrap();
@@ -3421,11 +3556,11 @@ mod tests {
         let mut data = catalog(dir.path().join("missing.wav"), 27);
         let grid = crate::beatgrid::BeatGrid::new(128.5, Duration::new(1, 123456789))
             .unwrap()
-            .with_beats_per_bar(3)
+            .with_time_signature(3, 4)
             .unwrap()
-            .with_meter_change(2, 5)
+            .with_time_signature_change(2, 5, 4)
             .unwrap()
-            .with_meter_change(9, 7)
+            .with_time_signature_change(9, 7, 4)
             .unwrap();
         data.tracks[0].grid = Some(grid);
         let id = data.crates.create("Set").unwrap();

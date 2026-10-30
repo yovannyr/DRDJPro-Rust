@@ -112,7 +112,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Momentanes ±2%-Nudge mit vorbereitetem Keylock auf A/B: begrenzte Stereo-Overlap/Add-Verarbeitung, Tonhöhen-/Quellzeit-/Neutral-Return- und GUI-Tests; allokationsfreien Renderpfad lokal vermessen.
   - [x] ✅ Kontinuierlicher Keylock-Follower auf A/B: automatische asynchrone Tempo-Vorbereitung, frische Renderframes, ±2%-Korrektur und 100-ms-Render-Deadline; Tonhöhen-, Quellzeit- und Abbruchtests. Musikalische/transiente Abnahme bleibt offen.
   - [x] ✅ Taktlängenwechsel innerhalb eines Tracks (Viertelnoten-Zähleinheit, bis zu 16 Wechsel): fortlaufende Taktnummern/Downbeats, Grid-Vorschau und Save/Cancel/Löschen auf A/B sowie SQLite-Schema 8 mit Neustart- und Migrationstests.
-  - [ ] ☐ Andere Taktart-Nenner, automatisch meterabhängige Sync-Ausrichtung, musikalische/transiente Hörabnahme und physische Hardware-Langzeitabnahme bleiben offen.
+  - [ ] ☐ Automatisch meterabhängige Sync-Ausrichtung, musikalische/transiente Hörabnahme und physische Hardware-Langzeitabnahme bleiben offen.
 - [ ] ☐ Tempo/Pitch, Nudge, Sync, Keylock und Quantisierung.
   - [x] ✅ Tempo/Pitch: Basis-/Effektivtempo, Bereiche, Reset und Feinschritte; getrenntes momentanes Nudge mit sicherem Release.
   - [x] ✅ Sync: einmaliges Matching/Phase und begrenzter kontinuierlicher Follower; Keylock-Ziel mit asynchroner Vorbereitung und Abbruchschutz.
@@ -168,7 +168,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Hierarchische Sub-Crates: unter dem ausgewählten Crate anlegen, als eingerückter Baum navigieren, vollständige Hierarchie als Zuordnungsziel anzeigen und direkte Kinder beim Löschen eine Ebene nach oben verschieben. SQLite-Schema 9 migriert flache Crates verlustfrei; Modell-, UI-, Upgrade- und Neustarttests.
 - [ ] ☐ Erweiterte Grid-Funktionen: Warp-Marker und weitere Taktartwechsel.
   - [x] ✅ Variable BPM-Abschnitte als BeatGrid-Modell und SQLite-Schema 10; Beats bleiben über Tempoübergänge zeitkontinuierlich, sichtbare Grid-Linien und Quantisierung verwenden das lokale Tempo. Ältere Grids migrieren unverändert. One-shot/continuous Sync und Tempo-Matching weisen diese Grids bis zur passenden lokalen Temporegelung explizit zurück; kein UI-Editor, Warp-Marker oder native musikalische Abnahme in diesem Schritt.
-  - [x] ✅ Variable BPM-Änderungen im Edit-Grid für Deck A/B bei ganzzahligen Beat-Indizes setzen, ersetzen und entfernen; Vorschau, Save/Cancel und Konfliktschutz verwenden den bestehenden Grid-Draft-/Persistenzpfad. Warp-Marker, andere Taktart-Nenner, lokales Tempo-Sync und native musikalische Abnahme bleiben offen.
+  - [x] ✅ Variable BPM-Änderungen im Edit-Grid für Deck A/B bei ganzzahligen Beat-Indizes setzen, ersetzen und entfernen; Vorschau, Save/Cancel und Konfliktschutz verwenden den bestehenden Grid-Draft-/Persistenzpfad. Warp-Marker, lokales Tempo-Sync und native musikalische Abnahme bleiben offen.
+  - [x] ✅ Taktarten mit Zählern 1–16 und Nennern 2/4/8/16 als Basis oder bar-indexierter Wechsel; Viertelschlag-Positionen und Downbeats unterstützen gebrochene Werte, SQLite-Schema 11 migriert alte Wechsel-Nenner und Schema 12 speichert den Basis-Nenner; ältere Werte gelten verlustfrei als /4.
 - [ ] ☐ Cue-Tastatur-/Hold-Verhalten und Prüfung überlappender Marker.
 - [ ] ☐ Vollständiger .NET-Code-/Referenztest-Abgleich und Feature-Paritätsnachweis.
 - [ ] ☐ Unterstützten Umfang optionaler Streaming-/Video-Integrationen festlegen und umsetzen.

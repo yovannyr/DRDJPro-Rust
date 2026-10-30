@@ -44,6 +44,8 @@ impl QuantizeStep {
 pub struct MeterChange {
     pub bar: u32,
     pub beats: u8,
+    #[serde(default = "quarter_note_denominator")]
+    pub denominator: u8,
 }
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,8 +53,21 @@ pub struct TempoChange {
     pub beat: u64,
     pub bpm: f64,
 }
-const EMPTY_METER: MeterChange = MeterChange { bar: 0, beats: 0 };
+const EMPTY_METER: MeterChange = MeterChange {
+    bar: 0,
+    beats: 0,
+    denominator: 4,
+};
 const EMPTY_TEMPO: TempoChange = TempoChange { beat: 0, bpm: 0. };
+const fn quarter_note_denominator() -> u8 {
+    4
+}
+fn valid_meter_denominator(denominator: u8) -> bool {
+    matches!(denominator, 2 | 4 | 8 | 16)
+}
+fn quarter_beats_per_bar(beats: u8, denominator: u8) -> f64 {
+    f64::from(beats) * 4. / f64::from(denominator)
+}
 pub const MAX_ANCHOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 fn parse_bpm(text: &str) -> Result<f64, String> {
     text.trim()
@@ -72,6 +87,7 @@ pub struct BeatGrid {
     bpm: f64,
     anchor: Duration,
     beats_per_bar: u8,
+    meter_denominator: u8,
     changes: [MeterChange; MAX_METER_CHANGES],
     change_count: u8,
     tempo_changes: [TempoChange; MAX_TEMPO_CHANGES],
@@ -96,26 +112,38 @@ impl BeatGrid {
             bpm,
             anchor,
             beats_per_bar: 4,
+            meter_denominator: 4,
             changes: [EMPTY_METER; MAX_METER_CHANGES],
             change_count: 0,
             tempo_changes: [EMPTY_TEMPO; MAX_TEMPO_CHANGES],
             tempo_change_count: 0,
         })
     }
-    pub fn with_beats_per_bar(mut self, beats: u8) -> Result<Self, String> {
-        if !(1..=16).contains(&beats) {
-            return Err("Beats per bar must be 1 through 16".into());
+    pub fn with_time_signature(mut self, beats: u8, denominator: u8) -> Result<Self, String> {
+        if !(1..=16).contains(&beats) || !valid_meter_denominator(denominator) {
+            return Err(
+                "Time signatures require 1 through 16 beats and denominator 2, 4, 8, or 16".into(),
+            );
         }
         self.beats_per_bar = beats;
+        self.meter_denominator = denominator;
         Ok(self)
     }
     pub fn meter_changes(&self) -> &[MeterChange] {
         &self.changes[..usize::from(self.change_count)]
     }
-    pub fn with_meter_change(mut self, bar: u32, beats: u8) -> Result<Self, String> {
-        if !(2..=MAX_BAR).contains(&bar) || !(1..=16).contains(&beats) {
+    pub fn with_time_signature_change(
+        mut self,
+        bar: u32,
+        beats: u8,
+        denominator: u8,
+    ) -> Result<Self, String> {
+        if !(2..=MAX_BAR).contains(&bar)
+            || !(1..=16).contains(&beats)
+            || !valid_meter_denominator(denominator)
+        {
             return Err(
-                "Meter changes require bar 2 through 1000000 and 1 through 16 quarter beats".into(),
+                "Meter changes require bar 2 through 1000000, 1 through 16 beats, and denominator 2, 4, 8, or 16".into(),
             );
         }
         let index = match self
@@ -133,7 +161,11 @@ impl BeatGrid {
                 index
             }
         };
-        self.changes[index] = MeterChange { bar, beats };
+        self.changes[index] = MeterChange {
+            bar,
+            beats,
+            denominator,
+        };
         Ok(self)
     }
     pub fn without_meter_change(mut self, bar: u32) -> Result<Self, String> {
@@ -184,41 +216,58 @@ impl BeatGrid {
         self.tempo_changes[count - 1] = EMPTY_TEMPO;
         Ok(self)
     }
-    pub fn bar_start_beat(self, bar: u32) -> Result<u64, String> {
+    pub fn bar_start_beat(self, bar: u32) -> Result<f64, String> {
         if !(1..=MAX_BAR).contains(&bar) {
             return Err("Invalid bar number".into());
         }
-        let (mut current, mut start, mut beats) = (1_u32, 0_u64, self.beats_per_bar);
-        for change in self.meter_changes().iter().take_while(|c| c.bar <= bar) {
-            start += u64::from(change.bar - current) * u64::from(beats);
-            current = change.bar;
-            beats = change.beats;
-        }
-        Ok(start + u64::from(bar - current) * u64::from(beats))
+        Ok(self.bar_start_beat_signed(i64::from(bar)))
     }
-    fn bar_at_beat(self, index: i64) -> (i64, bool) {
-        let (mut bar, mut start, mut beats) = (1_i64, 0_i64, self.beats_per_bar);
+    fn bar_start_beat_signed(self, bar: i64) -> f64 {
+        if bar <= 1 {
+            return (bar - 1) as f64
+                * quarter_beats_per_bar(self.beats_per_bar, self.meter_denominator);
+        }
+        let (mut current, mut start, mut beats, mut denominator) =
+            (1_i64, 0_f64, self.beats_per_bar, self.meter_denominator);
+        for change in self
+            .meter_changes()
+            .iter()
+            .take_while(|change| i64::from(change.bar) <= bar)
+        {
+            start += (i64::from(change.bar) - current) as f64
+                * quarter_beats_per_bar(beats, denominator);
+            current = i64::from(change.bar);
+            beats = change.beats;
+            denominator = change.denominator;
+        }
+        start + (bar - current) as f64 * quarter_beats_per_bar(beats, denominator)
+    }
+    fn bar_at_beat(self, index: f64) -> (i64, bool) {
+        let (mut bar, mut start, mut beats, mut denominator) =
+            (1_i64, 0_f64, self.beats_per_bar, self.meter_denominator);
         for change in self.meter_changes() {
-            let next = start + (i64::from(change.bar) - bar) * i64::from(beats);
+            let next = start
+                + (i64::from(change.bar) - bar) as f64 * quarter_beats_per_bar(beats, denominator);
             if index < next {
                 break;
             }
             start = next;
             bar = i64::from(change.bar);
             beats = change.beats;
+            denominator = change.denominator;
         }
         let offset = index - start;
-        (
-            bar + offset.div_euclid(i64::from(beats)),
-            offset.rem_euclid(i64::from(beats)) == 0,
-        )
+        let bar_length = quarter_beats_per_bar(beats, denominator);
+        let bar_offset = (offset / bar_length).floor();
+        let within_bar = offset - bar_offset * bar_length;
+        (bar + bar_offset as i64, within_bar.abs() < 1e-9)
     }
     pub fn validate_duration(self, duration: Duration) -> Result<(), String> {
         if self.anchor > duration {
             return Err("Grid anchor is outside this track".into());
         }
         for change in self.meter_changes() {
-            let time = self.time_at_beat(self.bar_start_beat(change.bar)? as f64);
+            let time = self.time_at_beat(self.bar_start_beat(change.bar)?);
             if time >= duration.as_secs_f64() {
                 return Err("Meter change is outside this track".into());
             }
@@ -298,6 +347,9 @@ impl BeatGrid {
     }
     pub fn beats_per_bar(self) -> u8 {
         self.beats_per_bar
+    }
+    pub fn meter_denominator(self) -> u8 {
+        self.meter_denominator
     }
     pub fn bpm(self) -> f64 {
         self.bpm
@@ -452,7 +504,7 @@ impl BeatGrid {
         let (index, _, _) = nearest.ok_or("No nonnegative quantization point")?;
         frame_at(index as f64 * unit)
     }
-    /// Return only the visible lines. The supported 32 s/240 BPM view has at most 129.
+    /// Return visible beat lines and any fractional-quarter downbeats.
     pub fn lines(self, start: Duration, end: Duration) -> Vec<GridLine> {
         if end <= start {
             return Vec::new();
@@ -461,22 +513,51 @@ impl BeatGrid {
         let end = end.as_secs_f64();
         let first = (self.beat_at_time(start) - 1e-9).ceil() as i64;
         let last = (self.beat_at_time(end) + 1e-9).floor() as i64;
-        (first..=last)
+        let mut lines: Vec<(f64, GridLine)> = (first..=last)
             .take(132)
             .filter_map(|index| {
-                let time = self.time_at_beat(index as f64);
+                let beat = index as f64;
+                let time = self.time_at_beat(beat);
                 if time < start - 1e-7 || time > end + 1e-7 {
                     return None;
                 }
-                let (bar, downbeat) = self.bar_at_beat(index);
-                Some(GridLine {
-                    percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
-                    downbeat,
-                    first: index == 0,
-                    bar: bar.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                })
+                let (bar, downbeat) = self.bar_at_beat(beat);
+                Some((
+                    time,
+                    GridLine {
+                        percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
+                        downbeat,
+                        first: index == 0,
+                        bar: bar.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                    },
+                ))
             })
-            .collect()
+            .collect();
+        let first_beat = self.beat_at_time(start);
+        let last_beat = self.beat_at_time(end);
+        let first_bar = self.bar_at_beat(first_beat).0 - 1;
+        let last_bar = self.bar_at_beat(last_beat).0 + 1;
+        for bar in (first_bar..=last_bar).take(660) {
+            let beat = self.bar_start_beat_signed(bar);
+            if (beat - beat.round()).abs() < 1e-9 {
+                continue;
+            }
+            let time = self.time_at_beat(beat);
+            if time >= start - 1e-7 && time <= end + 1e-7 {
+                lines.push((
+                    time,
+                    GridLine {
+                        percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
+                        downbeat: true,
+                        first: beat.abs() < 1e-9,
+                        bar: bar.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+                    },
+                ));
+            }
+        }
+        lines.sort_by(|left, right| left.0.total_cmp(&right.0));
+        lines.dedup_by(|left, right| (left.0 - right.0).abs() < 1e-9);
+        lines.into_iter().map(|(_, line)| line).collect()
     }
 }
 
@@ -487,6 +568,7 @@ pub struct GridDraft {
     value: Option<BeatGrid>,
     bpm: f64,
     base_beats: u8,
+    base_denominator: u8,
     duration: Duration,
 }
 impl GridDraft {
@@ -510,6 +592,7 @@ impl GridDraft {
             value: Some(grid),
             bpm: grid.bpm(),
             base_beats: grid.beats_per_bar,
+            base_denominator: grid.meter_denominator,
             duration,
         })
     }
@@ -522,23 +605,31 @@ impl GridDraft {
     pub fn bpm(&self) -> f64 {
         self.bpm
     }
-    pub fn set_beats_per_bar(&mut self, beats: u8) -> Result<(), String> {
-        if !(1..=16).contains(&beats) {
-            return Err("Beats per bar must be 1 through 16".into());
+    pub fn set_base_meter(&mut self, beats: u8, denominator: u8) -> Result<(), String> {
+        if !(1..=16).contains(&beats) || !valid_meter_denominator(denominator) {
+            return Err(
+                "Time signatures require 1 through 16 beats and denominator 2, 4, 8, or 16".into(),
+            );
         }
         if let Some(grid) = self.value {
-            let grid = grid.with_beats_per_bar(beats)?;
+            let grid = grid.with_time_signature(beats, denominator)?;
             grid.validate_duration(self.duration)?;
             self.value = Some(grid);
         }
         self.base_beats = beats;
+        self.base_denominator = denominator;
         Ok(())
     }
-    pub fn set_meter_change(&mut self, bar: u32, beats: u8) -> Result<(), String> {
+    pub fn set_meter_signature_change(
+        &mut self,
+        bar: u32,
+        beats: u8,
+        denominator: u8,
+    ) -> Result<(), String> {
         let grid = self
             .value
             .ok_or("Set a grid before adding meter changes")?
-            .with_meter_change(bar, beats)?;
+            .with_time_signature_change(bar, beats, denominator)?;
         grid.validate_duration(self.duration)?;
         self.value = Some(grid);
         Ok(())
@@ -575,7 +666,10 @@ impl GridDraft {
         let bpm = parse_bpm(text)?;
         let grid = self
             .value
-            .unwrap_or(BeatGrid::new(bpm, Duration::ZERO)?.with_beats_per_bar(self.base_beats)?)
+            .unwrap_or(
+                BeatGrid::new(bpm, Duration::ZERO)?
+                    .with_time_signature(self.base_beats, self.base_denominator)?,
+            )
             .reposition(bpm, self.value.map_or(Duration::ZERO, BeatGrid::anchor))?;
         grid.validate_duration(self.duration)?;
         self.bpm = bpm;
@@ -590,7 +684,10 @@ impl GridDraft {
         }
         let grid = self
             .value
-            .unwrap_or(BeatGrid::new(self.bpm, position)?.with_beats_per_bar(self.base_beats)?)
+            .unwrap_or(
+                BeatGrid::new(self.bpm, position)?
+                    .with_time_signature(self.base_beats, self.base_denominator)?,
+            )
             .reposition(self.bpm, position)?;
         grid.validate_duration(self.duration)?;
         self.value = Some(grid);
@@ -623,13 +720,13 @@ mod tests {
     fn mixed_meters_number_bars_and_survive_draft_edits() {
         let grid = BeatGrid::new(120., Duration::ZERO)
             .unwrap()
-            .with_meter_change(3, 5)
+            .with_time_signature_change(3, 5, 4)
             .unwrap()
-            .with_meter_change(2, 3)
+            .with_time_signature_change(2, 3, 4)
             .unwrap();
-        assert_eq!(grid.bar_start_beat(2).unwrap(), 4);
-        assert_eq!(grid.bar_start_beat(3).unwrap(), 7);
-        assert_eq!(grid.bar_start_beat(4).unwrap(), 12);
+        assert_eq!(grid.bar_start_beat(2).unwrap(), 4.);
+        assert_eq!(grid.bar_start_beat(3).unwrap(), 7.);
+        assert_eq!(grid.bar_start_beat(4).unwrap(), 12.);
         let bars: Vec<_> = grid
             .lines(Duration::ZERO, Duration::from_secs(9))
             .iter()
@@ -637,7 +734,7 @@ mod tests {
             .map(|l| l.bar)
             .collect();
         assert_eq!(bars, [1, 2, 3, 4, 5]);
-        assert_eq!(grid.bar_at_beat(-1), (0, false));
+        assert_eq!(grid.bar_at_beat(-1.), (0, false));
         let mut draft =
             GridDraft::new(Some(grid), 120., Duration::ZERO, Duration::from_secs(20)).unwrap();
         draft.set_bpm("125").unwrap();
@@ -645,10 +742,10 @@ mod tests {
         draft.nudge(10).unwrap();
         assert_eq!(draft.value().unwrap().meter_changes(), grid.meter_changes());
         let before = draft.value();
-        assert!(draft.set_meter_change(100, 3).is_err());
+        assert!(draft.set_meter_signature_change(100, 3, 4).is_err());
         assert_eq!(draft.value(), before);
         draft.remove_meter_change(2).unwrap();
-        assert_eq!(draft.value().unwrap().bar_start_beat(3).unwrap(), 8);
+        assert_eq!(draft.value().unwrap().bar_start_beat(3).unwrap(), 8.);
         assert_eq!(
             grid.without_meter_change(2)
                 .unwrap()
@@ -656,19 +753,20 @@ mod tests {
                 .unwrap(),
             BeatGrid::new(120., Duration::ZERO).unwrap()
         );
-        assert!(grid.with_meter_change(1, 3).is_err());
+        assert!(grid.with_time_signature_change(1, 3, 4).is_err());
         let mut full = BeatGrid::new(120., Duration::ZERO).unwrap();
         for bar in 2..=17 {
-            full = full.with_meter_change(bar, 3).unwrap();
+            full = full.with_time_signature_change(bar, 3, 4).unwrap();
         }
-        assert!(full.with_meter_change(18, 3).is_err());
-        assert!(full.with_meter_change(17, 7).is_ok());
+
+        assert!(full.with_time_signature_change(18, 3, 4).is_err());
+        assert!(full.with_time_signature_change(17, 7, 4).is_ok());
         let base = BeatGrid::new(120., Duration::ZERO).unwrap();
         let mut edge =
             GridDraft::new(Some(base), 120., Duration::ZERO, Duration::from_secs(2)).unwrap();
-        assert!(edge.set_meter_change(2, 3).is_err());
+        assert!(edge.set_meter_signature_change(2, 3, 4).is_err());
         assert_eq!(edge.value(), Some(base));
-        let short = base.with_meter_change(2, 3).unwrap();
+        let short = base.with_time_signature_change(2, 3, 4).unwrap();
         let mut edge =
             GridDraft::new(Some(short), 120., Duration::ZERO, Duration::from_secs(3)).unwrap();
         assert!(edge.set_bpm("40").is_err());
@@ -677,17 +775,60 @@ mod tests {
         assert!(edge.nudge(1000).is_err());
         assert_eq!(edge.value(), Some(short));
         edge.clear();
-        edge.set_beats_per_bar(3).unwrap();
+        edge.set_base_meter(3, 4).unwrap();
         edge.anchor_here(Duration::ZERO).unwrap();
         assert_eq!(edge.value().unwrap().beats_per_bar(), 3);
         assert!(edge.value().unwrap().meter_changes().is_empty());
     }
+
+    #[test]
+    fn time_signature_denominators_map_fractional_quarter_bar_lines() {
+        let grid = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_time_signature(3, 4)
+            .unwrap()
+            .with_time_signature_change(3, 5, 8)
+            .unwrap();
+        assert_eq!(grid.bar_start_beat(2).unwrap(), 3.);
+        assert_eq!(grid.bar_start_beat(3).unwrap(), 6.);
+        assert_eq!(grid.bar_start_beat(4).unwrap(), 8.5);
+        assert_eq!(grid.bar_at_beat(8.), (3, false));
+        assert_eq!(grid.bar_at_beat(8.5), (4, true));
+
+        let lines = grid.lines(Duration::ZERO, Duration::from_secs(5));
+        let fractional_downbeat = lines
+            .iter()
+            .find(|line| line.bar == 4 && line.downbeat)
+            .unwrap();
+        assert!((fractional_downbeat.percent - 85.).abs() < 1e-4);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.downbeat)
+                .map(|line| line.bar)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+
+        let eighths = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_time_signature(3, 8)
+            .unwrap();
+        assert_eq!(eighths.bar_start_beat(2).unwrap(), 1.5);
+        assert!(eighths
+            .lines(Duration::ZERO, Duration::from_secs(1))
+            .iter()
+            .any(|line| line.bar == 2 && line.downbeat));
+        assert!(eighths.with_time_signature(3, 3).is_err());
+        assert!(grid.with_time_signature_change(4, 3, 3).is_err());
+    }
+
     #[test]
     fn variable_bar_lengths_preserve_downbeats_through_draft_edits() {
         for beats in [3, 5, 7] {
             let grid = BeatGrid::new(120.0, Duration::ZERO)
                 .unwrap()
-                .with_beats_per_bar(beats)
+                .with_time_signature(beats, 4)
                 .unwrap();
             let lines = grid.lines(Duration::ZERO, Duration::from_secs(8));
             for (i, line) in lines.iter().enumerate() {
@@ -703,7 +844,7 @@ mod tests {
         }
         assert!(BeatGrid::new(120.0, Duration::ZERO)
             .unwrap()
-            .with_beats_per_bar(0)
+            .with_time_signature(0, 4)
             .is_err());
     }
 

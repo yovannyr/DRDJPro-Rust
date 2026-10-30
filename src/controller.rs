@@ -1078,6 +1078,24 @@ impl AudioController {
         }
         .to_string()
     }
+    fn meter_denominator_from_index(index: i32) -> Result<u8, String> {
+        match index {
+            0 => Ok(2),
+            1 => Ok(4),
+            2 => Ok(8),
+            3 => Ok(16),
+            _ => Err("Invalid meter denominator".into()),
+        }
+    }
+    fn meter_denominator_index(denominator: u8) -> i32 {
+        match denominator {
+            2 => 0,
+            4 => 1,
+            8 => 2,
+            16 => 3,
+            _ => 1,
+        }
+    }
     fn change_saved_loop(&self, id: DeckId, command: usize) -> Result<String, String> {
         if !self.can_control_deck(id) {
             return Err("Finish loading before using saved loops".into());
@@ -2443,13 +2461,24 @@ impl AudioController {
             stored_base,
             draft,
         });
-        let beats = self.grid_editors.borrow()[Self::grid_index(id)]
+        let signature = self.grid_editors.borrow()[Self::grid_index(id)]
             .as_ref()
             .and_then(|e| e.draft.value())
-            .map_or(4, |grid| i32::from(grid.beats_per_bar()));
+            .map_or((4, 1), |grid| {
+                (
+                    i32::from(grid.beats_per_bar()),
+                    Self::meter_denominator_index(grid.meter_denominator()),
+                )
+            });
         match id {
-            DeckId::A => ui.set_left_grid_draft_beats(beats),
-            DeckId::B => ui.set_right_grid_draft_beats(beats),
+            DeckId::A => {
+                ui.set_left_grid_draft_beats(signature.0);
+                ui.set_left_grid_draft_denominator_index(signature.1);
+            }
+            DeckId::B => {
+                ui.set_right_grid_draft_beats(signature.0);
+                ui.set_right_grid_draft_denominator_index(signature.1);
+            }
         }
         let tempo = self.grid_editors.borrow()[Self::grid_index(id)]
             .as_ref()
@@ -2490,12 +2519,20 @@ impl AudioController {
         let mut draft = editor.draft;
         let result = (|| {
             if !matches!(action, GridAction::Clear) {
-                let beats = match id {
-                    DeckId::A => ui.get_left_grid_draft_beats(),
-                    DeckId::B => ui.get_right_grid_draft_beats(),
+                let (beats, denominator_index) = match id {
+                    DeckId::A => (
+                        ui.get_left_grid_draft_beats(),
+                        ui.get_left_grid_draft_denominator_index(),
+                    ),
+                    DeckId::B => (
+                        ui.get_right_grid_draft_beats(),
+                        ui.get_right_grid_draft_denominator_index(),
+                    ),
                 };
-                draft
-                    .set_beats_per_bar(u8::try_from(beats).map_err(|_| "Invalid beats per bar")?)?;
+                draft.set_base_meter(
+                    u8::try_from(beats).map_err(|_| "Invalid beats per bar")?,
+                    Self::meter_denominator_from_index(denominator_index)?,
+                )?;
                 draft.set_bpm(&Self::grid_bpm_text(&ui, id))?;
             }
             match action {
@@ -2503,18 +2540,24 @@ impl AudioController {
                 GridAction::Anchor => draft.anchor_here(self.engine.borrow().snapshot(id).position),
                 GridAction::Nudge(ms) => draft.nudge(ms),
                 GridAction::MeterSet | GridAction::MeterRemove => {
-                    let (bar, beats) = match id {
-                        DeckId::A => (ui.get_left_grid_meter_bar(), ui.get_left_grid_meter_beats()),
+                    let (bar, beats, denominator_index) = match id {
+                        DeckId::A => (
+                            ui.get_left_grid_meter_bar(),
+                            ui.get_left_grid_meter_beats(),
+                            ui.get_left_grid_meter_denominator_index(),
+                        ),
                         DeckId::B => (
                             ui.get_right_grid_meter_bar(),
                             ui.get_right_grid_meter_beats(),
+                            ui.get_right_grid_meter_denominator_index(),
                         ),
                     };
                     let bar = u32::try_from(bar).map_err(|_| "Invalid meter bar")?;
                     if matches!(action, GridAction::MeterSet) {
-                        draft.set_meter_change(
+                        draft.set_meter_signature_change(
                             bar,
                             u8::try_from(beats).map_err(|_| "Invalid meter")?,
+                            Self::meter_denominator_from_index(denominator_index)?,
                         )
                     } else {
                         draft.remove_meter_change(bar)
@@ -2576,13 +2619,20 @@ impl AudioController {
                 return Err("Saved grid changed; cancel and reopen Edit Grid".into());
             }
             let meter_ui = self.ui.upgrade().ok_or("Window closed")?;
-            let beats = match id {
-                DeckId::A => meter_ui.get_left_grid_draft_beats(),
-                DeckId::B => meter_ui.get_right_grid_draft_beats(),
+            let (beats, denominator_index) = match id {
+                DeckId::A => (
+                    meter_ui.get_left_grid_draft_beats(),
+                    meter_ui.get_left_grid_draft_denominator_index(),
+                ),
+                DeckId::B => (
+                    meter_ui.get_right_grid_draft_beats(),
+                    meter_ui.get_right_grid_draft_denominator_index(),
+                ),
             };
-            editor
-                .draft
-                .set_beats_per_bar(u8::try_from(beats).map_err(|_| "Invalid beats per bar")?)?;
+            editor.draft.set_base_meter(
+                u8::try_from(beats).map_err(|_| "Invalid beats per bar")?,
+                Self::meter_denominator_from_index(denominator_index)?,
+            )?;
             editor.draft.set_bpm(&Self::grid_bpm_text(
                 &self.ui.upgrade().ok_or("Window closed")?,
                 id,
@@ -4859,14 +4909,25 @@ impl AudioController {
             let time = deck_time(s.position, s.duration);
             let caption = preview.map_or_else(
                 || "GRID OFF".into(),
-                |grid| format!("{} BPM · MANUAL {}/4", grid.bpm(), grid.beats_per_bar()),
+                |grid| {
+                    format!(
+                        "{} BPM · MANUAL {}/{}",
+                        grid.bpm(),
+                        grid.beats_per_bar(),
+                        grid.meter_denominator()
+                    )
+                },
             );
             let meter_summary = preview.map_or_else(
                 || "No meter map".to_string(),
                 |grid| {
-                    let mut summary = format!("1: {}/4", grid.beats_per_bar());
+                    let mut summary =
+                        format!("1: {}/{}", grid.beats_per_bar(), grid.meter_denominator());
                     for change in grid.meter_changes() {
-                        summary.push_str(&format!(" · {}: {}/4", change.bar, change.beats));
+                        summary.push_str(&format!(
+                            " · {}: {}/{}",
+                            change.bar, change.beats, change.denominator
+                        ));
                     }
                     summary
                 },
@@ -11408,16 +11469,28 @@ mod tests {
                     DeckId::A => ui.invoke_grid_left(),
                     DeckId::B => ui.invoke_grid_right(),
                 }
-                for (bar, beats) in [(2, 3), (3, 5)] {
+                match id {
+                    DeckId::A => {
+                        ui.set_left_grid_draft_beats(3);
+                        ui.set_left_grid_draft_denominator_index(2);
+                    }
+                    DeckId::B => {
+                        ui.set_right_grid_draft_beats(3);
+                        ui.set_right_grid_draft_denominator_index(2);
+                    }
+                }
+                for (bar, beats, denominator_index) in [(2, 3, 1), (3, 5, 2)] {
                     match id {
                         DeckId::A => {
                             ui.set_left_grid_meter_bar(bar);
                             ui.set_left_grid_meter_beats(beats);
+                            ui.set_left_grid_meter_denominator_index(denominator_index);
                             ui.invoke_grid_meter_set_left();
                         }
                         DeckId::B => {
                             ui.set_right_grid_meter_bar(bar);
                             ui.set_right_grid_meter_beats(beats);
+                            ui.set_right_grid_meter_denominator_index(denominator_index);
                             ui.invoke_grid_meter_set_right();
                         }
                     }
@@ -11429,12 +11502,17 @@ mod tests {
                     .draft
                     .value()
                     .unwrap();
-                assert_eq!(draft.bar_start_beat(4).unwrap(), 12);
+                assert_eq!(draft.bar_start_beat(4).unwrap(), 7.);
                 assert!(match id {
                     DeckId::A => ui.get_left_grid_meter_summary(),
                     DeckId::B => ui.get_right_grid_meter_summary(),
                 }
-                .contains("3: 5/4"));
+                .contains("3: 5/8"));
+                assert!(match id {
+                    DeckId::A => ui.get_left_grid_meter_summary(),
+                    DeckId::B => ui.get_right_grid_meter_summary(),
+                }
+                .contains("1: 3/8"));
                 match (id, save) {
                     (DeckId::A, false) => ui.invoke_cancel_grid_left(),
                     (DeckId::B, false) => ui.invoke_cancel_grid_right(),
@@ -11465,7 +11543,7 @@ mod tests {
             }
             assert_eq!(
                 engine.snapshot(id).grid.unwrap().bar_start_beat(3).unwrap(),
-                8
+                3.
             );
             assert_eq!(engine.snapshot(id).position, before);
             assert!(engine.snapshot(id).playing);
