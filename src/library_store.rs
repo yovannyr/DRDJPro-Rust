@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 10;
 fn startup_selection(
     connection: &Connection,
 ) -> Result<crate::audio_devices::StartupSelection, String> {
@@ -207,12 +207,14 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     }
     if version >= 4 {
         let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-        let mut statement = connection.prepare(if version >= 8 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,meter_changes FROM track_grids LIMIT ?1"
+        let mut statement = connection.prepare(if version >= 10 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,meter_changes,tempo_changes FROM track_grids LIMIT ?1"
+        } else if version >= 8 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,meter_changes,'[]' FROM track_grids LIMIT ?1"
         } else if version >= 7 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,'[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,'[]','[]' FROM track_grids LIMIT ?1"
         } else {
-            "SELECT track_id,bpm,anchor_ns,4,'[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,4,'[]','[]' FROM track_grids LIMIT ?1"
         })?;
         let mut rows = statement.query([library::MAX_TRACKS as i64 + 1])?;
         let mut count = 0;
@@ -253,6 +255,27 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
                 last = change.bar;
                 grid = grid
                     .with_meter_change(change.bar, change.beats)
+                    .map_err(InspectError::Damaged)?;
+            }
+            let json: String = row.get(5)?;
+            if json.len() > 4096 {
+                return Err(InspectError::Damaged("Oversized tempo map".into()));
+            }
+            let changes: Vec<crate::beatgrid::TempoChange> =
+                serde_json::from_str(&json).map_err(|e| InspectError::Damaged(e.to_string()))?;
+            if changes.len() > crate::beatgrid::MAX_TEMPO_CHANGES {
+                return Err(InspectError::Damaged("Too many tempo changes".into()));
+            }
+            let mut last = 0;
+            for change in changes {
+                if change.beat <= last {
+                    return Err(InspectError::Damaged(
+                        "Unsorted or duplicate tempo changes".into(),
+                    ));
+                }
+                last = change.beat;
+                grid = grid
+                    .with_tempo_change(change.beat, change.bpm)
                     .map_err(InspectError::Damaged)?;
             }
             tracks[*index].grid = Some(grid);
@@ -502,6 +525,21 @@ fn add_grid_meter(connection: &Connection) -> Result<(), String> {
 fn add_grid_meter_changes(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("ALTER TABLE track_grids ADD COLUMN meter_changes TEXT NOT NULL DEFAULT '[]' CHECK(length(meter_changes)<=2048);").map_err(|e| e.to_string())
 }
+fn add_grid_tempo_changes(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(track_grids)")
+        .map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let name: String = row.get(1).map_err(|e| e.to_string())?;
+        if name == "tempo_changes" {
+            return Ok(());
+        }
+    }
+    drop(rows);
+    drop(statement);
+    connection.execute_batch("ALTER TABLE track_grids ADD COLUMN tempo_changes TEXT NOT NULL DEFAULT '[]' CHECK(length(tempo_changes)<=4096);").map_err(|e| e.to_string())
+}
 fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
     connection
         .execute("DELETE FROM track_grids", [])
@@ -511,7 +549,7 @@ fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String>
 fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement = connection
         .prepare(
-            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar,meter_changes) VALUES(?1,?2,?3,?4,?5)",
+            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar,meter_changes,tempo_changes) VALUES(?1,?2,?3,?4,?5,?6)",
         )
         .map_err(|e| e.to_string())?;
     for track in tracks {
@@ -522,7 +560,8 @@ fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<()
                     grid.bpm(),
                     grid.anchor().as_nanos() as i64,
                     grid.beats_per_bar(),
-                    serde_json::to_string(grid.meter_changes()).map_err(|e| e.to_string())?
+                    serde_json::to_string(grid.meter_changes()).map_err(|e| e.to_string())?,
+                    serde_json::to_string(grid.tempo_changes()).map_err(|e| e.to_string())?
                 ])
                 .map_err(|e| e.to_string())?;
         }
@@ -674,6 +713,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     create_grid_schema(&transaction)?;
     add_grid_meter(&transaction)?;
     add_grid_meter_changes(&transaction)?;
+    add_grid_tempo_changes(&transaction)?;
     create_hot_cue_schema(&transaction)?;
     create_saved_loop_schema(&transaction)?;
     transaction
@@ -870,6 +910,9 @@ impl Store {
                 } else {
                     add_crate_hierarchy(&tx)?;
                 }
+            }
+            if version < 10 {
+                add_grid_tempo_changes(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
@@ -1979,6 +2022,90 @@ mod tests {
             Err(InspectError::Damaged(_))
         ));
     }
+
+    #[test]
+    fn malformed_tempo_maps_are_rejected_instead_of_merged_or_discarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        data.tracks[0].grid = Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap());
+        store.save(&data).unwrap();
+        for json in [
+            "[",
+            r#"[{"beat":0,"bpm":120}]"#,
+            r#"[{"beat":1,"bpm":39}]"#,
+            r#"[{"beat":2,"bpm":120},{"beat":2,"bpm":130}]"#,
+            r#"[{"beat":3,"bpm":120},{"beat":2,"bpm":130}]"#,
+            r#"[{"beat":2,"bpm":120,"unknown":true}]"#,
+        ] {
+            store
+                .connection
+                .execute("UPDATE track_grids SET tempo_changes=?1", [json])
+                .unwrap();
+            assert!(
+                matches!(inspect(&store.connection), Err(InspectError::Damaged(_))),
+                "{json}"
+            );
+        }
+        let excessive: Vec<_> = (1..=crate::beatgrid::MAX_TEMPO_CHANGES + 1)
+            .map(|beat| crate::beatgrid::TempoChange {
+                beat: beat as u64,
+                bpm: 120.,
+            })
+            .collect();
+        store
+            .connection
+            .execute(
+                "UPDATE track_grids SET tempo_changes=?1",
+                [serde_json::to_string(&excessive).unwrap()],
+            )
+            .unwrap();
+        assert!(matches!(
+            inspect(&store.connection),
+            Err(InspectError::Damaged(_))
+        ));
+    }
+
+    #[test]
+    fn schema_nine_upgrade_and_restart_preserve_variable_tempo_maps() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let path = dir.path().join("missing.wav");
+        library.insert([path.clone()]);
+        let base = crate::beatgrid::BeatGrid::new(120., Duration::from_millis(100)).unwrap();
+        library.set_grid(&path, Some(base)).unwrap();
+        store.save_delta(&library.changes()).unwrap();
+        drop(store);
+
+        let connection = connect(&db, false).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE track_grids DROP COLUMN tempo_changes; PRAGMA user_version=9;",
+            )
+            .unwrap();
+        drop(connection);
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        assert_eq!(library.grid(&path), Some(base));
+
+        let variable = base
+            .with_tempo_change(4, 90.)
+            .unwrap()
+            .with_tempo_change(12, 132.5)
+            .unwrap();
+        library.set_grid(&path, Some(variable)).unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+        drop(store);
+
+        let (_, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.grid(&path), Some(variable));
+        assert_eq!(
+            restored.grid(&path).unwrap().tempo_changes(),
+            variable.tempo_changes()
+        );
+    }
     #[test]
     fn schema_seven_upgrade_preserves_grid_and_persists_mixed_meter_deltas() {
         let dir = tempfile::tempdir().unwrap();
@@ -2949,7 +3076,7 @@ mod tests {
                 .connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
                 .unwrap(),
-            9
+            SCHEMA_VERSION
         );
         assert_eq!(library.crates().entries[0].id, root);
         assert_eq!(library.crates().entries[0].name, "Existing crate");

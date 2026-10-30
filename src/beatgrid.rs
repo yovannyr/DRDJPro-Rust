@@ -1,7 +1,9 @@
-//! User-defined constant-tempo grid; no automatic beat or tempo detection.
+//! User-defined beatgrid; no automatic beat or tempo detection.
 use std::time::Duration;
 pub const MAX_METER_CHANGES: usize = 16;
+pub const MAX_TEMPO_CHANGES: usize = 64;
 const MAX_BAR: u32 = 1_000_000;
+const MAX_BEAT: u64 = MAX_BAR as u64 * 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantizeStep {
     Eighth,
@@ -43,8 +45,21 @@ pub struct MeterChange {
     pub bar: u32,
     pub beats: u8,
 }
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TempoChange {
+    pub beat: u64,
+    pub bpm: f64,
+}
 const EMPTY_METER: MeterChange = MeterChange { bar: 0, beats: 0 };
+const EMPTY_TEMPO: TempoChange = TempoChange { beat: 0, bpm: 0. };
 pub const MAX_ANCHOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+fn validate_bpm(bpm: f64) -> Result<(), String> {
+    if !bpm.is_finite() || !(40.0..=240.0).contains(&bpm) {
+        return Err("Manual BPM must be between 40 and 240".into());
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BeatGrid {
@@ -53,6 +68,8 @@ pub struct BeatGrid {
     beats_per_bar: u8,
     changes: [MeterChange; MAX_METER_CHANGES],
     change_count: u8,
+    tempo_changes: [TempoChange; MAX_TEMPO_CHANGES],
+    tempo_change_count: u8,
 }
 
 #[derive(Debug)]
@@ -65,9 +82,7 @@ pub struct GridLine {
 
 impl BeatGrid {
     pub fn new(bpm: f64, anchor: Duration) -> Result<Self, String> {
-        if !bpm.is_finite() || !(40.0..=240.0).contains(&bpm) {
-            return Err("Manual BPM must be between 40 and 240".into());
-        }
+        validate_bpm(bpm)?;
         if anchor > MAX_ANCHOR {
             return Err("Grid anchor exceeds seven days".into());
         }
@@ -77,6 +92,8 @@ impl BeatGrid {
             beats_per_bar: 4,
             changes: [EMPTY_METER; MAX_METER_CHANGES],
             change_count: 0,
+            tempo_changes: [EMPTY_TEMPO; MAX_TEMPO_CHANGES],
+            tempo_change_count: 0,
         })
     }
     pub fn with_beats_per_bar(mut self, beats: u8) -> Result<Self, String> {
@@ -124,6 +141,32 @@ impl BeatGrid {
         self.changes[count - 1] = EMPTY_METER;
         Ok(self)
     }
+    pub fn tempo_changes(&self) -> &[TempoChange] {
+        &self.tempo_changes[..usize::from(self.tempo_change_count)]
+    }
+    pub fn with_tempo_change(mut self, beat: u64, bpm: f64) -> Result<Self, String> {
+        validate_bpm(bpm)?;
+        if !(1..=MAX_BEAT).contains(&beat) {
+            return Err("Tempo changes require beat 1 through 16000000".into());
+        }
+        let index = match self
+            .tempo_changes()
+            .binary_search_by_key(&beat, |change| change.beat)
+        {
+            Ok(index) => index,
+            Err(index) => {
+                let count = usize::from(self.tempo_change_count);
+                if count == MAX_TEMPO_CHANGES {
+                    return Err("At most sixty-four tempo changes per track".into());
+                }
+                self.tempo_changes.copy_within(index..count, index + 1);
+                self.tempo_change_count += 1;
+                index
+            }
+        };
+        self.tempo_changes[index] = TempoChange { beat, bpm };
+        Ok(self)
+    }
     pub fn bar_start_beat(self, bar: u32) -> Result<u64, String> {
         if !(1..=MAX_BAR).contains(&bar) {
             return Err("Invalid bar number".into());
@@ -158,13 +201,75 @@ impl BeatGrid {
             return Err("Grid anchor is outside this track".into());
         }
         for change in self.meter_changes() {
-            let time = self.anchor.as_secs_f64()
-                + self.bar_start_beat(change.bar)? as f64 * 60. / self.bpm;
+            let time = self.time_at_beat(self.bar_start_beat(change.bar)? as f64);
             if time >= duration.as_secs_f64() {
                 return Err("Meter change is outside this track".into());
             }
         }
+        for change in self.tempo_changes() {
+            if self.time_at_beat(change.beat as f64) >= duration.as_secs_f64() {
+                return Err("Tempo change is outside this track".into());
+            }
+        }
         Ok(())
+    }
+    fn time_at_beat(self, beat: f64) -> f64 {
+        if beat <= 0. || self.tempo_changes().is_empty() {
+            return self.anchor.as_secs_f64() + beat * 60. / self.bpm;
+        }
+        let mut current_beat = 0_f64;
+        let mut current_bpm = self.bpm;
+        let mut seconds = self.anchor.as_secs_f64();
+        for change in self.tempo_changes() {
+            let next_beat = change.beat as f64;
+            if beat <= next_beat {
+                return seconds + (beat - current_beat) * 60. / current_bpm;
+            }
+            seconds += (next_beat - current_beat) * 60. / current_bpm;
+            current_beat = next_beat;
+            current_bpm = change.bpm;
+        }
+        seconds + (beat - current_beat) * 60. / current_bpm
+    }
+    fn beat_at_time(self, seconds: f64) -> f64 {
+        let elapsed = seconds - self.anchor.as_secs_f64();
+        if elapsed <= 0. || self.tempo_changes().is_empty() {
+            return elapsed * self.bpm / 60.;
+        }
+        let mut current_beat = 0_f64;
+        let mut current_bpm = self.bpm;
+        let mut current_seconds = self.anchor.as_secs_f64();
+        for change in self.tempo_changes() {
+            let next_beat = change.beat as f64;
+            let next_seconds = current_seconds + (next_beat - current_beat) * 60. / current_bpm;
+            if seconds <= next_seconds {
+                return current_beat + (seconds - current_seconds) * current_bpm / 60.;
+            }
+            current_beat = next_beat;
+            current_bpm = change.bpm;
+            current_seconds = next_seconds;
+        }
+        current_beat + (seconds - current_seconds) * current_bpm / 60.
+    }
+    fn time_at_beat_nanos(self, beat: f64) -> i128 {
+        const NANOS_PER_MINUTE: f64 = 60_000_000_000.;
+        let mut time = self.anchor.as_nanos() as i128;
+        if beat <= 0. || self.tempo_changes().is_empty() {
+            return time + (beat * NANOS_PER_MINUTE / self.bpm).round() as i128;
+        }
+        let (mut current_beat, mut current_bpm) = (0_f64, self.bpm);
+        for change in self.tempo_changes() {
+            let next_beat = change.beat as f64;
+            let elapsed = (next_beat - current_beat) * NANOS_PER_MINUTE / current_bpm;
+            if beat <= next_beat {
+                return time
+                    + ((beat - current_beat) * NANOS_PER_MINUTE / current_bpm).round() as i128;
+            }
+            time += elapsed.round() as i128;
+            current_beat = next_beat;
+            current_bpm = change.bpm;
+        }
+        time + ((beat - current_beat) * NANOS_PER_MINUTE / current_bpm).round() as i128
     }
     fn reposition(self, bpm: f64, anchor: Duration) -> Result<Self, String> {
         Self::new(bpm, anchor)?;
@@ -179,6 +284,9 @@ impl BeatGrid {
     }
     pub fn bpm(self) -> f64 {
         self.bpm
+    }
+    pub fn is_constant_tempo(self) -> bool {
+        self.tempo_change_count == 0
     }
     pub fn anchor(self) -> Duration {
         self.anchor
@@ -213,6 +321,9 @@ impl BeatGrid {
     ) -> Result<usize, String> {
         if rate == 0 {
             return Err("Invalid source sample rate".into());
+        }
+        if !self.is_constant_tempo() {
+            return self.quantized_variable_frame(position, rate, step, next);
         }
         // BPM is a bounded positive normal f64. Preserve its exact binary rational
         // value so floor/ceil cannot cross a mathematical beat or nanosecond tie.
@@ -257,6 +368,73 @@ impl BeatGrid {
         }
         Err("No later representable quantization frame".into())
     }
+    fn quantized_variable_frame(
+        self,
+        position: Duration,
+        rate: u32,
+        step: QuantizeStep,
+        next: bool,
+    ) -> Result<usize, String> {
+        if position > MAX_ANCHOR {
+            return Err("Grid position exceeds seven days".into());
+        }
+        let (numerator, denominator) = step.ratio();
+        let unit = numerator as f64 / denominator as f64;
+        let beat = self.beat_at_time(position.as_secs_f64());
+        let scaled = beat / unit;
+        let lower = scaled.floor() as i64;
+        let position_ns = position.as_nanos() as i128;
+        let frame_at = |target_beat: f64| -> Result<usize, String> {
+            let raw_target_seconds = self.time_at_beat(target_beat);
+            let target_seconds = raw_target_seconds.max(0.);
+            let exact_frame = target_seconds * f64::from(rate);
+            let lower = exact_frame.floor();
+            let half = lower + 0.5;
+            let relative_seconds = raw_target_seconds - self.anchor.as_secs_f64();
+            let arithmetic_scale = self.anchor.as_secs_f64().abs() + relative_seconds.abs();
+            let tie_tolerance = (arithmetic_scale * f64::from(rate) * f64::EPSILON * 4.)
+                .max(exact_frame.abs().max(1.) * f64::EPSILON * 2.);
+            let frame = if (exact_frame - half).abs() <= tie_tolerance {
+                half.ceil()
+            } else {
+                exact_frame.round()
+            };
+            if !frame.is_finite() || frame >= usize::MAX as f64 {
+                return Err("Aligned beat exceeds source-frame range".into());
+            }
+            Ok(frame as usize)
+        };
+        if next {
+            for offset in 0..=32_i64 {
+                let index = lower - 1 + offset;
+                let target_beat = index as f64 * unit;
+                let target_ns = self.time_at_beat_nanos(target_beat);
+                if target_ns < 0 {
+                    continue;
+                }
+                let frame = frame_at(target_beat)?;
+                if crate::looping::frame_time(frame, rate) > position {
+                    return Ok(frame);
+                }
+            }
+            return Err("No later representable quantization frame".into());
+        }
+        let mut nearest: Option<(i64, i128, i128)> = None;
+        for index in (lower - 1)..=(lower + 2) {
+            let target_ns = self.time_at_beat_nanos(index as f64 * unit);
+            if target_ns < 0 {
+                continue;
+            }
+            let distance = (target_ns - position_ns).abs();
+            if nearest.is_none_or(|(best_index, _, best_distance)| {
+                distance < best_distance || (distance == best_distance && index > best_index)
+            }) {
+                nearest = Some((index, target_ns, distance));
+            }
+        }
+        let (index, _, _) = nearest.ok_or("No nonnegative quantization point")?;
+        frame_at(index as f64 * unit)
+    }
     /// Return only the visible lines. The supported 32 s/240 BPM view has at most 129.
     pub fn lines(self, start: Duration, end: Duration) -> Vec<GridLine> {
         if end <= start {
@@ -264,14 +442,12 @@ impl BeatGrid {
         }
         let start = start.as_secs_f64();
         let end = end.as_secs_f64();
-        let anchor = self.anchor.as_secs_f64();
-        let period = 60.0 / self.bpm;
-        let first = ((start - anchor) / period - 1e-9).ceil() as i64;
-        let last = ((end - anchor) / period + 1e-9).floor() as i64;
+        let first = (self.beat_at_time(start) - 1e-9).ceil() as i64;
+        let last = (self.beat_at_time(end) + 1e-9).floor() as i64;
         (first..=last)
             .take(132)
             .filter_map(|index| {
-                let time = anchor + index as f64 * period;
+                let time = self.time_at_beat(index as f64);
                 if time < start - 1e-7 || time > end + 1e-7 {
                     return None;
                 }
@@ -496,6 +672,145 @@ mod tests {
             .unwrap()
             .with_beats_per_bar(0)
             .is_err());
+    }
+
+    #[test]
+    fn variable_tempo_changes_keep_beats_continuous_across_segments() {
+        let grid = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(8, 90.)
+            .unwrap()
+            .with_tempo_change(4, 60.)
+            .unwrap();
+        assert_eq!(grid.tempo_changes()[0], TempoChange { beat: 4, bpm: 60. });
+        assert!((grid.time_at_beat(4.) - 2.).abs() < 1e-12);
+        assert!((grid.time_at_beat(8.) - 6.).abs() < 1e-12);
+        assert!((grid.time_at_beat(9.) - 6.666666666666667).abs() < 1e-12);
+        assert!((grid.beat_at_time(2.) - 4.).abs() < 1e-12);
+        assert!((grid.beat_at_time(6.) - 8.).abs() < 1e-12);
+
+        let lines = grid.lines(Duration::ZERO, Duration::from_secs(8));
+        let times: Vec<_> = lines.iter().map(|line| line.percent * 0.08).collect();
+        assert_eq!(lines.len(), 12);
+        assert!((times[4] - 2.).abs() < 1e-6);
+        assert!((times[8] - 6.).abs() < 1e-6);
+        assert_eq!(lines[8].bar, 3);
+    }
+
+    #[test]
+    fn variable_tempo_quantization_uses_local_segment_and_preserves_next_semantics() {
+        let grid = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(4, 60.)
+            .unwrap();
+        for rate in [44100, 48000, 96000] {
+            assert_eq!(
+                grid.nearest_beat_frame(Duration::from_millis(2499), rate)
+                    .unwrap(),
+                (2. * f64::from(rate)).round() as usize
+            );
+            assert_eq!(
+                grid.nearest_beat_frame(Duration::from_millis(2500), rate)
+                    .unwrap(),
+                (3. * f64::from(rate)).round() as usize
+            );
+            assert_eq!(
+                grid.nearest_quantized_frame(Duration::from_millis(2249), rate, QuantizeStep::Half)
+                    .unwrap(),
+                (2. * f64::from(rate)).round() as usize
+            );
+            assert_eq!(
+                grid.next_quantized_frame(Duration::from_secs(2), rate, QuantizeStep::Beat)
+                    .unwrap(),
+                (3. * f64::from(rate)).round() as usize
+            );
+        }
+        assert!(!grid.is_constant_tempo());
+        assert!(BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .is_constant_tempo());
+        assert!(grid.with_tempo_change(0, 100.).is_err());
+        assert!(grid.with_tempo_change(5, 39.9).is_err());
+        assert!(grid.with_tempo_change(5, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn variable_tempo_quantization_compares_neighboring_times_and_handles_float_boundaries() {
+        let half_frame = BeatGrid::new(180., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(4, 120.)
+            .unwrap();
+        assert_eq!(
+            half_frame
+                .nearest_quantized_frame(Duration::from_millis(208), 44_100, QuantizeStep::Eighth)
+                .unwrap(),
+            9_188
+        );
+        let half_frame_100_bpm = BeatGrid::new(100., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(4, 120.)
+            .unwrap();
+        assert_eq!(
+            half_frame_100_bpm
+                .nearest_quantized_frame(Duration::from_millis(1275), 44_100, QuantizeStep::Eighth)
+                .unwrap(),
+            56_228
+        );
+        let cancelled_half_frame = BeatGrid::new(100., Duration::from_millis(5100))
+            .unwrap()
+            .with_tempo_change(4, 120.)
+            .unwrap();
+        assert_eq!(
+            cancelled_half_frame
+                .nearest_quantized_frame(Duration::from_millis(75), 44_100, QuantizeStep::Eighth)
+                .unwrap(),
+            3_308
+        );
+
+        let boundary = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(1, 60.)
+            .unwrap();
+        assert_eq!(
+            boundary
+                .nearest_quantized_frame(Duration::from_millis(700), 48_000, QuantizeStep::Two)
+                .unwrap(),
+            0
+        );
+
+        let anchored = BeatGrid::new(120., Duration::from_millis(313))
+            .unwrap()
+            .with_tempo_change(1, 90.)
+            .unwrap();
+        assert_eq!(
+            anchored
+                .nearest_beat_frame(Duration::from_millis(563), 48_000)
+                .unwrap(),
+            39_024
+        );
+        assert_eq!(
+            anchored
+                .nearest_beat_frame(Duration::from_nanos(562_999_999), 48_000)
+                .unwrap(),
+            15_024
+        );
+        assert_eq!(
+            anchored
+                .nearest_beat_frame(Duration::from_nanos(563_000_001), 48_000)
+                .unwrap(),
+            39_024
+        );
+
+        let negative_beats = BeatGrid::new(200., Duration::from_millis(5100))
+            .unwrap()
+            .with_tempo_change(1, 100.)
+            .unwrap();
+        assert_eq!(
+            negative_beats
+                .nearest_beat_frame(Duration::ZERO, 48_000)
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

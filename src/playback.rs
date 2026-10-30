@@ -916,6 +916,9 @@ impl DualDeckEngine {
         let reference_grid = reference
             .grid
             .ok_or("Save manual grids on both decks before matching tempo")?;
+        if !own_grid.is_constant_tempo() || !reference_grid.is_constant_tempo() {
+            return Err("Tempo matching currently requires constant-tempo grids".into());
+        }
         if target.nudge != 0 || reference.nudge != 0 {
             return Err("Release nudge on both decks before matching tempo".into());
         }
@@ -2651,7 +2654,7 @@ mod tests {
         let (mixer, _output) = rodio::mixer::mixer(1, 48000);
         let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
         assert!(engine.tempo_match_factor(DeckId::A).is_err());
-        let a = wav_file(4096, 192000);
+        let a = crate::test_support::wav_samples(&vec![4096; 192000], 192000, 1);
         let b = crate::test_support::wav_samples(&vec![4096; 176400], 44100, 1);
         engine.load_a(a.path()).unwrap();
         engine.load_b(b.path()).unwrap();
@@ -2683,7 +2686,23 @@ mod tests {
         engine.set_grid(DeckId::B, grid(240.)).unwrap();
         engine.set_speed(DeckId::B, 1.).unwrap();
         assert_eq!(engine.tempo_match_factor(DeckId::A).unwrap(), 2.);
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(
+                    crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+                        .unwrap()
+                        .with_tempo_change(1, 110.)
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        assert!(engine
+            .tempo_match_factor(DeckId::A)
+            .unwrap_err()
+            .contains("constant-tempo"));
         engine.set_speed(DeckId::A, 1.).unwrap();
+        engine.set_grid(DeckId::A, grid(120.)).unwrap();
         assert_eq!(engine.tempo_match_factor(DeckId::B).unwrap(), 0.5);
     }
     #[test]

@@ -50,6 +50,9 @@ fn phase_fraction(
     position: Duration,
     alignment: Alignment,
 ) -> Result<(i128, i128), String> {
+    if !grid.is_constant_tempo() {
+        return Err("Phase sync currently requires constant-tempo grids".into());
+    }
     if position > MAX_ANCHOR {
         return Err("Phase sync supports positions up to seven days".into());
     }
@@ -375,5 +378,30 @@ mod tests {
             1
         )
         .is_err());
+    }
+
+    #[test]
+    fn phase_sync_rejects_variable_tempo_grids_until_local_tempo_matching_exists() {
+        let variable = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(8, 100.)
+            .unwrap();
+        let constant = BeatGrid::new(120., Duration::ZERO).unwrap();
+        assert!(
+            beat_displacement(variable, Duration::from_secs(2), constant, Duration::ZERO)
+                .unwrap_err()
+                .contains("constant-tempo")
+        );
+        assert!(target_frame_mode(
+            constant,
+            Duration::ZERO,
+            variable,
+            Duration::ZERO,
+            48000,
+            480000,
+            Alignment::Beat
+        )
+        .unwrap_err()
+        .contains("constant-tempo"));
     }
 }
