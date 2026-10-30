@@ -2769,10 +2769,21 @@ impl AudioController {
             Ok(profiles) => match self.engine.borrow().output_device_key() {
                 Some(key) => {
                     let saved = profiles.pair_for(key);
+                    if saved.is_none()
+                        && key.endpoint_id.is_some()
+                        && profiles.routes.iter().any(|route| {
+                            route.device.endpoint_id.is_none()
+                                && route.device.backend == key.backend
+                                && route.device.name == key.name
+                                && route.device.channels == key.channels
+                        })
+                    {
+                        warning = Some("Legacy name profile preserved; endpoint profile uses defaults. Set output/monitor settings for this endpoint".into());
+                    }
                     monitor = profiles
                         .routes
                         .iter()
-                        .find(|route| &route.device == key)
+                        .find(|route| route.device.same_device(key))
                         .and_then(|route| route.monitor);
                     let writable = saved.is_some()
                         || profiles.routes.len() < crate::output_preferences::MAX_OUTPUT_PROFILES;
@@ -8806,6 +8817,7 @@ mod tests {
             let engine = Rc::new(
                 DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
                     crate::output_preferences::OutputDeviceKey {
+                        endpoint_id: None,
                         backend: "Test".into(),
                         name: name.into(),
                         channels: 4,
@@ -8899,6 +8911,7 @@ mod tests {
         let engine = Rc::new(
             DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
                 crate::output_preferences::OutputDeviceKey {
+                    endpoint_id: None,
                     backend: "Test".into(),
                     name: "MC4000".into(),
                     channels: 4,
@@ -8955,6 +8968,7 @@ mod tests {
             if let Some(name) = name {
                 engine =
                     engine.with_output_device_key(crate::output_preferences::OutputDeviceKey {
+                        endpoint_id: None,
                         backend: "Test".into(),
                         name: name.into(),
                         channels,
@@ -8999,6 +9013,7 @@ mod tests {
             let engine = Rc::new(
                 DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
                     crate::output_preferences::OutputDeviceKey {
+                        endpoint_id: None,
                         backend: "Test".into(),
                         name: "MC4000".into(),
                         channels: 4,
@@ -9050,6 +9065,7 @@ mod tests {
             profiles
                 .update(crate::output_preferences::OutputRoute {
                     device: crate::output_preferences::OutputDeviceKey {
+                        endpoint_id: None,
                         backend: "Test".into(),
                         name: format!("Device{i}"),
                         channels: 4,
@@ -9074,6 +9090,7 @@ mod tests {
             let engine = Rc::new(
                 DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
                     crate::output_preferences::OutputDeviceKey {
+                        endpoint_id: None,
                         backend: "Test".into(),
                         name: name.into(),
                         channels: 4,
@@ -9138,6 +9155,7 @@ mod tests {
         let engine = Rc::new(
             DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
                 crate::output_preferences::OutputDeviceKey {
+                    endpoint_id: None,
                     backend: "Test".into(),
                     name: "MC4000".into(),
                     channels: 4,

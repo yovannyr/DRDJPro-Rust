@@ -4,6 +4,7 @@ use std::{rc::Rc, time::Duration};
 mod audio;
 mod audio_devices;
 mod audio_formats;
+mod audio_identity;
 mod beatgrid;
 mod cancellation;
 mod controller;

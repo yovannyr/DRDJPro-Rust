@@ -1,16 +1,25 @@
-//! Guarded output profiles: backend/name/channel shape, not a hardware serial number.
+//! Guarded profiles: backend/endpoint/channel shape, with preserved legacy name profiles.
 use serde::{Deserialize, Serialize};
 pub const MAX_ROUTES_BYTES: usize = 65536;
 pub const MAX_OUTPUT_PROFILES: usize = 32;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputDeviceKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
     pub backend: String,
     pub name: String,
     pub channels: u16,
 }
 impl OutputDeviceKey {
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .endpoint_id
+            .as_ref()
+            .is_some_and(|id| id.is_empty() || id.len() > 2048 || id.chars().any(char::is_control))
+        {
+            return Err("Invalid audio endpoint identity".into());
+        }
         if self.backend.is_empty()
             || self.backend.len() > 32
             || self.name.is_empty()
@@ -28,11 +37,21 @@ impl OutputDeviceKey {
     }
     pub fn unique(backend: String, name: String, channels: u16, matches: usize) -> Option<Self> {
         let key = Self {
+            endpoint_id: None,
             backend,
             name,
             channels,
         };
         (matches == 1 && key.validate().is_ok()).then_some(key)
+    }
+    pub fn same_device(&self, other: &Self) -> bool {
+        self.backend == other.backend
+            && self.channels == other.channels
+            && match (&self.endpoint_id, &other.endpoint_id) {
+                (Some(a), Some(b)) => a == b,
+                (None, None) => self.name == other.name,
+                _ => false,
+            }
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -100,7 +119,7 @@ impl OutputRoutes {
             route.validate()?;
             if self.routes[..index]
                 .iter()
-                .any(|r| r.device == route.device)
+                .any(|r| r.device.same_device(&route.device))
             {
                 return Err("Duplicate audio device profile".into());
             }
@@ -110,12 +129,16 @@ impl OutputRoutes {
     pub fn pair_for(&self, key: &OutputDeviceKey) -> Option<u16> {
         self.routes
             .iter()
-            .find(|r| &r.device == key)
+            .find(|r| r.device.same_device(key))
             .map(|r| r.pair)
     }
     pub fn update(&mut self, route: OutputRoute) -> Result<(), String> {
         route.validate()?;
-        if let Some(old) = self.routes.iter_mut().find(|r| r.device == route.device) {
+        if let Some(old) = self
+            .routes
+            .iter_mut()
+            .find(|r| r.device.same_device(&route.device))
+        {
             *old = route;
         } else {
             if self.routes.len() == MAX_OUTPUT_PROFILES {
@@ -129,6 +152,70 @@ impl OutputRoutes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn endpoint_identity_survives_rename_but_never_inherits_by_name() {
+        let mut key = OutputDeviceKey::unique("WASAPI".into(), "MC4000".into(), 4, 1).unwrap();
+        let legacy = key.clone();
+        key.endpoint_id = Some("endpoint-a".into());
+        let mut profiles = OutputRoutes::default();
+        profiles
+            .update(OutputRoute {
+                device: legacy.clone(),
+                pair: 1,
+                monitor: None,
+            })
+            .unwrap();
+        assert_eq!(profiles.pair_for(&key), None);
+        profiles
+            .update(OutputRoute {
+                device: key.clone(),
+                pair: 0,
+                monitor: Some(MonitorPreferences {
+                    gain: 0.2,
+                    mix: 0.,
+                    cues: [false, true],
+                }),
+            })
+            .unwrap();
+        let mut renamed = key.clone();
+        renamed.name = "Renamed mixer".into();
+        assert_eq!(profiles.pair_for(&renamed), Some(0));
+        let mut replacement = key.clone();
+        replacement.endpoint_id = Some("endpoint-b".into());
+        assert_eq!(profiles.pair_for(&replacement), None);
+        replacement = key.clone();
+        replacement.channels = 2;
+        assert_eq!(profiles.pair_for(&replacement), None);
+        replacement = key.clone();
+        replacement.backend = "Other".into();
+        assert_eq!(profiles.pair_for(&replacement), None);
+        profiles
+            .update(OutputRoute {
+                device: renamed.clone(),
+                pair: 0,
+                monitor: None,
+            })
+            .unwrap();
+        assert_eq!(profiles.routes.len(), 2);
+        assert_eq!(profiles.pair_for(&legacy), Some(1));
+        let saved = serde_json::to_string(&profiles).unwrap();
+        let restored: OutputRoutes = serde_json::from_str(&saved).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.pair_for(&renamed), Some(0));
+        let mut duplicate = restored.clone();
+        duplicate.routes.push(OutputRoute {
+            device: key.clone(),
+            pair: 0,
+            monitor: None,
+        });
+        assert!(duplicate.validate().is_err());
+        for invalid in ["", "bad\nidentity"] {
+            key.endpoint_id = Some(invalid.into());
+            assert!(key.validate().is_err());
+        }
+        key.endpoint_id = Some("x".repeat(2049));
+        assert!(key.validate().is_err());
+    }
     #[test]
     fn monitor_profiles_are_optional_strict_and_validate_routing_conflicts() {
         let old = r#"{"version":1,"routes":[{"device":{"backend":"Test","name":"MC4000","channels":4},"pair":0}]}"#;
@@ -177,6 +264,7 @@ mod tests {
                 ..key.clone()
             },
             OutputDeviceKey {
+                endpoint_id: None,
                 backend: "Other".into(),
                 ..key.clone()
             },
@@ -210,6 +298,7 @@ mod tests {
             profiles
                 .update(OutputRoute {
                     device: OutputDeviceKey {
+                        endpoint_id: None,
                         backend: "WASAPI".into(),
                         name: format!("Device{i}"),
                         channels: 2,
@@ -223,6 +312,7 @@ mod tests {
         assert!(profiles
             .update(OutputRoute {
                 device: OutputDeviceKey {
+                    endpoint_id: None,
                     backend: "WASAPI".into(),
                     name: "overflow".into(),
                     channels: 2

@@ -393,6 +393,14 @@ impl DualDeckEngine {
                 .ok_or("No default audio output device")?
         };
         let name = device.name().ok();
+        let endpoint_id = if host.id().name() == "WASAPI" {
+            crate::audio_identity::endpoints().ok().and_then(|entries| {
+                name.as_ref()
+                    .and_then(|name| crate::audio_identity::unique_id(&entries, name))
+            })
+        } else {
+            None
+        };
         let matches = name
             .as_ref()
             .and_then(|name| {
@@ -426,6 +434,18 @@ impl DualDeckEngine {
                 matches,
             )
         });
+        if let Some(key) = engine.output_device_key.as_mut() {
+            key.endpoint_id = endpoint_id;
+        }
+        // Windows profiles must never silently downgrade to a name after identity lookup fails.
+        if host.id().name() == "WASAPI"
+            && engine
+                .output_device_key
+                .as_ref()
+                .is_some_and(|key| key.endpoint_id.is_none())
+        {
+            engine.output_device_key = None;
+        }
         Ok(engine)
     }
     /// An injected renderer on another thread must be stopped/joined before this engine drops.

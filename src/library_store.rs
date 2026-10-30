@@ -1547,6 +1547,56 @@ mod tests {
         );
     }
     #[test]
+    fn endpoint_profile_survives_sqlite_restart_and_rename_without_merging_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let delta = library::CatalogDelta {
+            revision: 1,
+            tracks: vec![],
+            crates: None,
+            memberships: vec![],
+        };
+        let legacy = OutputRoute {
+            device: crate::output_preferences::OutputDeviceKey::unique(
+                "WASAPI".into(),
+                "Mixer".into(),
+                4,
+                1,
+            )
+            .unwrap(),
+            pair: 1,
+            monitor: None,
+        };
+        store
+            .save_all_state(&delta, None, Some(legacy.clone()))
+            .unwrap();
+        let mut identified = legacy.clone();
+        identified.device.endpoint_id = Some("endpoint-a".into());
+        identified.pair = 0;
+        store
+            .save_all_state(&delta, None, Some(identified.clone()))
+            .unwrap();
+        identified.device.name = "Renamed mixer".into();
+        identified.monitor = Some(crate::output_preferences::MonitorPreferences {
+            gain: 0.2,
+            mix: 0.,
+            cues: [true, false],
+        });
+        store
+            .save_all_state(&delta, None, Some(identified.clone()))
+            .unwrap();
+        drop(store);
+        let (store, _, _) = Store::open(db).unwrap();
+        let restored = store.read_output_routes().unwrap();
+        assert_eq!(restored.routes.len(), 2);
+        assert!(restored.routes.contains(&legacy));
+        assert!(restored.routes.contains(&identified));
+        let mut other = identified.device.clone();
+        other.endpoint_id = Some("endpoint-b".into());
+        assert_eq!(restored.pair_for(&other), None);
+    }
+    #[test]
     fn monitor_profile_roundtrip_and_combined_save_rollback() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("library.sqlite3");
@@ -1559,6 +1609,7 @@ mod tests {
         };
         let mut route = OutputRoute {
             device: crate::output_preferences::OutputDeviceKey {
+                endpoint_id: None,
                 backend: "Test".into(),
                 name: "MC4000".into(),
                 channels: 4,
@@ -1611,6 +1662,7 @@ mod tests {
         let (mut store, _, _) = Store::open(db.clone()).unwrap();
         let route = OutputRoute {
             device: crate::output_preferences::OutputDeviceKey {
+                endpoint_id: None,
                 backend: "Test".into(),
                 name: "MC4000".into(),
                 channels: 4,
