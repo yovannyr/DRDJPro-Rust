@@ -12,6 +12,8 @@ mod crates;
 mod cue_bus;
 mod deck_render;
 mod delay_fx;
+#[cfg(any(target_os = "windows", test))]
+mod external_drop;
 mod hot_cues;
 mod legacy_catalog;
 mod library;
@@ -154,6 +156,10 @@ fn main() -> Result<(), slint::PlatformError> {
     } else {
         None
     };
+    #[cfg(target_os = "windows")]
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .select()?;
     let ui = AppWindow::new()?;
     ui.set_audio_enabled(audio_engine.is_some());
     ui.set_audio_startup_warning(startup_audio_warning.into());
@@ -199,6 +205,9 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_status("Simulation: start without --demo for real audio".into());
         None
     };
+
+    #[cfg(target_os = "windows")]
+    let external_drop_timer = controller.as_ref().map(|_| external_drop::install(&ui));
 
     let audio_owner = controller
         .as_ref()
@@ -306,6 +315,10 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let result = ui.run();
+    #[cfg(target_os = "windows")]
+    if let Some(timer) = external_drop_timer {
+        timer.stop();
+    }
     lifecycle_trace("GUI loop exited");
     timer.stop();
     lifecycle_trace("timer stopped");

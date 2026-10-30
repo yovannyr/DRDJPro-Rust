@@ -42,6 +42,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 
 - [x] ✅ Track aus der Bibliothek auf Deck A/B ziehen: interne DragArea/DropArea, einzelner Audiodateipfad, pausiertes Ziel und bestehender Hintergrund-Loader; tatsächliche Pointer-Drag-Tests bei beiden Fenstergrößen sowie Payload-/Busy-/Playing-Schutz. Kein Dateiverschieben und kein automatischer Start.
 - [ ] ☐ Externe Explorer-Dateidrops: Windows-Winit-Brücke und native Drag-and-drop-Bedienabnahme; interne Headless-Tests sind kein nativer Nachweis.
+  - [x] ✅ Windows-Winit-Brücke für einzelne Dateipfade, DPI-korrekte Deck-Zuordnung und bestehenden Hintergrund-Loader implementiert; Mehrfachdrops, ungültige Ziele, offene AUDIO/MON/FX-Panels und belegte/spielende Ziele geschützt. Automatisierte Gesten-/Geometrie-/Controller-Regressionen vorhanden.
+  - [ ] ☐ Native Explorer-Bedienabnahme bei beiden Fenstergrößen und repräsentativer Windows-DPI-Skalierung; automatisierte Tests ersetzen diesen Nachweis nicht.
 
 - [x] ✅ Manuelle Loop-Engine mit framegenauem In/Out, Aktivieren/Verlassen und deterministischen Offline-Tests.
 - [x] ✅ Loop-In/Out, Aktivieren/Verlassen und echte Loop-Zustandsanzeige in beiden Decks.

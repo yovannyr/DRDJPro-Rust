@@ -8922,6 +8922,77 @@ mod tests {
         assert!(!engine.snapshot(DeckId::B).playing);
     }
     #[test]
+    fn external_drop_ingress_loads_both_decks_and_preserves_guards() {
+        use crate::external_drop::{drop_file, refresh_hover, FileGesture};
+        i_slint_backend_testing::init_no_event_loop();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            let ui = AppWindow::new().unwrap();
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+            let c = AudioController::wire(
+                &ui,
+                engine.clone(),
+                Arc::new(|| panic!("external drop must not open picker")),
+                Arc::new(|| None),
+            );
+            let wav = wav_file(8192, 192000);
+            let original = std::fs::read(wav.path()).unwrap();
+            ui.show().unwrap();
+            let point = |label| {
+                let origin = control(&ui, label).absolute_position();
+                slint::LogicalPosition::new(origin.x + 5., origin.y + 5.)
+            };
+            let a = point("DECK A load track");
+            let b = point("DECK B load track");
+            let mut gesture = FileGesture::default();
+            for position in [a, b] {
+                gesture.hover(wav.path().to_owned());
+                assert!(drop_file(&ui, &mut gesture, wav.path(), Ok(position)));
+                gesture.hover(wav.path().to_owned());
+                assert!(!drop_file(&ui, &mut gesture, wav.path(), Ok(position)));
+                assert!(ui.get_status().contains("Wait"));
+                finish(&c);
+            }
+            assert!(!engine.snapshot(DeckId::A).playing);
+            assert!(!engine.snapshot(DeckId::B).playing);
+            gesture.hover(wav.path().to_owned());
+            refresh_hover(&ui, &gesture, Some(a));
+            assert_eq!(ui.get_external_drop_deck(), 0);
+            engine.play(DeckId::A);
+            let before = engine.snapshot(DeckId::A);
+            assert!(!drop_file(&ui, &mut gesture, wav.path(), Ok(a)));
+            assert!(ui.get_status().contains("Pause"));
+            assert_eq!(engine.snapshot(DeckId::A).path, before.path);
+            assert!(engine.snapshot(DeckId::A).playing);
+            gesture.hover(wav.path().to_owned());
+            assert!(drop_file(&ui, &mut gesture, wav.path(), Ok(b)));
+            finish(&c);
+            assert!(!engine.snapshot(DeckId::B).playing);
+            let before_b = engine.snapshot(DeckId::B).path;
+            gesture.hover(wav.path().to_owned());
+            gesture.hover(wav.path().to_owned());
+            for _ in 0..2 {
+                assert!(!drop_file(&ui, &mut gesture, wav.path(), Ok(b)));
+                assert!(c.pending.borrow().is_none());
+            }
+            let invalid = wav.path().with_extension("txt");
+            gesture.hover(invalid.clone());
+            assert!(!drop_file(&ui, &mut gesture, &invalid, Ok(b)));
+            assert_eq!(engine.snapshot(DeckId::B).path, before_b);
+            let missing = wav.path().with_file_name("missing-external-drop.wav");
+            gesture.hover(missing.clone());
+            assert!(drop_file(&ui, &mut gesture, &missing, Ok(b)));
+            finish(&c);
+            assert_eq!(engine.snapshot(DeckId::B).path, before_b);
+            assert!(!engine.snapshot(DeckId::B).playing);
+            assert_eq!(std::fs::read(wav.path()).unwrap(), original);
+            engine.pause(DeckId::A);
+            ui.hide().unwrap();
+        }
+    }
+
+    #[test]
     fn library_pointer_drag_loads_both_decks_at_supported_sizes() {
         use slint::platform::{PointerEventButton, WindowEvent};
         i_slint_backend_testing::init_no_event_loop();

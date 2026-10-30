@@ -323,7 +323,8 @@ component CompactDeck inherits Rectangle {
     callback load(); callback toggle(); callback cue(); callback seek(float);
     pure callback accepts-drop(data-transfer) -> bool;
     callback drop-track(data-transfer) -> bool;
-    background: #171c24; border-width: 1px; border-color: deck-drop.has-drag ? root.accent : #303b4b;
+    in property <bool> external-hover: false;
+    background: #171c24; border-width: 1px; border-color: deck-drop.has-drag || root.external-hover ? root.accent : #303b4b;
     deck-drop := DropArea {
         width: 100%; height: 100%;
         can-drop(event) => { return root.accepts-drop(event.data) ? DragAction.copy : DragAction.none; }
@@ -695,6 +696,22 @@ export component AppWindow inherits Window {
     pure callback track-transfer(string) -> data-transfer;
     pure callback accepts-track-drop(int, data-transfer) -> bool;
     callback drop-track(int, data-transfer) -> bool;
+    in property <int> external-drop-deck: -1;
+    pure callback external-drop-target(float, float) -> int;
+    external-drop-target(px, py) => {
+        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open {
+            return -1;
+        }
+        if px >= left-deck.absolute-position.x / 1px && px < (left-deck.absolute-position.x + left-deck.width) / 1px
+            && py >= left-deck.absolute-position.y / 1px && py < (left-deck.absolute-position.y + left-deck.height) / 1px {
+            return 0;
+        }
+        if px >= right-deck.absolute-position.x / 1px && px < (right-deck.absolute-position.x + right-deck.width) / 1px
+            && py >= right-deck.absolute-position.y / 1px && py < (right-deck.absolute-position.y + right-deck.height) / 1px {
+            return 1;
+        }
+        return -1;
+    }
     title: "DrDJ Pro"; preferred-width: 1280px; preferred-height: 860px;
     min-width: 850px; min-height: 740px; background: #090d13;
     in property <[float]> left-waveform;
@@ -977,8 +994,9 @@ export component AppWindow inherits Window {
         }
         HorizontalLayout {
             height: 260px; spacing: 8px;
-            CompactDeck {
+            left-deck := CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
+                external-hover: root.external-drop-deck == 0;
                 accepts-drop(data) => { return root.accepts-track-drop(0,data); }
                 drop-track(data) => { return root.drop-track(0,data); }
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
@@ -1015,8 +1033,9 @@ export component AppWindow inherits Window {
                 audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.left-busy; load-busy: root.loading || root.library-busy;
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } seek(value) => { root.seek-left(value); }
             }
-            CompactDeck {
+            right-deck := CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
+                external-hover: root.external-drop-deck == 1;
                 accepts-drop(data) => { return root.accepts-track-drop(1,data); }
                 drop-track(data) => { return root.drop-track(1,data); }
                 waveform: root.right-waveform; colors: root.right-waveform-colors;

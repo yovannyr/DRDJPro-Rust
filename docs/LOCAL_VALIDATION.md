@@ -2,6 +2,16 @@
 
 Host: Windows x64, rustc 1.99.1. Starting revision: c8e0b70, branch main. Initial tracked working tree was clean. The referenced chat exposed message references only, so its claimed build results could not be recovered; the checkout was verified directly.
 
+## External Windows drops — implementation verification (2026-10-30)
+
+- Baseline `cargo test track_drop -- --nocapture`: 1 passed.
+- `cargo test drop -- --nocapture`: 9 passed, including four new external-drop tests for gesture state, DPI conversion, two-size geometry/panel gating and real controller/worker integration.
+- Independent GPT-6.1 Sol medium review found a mismatch when `SLINT_SCALE_FACTOR` overrides Windows DPI. The bridge now uses Slint's effective scale; a real headless window regression exercises 1/1.5/2 scales through the same coordinate conversion used by the native bridge. Follow-up review accepted with no remaining blockers.
+- After that correction: `cargo test external_drop -- --nocapture` passed all 5 selected tests; `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --quiet` (314 passed, 6 ignored), `cargo build --release` and `git diff --check` all passed.
+- Controller integration checks both decks remain paused after loading, playing-target and pending-load rejection, every member of a multiple drop, unsupported/missing files retaining the previous track, and byte-identical source files afterward.
+- A native OLE automation attempt used a separate WinForms source and an isolated SQLite profile. It did not establish a successful drop: the source harness returned None/timeout or stalled. The native DrDJ window and its accessibility tree were reachable, but no successful deck-load evidence was obtained. Test processes were terminated; playback was never started. This is inconclusive, not a passed native test or a demonstrated application defect.
+- Native Explorer/visual/DPI acceptance is not established by these checks. The migration item remains open pending that qualification.
+
 ## Baseline
 
 - `cargo fmt --check`: passed.
