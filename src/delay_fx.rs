@@ -218,7 +218,7 @@ impl<S: Source> Iterator for DelaySource<S> {
         let dry = self.source.next().unwrap_or(0.);
         if self.channel == 0 {
             self.auxiliary_passthrough = self.cue_controls.as_ref().is_some_and(|controls| {
-                controls[self.cue_deck].rendered_cue() || controls.iter().any(|c| c.cue())
+                controls[self.cue_deck].rendered_cue() || controls.iter().any(|c| c.monitor_mode())
             });
             if let Some(settings) = self.control.read() {
                 if settings != self.settings {

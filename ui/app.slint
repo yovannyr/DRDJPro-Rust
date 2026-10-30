@@ -768,6 +768,9 @@ export component AppWindow inherits Window {
     in property <bool> monitor-available: false;
     in property <string> monitor-status: "Independent cue unavailable";
     callback monitor-cue-changed(int);
+    in-out property <float> monitor-gain: 100;
+    in-out property <float> monitor-mix: 0;
+    callback monitor-changed();
     in property <string> channel-a-peak-caption: "A PRE —";
     in property <string> channel-b-peak-caption: "B PRE —";
     in property <float> channel-a-peak-level;
@@ -1147,7 +1150,7 @@ export component AppWindow inherits Window {
         Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
     }
     if root.monitor-open : Rectangle {
-        x:16px;y:60px;width:parent.width - 32px;height:170px;
+        x:16px;y:60px;width:parent.width - 32px;height:270px;
         background:#0b1119;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Headphone monitor panel";
         VerticalLayout {
@@ -1161,7 +1164,11 @@ export component AppWindow inherits Window {
                 CheckBox {text:"CUE A (pre-fader)";accessible-label:"Deck A headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-a;toggled=>{root.monitor-cue-changed(0);}}
                 CheckBox {text:"CUE B (pre-fader)";accessible-label:"Deck B headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-b;toggled=>{root.monitor-cue-changed(1);}}
             }
-            Text {text:"Session only. Use hardware headphone level; no Cue/Master blend yet.";color:#a6b4c8;}
+            Text {text:"HEADPHONE LEVEL " + round(root.monitor-gain) + "%";color:#edf2fa;}
+            Slider {accessible-label:"Headphone monitor gain";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-gain;changed=>{root.monitor-changed();}}
+            Text {text:"CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:#edf2fa;}
+            Slider {accessible-label:"Headphone cue master mix";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-mix;changed=>{root.monitor-changed();}}
+            Text {text:"Session only. MC4000 Monitor Level / Pan control these sliders.";color:#a6b4c8;}
         }
     }
     if root.fx-open : Rectangle {

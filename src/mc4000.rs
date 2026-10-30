@@ -10,6 +10,7 @@ pub enum Command {
     Keylock(usize),
     Cue(usize),
     HeadphoneCue(usize),
+    Monitor(usize, u8),
     Fader(usize, u8),
     Crossfader(u8),
     FxToggle(usize),
@@ -42,6 +43,7 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         (0x90, 0..=1, 27, 1..=127) => Some(Command::HeadphoneCue(channel as usize)),
         (0xb0, 0..=1, 28, value) => Some(Command::Fader(channel as usize, value)),
         (0xb0, 15, 8, value) => Some(Command::Crossfader(value)),
+        (0xb0, 15, 12..=13, value) => Some(Command::Monitor(usize::from(bytes[1] - 12), value)),
         _ => None,
     }
 }
@@ -115,7 +117,7 @@ pub struct Input {
     output: Option<midir::MidiOutputConnection>,
     greeting: Greeting,
     buttons: Receiver<Command>,
-    levels: Arc<[AtomicU8; 3]>,
+    levels: Arc<[AtomicU8; 5]>,
     fx_levels: Arc<[AtomicU8; 6]>,
     overflow: Arc<AtomicBool>,
     trace: Option<InputTrace>,
@@ -167,6 +169,9 @@ impl Input {
                                 values[deck].store(value, Ordering::Release)
                             }
                             Command::Crossfader(value) => values[2].store(value, Ordering::Release),
+                            Command::Monitor(index, value) => {
+                                values[3 + index].store(value, Ordering::Release)
+                            }
                             command => {
                                 if sender.try_send(command).is_err() {
                                     failed.store(true, Ordering::Release);
@@ -228,10 +233,12 @@ impl Input {
             }
         }
         // Coalesced levels are applied before transport in this UI tick.
-        for i in 0..3 {
+        for i in 0..5 {
             let value = self.levels[i].swap(128, Ordering::AcqRel);
             if value < 128 {
-                apply(if i == 2 {
+                apply(if i >= 3 {
+                    Command::Monitor(i - 3, value)
+                } else if i == 2 {
                     Command::Crossfader(value)
                 } else {
                     Command::Fader(i, value)
@@ -269,6 +276,14 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         return;
     }
     match command {
+        Command::Monitor(index, value) => {
+            match index {
+                0 => ui.set_monitor_gain(f32::from(value) * 100. / 127.),
+                1 => ui.set_monitor_mix(f32::from(value) * 100. / 127.),
+                _ => return,
+            }
+            ui.invoke_monitor_changed();
+        }
         Command::HeadphoneCue(0) => {
             ui.set_monitor_cue_a(!ui.get_monitor_cue_a());
             ui.invoke_monitor_cue_changed(0);
@@ -338,6 +353,10 @@ mod tests {
     use super::*;
     #[test]
     fn headphone_cue_notes_are_deck_scoped_and_releases_do_not_toggle() {
+        assert_eq!(decode(&[0xbf, 12, 0]), Some(Command::Monitor(0, 0)));
+        assert_eq!(decode(&[0xbf, 13, 127]), Some(Command::Monitor(1, 127)));
+        assert_eq!(decode(&[0xb0, 12, 127]), None);
+        assert_eq!(decode(&[0x9f, 12, 127]), None);
         for deck in 0..=1 {
             assert_eq!(
                 decode(&[0x90 | deck, 27, 127]),

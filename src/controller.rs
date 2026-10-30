@@ -459,6 +459,24 @@ impl AudioController {
             }
             .into(),
         );
+        ui.on_monitor_changed(move || {
+            if let Some(c) = weak.upgrade() {
+                if let Some(ui) = c.ui.upgrade() {
+                    let result =
+                        c.engine
+                            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                                gain: ui.get_monitor_gain() / 100.,
+                                mix: ui.get_monitor_mix() / 100.,
+                            });
+                    ui.set_monitor_status(match result {
+                        Ok(()) => "Monitor updated (session only)".into(),
+                        Err(error) => error.into(),
+                    });
+                    c.refresh();
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         ui.on_monitor_cue_changed(move |deck| {
             if let Some(c) = weak.upgrade() {
                 if let Some(ui) = c.ui.upgrade() {
@@ -3540,6 +3558,9 @@ impl AudioController {
         ui.set_monitor_available(self.engine.output_channels() >= 4);
         ui.set_monitor_cue_a(self.engine.headphone_cue(DeckId::A));
         ui.set_monitor_cue_b(self.engine.headphone_cue(DeckId::B));
+        let monitor = self.engine.monitor_settings();
+        ui.set_monitor_gain(monitor.gain * 100.);
+        ui.set_monitor_mix(monitor.mix * 100.);
         let (caption, level, warning) = peak_display(self.engine.output_peak());
         ui.set_output_peak_caption(caption.into());
         ui.set_output_peak_level(level);
@@ -4611,6 +4632,25 @@ mod tests {
             output.by_ref().take(4).collect::<Vec<_>>(),
             vec![0., 0., 0.25, 0.25]
         );
+        ui.set_monitor_gain(50.);
+        ui.set_monitor_mix(50.);
+        ui.invoke_monitor_changed();
+        output.by_ref().take(12000).for_each(drop);
+        assert_eq!(
+            output.by_ref().take(4).collect::<Vec<_>>(),
+            vec![0., 0., 0.0625, 0.0625]
+        );
+        ui.set_monitor_gain(f32::NAN);
+        ui.invoke_monitor_changed();
+        assert_eq!(ui.get_monitor_gain(), 50.);
+        for bytes in [[0xbf, 12, 64], [0xbf, 13, 127]] {
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        }
+        assert!((engine.monitor_settings().gain - 64. / 127.).abs() < 1e-6);
+        assert_eq!(engine.monitor_settings().mix, 1.);
+        for bytes in [[0xbf, 12, 127], [0xbf, 13, 0]] {
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        }
         ui.set_monitor_cue_b(false);
         ui.invoke_monitor_cue_changed(1);
         engine.set_output_pair(1).unwrap();
@@ -4627,6 +4667,8 @@ mod tests {
                 "Deck A headphone cue",
                 "Deck B headphone cue",
                 "Close headphone monitor",
+                "Headphone monitor gain",
+                "Headphone cue master mix",
             ] {
                 let item = control(&ui, label);
                 assert!(item.size().width > 0. && item.size().height > 0.);

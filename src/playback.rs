@@ -317,6 +317,7 @@ pub struct DualDeckEngine {
     decks: [RefCell<Deck>; 2],
     levels: Cell<MixerLevels>,
     cue_enabled: [Cell<bool>; 2],
+    monitor_settings: Cell<crate::output_routing::MonitorSettings>,
     mix_controls: [Arc<crate::cue_bus::DeckMixControl>; 2],
     eq_settings: [Cell<crate::mixer_dsp::EqSettings>; 2],
     eq_controls: [Arc<crate::mixer_dsp::EqControl>; 2],
@@ -467,6 +468,7 @@ impl DualDeckEngine {
             decks,
             levels: Cell::new(MixerLevels::default()),
             cue_enabled: std::array::from_fn(|_| Cell::new(false)),
+            monitor_settings: Cell::new(Default::default()),
             mix_controls,
             eq_settings: std::array::from_fn(
                 |_| Cell::new(crate::mixer_dsp::EqSettings::default()),
@@ -575,7 +577,9 @@ impl DualDeckEngine {
         self.try_install(id, track).unwrap();
     }
     pub fn try_install(&self, id: DeckId, track: PreparedTrack) -> Result<(), String> {
-        if track.samples.channels() > 2 && self.cue_enabled.iter().any(Cell::get) {
+        if track.samples.channels() > 2
+            && (self.cue_enabled.iter().any(Cell::get) || self.monitor_settings.get().mix > 0.)
+        {
             return Err("Disable headphone cue before loading multichannel audio".into());
         }
         let source = track.samples.clone();
@@ -1514,10 +1518,47 @@ impl DualDeckEngine {
                 "Independent headphone cue currently supports mono/stereo tracks only".into(),
             );
         }
-        let any = enabled || self.cue_enabled[1 - id.index()].get();
+        let any = enabled
+            || self.cue_enabled[1 - id.index()].get()
+            || self.monitor_settings.get().mix > 0.;
         self.output_routing.set_cue_enabled(any)?;
+        for control in &self.mix_controls {
+            control.set_monitor_mode(any);
+        }
         self.mix_controls[id.index()].set_cue(enabled);
         self.cue_enabled[id.index()].set(enabled);
+        Ok(())
+    }
+    pub fn monitor_settings(&self) -> crate::output_routing::MonitorSettings {
+        self.monitor_settings.get()
+    }
+    pub fn set_monitor_settings(
+        &self,
+        settings: crate::output_routing::MonitorSettings,
+    ) -> Result<(), String> {
+        settings.validate()?;
+        if self.output_channels < 4 {
+            return Err("Monitor controls require at least four output channels".into());
+        }
+        if settings.mix > 0.
+            && self.decks.iter().any(|d| {
+                d.borrow()
+                    .track
+                    .as_ref()
+                    .is_some_and(|t| t.samples.channels() > 2)
+            })
+        {
+            return Err(
+                "Independent headphone monitor currently supports mono/stereo tracks only".into(),
+            );
+        }
+        let active = settings.mix > 0. || self.cue_enabled.iter().any(Cell::get);
+        self.output_routing.set_cue_enabled(active)?;
+        for control in &self.mix_controls {
+            control.set_monitor_mode(active);
+        }
+        self.output_routing.set_monitor(settings);
+        self.monitor_settings.set(settings);
         Ok(())
     }
     pub fn eq_settings(&self, id: DeckId) -> crate::mixer_dsp::EqSettings {
@@ -1590,6 +1631,57 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn monitor_blend_gain_and_master_only_preview_preserve_master_and_validate_requests() {
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let a = wav_file(8192, 192000);
+        let b = wav_file(16384, 192000);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            channel_a: 1.,
+            channel_b: 0.,
+            crossfader: 0.,
+        });
+        engine.set_headphone_cue(DeckId::B, true).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        for (gain, mix, headphone) in [(1., 0., 0.5), (0.5, 0.5, 0.1875), (0., 0.5, 0.)] {
+            engine
+                .set_monitor_settings(crate::output_routing::MonitorSettings { gain, mix })
+                .unwrap();
+            output.by_ref().take(12000).for_each(drop);
+            let actual: Vec<_> = output.by_ref().take(4).collect();
+            assert_eq!(actual, vec![0.25, 0.25, headphone, headphone]);
+        }
+        engine.set_headphone_cue(DeckId::B, false).unwrap();
+        engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings { gain: 0.5, mix: 1. })
+            .unwrap();
+        assert!(engine.set_output_pair(1).is_err());
+        output.by_ref().take(12000).for_each(drop);
+        assert_eq!(
+            output.by_ref().take(4).collect::<Vec<_>>(),
+            vec![0.25, 0.25, 0.125, 0.125]
+        );
+        let previous = engine.monitor_settings();
+        for invalid in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            assert!(engine
+                .set_monitor_settings(crate::output_routing::MonitorSettings {
+                    gain: invalid,
+                    mix: 0.
+                })
+                .is_err());
+            assert!(engine
+                .set_monitor_settings(crate::output_routing::MonitorSettings {
+                    gain: 0.,
+                    mix: invalid
+                })
+                .is_err());
+            assert_eq!(engine.monitor_settings(), previous);
+        }
+    }
     #[test]
     fn multichannel_playback_and_fx_are_preserved_and_cue_admission_is_explicit() {
         let file =

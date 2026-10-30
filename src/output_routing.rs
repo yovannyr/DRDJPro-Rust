@@ -2,17 +2,52 @@
 use rodio::Source;
 use std::{
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonitorSettings {
+    pub gain: f32,
+    pub mix: f32,
+}
+impl Default for MonitorSettings {
+    fn default() -> Self {
+        Self { gain: 1., mix: 0. }
+    }
+}
+impl MonitorSettings {
+    pub fn validate(self) -> Result<(), String> {
+        if [self.gain, self.mix]
+            .into_iter()
+            .all(|v| v.is_finite() && (0. ..=1.).contains(&v))
+        {
+            Ok(())
+        } else {
+            Err("Monitor gain and mix must be finite values between 0 and 1".into())
+        }
+    }
+    fn bits(self) -> u64 {
+        u64::from(self.gain.to_bits()) | (u64::from(self.mix.to_bits()) << 32)
+    }
+    fn from_bits(bits: u64) -> Self {
+        Self {
+            gain: f32::from_bits(bits as u32),
+            mix: f32::from_bits((bits >> 32) as u32),
+        }
+    }
+}
 pub struct RoutingControl {
     channels: u16,
     requested: AtomicU32,
+    monitor: AtomicU64,
 }
 impl RoutingControl {
+    pub fn set_monitor(&self, settings: MonitorSettings) {
+        self.monitor.store(settings.bits(), Ordering::Release);
+    }
     pub fn pair(&self) -> u16 {
         self.requested.load(Ordering::Acquire) as u16
     }
@@ -54,6 +89,11 @@ pub struct PairRouter<S> {
     pair: u16,
     stereo: [f32; 2],
     cue: bool,
+    monitor: MonitorSettings,
+    target: MonitorSettings,
+    ramp: u32,
+    remaining: u32,
+    monitor_tail: bool,
 }
 impl<S: Source> PairRouter<S> {
     pub fn new(source: S) -> (Self, Arc<RoutingControl>) {
@@ -61,7 +101,9 @@ impl<S: Source> PairRouter<S> {
         let control = Arc::new(RoutingControl {
             channels: source.channels(),
             requested: AtomicU32::new(0),
+            monitor: AtomicU64::new(MonitorSettings::default().bits()),
         });
+        let ramp = source.sample_rate().div_ceil(200).max(1);
         (
             Self {
                 source,
@@ -70,6 +112,11 @@ impl<S: Source> PairRouter<S> {
                 pair: 0,
                 stereo: [0.; 2],
                 cue: false,
+                monitor: MonitorSettings::default(),
+                target: MonitorSettings::default(),
+                ramp,
+                remaining: 0,
+                monitor_tail: false,
             },
             control,
         )
@@ -79,16 +126,38 @@ impl<S: Source> Iterator for PairRouter<S> {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
         if self.channel == 0 {
+            let was_monitoring = self.cue || self.monitor_tail;
             let state = self.control.requested.load(Ordering::Acquire);
             self.pair = state as u16;
             self.cue = state & (1 << 16) != 0;
+            let target = MonitorSettings::from_bits(self.control.monitor.load(Ordering::Acquire));
+            if target != self.target {
+                self.target = target;
+                self.remaining = self.ramp;
+            }
+            if self.remaining > 0 {
+                self.monitor.gain += (self.target.gain - self.monitor.gain) / self.remaining as f32;
+                self.monitor.mix += (self.target.mix - self.monitor.mix) / self.remaining as f32;
+                self.remaining -= 1;
+                if self.remaining == 0 {
+                    self.monitor = self.target;
+                }
+            }
+            // Finish parameter ramps after the last cue/preview request is disabled.
+            // An explicit master reroute to 3/4 takes precedence over this tail.
+            self.monitor_tail = !self.cue
+                && was_monitoring
+                && (self.remaining > 0 || self.monitor.mix > 0.)
+                && self.pair != 1;
         }
         let input = self.source.next()?;
         if self.channel < 2 {
             self.stereo[usize::from(self.channel)] = input;
         }
-        let output = if self.cue && self.channel / 2 == 1 {
-            input
+        let output = if (self.cue || self.monitor_tail) && self.channel / 2 == 1 {
+            self.monitor.gain
+                * ((1. - self.monitor.mix) * if self.cue { input } else { 0. }
+                    + self.monitor.mix * self.stereo[usize::from(self.channel % 2)])
         } else if self.pair == 0 && (!self.cue || self.channel < 2) {
             // Keep the original mapping, including mono and existing multichannel sources.
             input
@@ -119,6 +188,52 @@ impl<S: Source> Source for PairRouter<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn headphone_gain_mix_ramp_is_stereo_coherent_and_leaves_master_untouched() {
+        let (mut source, control) = PairRouter::new(rodio::buffer::SamplesBuffer::new(
+            4,
+            1000,
+            [0.2, -0.4, 0.8, -0.6].repeat(100),
+        ));
+        control.set_cue_enabled(true).unwrap();
+        control.set_monitor(MonitorSettings { gain: 0., mix: 1. });
+        for frame in 1..=5 {
+            let gain = 1. - frame as f32 / 5.;
+            let mix = frame as f32 / 5.;
+            let actual: Vec<_> = source.by_ref().take(4).collect();
+            assert_eq!(&actual[..2], &[0.2, -0.4]);
+            assert!((actual[2] - gain * ((1. - mix) * 0.8 + mix * 0.2)).abs() < 1e-6);
+            assert!((actual[3] - gain * ((1. - mix) * -0.6 + mix * -0.4)).abs() < 1e-6);
+        }
+        assert_eq!(
+            source.by_ref().take(4).collect::<Vec<_>>(),
+            vec![0.2, -0.4, 0., 0.]
+        );
+    }
+    #[test]
+    fn master_preview_fades_out_when_last_monitor_request_is_disabled() {
+        let (mut source, control) = PairRouter::new(rodio::buffer::SamplesBuffer::new(
+            4,
+            1000,
+            [1., -0.5, 0., 0.].repeat(30),
+        ));
+        control.set_cue_enabled(true).unwrap();
+        control.set_monitor(MonitorSettings { gain: 1., mix: 1. });
+        source.by_ref().take(24).for_each(drop);
+        control.set_cue_enabled(false).unwrap();
+        // Force the engine's publication window: route changes before mix arrives.
+        assert_eq!(
+            source.by_ref().take(4).collect::<Vec<_>>(),
+            vec![1., -0.5, 1., -0.5]
+        );
+        control.set_monitor(MonitorSettings { gain: 1., mix: 0. });
+        for step in 1..=5 {
+            let frame: Vec<_> = source.by_ref().take(4).collect();
+            assert_eq!(&frame[..2], &[1., -0.5]);
+            assert!((frame[2] - (1. - step as f32 / 5.)).abs() < 1e-6);
+            assert!((frame[3] + 0.5 * (1. - step as f32 / 5.)).abs() < 1e-6);
+        }
+    }
     #[test]
     fn cue_pair_is_separate_from_remapped_master_and_route_changes_are_frame_bound() {
         let (mut source, control) = PairRouter::new(rodio::buffer::SamplesBuffer::new(

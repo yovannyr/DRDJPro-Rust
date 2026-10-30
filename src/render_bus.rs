@@ -97,7 +97,7 @@ impl<S: Source> Iterator for RenderBus<S> {
             self.stereo_meter = self
                 .cue_controls
                 .as_ref()
-                .is_some_and(|controls| controls.iter().any(|c| c.cue()));
+                .is_some_and(|controls| controls.iter().any(|c| c.monitor_mode()));
         }
         if !self.stereo_meter || self.channel < 2 {
             self.peak.sample(sample);

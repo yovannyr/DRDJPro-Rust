@@ -9,11 +9,12 @@ use std::{
     time::Duration,
 };
 
-pub struct DeckMixControl(AtomicU64, AtomicBool);
+pub struct DeckMixControl(AtomicU64, AtomicBool, AtomicBool);
 impl DeckMixControl {
     pub fn new() -> Arc<Self> {
         Arc::new(Self(
             AtomicU64::new(u64::from(1f32.to_bits())),
+            AtomicBool::new(false),
             AtomicBool::new(false),
         ))
     }
@@ -38,6 +39,12 @@ impl DeckMixControl {
     }
     pub fn cue(&self) -> bool {
         self.0.load(Ordering::Acquire) >> 32 != 0
+    }
+    pub fn monitor_mode(&self) -> bool {
+        self.2.load(Ordering::Acquire) || self.cue()
+    }
+    pub fn set_monitor_mode(&self, active: bool) {
+        self.2.store(active, Ordering::Release);
     }
     pub fn rendered_cue(&self) -> bool {
         self.1.load(Ordering::Acquire)
