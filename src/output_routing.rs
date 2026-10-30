@@ -2,7 +2,7 @@
 use rodio::Source;
 use std::{
     sync::{
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicU32, Ordering},
         Arc,
     },
     time::Duration,
@@ -10,11 +10,11 @@ use std::{
 
 pub struct RoutingControl {
     channels: u16,
-    requested: AtomicU16,
+    requested: AtomicU32,
 }
 impl RoutingControl {
     pub fn pair(&self) -> u16 {
-        self.requested.load(Ordering::Acquire)
+        self.requested.load(Ordering::Acquire) as u16
     }
     pub fn channels(&self) -> u16 {
         self.channels
@@ -23,7 +23,27 @@ impl RoutingControl {
         if pair != 0 && u32::from(pair) * 2 + 1 >= u32::from(self.channels) {
             return Err("Output pair is unavailable on the current audio device".into());
         }
-        self.requested.store(pair, Ordering::Release);
+        // One control-plane writer; route and reservation publish together.
+        let state = self.requested.load(Ordering::Acquire);
+        if state & (1 << 16) != 0 && pair == 1 {
+            return Err("Output pair 3/4 is reserved for active headphone cue".into());
+        }
+        self.requested
+            .store((state & (1 << 16)) | u32::from(pair), Ordering::Release);
+        Ok(())
+    }
+    pub fn set_cue_enabled(&self, enabled: bool) -> Result<(), String> {
+        if enabled && self.channels < 4 {
+            return Err("Independent headphone cue requires at least four output channels".into());
+        }
+        let state = self.requested.load(Ordering::Acquire);
+        if enabled && state as u16 == 1 {
+            return Err("Select a master pair other than 3/4 before enabling headphone cue".into());
+        }
+        self.requested.store(
+            (state & 0xffff) | (u32::from(enabled) << 16),
+            Ordering::Release,
+        );
         Ok(())
     }
 }
@@ -33,13 +53,14 @@ pub struct PairRouter<S> {
     channel: u16,
     pair: u16,
     stereo: [f32; 2],
+    cue: bool,
 }
 impl<S: Source> PairRouter<S> {
     pub fn new(source: S) -> (Self, Arc<RoutingControl>) {
         assert!(source.channels() > 0);
         let control = Arc::new(RoutingControl {
             channels: source.channels(),
-            requested: AtomicU16::new(0),
+            requested: AtomicU32::new(0),
         });
         (
             Self {
@@ -48,6 +69,7 @@ impl<S: Source> PairRouter<S> {
                 channel: 0,
                 pair: 0,
                 stereo: [0.; 2],
+                cue: false,
             },
             control,
         )
@@ -57,13 +79,17 @@ impl<S: Source> Iterator for PairRouter<S> {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
         if self.channel == 0 {
-            self.pair = self.control.pair();
+            let state = self.control.requested.load(Ordering::Acquire);
+            self.pair = state as u16;
+            self.cue = state & (1 << 16) != 0;
         }
         let input = self.source.next()?;
         if self.channel < 2 {
             self.stereo[usize::from(self.channel)] = input;
         }
-        let output = if self.pair == 0 {
+        let output = if self.cue && self.channel / 2 == 1 {
+            input
+        } else if self.pair == 0 && (!self.cue || self.channel < 2) {
             // Keep the original mapping, including mono and existing multichannel sources.
             input
         } else if self.channel / 2 == self.pair {
@@ -93,6 +119,27 @@ impl<S: Source> Source for PairRouter<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cue_pair_is_separate_from_remapped_master_and_route_changes_are_frame_bound() {
+        let (mut source, control) = PairRouter::new(rodio::buffer::SamplesBuffer::new(
+            6,
+            48000,
+            [1., -1., 0.25, -0.5, 0., 0.].repeat(3),
+        ));
+        control.set_pair(2).unwrap();
+        control.set_cue_enabled(true).unwrap();
+        assert!(control.set_pair(1).is_err());
+        assert_eq!(source.next(), Some(0.));
+        control.set_pair(0).unwrap();
+        assert_eq!(
+            source.by_ref().take(5).collect::<Vec<_>>(),
+            vec![0., 0.25, -0.5, 1., -1.]
+        );
+        assert_eq!(
+            source.by_ref().take(6).collect::<Vec<_>>(),
+            vec![1., -1., 0.25, -0.5, 0., 0.]
+        );
+    }
     #[test]
     fn routes_complete_stereo_frames_and_preserves_default_mapping() {
         let data = [1., -1., 7., 8., 2., -2., 9., 10., 3., -3., 11., 12.];

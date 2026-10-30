@@ -60,6 +60,8 @@ pub(crate) struct RenderBus<S> {
     rate: u32,
     channel: u16,
     peak: crate::peak_meter::PeakAccumulator,
+    cue_controls: Option<[Arc<crate::cue_bus::DeckMixControl>; 2]>,
+    stereo_meter: bool,
 }
 impl<S: Source> RenderBus<S> {
     pub fn new(source: S) -> (Self, Arc<RenderClock>) {
@@ -75,9 +77,15 @@ impl<S: Source> RenderBus<S> {
                 rate,
                 channel: 0,
                 peak: crate::peak_meter::PeakAccumulator::new(rate),
+                stereo_meter: false,
+                cue_controls: None,
             },
             clock,
         )
+    }
+    pub fn with_cue_meter(mut self, controls: [Arc<crate::cue_bus::DeckMixControl>; 2]) -> Self {
+        self.cue_controls = Some(controls);
+        self
     }
 }
 impl<S: Source> Iterator for RenderBus<S> {
@@ -85,7 +93,15 @@ impl<S: Source> Iterator for RenderBus<S> {
     fn next(&mut self) -> Option<f32> {
         // MixerSource can admit late sources after returning None; retain the bus at silence.
         let sample = self.source.next().unwrap_or(0.);
-        self.peak.sample(sample);
+        if self.channel == 0 {
+            self.stereo_meter = self
+                .cue_controls
+                .as_ref()
+                .is_some_and(|controls| controls.iter().any(|c| c.cue()));
+        }
+        if !self.stereo_meter || self.channel < 2 {
+            self.peak.sample(sample);
+        }
         self.channel += 1;
         if self.channel == self.channels {
             self.channel = 0;

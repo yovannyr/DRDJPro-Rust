@@ -7,6 +7,7 @@ mod beatgrid;
 mod cancellation;
 mod controller;
 mod crates;
+mod cue_bus;
 mod deck_render;
 mod delay_fx;
 mod hot_cues;

@@ -3087,8 +3087,9 @@ impl AudioController {
                 self.publish_library();
                 if self.engine.snapshot(id).playing {
                     ui.set_status(format!("Load discarded: deck {id:?} started playing").into());
+                } else if let Err(error) = self.engine.try_install(id, track) {
+                    ui.set_status(format!("Deck {id:?}: {error}").into());
                 } else {
-                    self.engine.install(id, track);
                     ui.set_status(format!("Deck {id:?} loaded and paused").into());
                     if let Err(error) = self.apply_saved_grid(id) {
                         ui.set_status(

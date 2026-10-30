@@ -316,6 +316,8 @@ impl DeckSnapshot {
 pub struct DualDeckEngine {
     decks: [RefCell<Deck>; 2],
     levels: Cell<MixerLevels>,
+    cue_enabled: [Cell<bool>; 2],
+    mix_controls: [Arc<crate::cue_bus::DeckMixControl>; 2],
     eq_settings: [Cell<crate::mixer_dsp::EqSettings>; 2],
     eq_controls: [Arc<crate::mixer_dsp::EqControl>; 2],
     clip_latches: [Arc<crate::peak_meter::ClipLatch>; 2],
@@ -416,8 +418,12 @@ impl DualDeckEngine {
         );
         // Both deck queues enter one fixed-format bus before the device/injected mixer.
         let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
-        let (deck_output, output_routing) = crate::output_routing::PairRouter::new(deck_output);
+        let mix_controls: [Arc<crate::cue_bus::DeckMixControl>; 2] =
+            std::array::from_fn(|_| crate::cue_bus::DeckMixControl::new());
         let (bus, render_clock) = crate::render_bus::RenderBus::new(deck_output);
+        // Meter only the logical post-fader master, before physical output routing.
+        let (bus, output_routing) =
+            crate::output_routing::PairRouter::new(bus.with_cue_meter(mix_controls.clone()));
         let fx_controls = std::array::from_fn(|_| crate::delay_fx::DelayControl::new());
         let fx_rings = [
             crate::delay_fx::DelayRing::new(output_rate, output_channels)?,
@@ -425,11 +431,14 @@ impl DualDeckEngine {
         ];
         let mixers = std::array::from_fn(|index| {
             let (input, output) = rodio::mixer::mixer(output_channels, output_rate);
-            deck_mixer.add(crate::delay_fx::DelaySource::new(
-                output,
-                Arc::clone(&fx_controls[index]),
-                Arc::clone(&fx_rings[index]),
-            ));
+            deck_mixer.add(
+                crate::delay_fx::DelaySource::new(
+                    output,
+                    Arc::clone(&fx_controls[index]),
+                    Arc::clone(&fx_rings[index]),
+                )
+                .with_cue_controls(mix_controls.clone(), index),
+            );
             input
         });
         mixer.add(bus);
@@ -457,6 +466,8 @@ impl DualDeckEngine {
         let engine = Self {
             decks,
             levels: Cell::new(MixerLevels::default()),
+            cue_enabled: std::array::from_fn(|_| Cell::new(false)),
+            mix_controls,
             eq_settings: std::array::from_fn(
                 |_| Cell::new(crate::mixer_dsp::EqSettings::default()),
             ),
@@ -559,9 +570,17 @@ impl DualDeckEngine {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub fn install(&self, id: DeckId, track: PreparedTrack) {
+        self.try_install(id, track).unwrap();
+    }
+    pub fn try_install(&self, id: DeckId, track: PreparedTrack) -> Result<(), String> {
+        if track.samples.channels() > 2 && self.cue_enabled.iter().any(Cell::get) {
+            return Err("Disable headphone cue before loading multichannel audio".into());
+        }
         let source = track.samples.clone();
         self.replace_source(id, track, source, Duration::ZERO, false, None);
+        Ok(())
     }
     fn replace_source(
         &self,
@@ -687,13 +706,17 @@ impl DualDeckEngine {
             _retirement: SourceRetirement(Arc::clone(&source_retired)),
         };
         sink.pause();
-        let (a, b) = self.levels.get().volumes();
-        sink.set_volume(if id == DeckId::A { a } else { b });
         let meter =
             crate::peak_meter::ChannelMeter::new(Arc::clone(&self.clip_latches[id.index()]));
-        sink.append(crate::peak_meter::Metered::new(
-            crate::mixer_dsp::EqSource::new(renderer, Arc::clone(&self.eq_controls[id.index()])),
-            Arc::clone(&meter),
+        sink.append(crate::cue_bus::CueSend::new(
+            crate::peak_meter::Metered::new(
+                crate::mixer_dsp::EqSource::new(
+                    renderer,
+                    Arc::clone(&self.eq_controls[id.index()]),
+                ),
+                Arc::clone(&meter),
+            ),
+            Arc::clone(&self.mix_controls[id.index()]),
         ));
         if playing {
             sink.play();
@@ -1308,11 +1331,11 @@ impl DualDeckEngine {
         Ok(())
     }
     pub fn load_a(&self, path: &Path) -> Result<(), Box<dyn Error>> {
-        self.install(DeckId::A, PreparedTrack::open(path)?);
+        self.try_install(DeckId::A, PreparedTrack::open(path)?)?;
         Ok(())
     }
     pub fn load_b(&self, path: &Path) -> Result<(), Box<dyn Error>> {
-        self.install(DeckId::B, PreparedTrack::open(path)?);
+        self.try_install(DeckId::B, PreparedTrack::open(path)?)?;
         Ok(())
     }
     pub fn play(&self, id: DeckId) {
@@ -1467,16 +1490,39 @@ impl DualDeckEngine {
     }
     #[cfg(test)]
     pub fn output_volumes(&self) -> (f32, f32) {
-        (
-            self.decks[0].borrow().sink.volume(),
-            self.decks[1].borrow().sink.volume(),
-        )
+        (self.mix_controls[0].gain(), self.mix_controls[1].gain())
     }
     pub fn set_levels(&self, levels: MixerLevels) {
         self.levels.set(levels);
         let (a, b) = levels.volumes();
-        self.decks[0].borrow().sink.set_volume(a);
-        self.decks[1].borrow().sink.set_volume(b);
+        self.mix_controls[0].set_gain(a);
+        self.mix_controls[1].set_gain(b);
+    }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Engine cue boundary; GUI wiring follows in next slice"
+        )
+    )]
+    pub fn set_headphone_cue(&self, id: DeckId, enabled: bool) -> Result<(), String> {
+        if enabled
+            && self.decks.iter().any(|d| {
+                d.borrow()
+                    .track
+                    .as_ref()
+                    .is_some_and(|t| t.samples.channels() > 2)
+            })
+        {
+            return Err(
+                "Independent headphone cue currently supports mono/stereo tracks only".into(),
+            );
+        }
+        let any = enabled || self.cue_enabled[1 - id.index()].get();
+        self.output_routing.set_cue_enabled(any)?;
+        self.mix_controls[id.index()].set_cue(enabled);
+        self.cue_enabled[id.index()].set(enabled);
+        Ok(())
     }
     pub fn eq_settings(&self, id: DeckId) -> crate::mixer_dsp::EqSettings {
         self.eq_settings[id.index()].get()
@@ -1548,6 +1594,97 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn multichannel_playback_and_fx_are_preserved_and_cue_admission_is_explicit() {
+        let file =
+            crate::test_support::wav_samples(&[4096, 8192, 16384, 24576].repeat(48000), 48000, 4);
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        engine.load_a(file.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            channel_a: 1.,
+            channel_b: 0.,
+            crossfader: 0.,
+        });
+        assert!(engine.set_headphone_cue(DeckId::B, true).is_err());
+        engine.play(DeckId::A);
+        let actual: Vec<_> = output.by_ref().take(4).collect();
+        assert_eq!(actual, [0.125, 0.25, 0.5, 0.75]);
+        engine
+            .set_fx(
+                DeckId::A,
+                crate::delay_fx::DelaySettings {
+                    enabled: true,
+                    time_ms: 20,
+                    feedback: 0.,
+                    wet: 1.,
+                },
+            )
+            .unwrap();
+        output.by_ref().take(20000).for_each(drop);
+        let actual: Vec<_> = output.by_ref().take(4).collect();
+        assert_eq!(actual, [0.125, 0.25, 0.5, 0.75]);
+        engine.pause(DeckId::A);
+        engine.set_levels(MixerLevels {
+            channel_a: 0.,
+            channel_b: 0.,
+            crossfader: 0.5,
+        });
+        let mono = wav_file(0, 48000);
+        engine.load_a(mono.path()).unwrap();
+        let previous = engine.snapshot(DeckId::A).path;
+        engine.set_headphone_cue(DeckId::B, true).unwrap();
+        assert!(engine.load_a(file.path()).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).path, previous);
+    }
+    #[test]
+    fn headphone_cue_is_pre_fader_dry_and_separate_from_master() {
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let a = wav_file(8192, 192000);
+        let b = wav_file(16384, 192000);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            channel_a: 1.,
+            channel_b: 0.,
+            crossfader: 0.,
+        });
+        engine.set_headphone_cue(DeckId::B, true).unwrap();
+        assert!(engine.set_output_pair(1).is_err());
+        engine
+            .set_fx(
+                DeckId::B,
+                crate::delay_fx::DelaySettings {
+                    enabled: true,
+                    wet: 1.,
+                    feedback: 0.,
+                    time_ms: 1000,
+                },
+            )
+            .unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let mut frame = [0.; 4];
+        for _ in 0..5000 {
+            for sample in &mut frame {
+                *sample = output.next().unwrap();
+            }
+        }
+        for (actual, expected) in frame.into_iter().zip([0.25, 0.25, 0.5, 0.5]) {
+            assert!((actual - expected).abs() < 1e-6, "{frame:?}");
+        }
+        engine.pause(DeckId::B);
+        output.by_ref().take(10000).for_each(drop);
+        let frame: Vec<_> = output.by_ref().take(4).collect();
+        assert_eq!(&frame[2..], &[0., 0.]);
+        engine.set_headphone_cue(DeckId::B, false).unwrap();
+        engine.set_output_pair(1).unwrap();
+        assert!(engine.set_headphone_cue(DeckId::A, true).is_err());
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let stereo = DualDeckEngine::from_mixer(mixer, 2, 48000);
+        assert!(stereo.set_headphone_cue(DeckId::A, true).is_err());
+    }
     #[test]
     fn delay_decks_are_independent_and_tail_survives_pause_and_replacement() {
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
@@ -3584,8 +3721,8 @@ mod tests {
         assert!(!engine.snapshot(DeckId::A).playing);
         assert!(engine.snapshot(DeckId::B).playing);
         assert_eq!(engine.snapshot(DeckId::A).percent(), 0.0);
-        assert!((engine.decks[0].borrow().sink.volume() - 0.6).abs() < 1e-6);
-        assert_eq!(engine.decks[1].borrow().sink.volume(), 0.1);
+        assert!((engine.output_volumes().0 - 0.6).abs() < 1e-6);
+        assert_eq!(engine.output_volumes().1, 0.1);
         let previous = engine.snapshot(DeckId::A).title;
         assert!(engine.load_a(Path::new("missing.wav")).is_err());
         assert_eq!(engine.snapshot(DeckId::A).title, previous);

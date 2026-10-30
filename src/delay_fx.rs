@@ -163,6 +163,9 @@ pub(crate) struct DelaySource<S> {
     target_wet: f32,
     target_feedback: f32,
     smoothing: u32,
+    cue_controls: Option<[Arc<crate::cue_bus::DeckMixControl>; 2]>,
+    cue_deck: usize,
+    auxiliary_passthrough: bool,
 }
 impl<S: Source> DelaySource<S> {
     pub fn new(source: S, control: Arc<DelayControl>, ring: Arc<DelayRing>) -> Self {
@@ -192,7 +195,20 @@ impl<S: Source> DelaySource<S> {
             target_wet: wet,
             target_feedback: settings.feedback,
             smoothing: 0,
+            auxiliary_passthrough: false,
+            cue_controls: None,
+            cue_deck: 0,
         }
+    }
+    pub fn with_cue_controls(
+        mut self,
+        controls: [Arc<crate::cue_bus::DeckMixControl>; 2],
+        deck: usize,
+    ) -> Self {
+        assert!(deck < 2);
+        self.cue_controls = Some(controls);
+        self.cue_deck = deck;
+        self
     }
 }
 impl<S: Source> Iterator for DelaySource<S> {
@@ -201,6 +217,9 @@ impl<S: Source> Iterator for DelaySource<S> {
         // A deck mixer can admit sources later; keep its fixed-format effect bus alive.
         let dry = self.source.next().unwrap_or(0.);
         if self.channel == 0 {
+            self.auxiliary_passthrough = self.cue_controls.as_ref().is_some_and(|controls| {
+                controls[self.cue_deck].rendered_cue() || controls.iter().any(|c| c.cue())
+            });
             if let Some(settings) = self.control.read() {
                 if settings != self.settings {
                     self.settings = settings;
@@ -234,7 +253,10 @@ impl<S: Source> Iterator for DelaySource<S> {
             let b = self.ring.read(self.cursor, self.new_tap, self.channel);
             a + (b - a) * self.tap_fade as f32 / self.ramp as f32
         };
-        let written = if dry.is_finite() {
+        // Never record the pre-fader headphone bus in master effect history.
+        let written = if self.auxiliary_passthrough && self.channel >= 2 {
+            0.
+        } else if dry.is_finite() {
             dry + self.feedback * echo
         } else {
             0.
@@ -247,7 +269,7 @@ impl<S: Source> Iterator for DelaySource<S> {
             },
             Ordering::Relaxed,
         );
-        let output = if self.wet == 0. {
+        let output = if self.wet == 0. || (self.auxiliary_passthrough && self.channel >= 2) {
             dry
         } else {
             (1. - self.wet) * dry + self.wet * echo
@@ -284,6 +306,115 @@ impl<S: Source> Source for DelaySource<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disabling_last_cue_between_source_and_effect_cannot_record_a_cued_frame() {
+        struct DisableAfterSample<S> {
+            source: S,
+            control: Arc<crate::cue_bus::DeckMixControl>,
+        }
+        impl<S: Source> Iterator for DisableAfterSample<S> {
+            type Item = f32;
+            fn next(&mut self) -> Option<f32> {
+                let sample = self.source.next();
+                self.control.set_cue(false);
+                sample
+            }
+        }
+        impl<S: Source> Source for DisableAfterSample<S> {
+            fn channels(&self) -> u16 {
+                self.source.channels()
+            }
+            fn sample_rate(&self) -> u32 {
+                self.source.sample_rate()
+            }
+            fn current_span_len(&self) -> Option<usize> {
+                None
+            }
+            fn total_duration(&self) -> Option<Duration> {
+                None
+            }
+        }
+        let controls = std::array::from_fn(|_| crate::cue_bus::DeckMixControl::new());
+        controls[1].set_gain(0.);
+        controls[1].set_cue(true);
+        let mut pcm = vec![0.; 400];
+        pcm[0] = 1.;
+        pcm[1] = -0.5;
+        let source = DisableAfterSample {
+            source: crate::cue_bus::CueSend::new(
+                rodio::buffer::SamplesBuffer::new(4, 1000, pcm),
+                controls[1].clone(),
+            ),
+            control: controls[1].clone(),
+        };
+        let fx = DelayControl::new();
+        fx.publish(DelaySettings {
+            enabled: true,
+            time_ms: 20,
+            feedback: 0.,
+            wet: 1.,
+        });
+        let mut output = DelaySource::new(source, fx, DelayRing::new(1000, 4).unwrap())
+            .with_cue_controls(controls, 1);
+        assert_eq!(
+            (output.next(), output.next(), output.next(), output.next()),
+            (Some(0.), Some(0.), Some(1.), Some(-0.5))
+        );
+        for _ in 0..300 {
+            assert_eq!(output.next(), Some(0.));
+        }
+    }
+    #[test]
+    fn auxiliary_delay_remains_live_without_cue_and_never_records_headphone_audio() {
+        let fx = DelayControl::new();
+        fx.publish(DelaySettings {
+            enabled: true,
+            time_ms: 20,
+            feedback: 0.,
+            wet: 1.,
+        });
+        let controls = std::array::from_fn(|_| crate::cue_bus::DeckMixControl::new());
+        let mut impulse = vec![0.; 400];
+        impulse[2] = 1.;
+        impulse[3] = -0.5;
+        let mut legacy = DelaySource::new(
+            rodio::buffer::SamplesBuffer::new(4, 1000, impulse),
+            fx.clone(),
+            DelayRing::new(1000, 4).unwrap(),
+        )
+        .with_cue_controls(controls.clone(), 1);
+        for _ in 0..80 {
+            assert_eq!(legacy.next(), Some(0.));
+        }
+        assert_eq!(
+            (legacy.next(), legacy.next(), legacy.next(), legacy.next()),
+            (Some(0.), Some(0.), Some(1.), Some(-0.5))
+        );
+        let mut data = [0., 0., 0.5, -0.25].repeat(40);
+        data.extend([0.; 400]);
+        controls[1].set_cue(true);
+        let mut source = DelaySource::new(
+            rodio::buffer::SamplesBuffer::new(4, 1000, data),
+            fx,
+            DelayRing::new(1000, 4).unwrap(),
+        )
+        .with_cue_controls(controls.clone(), 1);
+        for _ in 0..40 {
+            assert_eq!(
+                (source.next(), source.next(), source.next(), source.next()),
+                (Some(0.), Some(0.), Some(0.5), Some(-0.25))
+            );
+        }
+        controls[0].set_cue(true);
+        controls[1].set_cue(false);
+        for _ in 0..160 {
+            assert_eq!(source.next(), Some(0.));
+        }
+        controls[0].set_cue(false);
+        for _ in 0..160 {
+            assert_eq!(source.next(), Some(0.));
+        }
+    }
     #[test]
     fn delay_bypass_ramps_and_latest_time_target() {
         let control = DelayControl::new();
