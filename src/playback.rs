@@ -330,6 +330,7 @@ pub struct DualDeckEngine {
     output_rate: u32,
     output_routing: Arc<crate::output_routing::RoutingControl>,
     output_device_key: Option<crate::output_preferences::OutputDeviceKey>,
+    output_device_label: String,
     retired: RefCell<Vec<RetiredTrack>>,
     // Shared producer timeline; completed-frame stamps are consumed by one-shot sync.
     render_clock: Arc<crate::render_bus::RenderClock>,
@@ -348,11 +349,19 @@ impl Drop for DualDeckEngine {
 }
 impl DualDeckEngine {
     pub fn open_default() -> Result<Self, Box<dyn Error>> {
+        Self::open_selected(None)
+    }
+    pub fn open_selected(
+        selection: Option<&crate::audio_devices::DeviceSelector>,
+    ) -> Result<Self, Box<dyn Error>> {
         use rodio::cpal::traits::{DeviceTrait, HostTrait};
         let host = rodio::cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or("No default audio output device")?;
+        let device = if let Some(selection) = selection {
+            crate::audio_devices::resolve(&host, selection)?
+        } else {
+            host.default_output_device()
+                .ok_or("No default audio output device")?
+        };
         let name = device.name().ok();
         let matches = name
             .as_ref()
@@ -376,6 +385,9 @@ impl DualDeckEngine {
             Box::new(std::time::Instant::now),
         )?;
         engine._stream = Some(stream);
+        engine.output_device_label = name
+            .clone()
+            .unwrap_or_else(|| "Unnamed output device".into());
         engine.output_device_key = name.and_then(|name| {
             crate::output_preferences::OutputDeviceKey::unique(
                 host.id().name().into(),
@@ -487,6 +499,7 @@ impl DualDeckEngine {
             output_rate,
             output_routing,
             output_device_key: None,
+            output_device_label: "Injected audio output".into(),
             retired: RefCell::new(Vec::new()),
             render_clock,
             clock_observer: RefCell::new(crate::render_bus::ClockObserver::default()),
@@ -985,6 +998,9 @@ impl DualDeckEngine {
     }
     pub fn output_channels(&self) -> u16 {
         self.output_routing.channels()
+    }
+    pub fn output_device_label(&self) -> &str {
+        &self.output_device_label
     }
     pub fn output_device_key(&self) -> Option<&crate::output_preferences::OutputDeviceKey> {
         self.output_device_key.as_ref()

@@ -17,6 +17,8 @@ use std::{
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<Result<crate::library::ImportBatch, String>>;
+type DeviceScanResult = Result<Vec<crate::audio_devices::DeviceChoice>, String>;
+type DeviceCatalog = Arc<dyn Fn() -> DeviceScanResult + Send + Sync>;
 type KeylockJob = (Arc<crate::waveform::DetailPeaks>, drdj_keylock::Job, f64);
 struct PitchRequest {
     source: Arc<crate::waveform::DetailPeaks>,
@@ -199,6 +201,12 @@ impl SearchWorker {
 }
 
 pub struct AudioController {
+    device_catalog: DeviceCatalog,
+    device_scan: RefCell<Option<Receiver<DeviceScanResult>>>,
+    device_choices: RefCell<Vec<crate::audio_devices::DeviceChoice>>,
+    device_list_ready: Cell<bool>,
+    saved_startup_audio: RefCell<crate::audio_devices::StartupSelection>,
+    startup_audio_saving: Cell<bool>,
     ui: slint::Weak<AppWindow>,
     engine: Rc<DualDeckEngine>,
     picker: TrackPicker,
@@ -266,7 +274,28 @@ impl AudioController {
         picker: TrackPicker,
         library_picker: LibraryPicker,
     ) -> Rc<Self> {
+        Self::wire_with_device_catalog(
+            ui,
+            engine,
+            picker,
+            library_picker,
+            Arc::new(crate::audio_devices::enumerate),
+        )
+    }
+    fn wire_with_device_catalog(
+        ui: &AppWindow,
+        engine: Rc<DualDeckEngine>,
+        picker: TrackPicker,
+        library_picker: LibraryPicker,
+        device_catalog: DeviceCatalog,
+    ) -> Rc<Self> {
         let controller = Rc::new(Self {
+            device_catalog,
+            device_scan: RefCell::new(None),
+            device_choices: RefCell::new(Vec::new()),
+            device_list_ready: Cell::new(false),
+            saved_startup_audio: RefCell::new(Default::default()),
+            startup_audio_saving: Cell::new(false),
             ui: ui.as_weak(),
             engine,
             picker,
@@ -330,6 +359,26 @@ impl AudioController {
                 })
                 .collect::<Vec<_>>(),
         )));
+        ui.set_audio_device_current(
+            format!(
+                "{} ({} channels)",
+                controller.engine.output_device_label(),
+                controller.engine.output_channels()
+            )
+            .into(),
+        );
+        let weak = Rc::downgrade(&controller);
+        ui.on_audio_device_scan(move || {
+            if let Some(c) = weak.upgrade() {
+                c.start_device_scan();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_audio_device_save(move || {
+            if let Some(c) = weak.upgrade() {
+                c.save_startup_audio();
+            }
+        });
         let weak = Rc::downgrade(&controller);
         ui.on_output_pair_changed(move || {
             if let Some(c) = weak.upgrade() {
@@ -2734,6 +2783,23 @@ impl AudioController {
             .as_ref()
             .map(|w| w.events.try_recv());
         match event {
+            Some(Ok(crate::library_store::Event::StartupAudioSaved(result))) => {
+                self.startup_audio_saving.set(false);
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_audio_device_saving(false);
+                    match result {
+                        Ok(selection) => {
+                            *self.saved_startup_audio.borrow_mut() = selection;
+                            ui.set_audio_device_status(
+                                "Output selection saved; applies at next program start".into(),
+                            );
+                        }
+                        Err(error) => ui.set_audio_device_status(
+                            format!("Output selection not saved: {error}").into(),
+                        ),
+                    }
+                }
+            }
             Some(Ok(crate::library_store::Event::Loaded(result))) => {
                 self.storage_ready.set(true);
                 if let Some(ui) = self.ui.upgrade() {
@@ -2743,6 +2809,7 @@ impl AudioController {
                 match result {
                     Ok(loaded) => {
                         let crate::library_store::LoadedLibrary {
+                            startup_audio,
                             library,
                             note,
                             backfill_error,
@@ -2751,6 +2818,17 @@ impl AudioController {
                             output_routes,
                             fx_preferences,
                         } = *loaded;
+                        match startup_audio {
+                            Ok(selection) => {
+                                *self.saved_startup_audio.borrow_mut() = selection;
+                                self.sync_saved_device_choice();
+                            }
+                            Err(error) => {
+                                if let Some(ui) = self.ui.upgrade() {
+                                    ui.set_audio_device_status(format!("Saved device selection unavailable: {error}; preserved until explicit save").into());
+                                }
+                            }
+                        }
                         self.restore_quantize_preferences(quantize_preferences);
                         let output_warning = self.restore_output_routes(output_routes);
                         let fx_warning = self.restore_fx(fx_preferences);
@@ -2889,6 +2967,7 @@ impl AudioController {
             }
             Some(Err(TryRecvError::Disconnected)) => {
                 self.persistence.borrow_mut().take();
+                self.startup_audio_saving.set(false);
                 self.fx_writable.set(false);
                 self.storage_ready.set(true);
                 self.saving.set(false);
@@ -2896,6 +2975,10 @@ impl AudioController {
                     ui.set_library_busy(false);
                     ui.set_quantize_preferences_ready(true);
                     ui.set_fx_status("FX session only (storage unavailable)".into());
+                    ui.set_audio_device_saving(false);
+                    ui.set_audio_device_status(
+                        "Storage unavailable; next-start output is not saved".into(),
+                    );
                 }
                 self.storage_error("Storage worker stopped; session only", false);
             }
@@ -3221,7 +3304,128 @@ impl AudioController {
         }
         self.refresh();
     }
+    fn start_device_scan(&self) {
+        if self.device_scan.borrow().is_some() || self.startup_audio_saving.get() {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else { return };
+        let catalog = self.device_catalog.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        match std::thread::Builder::new()
+            .name("audio-device-list".into())
+            .spawn(move || {
+                let _ = tx.send(catalog());
+            }) {
+            Ok(_) => {
+                *self.device_scan.borrow_mut() = Some(rx);
+                ui.set_audio_device_scanning(true);
+                ui.set_audio_device_status("Reading available outputs…".into());
+            }
+            Err(error) => ui
+                .set_audio_device_status(format!("Cannot enumerate audio devices: {error}").into()),
+        }
+    }
+    fn poll_device_scan(&self) {
+        let result = self.device_scan.borrow().as_ref().map(|rx| rx.try_recv());
+        let Some(result) = result else { return };
+        let result = match result {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("Audio device enumeration stopped".into()),
+        };
+        self.device_scan.borrow_mut().take();
+        let Some(ui) = self.ui.upgrade() else { return };
+        ui.set_audio_device_scanning(false);
+        match result {
+            Ok(choices) => {
+                let mut names = vec![slint::SharedString::from("System default")];
+                names.extend(choices.iter().map(|choice| {
+                    format!(
+                        "{} — {} ({} ch)",
+                        choice.selector.backend, choice.selector.name, choice.channels
+                    )
+                    .into()
+                }));
+                ui.set_audio_device_names(ModelRc::new(VecModel::from(names)));
+                *self.device_choices.borrow_mut() = choices;
+                self.device_list_ready.set(true);
+                self.sync_saved_device_choice();
+            }
+            Err(error) => {
+                self.device_list_ready.set(false);
+                self.device_choices.borrow_mut().clear();
+                ui.set_audio_device_names(ModelRc::new(VecModel::from(vec![
+                    "System default".into()
+                ])));
+                ui.set_audio_device_choice(0);
+                ui.set_audio_device_status(error.into());
+            }
+        }
+    }
+    fn sync_saved_device_choice(&self) {
+        if !self.device_list_ready.get() {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else { return };
+        let saved = self.saved_startup_audio.borrow();
+        let choices = self.device_choices.borrow();
+        let index = saved
+            .device
+            .as_ref()
+            .and_then(|selector| {
+                choices
+                    .iter()
+                    .position(|choice| &choice.selector == selector)
+            })
+            .map_or(0, |i| i + 1);
+        ui.set_audio_device_choice(index as i32);
+        let status=match &saved.device {
+            Some(selector)=>match crate::audio_devices::unique_choice(&choices,selector) {
+                Ok(())=>"Selection applies at next program start; current playback stays on the active output".to_string(),
+                Err(error)=>format!("Saved output {}: {error}. Original selection is preserved until explicit save",selector.name),
+            },
+            None=>"System default selected for next program start; current playback stays on the active output".to_string(),
+        };
+        ui.set_audio_device_status(status.into());
+    }
+    fn save_startup_audio(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        if !self.storage_ready.get()
+            || self.device_scan.borrow().is_some()
+            || self.startup_audio_saving.get()
+        {
+            return;
+        }
+        let result = (|| {
+            let index = usize::try_from(ui.get_audio_device_choice())
+                .map_err(|_| "Invalid audio device selection".to_string())?;
+            let choices = self.device_choices.borrow();
+            let device = if index == 0 {
+                None
+            } else {
+                let choice = choices
+                    .get(index - 1)
+                    .ok_or("Invalid audio device selection")?;
+                crate::audio_devices::unique_choice(&choices, &choice.selector)?;
+                Some(choice.selector.clone())
+            };
+            self.persistence
+                .borrow()
+                .as_ref()
+                .ok_or("Library storage unavailable; selection not saved")?
+                .save_startup_audio(crate::audio_devices::StartupSelection { version: 1, device })
+        })();
+        match result {
+            Ok(()) => {
+                self.startup_audio_saving.set(true);
+                ui.set_audio_device_saving(true);
+                ui.set_audio_device_status("Saving next-start output selection…".into());
+            }
+            Err(error) => ui.set_audio_device_status(error.into()),
+        }
+    }
     pub fn tick(&self) {
+        self.poll_device_scan();
         self.engine.collect_retired();
         self.cancel_stale_nudges();
         self.apply_pending_pitch();
@@ -3627,6 +3831,7 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        ui.set_audio_device_ready(self.storage_ready.get() && self.persistence.borrow().is_some());
         ui.set_monitor_available(self.engine.output_channels() >= 4 && self.storage_ready.get());
         ui.set_monitor_cue_a(self.engine.headphone_cue(DeckId::A));
         ui.set_monitor_cue_b(self.engine.headphone_cue(DeckId::B));
@@ -8181,6 +8386,132 @@ mod tests {
         assert_eq!(c.library.borrow().len(), 0);
         assert_eq!(c.library.borrow().revision(), 0);
         assert!(!c.dirty.get());
+    }
+    #[test]
+    fn device_scan_before_profile_load_restores_saved_row_and_warns_if_missing() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let selected = crate::audio_devices::DeviceSelector {
+            backend: "Test".into(),
+            name: "Speakers".into(),
+        };
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        worker.events.recv().unwrap();
+        worker
+            .save_startup_audio(crate::audio_devices::StartupSelection {
+                version: 1,
+                device: Some(selected.clone()),
+            })
+            .unwrap();
+        worker.events.recv().unwrap();
+        worker.close_delta(None).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let selector = selected.clone();
+        let c = AudioController::wire_with_device_catalog(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+            Arc::new(move || {
+                Ok(vec![crate::audio_devices::DeviceChoice {
+                    selector: selector.clone(),
+                    channels: 2,
+                }])
+            }),
+        );
+        c.restore_library(Ok(db), vec![]);
+        c.start_device_scan();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while c.device_scan.borrow().is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            c.poll_device_scan();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!c.storage_ready.get());
+        assert_eq!(ui.get_audio_device_choice(), 0);
+        finish_storage(&c);
+        assert_eq!(ui.get_audio_device_choice(), 1);
+        c.device_choices.borrow_mut().clear();
+        c.sync_saved_device_choice();
+        assert!(ui.get_audio_device_status().contains("Speakers"));
+        assert!(ui.get_audio_device_status().contains("preserved"));
+        assert_eq!(c.saved_startup_audio.borrow().device, Some(selected));
+        ui.set_audio_startup_warning("Selected device unavailable; default in use".into());
+        ui.show().unwrap();
+        assert!(!ui.get_audio_device_open());
+        assert!(control(&ui, "Audio startup fallback warning").size().height > 0.);
+        ui.hide().unwrap();
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn startup_device_gui_scans_off_thread_and_saves_without_switching_playback() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 4, 48000));
+        let main_thread = std::thread::current().id();
+        let catalog: DeviceCatalog = Arc::new(move || {
+            assert_ne!(std::thread::current().id(), main_thread);
+            Ok(vec![crate::audio_devices::DeviceChoice {
+                selector: crate::audio_devices::DeviceSelector {
+                    backend: "Test".into(),
+                    name: "Speakers".into(),
+                },
+                channels: 2,
+            }])
+        });
+        let c = AudioController::wire_with_device_catalog(
+            &ui,
+            engine.clone(),
+            Arc::new(|| None),
+            Arc::new(|| None),
+            catalog,
+        );
+        c.restore_library(Ok(db.clone()), vec![]);
+        finish_storage(&c);
+        let track = wav_file(8192, 192000);
+        engine.load_a(track.path()).unwrap();
+        engine.play(DeckId::A);
+        ui.show().unwrap();
+        control(&ui, "Show audio device settings").invoke_accessible_default_action();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while c.device_scan.borrow().is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            c.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(ui.get_audio_device_names().row_count(), 2);
+        ui.set_audio_device_choice(1);
+        ui.invoke_audio_device_save();
+        while c.startup_audio_saving.get() {
+            assert!(std::time::Instant::now() < deadline);
+            c.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(ui.get_audio_device_status().contains("saved"));
+        assert_eq!(
+            crate::library_store::read_startup_audio(&db)
+                .unwrap()
+                .device
+                .unwrap()
+                .name,
+            "Speakers"
+        );
+        assert_eq!(engine.output_channels(), 4);
+        assert!(engine.snapshot(DeckId::A).playing);
+        output.by_ref().take(10000).for_each(drop);
+        assert!(engine.snapshot(DeckId::A).position > Duration::ZERO);
+        assert_eq!(engine.output_pair(), 0);
+        ui.set_audio_device_choice(-1);
+        ui.invoke_audio_device_save();
+        assert!(ui.get_audio_device_status().contains("Invalid"));
+        assert!(!c.startup_audio_saving.get());
+        ui.hide().unwrap();
+        c.close_library().unwrap();
     }
     #[test]
     fn monitor_profiles_restore_latest_ack_and_close_flush_only_for_matching_device() {

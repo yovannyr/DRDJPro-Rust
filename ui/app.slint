@@ -771,6 +771,17 @@ export component AppWindow inherits Window {
     in-out property <float> monitor-gain: 100;
     in-out property <float> monitor-mix: 0;
     callback monitor-changed();
+    in-out property <bool> audio-device-open:false;
+    in property <[string]> audio-device-names:["System default"];
+    in-out property <int> audio-device-choice:0;
+    in property <bool> audio-device-scanning:false;
+    in property <bool> audio-device-saving:false;
+    in property <bool> audio-device-ready:false;
+    in property <string> audio-device-current:"";
+    in property <string> audio-device-status:"Choose an output for the next program start";
+    in property <string> audio-startup-warning:"";
+    callback audio-device-scan();
+    callback audio-device-save();
     in property <string> channel-a-peak-caption: "A PRE —";
     in property <string> channel-b-peak-caption: "B PRE —";
     in property <float> channel-a-peak-level;
@@ -938,6 +949,11 @@ export component AppWindow inherits Window {
             CheckBox { text: "QUANTIZE"; accessible-label: "Global Quantize"; accessible-description: "Enable selected cue and auto-loop quantization on both decks; disabling cancels queued cue triggers and retains deck preferences"; checked <=> root.quantize-enabled; enabled: root.quantize-preferences-ready; toggled => { root.quantize-mode-changed(); } }
             Text { text: "EXTENDED / " + (audio-enabled ? "INTERNAL AUDIO" : "SIMULATION · NO AUDIO"); color: #9cacc1; horizontal-alignment: right; vertical-alignment: center; }
         }
+        if root.audio-startup-warning != "" : Rectangle {
+            height:28px;background:#6a2e20;
+            Text {text:"AUDIO OUTPUT NOTICE — check AUDIO settings before playback";color:#fff1de;vertical-alignment:center;
+                accessible-label:"Audio startup fallback warning";accessible-description:root.audio-startup-warning;}
+        }
         HorizontalLayout {
             height: 260px; spacing: 8px;
             CompactDeck {
@@ -1019,8 +1035,9 @@ export component AppWindow inherits Window {
                 padding: 4px; spacing: 8px;
                 Text { text: "A"; color: #36c9ef; vertical-alignment: center; }
                 Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.eq-open = !root.eq-open; } }
-                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{root.fx-open=!root.fx-open;}}
-                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.monitor-open=!root.monitor-open;}}
+                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{root.fx-open=!root.fx-open;root.audio-device-open=false;}}
+                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.monitor-open=!root.monitor-open;root.audio-device-open=false;}}
+                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -1148,6 +1165,22 @@ export component AppWindow inherits Window {
             }
         }
         Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
+    }
+    if root.audio-device-open : Rectangle {
+        x:16px;y:60px;width:parent.width - 32px;height:250px;background:#0b1119;border-width:1px;border-color:#53657d;
+        accessible-role:groupbox;accessible-label:"Audio device settings panel";
+        VerticalLayout {
+            padding:10px;spacing:8px;
+            HorizontalLayout {Text {text:"CURRENT: " + root.audio-device-current;color:#edf2fa;} Button {text:"CLOSE AUDIO";accessible-label:"Close audio device settings";clicked=>{root.audio-device-open=false;}}}
+            Text {text:root.audio-startup-warning;color:#ffb86c;wrap:word-wrap;}
+            Text {text:"OUTPUT FOR NEXT START (current playback is preserved)";color:#edf2fa;}
+            ComboBox {accessible-label:"Next startup audio device";model:root.audio-device-names;current-index <=> root.audio-device-choice;enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving;}
+            HorizontalLayout {
+                Button {text:root.audio-device-scanning ? "SCANNING…":"REFRESH";accessible-label:"Refresh audio devices";enabled:!root.audio-device-scanning && !root.audio-device-saving;clicked=>{root.audio-device-scan();}}
+                Button {text:root.audio-device-saving ? "SAVING…":"SAVE FOR NEXT START";accessible-label:"Save next startup audio device";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving;clicked=>{root.audio-device-save();}}
+            }
+            Text {text:root.audio-device-status;color:#edf2fa;wrap:word-wrap;}
+        }
     }
     if root.monitor-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:270px;

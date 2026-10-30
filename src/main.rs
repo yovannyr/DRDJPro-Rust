@@ -2,6 +2,7 @@ use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
 mod audio;
+mod audio_devices;
 mod audio_formats;
 mod beatgrid;
 mod cancellation;
@@ -105,8 +106,28 @@ fn main() -> Result<(), slint::PlatformError> {
     } else {
         None
     };
+    let mut startup_audio_warning = String::new();
     let audio_engine = if std::env::args().nth(1).as_deref() != Some("--demo") {
-        let engine = match playback::DualDeckEngine::open_default() {
+        let startup = match library_store::default_path()
+            .and_then(|path| library_store::read_startup_audio(&path))
+        {
+            Ok(value) => value,
+            Err(error) => {
+                startup_audio_warning =
+                    format!("Startup preference unavailable: {error}; system default requested");
+                Default::default()
+            }
+        };
+        let opened =
+            audio_devices::open_preferred(&startup, playback::DualDeckEngine::open_selected).map(
+                |(engine, warning)| {
+                    if let Some(warning) = warning {
+                        startup_audio_warning = warning;
+                    }
+                    engine
+                },
+            );
+        let engine = match opened {
             Ok(engine) => engine,
             Err(err) => {
                 eprintln!("Cannot open default audio device: {err}");
@@ -134,6 +155,7 @@ fn main() -> Result<(), slint::PlatformError> {
     };
     let ui = AppWindow::new()?;
     ui.set_audio_enabled(audio_engine.is_some());
+    ui.set_audio_startup_warning(startup_audio_warning.into());
 
     if audio_engine.is_none() {
         let waveform: Vec<f32> = (0..240)

@@ -19,6 +19,48 @@ use std::{
 };
 const APPLICATION_ID: i32 = 0x4452444a;
 const SCHEMA_VERSION: i32 = 8;
+fn startup_selection(
+    connection: &Connection,
+) -> Result<crate::audio_devices::StartupSelection, String> {
+    let raw:Option<String>=connection.query_row("SELECT CASE WHEN length(CAST(value AS BLOB))<=4096 THEN value ELSE '' END FROM library_meta WHERE key='startup_audio_device_v1'",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+    let selection = raw
+        .map(|raw| {
+            serde_json::from_str::<crate::audio_devices::StartupSelection>(&raw)
+                .map_err(|e| e.to_string())
+        })
+        .transpose()?
+        .unwrap_or_default();
+    selection.validate()?;
+    Ok(selection)
+}
+pub fn read_startup_audio(path: &Path) -> Result<crate::audio_devices::StartupSelection, String> {
+    match fs::metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => return Err(error.to_string()),
+        Ok(_) => (),
+    }
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
+    connection
+        .busy_timeout(Duration::from_millis(200))
+        .map_err(|e| e.to_string())?;
+    connection
+        .pragma_update(None, "trusted_schema", false)
+        .map_err(|e| e.to_string())?;
+    let app: i32 = connection
+        .pragma_query_value(None, "application_id", |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let version: i32 = connection
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if app != APPLICATION_ID || !(1..=SCHEMA_VERSION).contains(&version) {
+        return Err("Startup audio preferences require a supported DrDJ library".into());
+    }
+    startup_selection(&connection)
+}
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(60);
 static STAGE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1143,6 +1185,7 @@ impl Store {
 }
 
 pub struct LoadedLibrary {
+    pub startup_audio: Result<crate::audio_devices::StartupSelection, String>,
     pub fx_preferences: Result<crate::delay_fx::FxPreferences, String>,
     pub library: Library,
     pub note: String,
@@ -1152,11 +1195,13 @@ pub struct LoadedLibrary {
     pub output_routes: Result<OutputRoutes, String>,
 }
 pub enum Event {
+    StartupAudioSaved(Result<crate::audio_devices::StartupSelection, String>),
     Loaded(Result<Box<LoadedLibrary>, String>),
     Saved(Result<(), String>),
     CheckpointFailed(String),
 }
 enum Command {
+    SaveStartupAudio(crate::audio_devices::StartupSelection),
     #[cfg(test)]
     Save(Catalog),
     #[cfg(test)]
@@ -1180,6 +1225,15 @@ pub struct Worker {
     join: JoinHandle<Result<(), String>>,
 }
 impl Worker {
+    pub fn save_startup_audio(
+        &self,
+        selection: crate::audio_devices::StartupSelection,
+    ) -> Result<(), String> {
+        selection.validate()?;
+        self.tx
+            .try_send(Command::SaveStartupAudio(selection))
+            .map_err(|e| format!("Startup audio save unavailable: {e}"))
+    }
     pub fn start(path: PathBuf) -> Result<Self, String> {
         Self::start_with_checkpoint_interval(path, CHECKPOINT_INTERVAL)
     }
@@ -1202,6 +1256,7 @@ impl Worker {
                         Err(error) => (QuantizePreferences::default(), Some(error)),
                     };
                 let loaded = LoadedLibrary {
+                    startup_audio: startup_selection(&store.connection),
                     fx_preferences: store.read_fx_preferences(),
                     library,
                     note,
@@ -1237,6 +1292,22 @@ impl Worker {
                         }
                     };
                     match command {
+                        Command::SaveStartupAudio(selection)=>{
+                            let result=(|| {
+                                selection.validate()?;
+                                let raw=serde_json::to_string(&selection).map_err(|e|e.to_string())?;
+                                if raw.len()>4096 {return Err("Startup audio preferences exceed size limit".into());}
+                                let tx=store.connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+                                let app:i32=tx.pragma_query_value(None,"application_id",|r|r.get(0)).map_err(|e|e.to_string())?;
+                                let version:i32=tx.pragma_query_value(None,"user_version",|r|r.get(0)).map_err(|e|e.to_string())?;
+                                if app!=APPLICATION_ID || version!=SCHEMA_VERSION {return Err("Library schema changed; output selection not saved".into());}
+                                tx.execute("INSERT INTO library_meta(key,value) VALUES('startup_audio_device_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[raw]).map_err(|e|e.to_string())?;
+                                tx.commit().map_err(|e|e.to_string())?;
+                                store.backup_pending=true;
+                                Ok(selection)
+                            })();
+                            let _=events_tx.send(Event::StartupAudioSaved(result));
+                        }
                         Command::SaveDelta(delta, preferences, output, fx) => {
                             let result = store.save_session_state(&delta, preferences, output, fx);
                             retry_wait = result.is_err();
@@ -1428,6 +1499,53 @@ mod tests {
         assert_eq!(saved, raw);
     }
     use super::*;
+    #[test]
+    fn startup_device_worker_save_failure_preserves_selection_and_close_flushes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        assert_eq!(read_startup_audio(&db).unwrap(), Default::default());
+        let worker = Worker::start(db.clone()).unwrap();
+        worker.events.recv().unwrap();
+        let preference = crate::audio_devices::StartupSelection {
+            version: 1,
+            device: Some(crate::audio_devices::DeviceSelector {
+                backend: "Test".into(),
+                name: "MC4000".into(),
+            }),
+        };
+        worker.save_startup_audio(preference.clone()).unwrap();
+        assert!(
+            matches!(worker.events.recv().unwrap(),Event::StartupAudioSaved(Ok(value)) if value==preference)
+        );
+        assert_eq!(read_startup_audio(&db).unwrap(), preference);
+        let sql = Connection::open(&db).unwrap();
+        sql.execute_batch("CREATE TRIGGER reject_startup BEFORE INSERT ON library_meta WHEN NEW.key='startup_audio_device_v1' BEGIN SELECT RAISE(ABORT,'injected startup save failure'); END;").unwrap();
+        worker.save_startup_audio(Default::default()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            Event::StartupAudioSaved(Err(_))
+        ));
+        assert_eq!(read_startup_audio(&db).unwrap(), preference);
+        sql.execute_batch("DROP TRIGGER reject_startup").unwrap();
+        worker.save_startup_audio(Default::default()).unwrap();
+        worker.close_delta(None).unwrap();
+        assert_eq!(read_startup_audio(&db).unwrap(), Default::default());
+        sql.execute(
+            "UPDATE library_meta SET value=?1 WHERE key='startup_audio_device_v1'",
+            ["x".repeat(5000)],
+        )
+        .unwrap();
+        assert!(read_startup_audio(&db).is_err());
+        assert_eq!(
+            sql.query_row(
+                "SELECT length(value) FROM library_meta WHERE key='startup_audio_device_v1'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            5000
+        );
+    }
     #[test]
     fn monitor_profile_roundtrip_and_combined_save_rollback() {
         let dir = tempfile::tempdir().unwrap();
