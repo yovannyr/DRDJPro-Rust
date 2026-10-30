@@ -17,6 +17,7 @@ mod external_drop;
 mod hot_cues;
 mod legacy_catalog;
 mod library;
+mod library_perf;
 mod library_store;
 mod looping;
 mod mc4000;
@@ -109,6 +110,15 @@ fn main() -> Result<(), slint::PlatformError> {
     } else {
         None
     };
+    if std::env::var_os("DRDJ_LIBRARY_PERF_PATH").is_some()
+        && std::env::args().nth(1).as_deref() == Some("--demo")
+    {
+        return Err(slint::PlatformError::Other(
+            "Library performance measurement requires real audio, not --demo".into(),
+        ));
+    }
+    let performance_output =
+        library_perf::ReportFile::from_env().map_err(slint::PlatformError::Other)?;
     let mut startup_audio_warning = String::new();
     let audio_engine = if std::env::args().nth(1).as_deref() != Some("--demo") {
         let startup = match library_store::default_path()
@@ -163,6 +173,26 @@ fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
     ui.set_audio_enabled(audio_engine.is_some());
     ui.set_audio_startup_warning(startup_audio_warning.into());
+    let performance = if performance_output.is_some() {
+        let recorder = Rc::new(std::cell::RefCell::new(library_perf::Recorder::new(
+            std::time::Instant::now(),
+        )));
+        let rendered = Rc::clone(&recorder);
+        ui.window()
+            .set_rendering_notifier(move |state, _| {
+                if matches!(state, slint::RenderingState::AfterRendering) {
+                    rendered.borrow_mut().rendered(std::time::Instant::now());
+                }
+            })
+            .map_err(|error| {
+                slint::PlatformError::Other(format!(
+                    "Library performance rendering measurement unavailable: {error}"
+                ))
+            })?;
+        Some(recorder)
+    } else {
+        None
+    };
 
     if audio_engine.is_none() {
         let waveform: Vec<f32> = (0..240)
@@ -195,6 +225,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     .pick_files()
             }),
         );
+        if let Some(performance) = &performance {
+            controller.record_library_performance(Rc::clone(performance));
+        }
         let initial_paths = gui_tracks
             .as_ref()
             .map_or_else(Vec::new, |(left, right)| vec![left.into(), right.into()]);
@@ -315,6 +348,29 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let result = ui.run();
+    let performance_result = match (performance_output, performance) {
+        (Some(output), Some(recorder)) => {
+            if result.is_err() {
+                recorder.borrow_mut().failed();
+            }
+            let report = recorder.borrow().report(std::time::Instant::now());
+            let path = output.path.clone();
+            output
+                .finish(&report)
+                .map(|()| {
+                    println!(
+                        "Library performance: {}; report: {}",
+                        report.outcome,
+                        path.display()
+                    );
+                })
+                .map_err(|error| {
+                    eprintln!("{error}");
+                    slint::PlatformError::Other(error)
+                })
+        }
+        _ => Ok(()),
+    };
     #[cfg(target_os = "windows")]
     if let Some(timer) = external_drop_timer {
         timer.stop();
@@ -338,7 +394,7 @@ fn main() -> Result<(), slint::PlatformError> {
     lifecycle_trace("UI released");
     drop(audio_owner);
     lifecycle_trace("audio released");
-    result
+    result.and(performance_result)
 }
 
 fn lifecycle_trace(stage: &str) {

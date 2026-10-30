@@ -224,6 +224,8 @@ pub struct AudioController {
     library_page: Cell<usize>,
     pending_page_selection: Cell<i8>,
     search_worker: RefCell<Option<SearchWorker>>,
+    library_perf: RefCell<Option<Rc<RefCell<crate::library_perf::Recorder>>>>,
+    perf_status_updated: Cell<std::time::Instant>,
     persistence: RefCell<Option<crate::library_store::Worker>>,
     storage_ready: Cell<bool>,
     dirty: Cell<bool>,
@@ -338,6 +340,8 @@ impl AudioController {
             library_page: Cell::new(0),
             pending_page_selection: Cell::new(0),
             search_worker: RefCell::new(None),
+            library_perf: RefCell::new(None),
+            perf_status_updated: Cell::new(std::time::Instant::now()),
             persistence: RefCell::new(None),
             storage_ready: Cell::new(true),
             dirty: Cell::new(false),
@@ -677,10 +681,12 @@ impl AudioController {
         ui.on_library_search(move || {
             if let Some(c) = weak.upgrade() {
                 if let Some(ui) = c.ui.upgrade() {
-                    c.library
-                        .borrow_mut()
-                        .set_query_background(ui.get_library_query().to_string());
-                    c.publish_library();
+                    c.measure_library_action(crate::library_perf::Operation::Search, || {
+                        c.library
+                            .borrow_mut()
+                            .set_query_background(ui.get_library_query().to_string());
+                        c.publish_library();
+                    });
                 }
             }
         });
@@ -748,8 +754,10 @@ impl AudioController {
         let weak = Rc::downgrade(&controller);
         ui.on_sort_library(move |field| {
             if let Some(c) = weak.upgrade() {
-                c.library.borrow_mut().sort(field);
-                c.publish_library();
+                c.measure_library_action(crate::library_perf::Operation::Sort, || {
+                    c.library.borrow_mut().sort(field);
+                    c.publish_library();
+                });
             }
         });
         let weak = Rc::downgrade(&controller);
@@ -3793,6 +3801,15 @@ impl AudioController {
         }
     }
     pub fn tick(&self) {
+        if let Some(perf) = self.library_perf.borrow().as_ref() {
+            let (tracks, both_playing) = self.library_perf_context();
+            perf.borrow_mut().tick(
+                std::time::Instant::now(),
+                tracks,
+                both_playing,
+                self.engine.borrow().rendered_frames(),
+            );
+        }
         self.handle_output_failure();
         self.poll_device_scan();
         self.engine.borrow().collect_retired();
@@ -3883,7 +3900,67 @@ impl AudioController {
         self.save_library();
         self.poll_device_switch();
         self.refresh();
+        if self.perf_status_updated.get().elapsed() >= std::time::Duration::from_secs(1) {
+            if let Some(perf) = self.library_perf.borrow().as_ref() {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_library_performance(perf.borrow().progress().into());
+                }
+                self.perf_status_updated.set(std::time::Instant::now());
+            }
+        }
     }
+    pub fn record_library_performance(&self, recorder: Rc<RefCell<crate::library_perf::Recorder>>) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_library_performance(recorder.borrow().progress().into());
+        }
+        *self.library_perf.borrow_mut() = Some(recorder);
+    }
+
+    fn library_perf_context(&self) -> (usize, bool) {
+        let engine = self.engine.borrow();
+        (
+            self.library.borrow().scope_len(),
+            engine.snapshot(DeckId::A).playing && engine.snapshot(DeckId::B).playing,
+        )
+    }
+
+    fn measure_library_action(
+        &self,
+        operation: crate::library_perf::Operation,
+        action: impl FnOnce(),
+    ) {
+        let perf = self.library_perf.borrow().clone();
+        if let Some(perf) = &perf {
+            let now = std::time::Instant::now();
+            let (tracks, both_playing) = self.library_perf_context();
+            let mut recorder = perf.borrow_mut();
+            recorder.context(tracks, both_playing);
+            recorder.begin(operation, now);
+        }
+        action();
+        if let Some(perf) = perf {
+            perf.borrow_mut().dispatched(std::time::Instant::now());
+        }
+    }
+
+    fn library_perf_ready(&self, spec: &crate::library::SearchSpec) {
+        if let Some(perf) = self.library_perf.borrow().as_ref() {
+            let (tracks, both_playing) = self.library_perf_context();
+            let mut recorder = perf.borrow_mut();
+            recorder.context(tracks, both_playing);
+            recorder.model_ready(spec, std::time::Instant::now());
+            if let Some(ui) = self.ui.upgrade() {
+                ui.window().request_redraw();
+            }
+        }
+    }
+
+    fn fail_library_performance(&self) {
+        if let Some(perf) = self.library_perf.borrow().as_ref() {
+            perf.borrow_mut().failed();
+        }
+    }
+
     pub fn import_paths(&self, paths: Vec<PathBuf>) {
         self.start_import(Arc::new(move || Some(paths.clone())));
     }
@@ -3960,6 +4037,7 @@ impl AudioController {
             match SearchWorker::start() {
                 Ok(worker) => *worker_slot = Some(worker),
                 Err(error) => {
+                    self.fail_library_performance();
                     ui.set_status(format!("Cannot start library search: {error}").into());
                     ui.set_library_rows(ModelRc::new(Rc::new(
                         VecModel::<crate::LibraryRow>::default(),
@@ -3986,12 +4064,16 @@ impl AudioController {
             }
         }
         spec.page_index = self.library_page.get();
+        if let Some(perf) = self.library_perf.borrow().as_ref() {
+            perf.borrow_mut().bind(&spec);
+        }
         if worker.published.as_ref() == Some(&spec) && worker.wanted.is_none() {
             if let Some(ids) = library.cached_visible_ids() {
                 let total = worker.published_total;
                 drop(worker_slot);
                 drop(library);
                 self.publish_search_rows(ids, total);
+                self.library_perf_ready(&spec);
                 return;
             }
             worker.published = None;
@@ -4018,6 +4100,7 @@ impl AudioController {
         worker.wanted = Some(spec.clone());
         worker.pending = Some((projection, spec));
         if let Err(error) = worker.send_pending() {
+            self.fail_library_performance();
             ui.set_status(error.into());
             *worker_slot = None;
             ui.set_library_rows(ModelRc::new(Rc::new(
@@ -4052,10 +4135,12 @@ impl AudioController {
         let next =
             (self.library_page.get() as i64 + i64::from(delta)).clamp(0, last as i64) as usize;
         if next != self.library_page.get() {
-            self.library_page.set(next);
-            self.pending_page_selection.set(select_edge);
-            self.library.borrow_mut().select(-1);
-            self.publish_library();
+            self.measure_library_action(crate::library_perf::Operation::Page, || {
+                self.library_page.set(next);
+                self.pending_page_selection.set(select_edge);
+                self.library.borrow_mut().select(-1);
+                self.publish_library();
+            });
         }
     }
 
@@ -4086,11 +4171,11 @@ impl AudioController {
                         if current == spec {
                             worker.wanted = None;
                             self.library_page.set(page.page_index);
-                            let mut published = spec;
+                            let mut published = spec.clone();
                             published.page_index = page.page_index;
                             worker.published = Some(published);
                             worker.published_total = page.total;
-                            accepted = Some(page);
+                            accepted = Some((spec, page));
                         } else {
                             worker.wanted = None;
                             worker.pending = None;
@@ -4114,6 +4199,7 @@ impl AudioController {
         }
         drop(slot);
         if failed {
+            self.fail_library_performance();
             if let Some(ui) = self.ui.upgrade() {
                 ui.set_status("Library search worker stopped".into());
                 ui.set_library_can_previous_page(false);
@@ -4124,7 +4210,7 @@ impl AudioController {
             }
         } else if reschedule {
             self.publish_library();
-        } else if let Some(page) = accepted {
+        } else if let Some((spec, page)) = accepted {
             let edge = self.pending_page_selection.replace(0);
             let mut library = self.library.borrow_mut();
             library.install_search_result(&page.ids);
@@ -4145,6 +4231,7 @@ impl AudioController {
             if let Some(ui) = self.ui.upgrade() {
                 ui.invoke_library_scroll_page(edge < 0);
             }
+            self.library_perf_ready(&spec);
         }
     }
 
@@ -5595,6 +5682,10 @@ mod tests {
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 2);
         ui.invoke_select_library(1);
         assert_eq!(ui.get_selected_track(), 1);
+        let perf = Rc::new(RefCell::new(crate::library_perf::Recorder::new(
+            Instant::now(),
+        )));
+        c.record_library_performance(Rc::clone(&perf));
         let (sender, input) = mpsc::sync_channel(1);
         drop(input);
         let (output, receiver) = mpsc::sync_channel(1);
@@ -5614,11 +5705,91 @@ mod tests {
         assert_eq!(ui.get_selected_track(), -1);
         assert_eq!(ui.get_library_rows().row_count(), 0);
         assert!(ui.get_library_empty().contains("unavailable"));
+        assert_eq!(
+            perf.borrow().report(Instant::now()).outcome,
+            "measurement_failed"
+        );
         ui.set_library_query("one".into());
         ui.invoke_library_search();
         assert!(c.search_in_progress());
         finish_search(&c);
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 1);
+    }
+
+    #[test]
+    fn library_performance_records_handlers_and_installed_results_before_render() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48_000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let dir = tempfile::tempdir().unwrap();
+        c.library.borrow_mut().insert(
+            (0..crate::library_perf::MIN_TRACKS)
+                .map(|i| dir.path().join(format!("track-{i:06}.wav"))),
+        );
+        c.publish_library();
+        finish_search(&c);
+        let wav = wav_file(8192, 192000);
+        engine.load_a(wav.path()).unwrap();
+        engine.load_b(wav.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let perf = Rc::new(RefCell::new(crate::library_perf::Recorder::new(
+            Instant::now(),
+        )));
+        c.record_library_performance(Rc::clone(&perf));
+        c.tick();
+        output.by_ref().take(4800).for_each(drop);
+        c.tick();
+        let frames = engine.rendered_frames();
+        ui.set_library_query("track".into());
+        ui.invoke_library_search();
+        finish_search(&c);
+        let report = serde_json::to_value(perf.borrow().report(Instant::now())).unwrap();
+        assert_eq!(report["samples"].as_array().unwrap().len(), 0);
+        assert_eq!(report["unfinished_actions"], 1);
+        // The testing backend has no native rendering; inject only the notifier boundary.
+        perf.borrow_mut().rendered(Instant::now());
+        ui.invoke_sort_library(0);
+        finish_search(&c);
+        perf.borrow_mut().rendered(Instant::now());
+        ui.invoke_library_change_page(1);
+        finish_search(&c);
+        perf.borrow_mut().rendered(Instant::now());
+        let report = serde_json::to_value(perf.borrow().report(Instant::now())).unwrap();
+        let samples = report["samples"].as_array().unwrap();
+        assert_eq!(samples.len(), 3);
+        for (sample, operation) in samples.iter().zip(["search", "sort", "page"]) {
+            assert_eq!(sample["operation"], operation);
+            assert!(
+                sample["after_rendering_ms"].as_f64().unwrap()
+                    >= sample["model_ms"].as_f64().unwrap()
+            );
+        }
+        assert_eq!(report["outcome"], "insufficient_coverage");
+        assert_eq!(engine.rendered_frames(), frames);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(ui.get_library_performance().starts_with("PERF"));
+        let small_crate = c
+            .library
+            .borrow_mut()
+            .create_crate("Small measured scope")
+            .unwrap();
+        c.library.borrow_mut().select_crate(small_crate).unwrap();
+        assert_eq!(c.library.borrow().len(), crate::library_perf::MIN_TRACKS);
+        assert_eq!(c.library_perf_context().0, 0);
+        ui.invoke_sort_library(0);
+        finish_search(&c);
+        perf.borrow_mut().rendered(Instant::now());
+        let report = serde_json::to_value(perf.borrow().report(Instant::now())).unwrap();
+        assert_eq!(
+            report["samples"].as_array().unwrap().last().unwrap()["under_load"],
+            false
+        );
+        engine.pause(DeckId::A);
+        engine.pause(DeckId::B);
     }
 
     #[test]

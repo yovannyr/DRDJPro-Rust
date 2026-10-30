@@ -1,5 +1,41 @@
 # Local library storage — SQLite
 
+## Repeatable native library performance protocol (2026-10-30)
+
+The opt-in measurement profile is a development gate for the current roughly 3,000–5,000-track real-library scenario, not a final product SLA or native 100,000-track acceptance. Normal runs are unchanged. No dependency or database schema is added.
+
+Start a fresh PowerShell terminal with the real library available, not the small isolated Explorer-test catalog:
+
+```powershell
+$env:DRDJ_LIBRARY_PERF_PATH = Join-Path $env:TEMP ("drdj-library-perf-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".json")
+& 'C:\repo\DRDJPro-Rust\target\release\drdjpro-ui-spike.exe' --gui
+```
+
+The report path must be absolute, its parent must exist, and the file must not already exist. The catalog directory must already exist as well. Put the report **outside the catalog's own directory** (a separate report subdirectory is allowed); resolved directory identities are checked before creation. This prevents a new JSON report from masquerading as a legacy migration catalog or occupying a backup/lock name. Creation failure is explicit; existing reports are never overwritten. The file is reserved at startup and written/flushed/synced on regular window close. Forced termination or a startup failure can leave an empty/incomplete report, which is not successful evidence. A renderer without Slint rendering-notifier support refuses this mode explicitly. `--demo` is not accepted.
+
+1. Wait until restoration/metadata work finishes and select the full-library scope with at least **3,000 entries**. The gate uses the searched scope size before query filtering; a small crate inside a large catalog does not qualify. Keep the same real collection, output device, settings and Windows scaling for comparable runs. Track count alone does not establish music diversity or file availability.
+2. Load two real tracks longer than three minutes, start both, and keep both playing throughout the operations. Use a safe listening level and check for audible interruptions separately. Do not change audio devices, import more files or minimize/occlude the window during a run.
+3. Perform at least ten targeted-search-and-clear cycles, ten sort clicks and ten next/previous-page actions. Wait for each result to appear before the next action. Clear the query before paging so multiple pages exist. Check displayed results, selection and responsiveness; timing does not establish result correctness.
+4. Continue until the status shows at least **120 seconds** and each **Q/S/P count is at least 10**. Q includes clear-query actions and completed typed prefixes; superseded keystrokes do not count. The counter can advance later/slower than wall time because only sampled qualifying load counts.
+5. Close the window normally. The terminal prints the report location and numerical outcome only after successful report persistence. Repeat with a fresh report filename, once in the large window and once at minimum size, then send both JSON files plus Windows scaling/device details and the listening/usability result.
+
+### Measurements, budgets and outcomes
+
+| Criterion | Engineering gate |
+| --- | --- |
+| Scope/load coverage | At least 3,000 entries in the searched all-tracks/crate scope, 120 sampled seconds with both decks playing and recent render-bus progress |
+| Completed actions | At least 10 qualifying search, 10 sort and 10 page actions |
+| Controller handler duration | Maximum 50 ms for qualifying actions |
+| Handler start to AfterRendering | Nearest-rank p95 at most 250 ms; maximum 1,000 ms, independently for each operation |
+| GUI controller tick gap | Maximum 100 ms during sampled qualifying load |
+| Observed bus progress | Fresh within 100 ms; losing observed freshness during dual-deck/large-catalog load exceeds the budget |
+
+`model_ms` ends after accepted rows/selection/page scroll installation. `after_rendering_ms` ends at Slint AfterRendering, **before** swap/presentation, not when pixels are observed on screen. Both start inside the controller action handler; OS input dispatch, physical input and display latency are outside the measurement. GUI-tick gaps include scheduling/control-plane work, not audio callback durations. Bus progress is not a hardware dropout detector. Cold startup, initial import/tag scanning, SQLite-level paging, exhaustive music-corpus correctness and long-run audio qualification remain separate.
+
+Only the latest matching request completes a sample. Replaced requests/catalog changes are counted as superseded, not as completed latency samples. Paused/undersized/no-fresh-bus observations cannot establish load. Off-load completions are retained separately in raw samples, excluded from qualified statistics. At most 4,096 completed samples are stored; overflow, unfinished actions or insufficient load/actions cannot produce `within_budgets`. Search-worker/measurement errors produce `measurement_failed`.
+
+The JSON contains thresholds, per-operation count/min/p95/max, raw bounded timing samples, sampled load coverage and counters. It omits queries, filenames, tags and device identities. Outcomes are `insufficient_coverage`, `budget_exceeded`, `measurement_failed` or `within_budgets`; the latter is numerical evidence only, not a claim of listening/visual/native product acceptance. Reports with missing coverage remain incomplete even if individual timings look fast.
+
 The current storage backend is SQLite, replacing the published JSON writer. The current catalog persists stable track IDs/paths plus title, artist, album, duration and metadata-inspection state. It also persists flat crates and track membership; constant-BPM beatgrids are also stored, and schema 5 adds hot-cue data storage. Basic hot-cue GUI set/recall/delete integration exists; deck/session restoration and SQL-backed table searching remain open. Decks start unloaded/paused unless explicit CLI tracks were supplied.
 
 ## Location and compatibility
