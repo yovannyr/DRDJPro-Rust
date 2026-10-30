@@ -38,7 +38,7 @@ pub struct CatalogDelta {
 }
 pub struct CrateDelta {
     pub last_id: i32,
-    pub entries: Vec<(i32, Option<String>)>,
+    pub entries: Vec<(i32, Option<String>, Option<i32>)>,
 }
 impl Catalog {
     pub fn validate(&self) -> Result<(), String> {
@@ -645,13 +645,11 @@ impl Library {
                     .changed_crates
                     .keys()
                     .map(|&id| {
+                        let entry = self.crates.entries.iter().find(|c| c.id == id);
                         (
                             id,
-                            self.crates
-                                .entries
-                                .iter()
-                                .find(|c| c.id == id)
-                                .map(|c| c.name.clone()),
+                            entry.map(|c| c.name.clone()),
+                            entry.and_then(|c| c.parent_id),
                         )
                     })
                     .collect(),
@@ -750,19 +748,45 @@ impl Library {
         self.mark_crate(id);
         Ok(id)
     }
+    pub fn create_crate_under(
+        &mut self,
+        parent_id: Option<i32>,
+        name: &str,
+    ) -> Result<i32, String> {
+        let id = self.crates.create_under(parent_id, name)?;
+        self.mark_crate(id);
+        Ok(id)
+    }
     pub fn rename_crate(&mut self, id: i32, name: &str) -> Result<(), String> {
         self.crates.rename(id, name)?;
         self.mark_crate(id);
         Ok(())
     }
     pub fn delete_crate(&mut self, id: i32) -> Result<(), String> {
+        let parent_id = self
+            .crates
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("Crate no longer exists")?
+            .parent_id;
+        let children: Vec<_> = self
+            .crates
+            .entries
+            .iter()
+            .filter(|entry| entry.parent_id == Some(id))
+            .map(|entry| entry.id)
+            .collect();
         self.crates.delete(id)?;
+        for child_id in children {
+            self.mark_crate(child_id);
+        }
         self.scope_bits.remove(&id);
         self.changed_memberships
             .retain(|(crate_id, _), _| *crate_id != id);
         self.mark_crate(id);
         if self.active_crate == id {
-            self.select_crate(0)?;
+            self.select_crate(parent_id.unwrap_or(0))?;
         }
         Ok(())
     }

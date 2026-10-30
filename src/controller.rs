@@ -247,7 +247,7 @@ pub struct AudioController {
     fx_writable: Cell<bool>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
-    crate_editor: Cell<Option<i32>>,
+    crate_editor: Cell<Option<(i32, Option<i32>)>>,
     crate_delete: Cell<Option<i32>>,
     crate_target: Cell<i32>,
     import_crate: Cell<i32>,
@@ -914,7 +914,7 @@ impl AudioController {
                     } else {
                         String::new()
                     };
-                    c.crate_editor.set(Some(id));
+                    c.crate_editor.set(Some((id, None)));
                     if let Some(ui) = c.ui.upgrade() {
                         ui.set_crate_edit_name(name.into());
                         ui.set_crate_dialog_title(
@@ -931,12 +931,34 @@ impl AudioController {
             }
         }
         let weak = Rc::downgrade(self);
+        ui.on_new_subcrate(move || {
+            if let Some(c) = weak.upgrade() {
+                if !c.can_change_crates() {
+                    return;
+                }
+                let library = c.library.borrow();
+                let parent_id = library.active_crate();
+                if parent_id == 0 {
+                    return;
+                }
+                let Ok(parent_name) = library.crates().hierarchy_name(parent_id) else {
+                    return;
+                };
+                c.crate_editor.set(Some((0, Some(parent_id))));
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_crate_edit_name("".into());
+                    ui.set_crate_dialog_title(format!("New subcrate in {parent_name}").into());
+                    ui.set_crate_editor_open(true);
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
         ui.on_save_crate_name(move || {
             if let Some(c) = weak.upgrade() {
                 if !c.can_change_crates() {
                     return;
                 }
-                let Some(id) = c.crate_editor.get() else {
+                let Some((id, parent_id)) = c.crate_editor.get() else {
                     return;
                 };
                 let Some(ui) = c.ui.upgrade() else {
@@ -945,7 +967,11 @@ impl AudioController {
                 let name = ui.get_crate_edit_name().to_string();
                 let result = if id == 0 {
                     let mut library = c.library.borrow_mut();
-                    library.create_crate(&name).and_then(|id| {
+                    let created = match parent_id {
+                        Some(parent_id) => library.create_crate_under(Some(parent_id), &name),
+                        None => library.create_crate(&name),
+                    };
+                    created.and_then(|id| {
                         c.crate_target.set(id);
                         library.select_crate(id)
                     })
@@ -4065,27 +4091,39 @@ impl AudioController {
             .set_query_background(ui.get_library_query().to_string());
         let library = self.library.borrow();
         ui.set_selected_track(library.selected_id());
-        let crates = library.crates().ordered();
+        let crates = library.crates().ordered_with_depth();
+        let crate_names = match crates
+            .iter()
+            .map(|(entry, _)| library.crates().hierarchy_name(entry.id))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(names) => names,
+            Err(error) => {
+                ui.set_status(format!("Cannot display crate hierarchy: {error}").into());
+                return;
+            }
+        };
         let target = crates
             .iter()
-            .position(|entry| entry.id == self.crate_target.get())
+            .position(|(entry, _)| entry.id == self.crate_target.get())
             .or_else(|| (!crates.is_empty()).then_some(0));
         self.crate_target
-            .set(target.map_or(0, |index| crates[index].id));
+            .set(target.map_or(0, |index| crates[index].0.id));
         ui.set_target_crate_index(target.map_or(-1, |index| index as i32));
         ui.set_crate_names(ModelRc::new(Rc::new(VecModel::from(
-            crates
-                .iter()
-                .map(|c| slint::SharedString::from(c.name.as_str()))
+            crate_names
+                .into_iter()
+                .map(slint::SharedString::from)
                 .collect::<Vec<_>>(),
         ))));
         ui.set_crate_rows(ModelRc::new(Rc::new(VecModel::from(
             crates
                 .iter()
-                .map(|c| crate::CrateRow {
-                    id: c.id,
-                    name: c.name.clone().into(),
-                    count: c.tracks.len() as i32,
+                .map(|(entry, depth)| crate::CrateRow {
+                    id: entry.id,
+                    name: entry.name.clone().into(),
+                    count: entry.tracks.len() as i32,
+                    depth: *depth as i32,
                 })
                 .collect::<Vec<_>>(),
         ))));
@@ -11169,6 +11207,111 @@ mod tests {
         assert!(!ui.get_right_playing());
         c.close_library().unwrap();
     }
+
+    #[test]
+    fn subcrate_gui_persists_hierarchy_and_promotes_children_after_delete() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let audio = wav_file(8192, 48_000);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        ui.show().unwrap();
+        c.import_paths(vec![audio.path().to_owned()]);
+        finish_import(&c);
+
+        control(&ui, "New crate").invoke_accessible_default_action();
+        control(&ui, "Crate name").set_accessible_value("Parent");
+        control(&ui, "Save crate name").invoke_accessible_default_action();
+        finish_search(&c);
+        ui.invoke_select_crate(1);
+        control(&ui, "New subcrate").invoke_accessible_default_action();
+        assert!(ui.get_crate_dialog_title().contains("Parent"));
+        control(&ui, "Crate name").set_accessible_value("Child");
+        control(&ui, "Save crate name").invoke_accessible_default_action();
+        finish_search(&c);
+        ui.invoke_select_crate(2);
+        control(&ui, "New subcrate").invoke_accessible_default_action();
+        control(&ui, "Crate name").set_accessible_value("Nested");
+        control(&ui, "Save crate name").invoke_accessible_default_action();
+        finish_search(&c);
+
+        assert_eq!(ui.get_crate_rows().row_count(), 3);
+        assert_eq!(ui.get_crate_rows().row_data(1).unwrap().depth, 1);
+        assert_eq!(ui.get_crate_rows().row_data(2).unwrap().depth, 2);
+        control(&ui, "All library tracks").invoke_accessible_default_action();
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        control(&ui, "Add selected track to crate").invoke_accessible_default_action();
+        assert_eq!(
+            c.library.borrow().crates().entries[2].tracks,
+            std::collections::HashSet::from([1])
+        );
+
+        ui.invoke_select_crate(2);
+        finish_search(&c);
+        control(&ui, "Delete crate").invoke_accessible_default_action();
+        assert!(ui.get_crate_delete_pending());
+        assert_eq!(ui.get_crate_rows().row_count(), 3);
+        control(&ui, "Confirm crate deletion").invoke_accessible_default_action();
+        finish_search(&c);
+        let catalog = c.library.borrow();
+        assert!(catalog.crates().entries.iter().all(|entry| entry.id != 2));
+        assert_eq!(
+            catalog
+                .crates()
+                .entries
+                .iter()
+                .find(|entry| entry.id == 3)
+                .unwrap()
+                .parent_id,
+            Some(1)
+        );
+        assert_eq!(
+            catalog
+                .crates()
+                .entries
+                .iter()
+                .find(|entry| entry.id == 3)
+                .unwrap()
+                .tracks,
+            std::collections::HashSet::from([1])
+        );
+        drop(catalog);
+        finish_storage(&c);
+        c.close_library().unwrap();
+        ui.hide().unwrap();
+        drop(c);
+
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        assert_eq!(ui.get_crate_rows().row_count(), 2);
+        assert_eq!(ui.get_crate_rows().row_data(1).unwrap().name, "Nested");
+        assert_eq!(ui.get_crate_rows().row_data(1).unwrap().depth, 1);
+        ui.invoke_select_crate(3);
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 1);
+        c.close_library().unwrap();
+    }
+
     #[test]
     fn mixed_meter_gui_preview_save_cancel_and_remove_on_both_decks() {
         i_slint_backend_testing::init_no_event_loop();

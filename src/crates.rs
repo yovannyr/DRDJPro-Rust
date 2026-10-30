@@ -1,7 +1,8 @@
-//! Flat named track collections. No filesystem or audio operations.
+//! Hierarchical named track collections. No filesystem or audio operations.
 use std::collections::HashSet;
 pub const MAX_CRATES: usize = 1024;
 pub const MAX_MEMBERSHIPS: usize = 1_000_000;
+pub const MAX_CRATE_DEPTH: usize = 16;
 #[derive(Clone, Debug, Default)]
 pub struct CrateCatalog {
     pub last_id: i32,
@@ -11,6 +12,7 @@ pub struct CrateCatalog {
 pub struct Crate {
     pub id: i32,
     pub name: String,
+    pub parent_id: Option<i32>,
     pub tracks: HashSet<i32>,
 }
 pub fn name_key(name: &str) -> String {
@@ -46,20 +48,100 @@ impl CrateCatalog {
             }
             count += entry.tracks.len();
         }
+        for entry in &self.entries {
+            let mut parent_id = entry.parent_id;
+            let mut depth = 1;
+            while let Some(id) = parent_id {
+                if id == entry.id || depth >= MAX_CRATE_DEPTH {
+                    return Err("Invalid crate hierarchy or depth limit exceeded".into());
+                }
+                let parent = self
+                    .entries
+                    .iter()
+                    .find(|candidate| candidate.id == id)
+                    .ok_or("Crate parent no longer exists")?;
+                if parent.id >= entry.id {
+                    return Err("Crate parent must precede its child".into());
+                }
+                parent_id = parent.parent_id;
+                depth += 1;
+            }
+        }
         if count > MAX_MEMBERSHIPS {
             return Err("Crate membership limit exceeded".into());
         }
         Ok(())
     }
     pub fn ordered(&self) -> Vec<&Crate> {
-        let mut entries: Vec<_> = self.entries.iter().collect();
-        entries.sort_by_cached_key(|c| (name_key(&c.name), c.id));
+        self.ordered_with_depth()
+            .into_iter()
+            .map(|(entry, _)| entry)
+            .collect()
+    }
+    pub fn ordered_with_depth(&self) -> Vec<(&Crate, usize)> {
+        fn append<'a>(
+            catalog: &'a CrateCatalog,
+            parent_id: Option<i32>,
+            depth: usize,
+            entries: &mut Vec<(&'a Crate, usize)>,
+        ) {
+            let mut children: Vec<_> = catalog
+                .entries
+                .iter()
+                .filter(|entry| entry.parent_id == parent_id)
+                .collect();
+            children.sort_by_cached_key(|entry| (name_key(&entry.name), entry.id));
+            for entry in children {
+                entries.push((entry, depth));
+                append(catalog, Some(entry.id), depth + 1, entries);
+            }
+        }
+        let mut entries = Vec::with_capacity(self.entries.len());
+        append(self, None, 0, &mut entries);
         entries
     }
+    pub fn hierarchy_name(&self, id: i32) -> Result<String, String> {
+        let mut names = Vec::new();
+        let mut current = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("Crate no longer exists")?;
+        loop {
+            names.push(current.name.as_str());
+            let Some(parent_id) = current.parent_id else {
+                break;
+            };
+            current = self
+                .entries
+                .iter()
+                .find(|entry| entry.id == parent_id)
+                .ok_or("Crate parent no longer exists")?;
+        }
+        names.reverse();
+        Ok(names.join(" / "))
+    }
     pub fn create(&mut self, value: &str) -> Result<i32, String> {
+        self.create_under(None, value)
+    }
+    pub fn create_under(&mut self, parent_id: Option<i32>, value: &str) -> Result<i32, String> {
         let value = name(value)?;
         if self.entries.len() == MAX_CRATES {
             return Err("Crate limit reached".into());
+        }
+        let depth = match parent_id {
+            Some(id) => {
+                let parent = self
+                    .entries
+                    .iter()
+                    .find(|entry| entry.id == id)
+                    .ok_or("Crate parent no longer exists")?;
+                self.depth(parent.id) + 1
+            }
+            None => 0,
+        };
+        if depth > MAX_CRATE_DEPTH {
+            return Err("Crate hierarchy depth limit reached".into());
         }
         if self
             .entries
@@ -77,9 +159,21 @@ impl CrateCatalog {
         self.entries.push(Crate {
             id,
             name: value,
+            parent_id,
             tracks: HashSet::new(),
         });
         Ok(id)
+    }
+    fn depth(&self, id: i32) -> usize {
+        let mut depth = 0;
+        let mut current = self.entries.iter().find(|entry| entry.id == id);
+        while let Some(entry) = current {
+            depth += 1;
+            current = entry
+                .parent_id
+                .and_then(|parent| self.entries.iter().find(|entry| entry.id == parent));
+        }
+        depth
     }
     pub fn rename(&mut self, id: i32, value: &str) -> Result<(), String> {
         let value = name(value)?;
@@ -98,12 +192,20 @@ impl CrateCatalog {
         Ok(())
     }
     pub fn delete(&mut self, id: i32) -> Result<(), String> {
-        let index = self
+        let entry = self
             .entries
             .iter()
-            .position(|c| c.id == id)
+            .find(|entry| entry.id == id)
             .ok_or("Crate no longer exists")?;
-        self.entries.remove(index);
+        let parent_id = entry.parent_id;
+        for child in self
+            .entries
+            .iter_mut()
+            .filter(|entry| entry.parent_id == Some(id))
+        {
+            child.parent_id = parent_id;
+        }
+        self.entries.retain(|entry| entry.id != id);
         Ok(())
     }
     pub fn add(&mut self, crate_id: i32, track_id: i32) -> Result<bool, String> {
@@ -184,5 +286,77 @@ mod tests {
         catalog.last_id = id;
         catalog.entries.push(catalog.entries[0].clone());
         assert!(catalog.validate(&HashSet::from([1])).is_err());
+    }
+
+    #[test]
+    fn nested_crates_validate_order_and_promote_children_on_delete() {
+        let mut catalog = CrateCatalog::default();
+        let parent = catalog.create("Parent").unwrap();
+        let child_b = catalog.create_under(Some(parent), "B").unwrap();
+        let child_a = catalog.create_under(Some(parent), "A").unwrap();
+        let grandchild = catalog.create_under(Some(child_a), "Grandchild").unwrap();
+        catalog.add(child_b, 42).unwrap();
+        assert_eq!(
+            catalog
+                .ordered_with_depth()
+                .iter()
+                .map(|(entry, depth)| (entry.name.as_str(), *depth))
+                .collect::<Vec<_>>(),
+            [("Parent", 0), ("A", 1), ("Grandchild", 2), ("B", 1)]
+        );
+        assert!(catalog.validate(&HashSet::from([42])).is_ok());
+
+        catalog.delete(parent).unwrap();
+        assert_eq!(
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == child_a)
+                .unwrap()
+                .parent_id,
+            None
+        );
+        assert_eq!(
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == child_b)
+                .unwrap()
+                .parent_id,
+            None
+        );
+        assert_eq!(
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == grandchild)
+                .unwrap()
+                .parent_id,
+            Some(child_a)
+        );
+        assert_eq!(
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == child_b)
+                .unwrap()
+                .tracks,
+            HashSet::from([42])
+        );
+        assert!(catalog.validate(&HashSet::from([42])).is_ok());
+    }
+
+    #[test]
+    fn nested_crates_reject_missing_parents_and_depth_overflow() {
+        let mut catalog = CrateCatalog::default();
+        assert!(catalog.create_under(Some(77), "Orphan").is_err());
+        let mut parent = catalog.create("Level 0").unwrap();
+        for level in 1..MAX_CRATE_DEPTH {
+            parent = catalog
+                .create_under(Some(parent), &format!("Level {level}"))
+                .unwrap();
+        }
+        assert!(catalog.create_under(Some(parent), "Too deep").is_err());
+        assert!(catalog.validate(&HashSet::new()).is_ok());
     }
 }

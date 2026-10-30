@@ -164,7 +164,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
     - [x] ✅ Gemeldeten Audio-Streamfehler atomar erfassen, beide Decks pausieren und PLAY sperren; AUDIO / REOPEN CURRENT öffnet denselben Ausgang nach Speicherbestätigung neu, prüft Endpunkt/Backend/Kanalform und übernimmt pausierte Tracks/Zustand. Headless-Fehler-/Identitäts-/Positions-/Wiederanlauftest; keine automatische Audio-Wiederverbindung oder native Hörabnahme.
     - [ ] ☐ Native Audio-Fehler-/REOPEN-CURRENT-/Hörabnahme nach USB-Wiederverbindung; automatische Audio-Wiederverbindung, schnelle USB-Wechsel, native RECONNECT-MIDI-Abnahme und Transport-/weitere Bedienabnahme bleiben offen.
     - [ ] ☐ Weitere Regler, vollständige Transport-Cue-Drück-/Loslass-Semantik und vollständige Hardware-Bedienabnahme.
-- [ ] ☐ Erweiterte Bibliothek: Sub-/Smart-Crates, History, Relocation und Session-Wiederherstellung.
+- [ ] ☐ Erweiterte Bibliothek: Smart-Crates, History, Relocation und Session-Wiederherstellung.
+  - [x] ✅ Hierarchische Sub-Crates: unter dem ausgewählten Crate anlegen, als eingerückter Baum navigieren, vollständige Hierarchie als Zuordnungsziel anzeigen und direkte Kinder beim Löschen eine Ebene nach oben verschieben. SQLite-Schema 9 migriert flache Crates verlustfrei; Modell-, UI-, Upgrade- und Neustarttests.
 - [ ] ☐ Erweiterte Grid-Funktionen: variable Tempi, Warp-Marker und Taktartwechsel.
 - [ ] ☐ Cue-Tastatur-/Hold-Verhalten und Prüfung überlappender Marker.
 - [ ] ☐ Vollständiger .NET-Code-/Referenztest-Abgleich und Feature-Paritätsnachweis.
@@ -218,7 +219,7 @@ This is an implementation checkpoint, not phase completion or a feature-parity c
 | 2 — architecture/evaluation | Cargo workspace and focused modules; Slint/Rodio prototype | Framework choice, audio backend and real-time qualification |
 | 3 — representative deck UI | Extended workspace, dual transport/mixer/seek, peak/color detail views and constant-grid draft editor | Visual review, rendering/interaction measurements and Windows/macOS framework qualification |
 | 4 — incremental audio | MP3/WAV and deck/mixer/seek behavior headless-tested | Reference parity, DSP/routing/device behavior and physical real-time tests |
-| 5 — hardware/library/persistence | Searchable local catalog with title/artist/album/duration, durable SQLite storage, flat crates, manual grids and backup recovery | Subcrates/smart crates/history, relocation, session restore and hardware slices |
+| 5 — hardware/library/persistence | Searchable local catalog with title/artist/album/duration, durable SQLite storage, hierarchical subcrates, manual grids and backup recovery | Smart crates/history, relocation, session restore and hardware slices |
 | 6 — cross-platform acceptance | Open | Platform builds, long-run stability, performance and usability |
 
 The latest bounded slice replaces synthetic audio-mode bars with real PCM peaks and connects overview clicks to seeking. It intentionally does not add zoom, BPM/beatgrid, hardware or new dependencies. Phase 3 stays partial. Subsequent scope requires review.

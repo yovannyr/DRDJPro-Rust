@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 9;
 fn startup_selection(
     connection: &Connection,
 ) -> Result<crate::audio_devices::StartupSelection, String> {
@@ -265,7 +265,7 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
         read_saved_loops(connection, &mut tracks)?;
     }
     let crates = if version >= 3 {
-        read_crates(connection)?
+        read_crates(connection, version)?
     } else {
         Default::default()
     };
@@ -277,7 +277,10 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     catalog.validate().map_err(InspectError::Damaged)?;
     Ok(Some(catalog))
 }
-fn read_crates(connection: &Connection) -> Result<crate::crates::CrateCatalog, InspectError> {
+fn read_crates(
+    connection: &Connection,
+    version: i32,
+) -> Result<crate::crates::CrateCatalog, InspectError> {
     let value: String = connection.query_row(
         "SELECT value FROM library_meta WHERE key='last_crate_id'",
         [],
@@ -289,8 +292,11 @@ fn read_crates(connection: &Connection) -> Result<crate::crates::CrateCatalog, I
             .map_err(|_| InspectError::Damaged("Invalid crate ID sequence".into()))?,
         entries: Vec::new(),
     };
-    let mut stmt =
-        connection.prepare("SELECT id,name,name_key FROM crates ORDER BY id LIMIT ?1")?;
+    let mut stmt = connection.prepare(if version >= 9 {
+        "SELECT id,name,name_key,parent_id FROM crates ORDER BY id LIMIT ?1"
+    } else {
+        "SELECT id,name,name_key,NULL FROM crates ORDER BY id LIMIT ?1"
+    })?;
     let mut rows = stmt.query([crate::crates::MAX_CRATES as i64 + 1])?;
     let mut indices = HashMap::new();
     while let Some(row) = rows.next()? {
@@ -303,6 +309,7 @@ fn read_crates(connection: &Connection) -> Result<crate::crates::CrateCatalog, I
         catalog.entries.push(crate::crates::Crate {
             id,
             name,
+            parent_id: row.get(3)?,
             tracks: HashSet::new(),
         });
     }
@@ -523,10 +530,27 @@ fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<()
     Ok(())
 }
 fn create_crate_schema(connection: &Connection) -> Result<(), String> {
-    connection.execute_batch("CREATE TABLE crates(id INTEGER PRIMARY KEY CHECK(id>0 AND id<2147483647),name TEXT NOT NULL CHECK(length(name)>0 AND length(name)<=128),name_key TEXT NOT NULL UNIQUE) STRICT;
+    connection.execute_batch("CREATE TABLE crates(id INTEGER PRIMARY KEY CHECK(id>0 AND id<2147483647),name TEXT NOT NULL CHECK(length(name)>0 AND length(name)<=128),name_key TEXT NOT NULL UNIQUE,parent_id INTEGER REFERENCES crates(id)) STRICT;
         CREATE TABLE crate_tracks(crate_id INTEGER NOT NULL REFERENCES crates(id) ON DELETE CASCADE,track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,PRIMARY KEY(crate_id,track_id)) STRICT;
         CREATE INDEX crate_tracks_track ON crate_tracks(track_id);
         INSERT INTO library_meta(key,value) VALUES('last_crate_id','0');").map_err(|e|e.to_string())
+}
+fn add_crate_hierarchy(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(crates)")
+        .map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let name: String = row.get(1).map_err(|e| e.to_string())?;
+        if name == "parent_id" {
+            return Ok(());
+        }
+    }
+    drop(rows);
+    drop(statement);
+    connection
+        .execute_batch("ALTER TABLE crates ADD COLUMN parent_id INTEGER REFERENCES crates(id);")
+        .map_err(|e| e.to_string())
 }
 fn write_crates(
     connection: &Connection,
@@ -537,17 +561,20 @@ fn write_crates(
         .execute_batch("DELETE FROM crate_tracks; DELETE FROM crates;")
         .map_err(|e| e.to_string())?;
     let mut crates = connection
-        .prepare("INSERT INTO crates(id,name,name_key) VALUES(?1,?2,?3)")
+        .prepare("INSERT INTO crates(id,name,name_key,parent_id) VALUES(?1,?2,?3,?4)")
         .map_err(|e| e.to_string())?;
     let mut members = connection
         .prepare("INSERT INTO crate_tracks(crate_id,track_id) VALUES(?1,?2)")
         .map_err(|e| e.to_string())?;
-    for entry in &catalog.entries {
+    let mut entries: Vec<_> = catalog.entries.iter().collect();
+    entries.sort_by_key(|entry| entry.id);
+    for entry in entries {
         crates
             .execute(rusqlite::params![
                 entry.id,
                 entry.name,
-                crate::crates::name_key(&entry.name)
+                crate::crates::name_key(&entry.name),
+                entry.parent_id
             ])
             .map_err(|e| e.to_string())?;
         for track in &entry.tracks {
@@ -837,6 +864,13 @@ impl Store {
             if version < 8 {
                 add_grid_meter_changes(&tx)?;
             }
+            if version < 9 {
+                if version < 3 {
+                    // The newly created crate schema already includes parent_id.
+                } else {
+                    add_crate_hierarchy(&tx)?;
+                }
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
@@ -1077,9 +1111,12 @@ impl Store {
                 return Err("Invalid crate ID sequence".into());
             }
             let mut ids = HashSet::new();
-            for (id, name) in &crates.entries {
+            for (id, name, parent_id) in &crates.entries {
                 if *id <= 0 || *id > crates.last_id || !ids.insert(*id) {
                     return Err("Invalid crate identity".into());
+                }
+                if parent_id.is_some_and(|parent| parent <= 0 || parent >= *id) {
+                    return Err("Invalid crate parent identity".into());
                 }
                 if let Some(name) = name {
                     crate::crates::CrateCatalog {
@@ -1087,32 +1124,33 @@ impl Store {
                         entries: vec![crate::crates::Crate {
                             id: *id,
                             name: name.clone(),
+                            parent_id: None,
                             tracks: HashSet::new(),
                         }],
                     }
                     .validate(&HashSet::new())?;
                 }
             }
-            // Delete first, then reserve temporary keys for all renamed rows. A NUL-prefixed
+            // Reserve temporary keys for changed rows before applying the bounded delta. A NUL-prefixed
             // key cannot be produced by a valid crate name and exists only inside this transaction.
-            for (id, name) in &crates.entries {
+            for (id, _, _) in &crates.entries {
+                tx.execute(
+                    "UPDATE crates SET name_key=char(0)||CAST(id AS TEXT) WHERE id=?1",
+                    [id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            let mut changed: Vec<_> = crates.entries.iter().collect();
+            changed.sort_by_key(|(id, _, _)| *id);
+            for (id, name, parent_id) in &changed {
+                if let Some(name) = name {
+                    tx.execute("INSERT INTO crates(id,name,name_key,parent_id) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET name=excluded.name,name_key=excluded.name_key,parent_id=excluded.parent_id", rusqlite::params![id, name, crate::crates::name_key(name), parent_id]).map_err(|e| e.to_string())?;
+                }
+            }
+            for (id, name, _) in changed.iter().rev() {
                 if name.is_none() {
                     tx.execute("DELETE FROM crates WHERE id=?1", [id])
                         .map_err(|e| e.to_string())?;
-                }
-            }
-            for (id, name) in &crates.entries {
-                if name.is_some() {
-                    tx.execute(
-                        "UPDATE crates SET name_key=char(0)||CAST(id AS TEXT) WHERE id=?1",
-                        [id],
-                    )
-                    .map_err(|e| e.to_string())?;
-                }
-            }
-            for (id, name) in &crates.entries {
-                if let Some(name) = name {
-                    tx.execute("INSERT INTO crates(id,name,name_key) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET name=excluded.name,name_key=excluded.name_key", rusqlite::params![id, name, crate::crates::name_key(name)]).map_err(|e| e.to_string())?;
                 }
             }
             let count: i64 = tx
@@ -2794,7 +2832,10 @@ mod tests {
         let id = library.create_crate("Transient").unwrap();
         library.delete_crate(id).unwrap();
         let delta = library.changes();
-        assert_eq!(delta.crates.as_ref().unwrap().entries, vec![(id, None)]);
+        assert_eq!(
+            delta.crates.as_ref().unwrap().entries,
+            vec![(id, None, None)]
+        );
         store.save_delta(&delta).unwrap();
         library.acknowledge(delta.revision);
         assert!(!library.has_changes());
@@ -2824,7 +2865,7 @@ mod tests {
         let latest = library.changes();
         assert_eq!(
             latest.crates.as_ref().unwrap().entries,
-            vec![(a, None), (b, Some("Second".into()))]
+            vec![(a, None, None), (b, Some("Second".into()), None)]
         );
         assert_eq!(latest.memberships, vec![(b, 1, true)]);
         store.save_delta(&latest).unwrap();
@@ -2835,6 +2876,119 @@ mod tests {
         assert_eq!(restored.crates().entries.len(), 1);
         assert_eq!(restored.crates().entries[0].tracks, HashSet::from([1]));
         assert_eq!(restored.create_crate("Next").unwrap(), b + 1);
+    }
+
+    #[test]
+    fn nested_crates_persist_and_deleted_parents_promote_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let parent = library.create_crate("Parent").unwrap();
+        let child = library.create_crate_under(Some(parent), "Child").unwrap();
+        let nested = library.create_crate_under(Some(child), "Nested").unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+        drop(store);
+
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        assert_eq!(
+            library
+                .crates()
+                .entries
+                .iter()
+                .find(|entry| entry.id == child)
+                .unwrap()
+                .parent_id,
+            Some(parent)
+        );
+        assert_eq!(
+            library
+                .crates()
+                .entries
+                .iter()
+                .find(|entry| entry.id == nested)
+                .unwrap()
+                .parent_id,
+            Some(child)
+        );
+        library.delete_crate(child).unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        drop(store);
+
+        let (_, restored, _) = Store::open(db).unwrap();
+        let nested = restored
+            .crates()
+            .entries
+            .iter()
+            .find(|entry| entry.id == nested)
+            .unwrap();
+        assert_eq!(nested.parent_id, Some(parent));
+    }
+
+    #[test]
+    fn schema_eight_upgrade_preserves_flat_crates() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let root = library.create_crate("Existing crate").unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        drop(store);
+
+        let connection = connect(&db, false).unwrap();
+        connection
+            .execute_batch("ALTER TABLE crates DROP COLUMN parent_id; PRAGMA user_version=8;")
+            .unwrap();
+        drop(connection);
+
+        let (store, library, _) = Store::open(db).unwrap();
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+                .unwrap(),
+            9
+        );
+        assert_eq!(library.crates().entries[0].id, root);
+        assert_eq!(library.crates().entries[0].name, "Existing crate");
+        assert_eq!(library.crates().entries[0].parent_id, None);
+    }
+
+    #[test]
+    fn crate_delta_can_delete_nested_rows_and_reuse_their_names_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        let parent = library.create_crate("Reusable parent").unwrap();
+        let child = library
+            .create_crate_under(Some(parent), "Reusable child")
+            .unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+
+        library.delete_crate(parent).unwrap();
+        library.delete_crate(child).unwrap();
+        let replacement = library.create_crate("Reusable parent").unwrap();
+        let replacement_child = library.create_crate("Reusable child").unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        drop(store);
+
+        let (_, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.crates().entries.len(), 2);
+        assert!(restored
+            .crates()
+            .entries
+            .iter()
+            .any(|entry| entry.id == replacement && entry.parent_id.is_none()));
+        assert!(restored
+            .crates()
+            .entries
+            .iter()
+            .any(|entry| entry.id == replacement_child && entry.parent_id.is_none()));
     }
 
     #[test]
