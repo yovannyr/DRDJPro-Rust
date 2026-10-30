@@ -159,3 +159,10 @@ The new wrapper uses fixed stereo storage and atomic frame snapshots, with no ad
 ## Headphone cue GUI (2026-10-30)
 
 MON opens a closable headphone monitor panel with independent CUE A/B checkboxes and a fixed OUT 3/4 label. Enabling cue requests the engine's pre-fader dry send. The controls require at least four output channels; incompatible master routing or multichannel tracks produce a panel error and restore the checkbox from actual engine state. Master output selection is not changed implicitly. Cue is session-only and defaults off on restart. The existing deck CUE transport buttons still mean cue-to-zero, not headphone selection. Use the hardware headphone level; software monitor gain, Cue/Master blend and MC4000 headphone-cue MIDI remain separate open steps.
+
+
+## MC4000 headphone cue buttons (2026-10-30)
+
+The manufacturer's User Guide v1.2 MIDI table (printed p.30, row 9 Cue (headphone)) assigns note 27 / 0x1B to deck channels 1 and 2. DrDJ now maps positive Note On on those channels to the corresponding MON Cue A/B toggle through the same controller callback. Note-on zero and Note Off releases do not toggle. The transport CUE (note 1) remains the separate cue-to-zero action; channel-16 note 27 (Load Prep) remains unmapped. Rejected selections use the same panel error and restore the actual engine checkbox state. MIDI callbacks still enqueue commands; engine/UI work remains on GUI polling. Existing all-on LED behavior is unchanged, so the headphone cue lamps do not represent selection state. Use MON checkboxes for actual state. Monitor gain/blend and cue persistence remain open.
+
+Reference: https://cdn.inmusicbrands.com/denondj/MC4000/MC4000-User-Guide-v1.2_00.pdf (also stored in docs/MC4000-User-Guide-v1.2_00.pdf).

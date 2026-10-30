@@ -9,6 +9,7 @@ pub enum Command {
     Toggle(usize),
     Keylock(usize),
     Cue(usize),
+    HeadphoneCue(usize),
     Fader(usize, u8),
     Crossfader(u8),
     FxToggle(usize),
@@ -38,6 +39,7 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         (0x90, 0..=1, 13, 1..=127) => Some(Command::Keylock(channel as usize)),
         (0x90, 0..=1, 0, 1..=127) => Some(Command::Toggle(channel as usize)),
         (0x90, 0..=1, 1, 1..=127) => Some(Command::Cue(channel as usize)),
+        (0x90, 0..=1, 27, 1..=127) => Some(Command::HeadphoneCue(channel as usize)),
         (0xb0, 0..=1, 28, value) => Some(Command::Fader(channel as usize, value)),
         (0xb0, 15, 8, value) => Some(Command::Crossfader(value)),
         _ => None,
@@ -267,6 +269,15 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         return;
     }
     match command {
+        Command::HeadphoneCue(0) => {
+            ui.set_monitor_cue_a(!ui.get_monitor_cue_a());
+            ui.invoke_monitor_cue_changed(0);
+        }
+        Command::HeadphoneCue(1) => {
+            ui.set_monitor_cue_b(!ui.get_monitor_cue_b());
+            ui.invoke_monitor_cue_changed(1);
+        }
+        Command::HeadphoneCue(_) => (),
         Command::FxToggle(deck) => {
             if deck == 0 {
                 ui.set_fx_active_a(!ui.get_fx_active_a());
@@ -325,6 +336,25 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn headphone_cue_notes_are_deck_scoped_and_releases_do_not_toggle() {
+        for deck in 0..=1 {
+            assert_eq!(
+                decode(&[0x90 | deck, 27, 127]),
+                Some(Command::HeadphoneCue(usize::from(deck)))
+            );
+            assert_eq!(decode(&[0x90 | deck, 27, 0]), None);
+            assert_eq!(decode(&[0x80 | deck, 27, 64]), None);
+            assert_eq!(decode(&[0xb0 | deck, 27, 127]), None);
+            assert_eq!(
+                decode(&[0x90 | deck, 1, 127]),
+                Some(Command::Cue(usize::from(deck)))
+            );
+        }
+        // Channel 16, note 27 is Load Prep, not either headphone selector.
+        assert_eq!(decode(&[0x9f, 27, 127]), None);
+        assert_eq!(decode(&[0x92, 27, 127]), None);
+    }
     #[test]
     fn transport_press_release_sequences_dispatch_once_per_deck() {
         use std::{cell::Cell, rc::Rc};

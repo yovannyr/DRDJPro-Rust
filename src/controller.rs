@@ -4526,6 +4526,65 @@ mod tests {
         );
     }
     #[test]
+    fn mc4000_headphone_buttons_drive_cue_audio_and_keep_transport_unchanged() {
+        i_slint_backend_testing::init_no_event_loop();
+        for channels in [2, 4] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(channels, 48000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, channels, 48000));
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            let a = wav_file(8192, 48000 * 3);
+            let b = wav_file(16384, 48000 * 3);
+            engine.load_a(a.path()).unwrap();
+            engine.load_b(b.path()).unwrap();
+            engine.set_levels(MixerLevels {
+                channel_a: 0.,
+                channel_b: 0.,
+                crossfader: 0.5,
+            });
+            engine.play(DeckId::A);
+            engine.play(DeckId::B);
+            let message = |status, note, value| {
+                if let Some(command) = crate::mc4000::decode(&[status, note, value]) {
+                    crate::mc4000::apply(&ui, command);
+                }
+            };
+            message(0x90, 27, 127);
+            message(0x90, 27, 0);
+            message(0x80, 27, 0);
+            assert_eq!(engine.headphone_cue(DeckId::A), channels == 4);
+            assert_eq!(ui.get_monitor_cue_a(), channels == 4);
+            assert!(!engine.headphone_cue(DeckId::B));
+            message(0x91, 27, 127);
+            message(0x91, 27, 0);
+            assert_eq!(engine.headphone_cue(DeckId::B), channels == 4);
+            output.by_ref().take(10000).for_each(drop);
+            let actual: Vec<_> = output.by_ref().take(usize::from(channels)).collect();
+            assert_eq!(
+                actual,
+                if channels == 4 {
+                    vec![0., 0., 0.75, 0.75]
+                } else {
+                    vec![0., 0.]
+                }
+            );
+            assert!(engine.snapshot(DeckId::A).playing && engine.snapshot(DeckId::B).playing);
+            if channels == 4 {
+                message(0x90, 27, 127);
+                message(0x91, 27, 127);
+                engine.set_output_pair(1).unwrap();
+                message(0x91, 27, 127);
+                assert!(!ui.get_monitor_cue_b());
+                assert!(!engine.headphone_cue(DeckId::B));
+                assert!(ui.get_monitor_status().contains("master pair"));
+            } else {
+                assert!(ui.get_monitor_status().contains("four output channels"));
+            }
+            c.tick();
+        }
+    }
+    #[test]
     fn headphone_monitor_gui_drives_pre_fader_bus_and_restores_rejected_selection() {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
