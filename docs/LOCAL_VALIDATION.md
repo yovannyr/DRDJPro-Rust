@@ -1356,3 +1356,12 @@ New parser tests cover both deck channels, note-on-zero/note-off release, wrong 
 Independent gpt-6.1-sol / medium static code review reported no actionable findings. The coordinator verified the manufacturer row through the official PDF text; the reviewer could open the PDF but its appendix follow-up timed out, so independent exact-row verification is not claimed. Physical headphone-button acceptance remains pending; the preceding GUI-selected simultaneous A/B cue acceptance does not establish these hardware buttons. No software monitor gain/blend, cue persistence or LED state feedback was added.
 
 Final cargo build --workspace --release --locked exited 0 (1m 29s).
+
+
+## Physical MC4000 headphone-cue buttons and listening (2026-10-30)
+
+With cc85830 running in the isolated profile and both decks paused, the user pressed B headphone CUE. Trace recorded 91 1B 7F decoded HeadphoneCue(1), then 91 1B 00 decoded None; the native MON panel showed only B selected and both positions zero. A second B press deselected B, then A press (90 1B 7F, release 90 1B 00) selected only A, with positions still zero. This confirms both physical button addresses, selection changes and ignored releases without changing transport.
+
+The agent started both decks through GUI, master OUT 1/2, A channel 0.2, B channel zero, centered crossfader. The user then switched A headphone cue off and B on via the controller. The trace recorded the corresponding A/B press-release pairs, and the user explicitly confirmed MASTER A (Ay! Ven), headphones exclusively B (Celoso) despite closed B fader. Both decks were paused through GUI afterward. This qualifies the tested physical A/B selectors and that controller-selected B pre-fader listening scenario. The earlier separate GUI-selected reverse listening test remains evidence for cue A audio; no new controller-selected A listening confirmation is inferred here.
+
+All-on LED policy continues, so physical lamps do not indicate selected cue. Software monitor mix/gain, persistent cue preferences, repeated hotplug/endurance and other-platform acceptance remain open. No source changes or additional Cargo runs were required for this physical evidence update; preceding 289-test/release results apply to cc85830.
