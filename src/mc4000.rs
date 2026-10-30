@@ -103,6 +103,11 @@ pub fn present() -> Result<bool, String> {
             .is_ok_and(|name| name.trim().eq_ignore_ascii_case("MC4000"))
     }))
 }
+type TraceRecord = (u64, [u8; 3], usize);
+struct InputTrace {
+    receiver: Receiver<TraceRecord>,
+    overflow: Arc<AtomicBool>,
+}
 pub struct Input {
     _connection: midir::MidiInputConnection<()>,
     output: Option<midir::MidiOutputConnection>,
@@ -111,6 +116,7 @@ pub struct Input {
     levels: Arc<[AtomicU8; 3]>,
     fx_levels: Arc<[AtomicU8; 6]>,
     overflow: Arc<AtomicBool>,
+    trace: Option<InputTrace>,
 }
 impl Input {
     pub fn connect() -> Result<Option<Self>, String> {
@@ -130,11 +136,26 @@ impl Input {
         let fx_values = Arc::clone(&fx_levels);
         let overflow = Arc::new(AtomicBool::new(false));
         let failed = overflow.clone();
+        let trace_enabled = std::env::var_os("DRDJ_MIDI_TRACE").is_some_and(|v| v == "1");
+        let (trace_sender, trace_receiver) = mpsc::sync_channel(128);
+        let trace_overflow = Arc::new(AtomicBool::new(false));
+        let trace_failed = trace_overflow.clone();
         let connection = midi
             .connect(
                 &port,
                 "DrDJ MC4000 input",
-                move |_, data, _| {
+                move |timestamp, data, _| {
+                    if trace_enabled {
+                        let mut bytes = [0; 3];
+                        let count = data.len().min(3);
+                        bytes[..count].copy_from_slice(&data[..count]);
+                        if trace_sender
+                            .try_send((timestamp, bytes, data.len()))
+                            .is_err()
+                        {
+                            trace_failed.store(true, Ordering::Release);
+                        }
+                    }
                     if let Some(command) = decode(data) {
                         match command {
                             Command::FxKnob(deck, knob, value) => {
@@ -173,9 +194,27 @@ impl Input {
             levels,
             fx_levels,
             overflow,
+            trace: trace_enabled.then_some(InputTrace {
+                receiver: trace_receiver,
+                overflow: trace_overflow,
+            }),
         }))
     }
     pub fn poll(&mut self, mut apply: impl FnMut(Command)) -> bool {
+        if let Some(InputTrace { receiver, overflow }) = &self.trace {
+            for _ in 0..128 {
+                let Ok((timestamp, bytes, len)) = receiver.try_recv() else {
+                    break;
+                };
+                eprintln!(
+                    "MC4000 raw us={timestamp} len={len} prefix={bytes:02x?} decoded={:?}",
+                    if len == 3 { decode(&bytes) } else { None }
+                );
+            }
+            if overflow.swap(false, Ordering::AcqRel) {
+                eprintln!("MC4000 diagnostic queue overflow: raw messages omitted");
+            }
+        }
         if let Some(messages) = self.greeting.messages(std::time::Instant::now()) {
             if let Some(output) = &mut self.output {
                 for message in messages {
@@ -286,6 +325,30 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transport_press_release_sequences_dispatch_once_per_deck() {
+        use std::{cell::Cell, rc::Rc};
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        let counts = Rc::new([Cell::new(0), Cell::new(0)]);
+        let a = counts.clone();
+        ui.on_toggle_left(move || a[0].set(a[0].get() + 1));
+        let b = counts.clone();
+        ui.on_toggle_right(move || b[1].set(b[1].get() + 1));
+        for channel in 0..=1 {
+            for message in [
+                [0x90 | channel, 0, 127],
+                [0x90 | channel, 0, 0],
+                [0x80 | channel, 0, 64],
+                [0x90 | channel, 0x32, 127], // unrelated note must not toggle transport
+            ] {
+                if let Some(command) = decode(&message) {
+                    apply(&ui, command);
+                }
+            }
+        }
+        assert_eq!([counts[0].get(), counts[1].get()], [1, 1]);
+    }
     #[test]
     fn fx_banks_decode_and_reach_separate_gui_parameters() {
         i_slint_backend_testing::init_no_event_loop();

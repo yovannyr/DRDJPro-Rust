@@ -193,6 +193,7 @@ fn main() -> Result<(), slint::PlatformError> {
         None
     };
     let mut midi_discovery = std::time::Instant::now();
+    let midi_trace = std::env::var_os("DRDJ_MIDI_TRACE").is_some_and(|v| v == "1");
     let timer = Timer::default();
     let closing_controller = controller.clone();
     let weak = ui.as_weak();
@@ -220,7 +221,20 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 }
                 if let Some(midi) = &mut midi {
-                    if midi.poll(|command| mc4000::apply(&ui, command)) {
+                    if midi.poll(|command| {
+                        let before = (ui.get_left_playing(), ui.get_right_playing());
+                        let transport = matches!(&command, mc4000::Command::Toggle(_));
+                        if midi_trace && transport {
+                            eprintln!("MC4000 dispatch {command:?} playing_before={before:?}");
+                        }
+                        mc4000::apply(&ui, command);
+                        if midi_trace && transport {
+                            eprintln!(
+                                "MC4000 playing_after={:?}",
+                                (ui.get_left_playing(), ui.get_right_playing())
+                            );
+                        }
+                    }) {
                         ui.set_status(
                             "MC4000 input queue overflow; a button action was dropped".into(),
                         );
