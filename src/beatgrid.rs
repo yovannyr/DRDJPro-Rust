@@ -54,6 +54,12 @@ pub struct TempoChange {
 const EMPTY_METER: MeterChange = MeterChange { bar: 0, beats: 0 };
 const EMPTY_TEMPO: TempoChange = TempoChange { beat: 0, bpm: 0. };
 pub const MAX_ANCHOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+fn parse_bpm(text: &str) -> Result<f64, String> {
+    text.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .map_err(|_| "Enter a decimal BPM between 40 and 240".into())
+}
 fn validate_bpm(bpm: f64) -> Result<(), String> {
     if !bpm.is_finite() || !(40.0..=240.0).contains(&bpm) {
         return Err("Manual BPM must be between 40 and 240".into());
@@ -165,6 +171,17 @@ impl BeatGrid {
             }
         };
         self.tempo_changes[index] = TempoChange { beat, bpm };
+        Ok(self)
+    }
+    pub fn without_tempo_change(mut self, beat: u64) -> Result<Self, String> {
+        let index = self
+            .tempo_changes()
+            .binary_search_by_key(&beat, |change| change.beat)
+            .map_err(|_| "No tempo change at this beat")?;
+        let count = usize::from(self.tempo_change_count);
+        self.tempo_changes.copy_within(index + 1..count, index);
+        self.tempo_change_count -= 1;
+        self.tempo_changes[count - 1] = EMPTY_TEMPO;
         Ok(self)
     }
     pub fn bar_start_beat(self, bar: u32) -> Result<u64, String> {
@@ -464,6 +481,7 @@ impl BeatGrid {
 }
 
 /// An isolated control-plane draft. It never owns or changes audio state.
+#[derive(Clone, Copy)]
 pub struct GridDraft {
     original: Option<BeatGrid>,
     value: Option<BeatGrid>,
@@ -534,12 +552,27 @@ impl GridDraft {
         self.value = Some(grid);
         Ok(())
     }
+    pub fn set_tempo_change(&mut self, beat: u64, text: &str) -> Result<(), String> {
+        let bpm = parse_bpm(text)?;
+        let grid = self
+            .value
+            .ok_or("Set a grid before adding tempo changes")?
+            .with_tempo_change(beat, bpm)?;
+        grid.validate_duration(self.duration)?;
+        self.value = Some(grid);
+        Ok(())
+    }
+    pub fn remove_tempo_change(&mut self, beat: u64) -> Result<(), String> {
+        let grid = self
+            .value
+            .ok_or("Set a grid first")?
+            .without_tempo_change(beat)?;
+        grid.validate_duration(self.duration)?;
+        self.value = Some(grid);
+        Ok(())
+    }
     pub fn set_bpm(&mut self, text: &str) -> Result<(), String> {
-        let bpm = text
-            .trim()
-            .replace(',', ".")
-            .parse::<f64>()
-            .map_err(|_| "Enter a decimal BPM between 40 and 240")?;
+        let bpm = parse_bpm(text)?;
         let grid = self
             .value
             .unwrap_or(BeatGrid::new(bpm, Duration::ZERO)?.with_beats_per_bar(self.base_beats)?)
@@ -695,6 +728,41 @@ mod tests {
         assert!((times[4] - 2.).abs() < 1e-6);
         assert!((times[8] - 6.).abs() < 1e-6);
         assert_eq!(lines[8].bar, 3);
+    }
+
+    #[test]
+    fn tempo_draft_edits_are_sorted_atomic_bounded_and_removable() {
+        let base = BeatGrid::new(120., Duration::ZERO).unwrap();
+        let mut draft =
+            GridDraft::new(Some(base), 120., Duration::ZERO, Duration::from_secs(10)).unwrap();
+        draft.set_tempo_change(8, "90").unwrap();
+        draft.set_tempo_change(4, "105,5").unwrap();
+        draft.set_tempo_change(8, "95").unwrap();
+        assert_eq!(
+            draft.value().unwrap().tempo_changes(),
+            &[
+                TempoChange {
+                    beat: 4,
+                    bpm: 105.5
+                },
+                TempoChange { beat: 8, bpm: 95. }
+            ]
+        );
+
+        let before_invalid = draft.value();
+        assert!(draft.set_tempo_change(0, "100").is_err());
+        assert!(draft.set_tempo_change(5, "240.1").is_err());
+        assert!(draft.set_tempo_change(21, "100").is_err());
+        assert_eq!(draft.value(), before_invalid);
+
+        draft.remove_tempo_change(4).unwrap();
+        assert_eq!(
+            draft.value().unwrap().tempo_changes(),
+            &[TempoChange { beat: 8, bpm: 95. }]
+        );
+        let before_missing = draft.value();
+        assert!(draft.remove_tempo_change(4).is_err());
+        assert_eq!(draft.value(), before_missing);
     }
 
     #[test]

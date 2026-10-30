@@ -168,6 +168,7 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Hierarchische Sub-Crates: unter dem ausgewählten Crate anlegen, als eingerückter Baum navigieren, vollständige Hierarchie als Zuordnungsziel anzeigen und direkte Kinder beim Löschen eine Ebene nach oben verschieben. SQLite-Schema 9 migriert flache Crates verlustfrei; Modell-, UI-, Upgrade- und Neustarttests.
 - [ ] ☐ Erweiterte Grid-Funktionen: Warp-Marker und weitere Taktartwechsel.
   - [x] ✅ Variable BPM-Abschnitte als BeatGrid-Modell und SQLite-Schema 10; Beats bleiben über Tempoübergänge zeitkontinuierlich, sichtbare Grid-Linien und Quantisierung verwenden das lokale Tempo. Ältere Grids migrieren unverändert. One-shot/continuous Sync und Tempo-Matching weisen diese Grids bis zur passenden lokalen Temporegelung explizit zurück; kein UI-Editor, Warp-Marker oder native musikalische Abnahme in diesem Schritt.
+  - [x] ✅ Variable BPM-Änderungen im Edit-Grid für Deck A/B bei ganzzahligen Beat-Indizes setzen, ersetzen und entfernen; Vorschau, Save/Cancel und Konfliktschutz verwenden den bestehenden Grid-Draft-/Persistenzpfad. Warp-Marker, andere Taktart-Nenner, lokales Tempo-Sync und native musikalische Abnahme bleiben offen.
 - [ ] ☐ Cue-Tastatur-/Hold-Verhalten und Prüfung überlappender Marker.
 - [ ] ☐ Vollständiger .NET-Code-/Referenztest-Abgleich und Feature-Paritätsnachweis.
 - [ ] ☐ Unterstützten Umfang optionaler Streaming-/Video-Integrationen festlegen und umsetzen.

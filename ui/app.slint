@@ -475,6 +475,10 @@ component DetailWaveform inherits Rectangle {
     in-out property <int> grid-meter-beats: 3;
     in property <string> grid-meter-summary;
     callback meter-set(); callback meter-remove();
+    in-out property <int> grid-tempo-beat: 1;
+    in-out property <string> grid-tempo-bpm;
+    in property <string> grid-tempo-summary;
+    callback tempo-set(); callback tempo-remove();
     callback edit-bpm(); callback anchor-grid(); callback earlier-grid(); callback later-grid(); callback save-grid(); callback cancel-grid();
     in property <string> grid-caption;
     in-out property <int> grid-bpm: 120;
@@ -525,6 +529,16 @@ component DetailWaveform inherits Rectangle {
             Button { text: "SET METER"; width: 88px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " set meter change"; clicked => { root.meter-set(); } }
             Button { text: "REMOVE"; width: 76px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " remove meter change"; clicked => { root.meter-remove(); } }
             Text { text: root.grid-meter-summary; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; accessible-description: root.grid-meter-summary; }
+        }
+        if root.grid-editing : HorizontalLayout {
+            height: 28px; spacing: 4px;
+            Text { text: "At beat"; color: #abb6c6; width: 48px; vertical-alignment: center; }
+            SpinBox { width: 110px; minimum: 1; maximum: 16000000; value <=> root.grid-tempo-beat; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " tempo change beat"; }
+            Text { text: "BPM"; color: #abb6c6; width: 30px; vertical-alignment: center; }
+            LineEdit { width: 76px; text <=> root.grid-tempo-bpm; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " tempo change BPM"; }
+            Button { text: "SET TEMPO"; width: 90px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " set tempo change"; clicked => { root.tempo-set(); } }
+            Button { text: "REMOVE"; width: 76px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " remove tempo change"; clicked => { root.tempo-remove(); } }
+            Text { text: root.grid-tempo-summary; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; accessible-description: root.grid-tempo-summary; }
         }
         WaveformStrip {
             keyboard-zoom: true;
@@ -935,12 +949,20 @@ export component AppWindow inherits Window {
     in-out property <int> left-grid-meter-beats: 3;
     in property <string> left-grid-meter-summary;
     callback grid-meter-set-left(); callback grid-meter-remove-left();
+    in-out property <int> left-grid-tempo-beat: 1;
+    in-out property <string> left-grid-tempo-bpm;
+    in property <string> left-grid-tempo-summary;
+    callback grid-tempo-set-left(); callback grid-tempo-remove-left();
     in-out property <string> right-grid-draft-bpm;
     in-out property <int> right-grid-draft-beats: 4;
     in-out property <int> right-grid-meter-bar: 2;
     in-out property <int> right-grid-meter-beats: 3;
     in property <string> right-grid-meter-summary;
     callback grid-meter-set-right(); callback grid-meter-remove-right();
+    in-out property <int> right-grid-tempo-beat: 1;
+    in-out property <string> right-grid-tempo-bpm;
+    in property <string> right-grid-tempo-summary;
+    callback grid-tempo-set-right(); callback grid-tempo-remove-right();
     callback edit-grid-bpm-left(); callback edit-grid-bpm-right();
     callback grid-anchor-left(); callback grid-anchor-right();
     callback grid-earlier-left(); callback grid-earlier-right();
@@ -1136,9 +1158,9 @@ export component AppWindow inherits Window {
         }
         Rectangle {
             accessible-role: groupbox; accessible-label: "Shared waveform area";
-            min-height: 148px + (root.left-grid-editing ? 28px : 0px) + (root.right-grid-editing ? 28px : 0px);
-            preferred-height: 184px + (root.left-grid-editing ? 28px : 0px) + (root.right-grid-editing ? 28px : 0px);
-            max-height: 184px + (root.left-grid-editing ? 28px : 0px) + (root.right-grid-editing ? 28px : 0px);
+            min-height: 148px + (root.left-grid-editing ? 56px : 0px) + (root.right-grid-editing ? 56px : 0px);
+            preferred-height: 184px + (root.left-grid-editing ? 56px : 0px) + (root.right-grid-editing ? 56px : 0px);
+            max-height: 184px + (root.left-grid-editing ? 56px : 0px) + (root.right-grid-editing ? 56px : 0px);
             vertical-stretch: 0; background: #10151d;
             VerticalLayout { spacing: 2px;
                 DetailWaveform {
@@ -1151,6 +1173,8 @@ export component AppWindow inherits Window {
                     grid-editing: root.left-grid-editing; grid-draft-bpm <=> root.left-grid-draft-bpm; grid-draft-beats <=> root.left-grid-draft-beats;
                     grid-meter-bar <=> root.left-grid-meter-bar; grid-meter-beats <=> root.left-grid-meter-beats; grid-meter-summary: root.left-grid-meter-summary;
                     meter-set => { root.grid-meter-set-left(); } meter-remove => { root.grid-meter-remove-left(); }
+                    grid-tempo-beat <=> root.left-grid-tempo-beat; grid-tempo-bpm <=> root.left-grid-tempo-bpm; grid-tempo-summary: root.left-grid-tempo-summary;
+                    tempo-set => { root.grid-tempo-set-left(); } tempo-remove => { root.grid-tempo-remove-left(); }
                     grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.left-busy;
                     edit-bpm => { root.edit-grid-bpm-left(); } anchor-grid => { root.grid-anchor-left(); }
                     earlier-grid => { root.grid-earlier-left(); } later-grid => { root.grid-later-left(); }
@@ -1169,6 +1193,8 @@ export component AppWindow inherits Window {
                     grid-editing: root.right-grid-editing; grid-draft-bpm <=> root.right-grid-draft-bpm; grid-draft-beats <=> root.right-grid-draft-beats;
                     grid-meter-bar <=> root.right-grid-meter-bar; grid-meter-beats <=> root.right-grid-meter-beats; grid-meter-summary: root.right-grid-meter-summary;
                     meter-set => { root.grid-meter-set-right(); } meter-remove => { root.grid-meter-remove-right(); }
+                    grid-tempo-beat <=> root.right-grid-tempo-beat; grid-tempo-bpm <=> root.right-grid-tempo-bpm; grid-tempo-summary: root.right-grid-tempo-summary;
+                    tempo-set => { root.grid-tempo-set-right(); } tempo-remove => { root.grid-tempo-remove-right(); }
                     grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.right-busy;
                     edit-bpm => { root.edit-grid-bpm-right(); } anchor-grid => { root.grid-anchor-right(); }
                     earlier-grid => { root.grid-earlier-right(); } later-grid => { root.grid-later-right(); }

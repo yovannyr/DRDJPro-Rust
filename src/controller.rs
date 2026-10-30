@@ -64,6 +64,8 @@ enum GridAction {
     Nudge(i32),
     MeterSet,
     MeterRemove,
+    TempoSet,
+    TempoRemove,
     Clear,
 }
 struct DetailCache {
@@ -2449,6 +2451,33 @@ impl AudioController {
             DeckId::A => ui.set_left_grid_draft_beats(beats),
             DeckId::B => ui.set_right_grid_draft_beats(beats),
         }
+        let tempo = self.grid_editors.borrow()[Self::grid_index(id)]
+            .as_ref()
+            .and_then(|editor| editor.draft.value())
+            .map(|grid| {
+                grid.tempo_changes()
+                    .first()
+                    .map_or((1, grid.bpm()), |change| (change.beat as i32, change.bpm))
+            })
+            .ok_or("Grid draft was cleared while opening the editor");
+        let tempo = match tempo {
+            Ok(tempo) => tempo,
+            Err(error) => {
+                self.grid_editors.borrow_mut()[Self::grid_index(id)].take();
+                return Err(error.into());
+            }
+        };
+        let tempo_bpm = tempo.1.to_string().into();
+        match id {
+            DeckId::A => {
+                ui.set_left_grid_tempo_beat(tempo.0);
+                ui.set_left_grid_tempo_bpm(tempo_bpm);
+            }
+            DeckId::B => {
+                ui.set_right_grid_tempo_beat(tempo.0);
+                ui.set_right_grid_tempo_bpm(tempo_bpm);
+            }
+        }
         self.set_grid_editing(id, true);
         Ok(())
     }
@@ -2458,45 +2487,64 @@ impl AudioController {
         let editor = editors[Self::grid_index(id)]
             .as_mut()
             .ok_or("Open Edit Grid first")?;
-        if !matches!(action, GridAction::Clear) {
-            let meter_ui = self.ui.upgrade().ok_or("Window closed")?;
-            let beats = match id {
-                DeckId::A => meter_ui.get_left_grid_draft_beats(),
-                DeckId::B => meter_ui.get_right_grid_draft_beats(),
-            };
-            editor
-                .draft
-                .set_beats_per_bar(u8::try_from(beats).map_err(|_| "Invalid beats per bar")?)?;
-            editor.draft.set_bpm(&Self::grid_bpm_text(&ui, id))?;
-        }
-        match action {
-            GridAction::Tempo => Ok(()),
-            GridAction::Anchor => editor
-                .draft
-                .anchor_here(self.engine.borrow().snapshot(id).position),
-            GridAction::Nudge(ms) => editor.draft.nudge(ms),
-            GridAction::MeterSet | GridAction::MeterRemove => {
-                let (bar, beats) = match id {
-                    DeckId::A => (ui.get_left_grid_meter_bar(), ui.get_left_grid_meter_beats()),
-                    DeckId::B => (
-                        ui.get_right_grid_meter_bar(),
-                        ui.get_right_grid_meter_beats(),
-                    ),
+        let mut draft = editor.draft;
+        let result = (|| {
+            if !matches!(action, GridAction::Clear) {
+                let beats = match id {
+                    DeckId::A => ui.get_left_grid_draft_beats(),
+                    DeckId::B => ui.get_right_grid_draft_beats(),
                 };
-                let bar = u32::try_from(bar).map_err(|_| "Invalid meter bar")?;
-                if matches!(action, GridAction::MeterSet) {
-                    editor
-                        .draft
-                        .set_meter_change(bar, u8::try_from(beats).map_err(|_| "Invalid meter")?)
-                } else {
-                    editor.draft.remove_meter_change(bar)
+                draft
+                    .set_beats_per_bar(u8::try_from(beats).map_err(|_| "Invalid beats per bar")?)?;
+                draft.set_bpm(&Self::grid_bpm_text(&ui, id))?;
+            }
+            match action {
+                GridAction::Tempo => Ok(()),
+                GridAction::Anchor => draft.anchor_here(self.engine.borrow().snapshot(id).position),
+                GridAction::Nudge(ms) => draft.nudge(ms),
+                GridAction::MeterSet | GridAction::MeterRemove => {
+                    let (bar, beats) = match id {
+                        DeckId::A => (ui.get_left_grid_meter_bar(), ui.get_left_grid_meter_beats()),
+                        DeckId::B => (
+                            ui.get_right_grid_meter_bar(),
+                            ui.get_right_grid_meter_beats(),
+                        ),
+                    };
+                    let bar = u32::try_from(bar).map_err(|_| "Invalid meter bar")?;
+                    if matches!(action, GridAction::MeterSet) {
+                        draft.set_meter_change(
+                            bar,
+                            u8::try_from(beats).map_err(|_| "Invalid meter")?,
+                        )
+                    } else {
+                        draft.remove_meter_change(bar)
+                    }
+                }
+                GridAction::TempoSet | GridAction::TempoRemove => {
+                    let (beat, bpm) = match id {
+                        DeckId::A => (ui.get_left_grid_tempo_beat(), ui.get_left_grid_tempo_bpm()),
+                        DeckId::B => (
+                            ui.get_right_grid_tempo_beat(),
+                            ui.get_right_grid_tempo_bpm(),
+                        ),
+                    };
+                    let beat = u64::try_from(beat).map_err(|_| "Invalid tempo-change beat")?;
+                    if matches!(action, GridAction::TempoSet) {
+                        draft.set_tempo_change(beat, &bpm)
+                    } else {
+                        draft.remove_tempo_change(beat)
+                    }
+                }
+                GridAction::Clear => {
+                    draft.clear();
+                    Ok(())
                 }
             }
-            GridAction::Clear => {
-                editor.draft.clear();
-                Ok(())
-            }
+        })();
+        if result.is_ok() {
+            editor.draft = draft;
         }
+        result
     }
     fn apply_saved_grid(&self, id: DeckId) -> Result<(), String> {
         if let Some(path) = self.engine.borrow().snapshot(id).path {
@@ -2589,6 +2637,8 @@ impl AudioController {
                 GridAction::Nudge(10),
                 GridAction::MeterSet,
                 GridAction::MeterRemove,
+                GridAction::TempoSet,
+                GridAction::TempoRemove,
                 GridAction::Clear,
             ] {
                 let weak = Rc::downgrade(self);
@@ -2618,6 +2668,10 @@ impl AudioController {
                     (DeckId::B, GridAction::MeterSet) => ui.on_grid_meter_set_right(change),
                     (DeckId::A, GridAction::MeterRemove) => ui.on_grid_meter_remove_left(change),
                     (DeckId::B, GridAction::MeterRemove) => ui.on_grid_meter_remove_right(change),
+                    (DeckId::A, GridAction::TempoSet) => ui.on_grid_tempo_set_left(change),
+                    (DeckId::B, GridAction::TempoSet) => ui.on_grid_tempo_set_right(change),
+                    (DeckId::A, GridAction::TempoRemove) => ui.on_grid_tempo_remove_left(change),
+                    (DeckId::B, GridAction::TempoRemove) => ui.on_grid_tempo_remove_right(change),
                     (DeckId::A, GridAction::Clear) => ui.on_clear_grid_left(change),
                     (DeckId::B, GridAction::Clear) => ui.on_clear_grid_right(change),
                 }
@@ -4817,9 +4871,25 @@ impl AudioController {
                     summary
                 },
             );
+            let tempo_summary = preview.map_or_else(
+                || "No tempo map".to_string(),
+                |grid| {
+                    let mut summary = format!("Base: {} BPM", grid.bpm());
+                    for change in grid.tempo_changes() {
+                        summary.push_str(&format!(" · Beat {}: {} BPM", change.beat, change.bpm));
+                    }
+                    summary
+                },
+            );
             match id {
-                DeckId::A => ui.set_left_grid_meter_summary(meter_summary.into()),
-                DeckId::B => ui.set_right_grid_meter_summary(meter_summary.into()),
+                DeckId::A => {
+                    ui.set_left_grid_meter_summary(meter_summary.into());
+                    ui.set_left_grid_tempo_summary(tempo_summary.into());
+                }
+                DeckId::B => {
+                    ui.set_right_grid_meter_summary(meter_summary.into());
+                    ui.set_right_grid_tempo_summary(tempo_summary.into());
+                }
             }
             let caption = if editing {
                 format!("DRAFT · {caption}")
@@ -11401,6 +11471,113 @@ mod tests {
             assert!(engine.snapshot(id).playing);
         }
     }
+
+    #[test]
+    fn variable_tempo_gui_preview_save_cancel_and_remove_on_both_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        for id in [DeckId::A, DeckId::B] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+            let file = wav_file(8192, 48_000 * 10);
+            match id {
+                DeckId::A => engine.load_a(file.path()).unwrap(),
+                DeckId::B => engine.load_b(file.path()).unwrap(),
+            }
+            let base = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+            engine.set_grid(id, Some(base)).unwrap();
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            for save in [false, true] {
+                match id {
+                    DeckId::A => ui.invoke_grid_left(),
+                    DeckId::B => ui.invoke_grid_right(),
+                }
+                for (beat, bpm) in [(8, "90"), (4, "105,5")] {
+                    match id {
+                        DeckId::A => {
+                            ui.set_left_grid_tempo_beat(beat);
+                            ui.set_left_grid_tempo_bpm(bpm.into());
+                            ui.invoke_grid_tempo_set_left();
+                        }
+                        DeckId::B => {
+                            ui.set_right_grid_tempo_beat(beat);
+                            ui.set_right_grid_tempo_bpm(bpm.into());
+                            ui.invoke_grid_tempo_set_right();
+                        }
+                    }
+                }
+                match id {
+                    DeckId::A => {
+                        ui.set_left_grid_draft_beats(3);
+                        ui.set_left_grid_tempo_beat(6);
+                        ui.set_left_grid_tempo_bpm("999".into());
+                        ui.invoke_grid_tempo_set_left();
+                        ui.set_left_grid_draft_beats(4);
+                    }
+                    DeckId::B => {
+                        ui.set_right_grid_draft_beats(3);
+                        ui.set_right_grid_tempo_beat(6);
+                        ui.set_right_grid_tempo_bpm("999".into());
+                        ui.invoke_grid_tempo_set_right();
+                        ui.set_right_grid_draft_beats(4);
+                    }
+                }
+                assert!(engine.snapshot(id).grid.unwrap().is_constant_tempo());
+                let draft = c.grid_editors.borrow()[AudioController::grid_index(id)]
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .value()
+                    .unwrap();
+                assert_eq!(
+                    draft.tempo_changes(),
+                    &[
+                        crate::beatgrid::TempoChange {
+                            beat: 4,
+                            bpm: 105.5
+                        },
+                        crate::beatgrid::TempoChange { beat: 8, bpm: 90. }
+                    ]
+                );
+                assert_eq!(draft.beats_per_bar(), 4);
+                assert!(match id {
+                    DeckId::A => ui.get_left_grid_tempo_summary(),
+                    DeckId::B => ui.get_right_grid_tempo_summary(),
+                }
+                .contains("Beat 4: 105.5 BPM"));
+                match (id, save) {
+                    (DeckId::A, false) => ui.invoke_cancel_grid_left(),
+                    (DeckId::B, false) => ui.invoke_cancel_grid_right(),
+                    (DeckId::A, true) => ui.invoke_save_grid_left(),
+                    (DeckId::B, true) => ui.invoke_save_grid_right(),
+                }
+                assert_eq!(
+                    engine.snapshot(id).grid.unwrap().tempo_changes().len(),
+                    if save { 2 } else { 0 }
+                );
+            }
+            match id {
+                DeckId::A => {
+                    ui.invoke_grid_left();
+                    ui.set_left_grid_tempo_beat(4);
+                    ui.invoke_grid_tempo_remove_left();
+                    ui.invoke_save_grid_left();
+                }
+                DeckId::B => {
+                    ui.invoke_grid_right();
+                    ui.set_right_grid_tempo_beat(4);
+                    ui.invoke_grid_tempo_remove_right();
+                    ui.invoke_save_grid_right();
+                }
+            }
+            assert_eq!(
+                engine.snapshot(id).grid.unwrap().tempo_changes(),
+                &[crate::beatgrid::TempoChange { beat: 8, bpm: 90. }]
+            );
+        }
+    }
+
     #[test]
     fn grid_editor_drafts_invalid_input_cancel_and_clear_preserve_transport() {
         use slint::Model;
