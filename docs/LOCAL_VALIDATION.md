@@ -1442,3 +1442,13 @@ Continued in the same isolated-profile process 1724 after the native MC4000 -> R
 This confirms audible A/B playback through MC4000 MASTER after the tested return from Realtek in the running application. GUI transport was used; no new physical-controller start, Realtek sound, independent cue-after-switch, all-state fidelity, transition-quality or endurance result is claimed. No runtime source or production catalog changed. The previous release qualification (304 passed, five ignored, fmt, strict Clippy and release build) remains applicable; no new Cargo run is inferred from this listening test.
 
 Independent GPT-6.1 Sol / medium documentation review accepted with no actionable findings. Final native readback showed unchanged paused positions, both channel faders 0.2, crossfader 0.5 and BUS PEAK minus infinity dBFS after decay. git diff --check exited 0; documentation-only publication.
+
+## Independent Cue listening after device replacement (2026-10-30)
+
+Continued in the same running isolated-profile application after MC4000 -> Realtek -> MC4000 and the MASTER-only A/B listening check. Both tracks were paused initially. The agent left A fader at 0.2, closed B fader, set monitor gain to 20 percent and Cue/Master mix to zero, and retained Cue B on / Cue A off. Both decks were started through the GUI. The user explicitly confirmed Ja: Lautsprecher A, Kopfhörer B when asked whether MASTER speakers contained only Ay! Ven and MC4000 headphones only Celoso despite the closed B fader.
+
+For the reverse test A fader was closed, B opened to 0.2, Cue B switched off and Cue A on. The user explicitly confirmed Ja: Lautsprecher B, Kopfhörer A. Both tracks were then paused through the GUI; both buttons displayed PLAY. Final session settings are A fader zero, B fader 0.2, crossfader center, Cue A on / Cue B off, monitor gain 20 percent and mix zero. No production catalog or OS output setting changed.
+
+This qualifies simultaneous independent MASTER/Cue in both directions after the tested device replacement. It does not qualify other output devices, Realtek listening, physical-controller operation after replacement, complete state fidelity, hotplug, endurance or transition quality. No runtime source changed and no new Cargo tests/builds were run for this evidence-only checkpoint; the existing 22966bb build qualification remains applicable.
+
+Independent GPT-6.1 Sol / medium documentation review accepted with no actionable findings. git diff --check exited 0; docs-only checkpoint.
