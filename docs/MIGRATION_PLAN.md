@@ -8,11 +8,11 @@ Release requires a traceable disposition and acceptance evidence for every FEATU
 
 Deliver in reviewed, bounded slices with working behavior and regression evidence. Keep the existing executable name during development for CI/command compatibility; its historical name does not define the product scope.
 
-## Fortschritt auf einen Blick (2026-10-29)
+## Fortschritt auf einen Blick (2026-10-30)
 
 ✅ = im beschriebenen Umfang implementiert und lokal geprüft. ☐ = noch offen. Die Häkchen kennzeichnen einzelne Arbeitspakete; keine der sechs Gesamtphasen ist bereits vollständig abgenommen. Historische Checkpoints weiter unten dokumentieren den damaligen Stand.
 
-🛠 = implementiert und statisch reviewt, aber noch nicht getestet. Nutzeranweisung 2026-10-29: die nächsten drei FX-Teilschritte implementieren, danach committen/pushen; Testausführung erst am 2026-10-30. Der letzte vollständig getestete Stand bleibt 80a8665 (271 bestandene Tests); die folgenden FX-Änderungen erweitern diesen Nachweis noch nicht.
+🛠 = implementiert und statisch reviewt, mit den jeweils genannten offenen Abnahmen. Die am 2026-10-29 zurückgestellten FX-Tests wurden am 2026-10-30 ausgeführt: d7c33d8 ist lokal mit 279 bestandenen Tests, fünf ignorierten Qualifikationstests, Formatierung, Clippy und Release-Build geprüft. Physische FX-Bedienung und Hörabnahme bleiben offen; neue plattformübergreifende CI-Ergebnisse liegen noch nicht vor.
 
 ### Erledigte Arbeitspakete
 
@@ -34,7 +34,7 @@ Deliver in reviewed, bounded slices with working behavior and regression evidenc
 - [x] ✅ Acht persistente Hot-Cue-Slots je Track mit Setzen, Anspringen und Löschen.
 - [x] ✅ Hot-Cue-Namen/RGB-Farben mit Save/Cancel und Konfliktschutz bearbeiten.
 - [x] ✅ Nummerierte, benannte und farbige Cue-Marker in Übersicht und Detail-Waveform.
-- [x] ✅ Lokaler Zwischenstand geprüft: 271 Tests bestanden, fünf Qualifikationstests standardmäßig übersprungen; ID3-Sammlung und MC4000-MIDI-Eingang separat erfolgreich geprüft. `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
+- [x] ✅ Lokaler Zwischenstand geprüft: 279 Tests bestanden, fünf Qualifikationstests standardmäßig übersprungen; ID3-Sammlung und MC4000-MIDI-Eingang separat erfolgreich geprüft. `cargo fmt --check`, striktes Clippy und Release-Build grün; siehe [Prüfnachweise](LOCAL_VALIDATION.md).
 
 Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat geprüften Schritten bis0819327 abgearbeitet und gepusht. Tempo-Matching ist als b143276 gepusht. Der anschließende einmalige Beat-Phasen-Sync hat148 grüne Tests, einen erfolgreichen Release-Build und ein akzeptiertes unabhängiges Astra-Mittel-Follow-up nach Korrektur eines Rundungsfehlers. Der gemeinsame Render-Bus ist als4b3009f gepusht. Kohärente Phasen-Veröffentlichung ist als7a43187 gepusht. Frischeprüfung ist als d45d31b gepusht. Der begrenzte kontinuierliche SYNC-Follower ist als f053a30 gepusht. Beat-/4/4-Takt-Auswahl ist als1a6f771 gepusht. Fortlaufende Taktphasenregelung ist als9e27c8c gepusht. Der anschließende QWEN-Schritt zur Quantisierung neuer Cues ist mit171 Tests, Release-Build und akzeptiertem GPT-6.1-Sol-Mittel-Review geprüft. Präzise Quellzeitanzeige ist als3e545b5 gepusht. Der anschließende fokusgebundene Tastaturzoom ist mit175 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Der gemessene Bus-Sample-Peak ist anschließend mit180 Tests, Release-Build und akzeptiertem Sol-Mittel-Review geprüft. Commit-Zuordnung und Prüfnachweise siehe Git-Historie und LOCAL_VALIDATION.md.
 
@@ -118,8 +118,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Bipolarer Filter je Deck: Mitte aus, links Tiefpass, rechts Hochpass; logarithmischer Sweep, feste Güte 1/√2, fünf Millisekunden Überblendung und separate OFF-Taste. Frequenzgang, Endpunkte, neutrale Stellung und Anbindung an beide Decks automatisiert geprüft; sitzungsbezogen.
   - [x] ✅ Unabhängige A/B-Sample-Peak-Meter nach EQ/Filter/Trim und vor den Fadern, aus vollständigen 50-ms-Fenstern. Clip-Hold für ≥0 dBFS oder ungültige Samples bis zum manuellen Löschen, auch über Trackwechsel hinweg; Reset-Rennen, A/B-Signal, stumme Fader, GUI und Freigabe alter Messzustände geprüft. Vorhandener Post-Fader-Bus-Sample-Peak bleibt separat; keine True-Peak-/Lautheits-/Hardware-Abnahme.
   - [ ] ☐ Effekte mit Bypass und Dry/Wet, Parameter-/Preset-Speicherung sowie Controller-Anbindung und musikalische/native Abnahme. Trim/EQ sind bisher sitzungsbezogen; kein Full-Kill-EQ und kein Limiter.
-    - [ ] 🛠 FX1 implementiert: ein post-fader Delay je Deck mit 20–1000 ms, Feedback 0–85%, Dry/Wet, Bypass und FX-Overlay. Begrenzte fallible Pufferreservierung, fünf Millisekunden Parameter-/Tap-Überblendung, ausklingende Fahnen bei Pause/Trackwechsel. Tests und native Abnahme zurückgestellt.
-    - [ ] 🛠 FX2 implementiert: aktuelle Delay-Parameter und acht gemeinsame Preset-Slots im SQLite-Worker; begrenztes JSON, gemeinsame Transaktion, Restore-/Ack-/Close-Snapshots und Session-only bei ungültigen gespeicherten FX-Daten. Geschriebene Regressionen noch nicht ausgeführt.
+    - [ ] 🛠 FX1 implementiert: ein post-fader Delay je Deck mit 20–1000 ms, Feedback 0–85%, Dry/Wet, Bypass und FX-Overlay. Begrenzte fallible Pufferreservierung, fünf Millisekunden Parameter-/Tap-Überblendung, ausklingende Fahnen bei Pause/Trackwechsel. Automatisierte Tests am 2026-10-30 bestanden; native Hör-/Hardware-Abnahme offen.
+    - [ ] 🛠 FX2 implementiert: aktuelle Delay-Parameter und acht gemeinsame Preset-Slots im SQLite-Worker; begrenztes JSON, gemeinsame Transaktion, Restore-/Ack-/Close-Snapshots und Session-only bei ungültigen gespeicherten FX-Daten. SQLite-/Restore-/Ack-/Close-Regressionen am 2026-10-30 bestanden; native Abnahme offen.
     - [ ] 🛠 FX3 implementiert: MC4000-FX1-Taster für Bypass, drei FX-Regler für Dry/Wet/Feedback/Zeit und Beats-Encoder für 10-ms-Schritte; getrennte Deck-Bänke und coalescierte Reglerwerte. MIDI-Adressen aus Herstellerhandbuch, physischer Test noch offen; kein Beat-Sync/Tap und keine drei unabhängigen Effektslots behauptet.
 - [ ] ☐ Audio-Gerätewahl, Ausgangs-/Kopfhörer-Routing und Vorhören.
   - [x] ✅ Ausgabepaar des bestehenden Stereo-Mixes in der Toolbar wählen: 1/2, 3/4 und weitere verfügbare Paare; Übernahme an vollständigen Framegrenzen, ohne Seek/Reload und mit Headless-Signal-/Zustands-/Allokationstests. Auswahl gilt für die laufende Sitzung.
