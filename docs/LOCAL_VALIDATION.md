@@ -1424,3 +1424,13 @@ Independent GPT-6.1 Sol / medium review found two blockers: hot-cue callbacks re
 The previous empty-track native test application was closed normally before release replacement. No native live-switch, visual acceptance, listening, exclusive-driver, hotplug or endurance result is claimed. GUI-thread opening can stall interaction; histories/meters/clocks reset. Target-device routing defaults/profile warnings apply. Production catalog and OS default device were not changed.
 
 Final cargo build --workspace --release --locked exited 0 (1m 55s). No runtime source edits followed the final checks.
+
+## Native paused in-process device change (2026-10-30)
+
+The 22966bb release was launched with the existing isolated test SQLite profile and two real MP3 tracks (Ay! Ven on A, Celoso on B). Neither deck was started. Native position controls set A to 25 percent (01:09.851) and B to 40 percent (02:02.827). AUDIO initially reported Lautsprecher (MC4000), four channels. Selecting Realtek and APPLY NOW changed CURRENT to Lautsprecher (2- Realtek(R) Audio), two channels, with the explicit decks-remain-paused acknowledgement. The two position controls still read 25 and 40 percent.
+
+Selecting MC4000 and APPLY NOW changed CURRENT back to four-channel MC4000. After closing the AUDIO panel both tracks remained loaded, both transport buttons displayed PLAY and the exact displayed times remained 01:09.851 and 02:02.827. Process ID 1724 and its start time 15:51:29 were unchanged through both switches; the same native window remained in use. stderr recorded two OutputStream drop notices, one per replaced stream. No errors were recorded. OUT 1/2 remained selected. The test application is left open with both tracks paused on MC4000.
+
+This verifies named WASAPI device opening/replacement in one running application and paused loaded-track/position preservation in this environment. It does not verify audible playback after replacement, all mixer/Keylock/loop states natively, physical unplug/replug, exclusive-driver behavior, endurance, hardware IDs or full UI usability. No OS default device or production catalog was changed. One initial accessibility click reported coordinate input geometry is unavailable; fresh foreground selection/capture and observed coordinates recovered the action. No runtime source changed for this evidence-only update; the 22966bb fmt/Clippy/304-pass/five-ignored/release evidence remains the applicable build qualification.
+
+Independent documentation review: GPT-6.1 Sol / medium identified one stale open-native-switch sentence in the plan; corrected to leave hearing/further-state acceptance open. Follow-up review accepted. git diff --check exited 0. No new Cargo runs were needed for this documentation-only checkpoint.
