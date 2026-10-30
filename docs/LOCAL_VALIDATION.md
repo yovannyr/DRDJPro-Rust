@@ -1338,3 +1338,10 @@ The new headless integration test opens MON through its accessible action, selec
 Final cargo fmt --all --check, cargo clippy --workspace --locked --all-targets -- -D warnings, cargo test --workspace --locked --quiet and git diff --check exited 0. Tests: 282 application plus five DSP passed, five qualifications ignored; application suite 29.80s. No source changes followed these checks. Simultaneous physical MASTER/headphone cue acceptance is still pending.
 
 Final cargo build --workspace --release --locked exited 0 (1m 45s).
+
+
+## Simultaneous MC4000 MASTER and independent pre-fader cue (2026-10-30)
+
+The fb4f3ed release was launched with the same isolated test profile and both real tracks paused. The native UI showed MASTER OUT 1/2. A channel was set to 0.2, B to zero, crossfader centered; MON opened and only Cue B selected. Both decks were then started through GUI transport. Source progress and A/B pre-fader peaks were present, with B channel still zero. The user explicitly answered: speakers A, headphones B. The agent then set A channel to zero, B to 0.2, deselected Cue B and selected Cue A while both decks continued playing. The user explicitly confirmed the reverse: speakers B, headphones A. The two audible tracks were Ay! Ven (A) and Celoso (B). Both decks were paused through the GUI afterward.
+
+This is user-confirmed simultaneous MASTER/pre-fader headphone isolation in both directions on this Windows/MC4000/profile session. It does not establish hardware cue-button mapping, software monitor gain/blend, cue preference persistence, other devices/platforms or endurance. Those items remain open in the existing plan. No code changed or additional Cargo execution was required; the fb4f3ed automated/build evidence remains applicable.
