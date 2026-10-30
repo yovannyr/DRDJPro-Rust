@@ -348,6 +348,36 @@ impl Drop for DualDeckEngine {
     }
 }
 impl DualDeckEngine {
+    pub fn inherit_paused_decks(&self, old: &Self) -> Result<(), String> {
+        if [DeckId::A, DeckId::B]
+            .into_iter()
+            .any(|id| old.snapshot(id).playing)
+        {
+            return Err("Pause both decks before changing audio device".into());
+        }
+        self.set_levels(old.levels.get());
+        for id in [DeckId::A, DeckId::B] {
+            self.set_eq(id, old.eq_settings(id))?;
+            self.set_fx(id, old.fx_settings(id))?;
+            let snapshot = old.snapshot(id);
+            let deck = old.decks[id.index()].borrow();
+            if let Some(track) = deck.track.clone() {
+                self.try_install(id, track)?;
+                self.set_speed(id, deck.base_factor)?;
+                self.set_grid(id, deck.grid)?;
+                {
+                    let mut target = self.decks[id.index()].borrow_mut();
+                    target.loop_in = deck.loop_in;
+                    target.loop_region = deck.loop_region;
+                }
+                self.seek_position(id, snapshot.position)?;
+                if deck.loop_active {
+                    self.activate_loop(id)?;
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn open_default() -> Result<Self, Box<dyn Error>> {
         Self::open_selected(None)
     }
@@ -1676,6 +1706,86 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn paused_device_handoff_keeps_pcm_position_pitch_grid_loops_and_mixer_state() {
+        let (mixer, _old_output) = rodio::mixer::mixer(4, 48000);
+        let old = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let a = wav_file(8192, 192000);
+        let b = wav_file(4096, 192000);
+        old.load_a(a.path()).unwrap();
+        old.load_b(b.path()).unwrap();
+        old.set_levels(MixerLevels {
+            channel_a: 0.3,
+            channel_b: 0.7,
+            crossfader: 0.4,
+        });
+        old.set_speed(DeckId::A, 1.2).unwrap();
+        old.set_grid(
+            DeckId::A,
+            Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+        )
+        .unwrap();
+        old.restore_loop(
+            DeckId::A,
+            Duration::from_millis(250),
+            Duration::from_millis(750),
+        )
+        .unwrap();
+        old.seek_position(DeckId::A, Duration::from_millis(400))
+            .unwrap();
+        old.activate_loop(DeckId::A).unwrap();
+        old.set_eq(
+            DeckId::B,
+            crate::mixer_dsp::EqSettings {
+                trim: 3.,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        old.set_fx(
+            DeckId::A,
+            crate::delay_fx::DelaySettings {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(2, 44100);
+        let new = DualDeckEngine::from_mixer(mixer, 2, 44100);
+        new.inherit_paused_decks(&old).unwrap();
+        let before = old.snapshot(DeckId::A);
+        let after = new.snapshot(DeckId::A);
+        assert_eq!(after.path, before.path);
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.requested_speed, 1.2);
+        assert_eq!(after.grid, before.grid);
+        assert!(after.loop_active);
+        assert_eq!(after.loop_in, before.loop_in);
+        assert_eq!(after.loop_out, before.loop_out);
+        assert_eq!(new.output_volumes(), old.output_volumes());
+        assert_eq!(new.eq_settings(DeckId::B), old.eq_settings(DeckId::B));
+        assert_eq!(new.fx_settings(DeckId::A), old.fx_settings(DeckId::A));
+        for id in [DeckId::A, DeckId::B] {
+            assert!(!new.snapshot(id).playing);
+            assert!(Arc::ptr_eq(
+                &new.decks[id.index()]
+                    .borrow()
+                    .track
+                    .as_ref()
+                    .unwrap()
+                    .detail,
+                &old.decks[id.index()]
+                    .borrow()
+                    .track
+                    .as_ref()
+                    .unwrap()
+                    .detail
+            ));
+        }
+        assert!(output.by_ref().take(5000).all(|sample| sample == 0.));
+        old.play(DeckId::B);
+        assert!(new.inherit_paused_decks(&old).is_err());
+    }
     #[test]
     fn monitor_blend_gain_and_master_only_preview_preserve_master_and_validate_requests() {
         let (mixer, mut output) = rodio::mixer::mixer(4, 48000);

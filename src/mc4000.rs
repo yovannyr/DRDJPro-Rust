@@ -116,7 +116,8 @@ pub struct Input {
     _connection: midir::MidiInputConnection<()>,
     output: Option<midir::MidiOutputConnection>,
     greeting: Greeting,
-    buttons: Receiver<Command>,
+    buttons: Receiver<(std::time::Instant, Command)>,
+    accept_buttons_after: std::time::Instant,
     levels: Arc<[AtomicU8; 5]>,
     fx_levels: Arc<[AtomicU8; 6]>,
     overflow: Arc<AtomicBool>,
@@ -173,7 +174,10 @@ impl Input {
                                 values[3 + index].store(value, Ordering::Release)
                             }
                             command => {
-                                if sender.try_send(command).is_err() {
+                                if sender
+                                    .try_send((std::time::Instant::now(), command))
+                                    .is_err()
+                                {
                                     failed.store(true, Ordering::Release);
                                 }
                             }
@@ -198,6 +202,7 @@ impl Input {
             },
             _connection: connection,
             buttons,
+            accept_buttons_after: std::time::Instant::now(),
             levels,
             fx_levels,
             overflow,
@@ -206,6 +211,9 @@ impl Input {
                 overflow: trace_overflow,
             }),
         }))
+    }
+    pub fn discard_buttons_before(&mut self, instant: std::time::Instant) {
+        self.accept_buttons_after = self.accept_buttons_after.max(instant);
     }
     pub fn poll(&mut self, mut apply: impl FnMut(Command)) -> bool {
         if let Some(InputTrace { receiver, overflow }) = &self.trace {
@@ -251,13 +259,21 @@ impl Input {
                 apply(Command::FxKnob(index / 3, index % 3, value));
             }
         }
-        for _ in 0..128 {
-            match self.buttons.try_recv() {
-                Ok(command) => apply(command),
-                Err(_) => break,
-            }
-        }
+        dispatch_buttons(&self.buttons, self.accept_buttons_after, &mut apply);
         self.overflow.swap(false, Ordering::AcqRel)
+    }
+}
+fn dispatch_buttons(
+    buttons: &Receiver<(std::time::Instant, Command)>,
+    accept_after: std::time::Instant,
+    mut apply: impl FnMut(Command),
+) {
+    for _ in 0..128 {
+        match buttons.try_recv() {
+            Ok((received, command)) if received >= accept_after => apply(command),
+            Ok(_) => (),
+            Err(_) => break,
+        }
     }
 }
 impl Drop for Input {
@@ -351,6 +367,20 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn commands_received_during_output_change_do_not_replay_after_commit() {
+        let (tx, rx) = mpsc::sync_channel(128);
+        let end = std::time::Instant::now();
+        tx.send((
+            end - std::time::Duration::from_millis(1),
+            Command::Toggle(0),
+        ))
+        .unwrap();
+        tx.send((end, Command::Toggle(1))).unwrap();
+        let mut applied = Vec::new();
+        dispatch_buttons(&rx, end, |command| applied.push(command));
+        assert_eq!(applied, vec![Command::Toggle(1)]);
+    }
     #[test]
     fn headphone_cue_notes_are_deck_scoped_and_releases_do_not_toggle() {
         assert_eq!(decode(&[0xbf, 12, 0]), Some(Command::Monitor(0, 0)));

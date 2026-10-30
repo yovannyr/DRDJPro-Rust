@@ -19,6 +19,8 @@ type LoadResult =
 type ImportResult = Option<Result<crate::library::ImportBatch, String>>;
 type DeviceScanResult = Result<Vec<crate::audio_devices::DeviceChoice>, String>;
 type DeviceCatalog = Arc<dyn Fn() -> DeviceScanResult + Send + Sync>;
+type DeviceOpener =
+    Rc<dyn Fn(Option<&crate::audio_devices::DeviceSelector>) -> Result<DualDeckEngine, String>>;
 type KeylockJob = (Arc<crate::waveform::DetailPeaks>, drdj_keylock::Job, f64);
 struct PitchRequest {
     source: Arc<crate::waveform::DetailPeaks>,
@@ -201,6 +203,10 @@ impl SearchWorker {
 }
 
 pub struct AudioController {
+    device_opener: DeviceOpener,
+    pending_device_switch: RefCell<Option<crate::audio_devices::StartupSelection>>,
+    transport_accept_after: Cell<std::time::Instant>,
+    output_profiles_cache: RefCell<Result<crate::output_preferences::OutputRoutes, String>>,
     device_catalog: DeviceCatalog,
     device_scan: RefCell<Option<Receiver<DeviceScanResult>>>,
     device_choices: RefCell<Vec<crate::audio_devices::DeviceChoice>>,
@@ -208,7 +214,7 @@ pub struct AudioController {
     saved_startup_audio: RefCell<crate::audio_devices::StartupSelection>,
     startup_audio_saving: Cell<bool>,
     ui: slint::Weak<AppWindow>,
-    engine: Rc<DualDeckEngine>,
+    engine: Rc<RefCell<Rc<DualDeckEngine>>>,
     picker: TrackPicker,
     library_picker: LibraryPicker,
     library: Rc<RefCell<crate::library::Library>>,
@@ -260,7 +266,7 @@ pub struct AudioController {
 impl Drop for AudioController {
     fn drop(&mut self) {
         if let Some(session) = self.sync_session.get_mut().take() {
-            let _ = self.engine.apply_sync_factor(session.target, 1.);
+            let _ = self.engine.borrow().apply_sync_factor(session.target, 1.);
         }
         if let Some(cancel) = self.pending_cancel.get_mut().as_ref() {
             cancel.request();
@@ -289,7 +295,30 @@ impl AudioController {
         library_picker: LibraryPicker,
         device_catalog: DeviceCatalog,
     ) -> Rc<Self> {
+        Self::wire_with_audio_services(
+            ui,
+            engine,
+            picker,
+            library_picker,
+            device_catalog,
+            Rc::new(|selection| {
+                DualDeckEngine::open_selected(selection).map_err(|e| e.to_string())
+            }),
+        )
+    }
+    fn wire_with_audio_services(
+        ui: &AppWindow,
+        engine: Rc<DualDeckEngine>,
+        picker: TrackPicker,
+        library_picker: LibraryPicker,
+        device_catalog: DeviceCatalog,
+        device_opener: DeviceOpener,
+    ) -> Rc<Self> {
         let controller = Rc::new(Self {
+            device_opener,
+            pending_device_switch: RefCell::new(None),
+            transport_accept_after: Cell::new(std::time::Instant::now()),
+            output_profiles_cache: RefCell::new(Ok(Default::default())),
             device_catalog,
             device_scan: RefCell::new(None),
             device_choices: RefCell::new(Vec::new()),
@@ -297,7 +326,7 @@ impl AudioController {
             saved_startup_audio: RefCell::new(Default::default()),
             startup_audio_saving: Cell::new(false),
             ui: ui.as_weak(),
-            engine,
+            engine: Rc::new(RefCell::new(engine)),
             picker,
             library_picker,
             library: Rc::new(RefCell::new(crate::library::Library::default())),
@@ -347,23 +376,25 @@ impl AudioController {
             displayed_details: RefCell::new([None, None]),
         });
         ui.set_audio_enabled(true);
-        let count = (controller.engine.output_channels() / 2).max(1);
+        let count = (controller.engine.borrow().output_channels() / 2).max(1);
         ui.set_output_pair_options(slint::ModelRc::new(slint::VecModel::from(
             (0..count)
                 .map(|pair| {
-                    slint::SharedString::from(if controller.engine.output_channels() == 1 {
-                        "OUT 1 (mono)".into()
-                    } else {
-                        format!("OUT {}/{}", pair * 2 + 1, pair * 2 + 2)
-                    })
+                    slint::SharedString::from(
+                        if controller.engine.borrow().output_channels() == 1 {
+                            "OUT 1 (mono)".into()
+                        } else {
+                            format!("OUT {}/{}", pair * 2 + 1, pair * 2 + 2)
+                        },
+                    )
                 })
                 .collect::<Vec<_>>(),
         )));
         ui.set_audio_device_current(
             format!(
                 "{} ({} channels)",
-                controller.engine.output_device_label(),
-                controller.engine.output_channels()
+                controller.engine.borrow().output_device_label(),
+                controller.engine.borrow().output_channels()
             )
             .into(),
         );
@@ -380,14 +411,20 @@ impl AudioController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        ui.on_audio_device_apply(move || {
+            if let Some(c) = weak.upgrade() {
+                c.request_device_switch();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         ui.on_output_pair_changed(move || {
             if let Some(c) = weak.upgrade() {
                 if let Some(ui) = c.ui.upgrade() {
                     let result = u16::try_from(ui.get_output_pair_index())
                         .map_err(|_| "Invalid output pair".to_string())
-                        .and_then(|pair| c.engine.set_output_pair(pair));
+                        .and_then(|pair| c.engine.borrow().set_output_pair(pair));
                     if let Err(error) = result {
-                        ui.set_output_pair_index(i32::from(c.engine.output_pair()));
+                        ui.set_output_pair_index(i32::from(c.engine.borrow().output_pair()));
                         ui.set_status(error.into());
                     }
                 }
@@ -409,11 +446,11 @@ impl AudioController {
             let weak = Rc::downgrade(&controller);
             let toggle = move || {
                 if let Some(c) = weak.upgrade() {
-                    if c.engine.snapshot(id).playing {
+                    if c.engine.borrow().snapshot(id).playing {
                         c.cancel_nudge(id);
-                        c.engine.pause(id);
+                        c.engine.borrow().pause(id);
                     } else {
-                        c.engine.play(id);
+                        c.engine.borrow().play(id);
                     }
                     c.refresh();
                 }
@@ -426,7 +463,7 @@ impl AudioController {
             let cue = move || {
                 if let Some(c) = weak.upgrade() {
                     c.cancel_nudge(id);
-                    c.engine.cue(id);
+                    c.engine.borrow().cue(id);
                     c.refresh();
                 }
             };
@@ -447,7 +484,7 @@ impl AudioController {
             let weak = Rc::downgrade(&controller);
             let seek = move |percent| {
                 if let Some(c) = weak.upgrade() {
-                    if let Err(err) = c.engine.seek_percent(id, percent) {
+                    if let Err(err) = c.engine.borrow().seek_percent(id, percent) {
                         if let Some(ui) = c.ui.upgrade() {
                             ui.set_status(format!("Deck {id:?}: {err}").into());
                         }
@@ -492,8 +529,8 @@ impl AudioController {
         ui.on_clear_channel_clip(move |deck| {
             if let Some(c) = weak.upgrade() {
                 match deck {
-                    0 => c.engine.clear_channel_clip(DeckId::A),
-                    1 => c.engine.clear_channel_clip(DeckId::B),
+                    0 => c.engine.borrow().clear_channel_clip(DeckId::A),
+                    1 => c.engine.borrow().clear_channel_clip(DeckId::B),
                     _ => (),
                 }
                 c.refresh();
@@ -501,7 +538,7 @@ impl AudioController {
         });
         let weak = Rc::downgrade(&controller);
         ui.set_monitor_status(
-            if controller.engine.output_channels() >= 4 {
+            if controller.engine.borrow().output_channels() >= 4 {
                 "Select a master pair other than OUT 3/4; cue uses OUT 3/4 (session only)"
             } else {
                 "Independent cue requires an output device with at least four channels"
@@ -515,12 +552,12 @@ impl AudioController {
                     return;
                 }
                 if let Some(ui) = c.ui.upgrade() {
-                    let result =
-                        c.engine
-                            .set_monitor_settings(crate::output_routing::MonitorSettings {
-                                gain: ui.get_monitor_gain() / 100.,
-                                mix: ui.get_monitor_mix() / 100.,
-                            });
+                    let result = c.engine.borrow().set_monitor_settings(
+                        crate::output_routing::MonitorSettings {
+                            gain: ui.get_monitor_gain() / 100.,
+                            mix: ui.get_monitor_mix() / 100.,
+                        },
+                    );
                     ui.set_monitor_status(match result {
                         Ok(()) => if c.output_profiles_writable.get() {
                             "Monitor changed"
@@ -548,7 +585,7 @@ impl AudioController {
                         _ => None,
                     };
                     if let Some((id, enabled)) = request {
-                        let status = match c.engine.set_headphone_cue(id, enabled) {
+                        let status = match c.engine.borrow().set_headphone_cue(id, enabled) {
                             Ok(()) => if c.output_profiles_writable.get() {
                                 "Headphone cue changed"
                             } else {
@@ -966,7 +1003,7 @@ impl AudioController {
             .and_then(|slot| usize::try_from(slot).ok())
             .filter(|slot| *slot < crate::saved_loops::SLOT_COUNT)
             .ok_or("Loop slot must be 1 through 8")?;
-        let snapshot = self.engine.snapshot(id);
+        let snapshot = self.engine.borrow().snapshot(id);
         let path = snapshot.path.ok_or("Load a track first")?;
         let saved = self.library.borrow().saved_loops(&path);
         let value = match command {
@@ -989,7 +1026,9 @@ impl AudioController {
                 let value = saved.slots()[slot]
                     .as_ref()
                     .ok_or("Saved loop slot is empty")?;
-                self.engine.restore_loop(id, value.start(), value.end())?;
+                self.engine
+                    .borrow()
+                    .restore_loop(id, value.start(), value.end())?;
                 self.cancel_nudge(id);
                 return Ok("Saved boundaries loaded; press LOOP to activate".into());
             }
@@ -1057,7 +1096,7 @@ impl AudioController {
         if self.nudges.borrow().iter().any(Option::is_some) {
             return Err("Release nudge on both decks before matching tempo".into());
         }
-        let factor = self.engine.tempo_match_factor(id)?;
+        let factor = self.engine.borrow().tempo_match_factor(id)?;
         if !self.pitch_ranges.get()[Self::grid_index(id)].contains(factor) {
             return Err("Widen the target pitch range before matching tempo".into());
         }
@@ -1096,7 +1135,7 @@ impl AudioController {
             self.keylock_next.set(next);
         }
         if let Some(session) = self.sync_session.borrow_mut().take() {
-            let _ = self.engine.apply_sync_factor(session.target, 1.);
+            let _ = self.engine.borrow().apply_sync_factor(session.target, 1.);
         }
     }
     fn sync_start_ready(&self, id: DeckId) -> Result<f64, String> {
@@ -1105,13 +1144,14 @@ impl AudioController {
         }
         let factor = self.tempo_match_target(id)?;
         self.engine
+            .borrow()
             .phase_sync_target_frame(id, self.alignments.get()[Self::grid_index(id)])?;
         Ok(factor)
     }
     fn capture_sync(&self, id: DeckId, frame: u64) -> SyncSession {
         let snapshots = [
-            self.engine.snapshot(DeckId::A),
-            self.engine.snapshot(DeckId::B),
+            self.engine.borrow().snapshot(DeckId::A),
+            self.engine.borrow().snapshot(DeckId::B),
         ];
         SyncSession {
             target: id,
@@ -1121,12 +1161,12 @@ impl AudioController {
             ],
             grids: [snapshots[0].grid.unwrap(), snapshots[1].grid.unwrap()],
             versions: [
-                self.engine.command_version(DeckId::A).unwrap(),
-                self.engine.command_version(DeckId::B).unwrap(),
+                self.engine.borrow().command_version(DeckId::A).unwrap(),
+                self.engine.borrow().command_version(DeckId::B).unwrap(),
             ],
             factor: 1.,
             last_frame: frame,
-            last_good: self.engine.control_now(),
+            last_good: self.engine.borrow().control_now(),
             alignment: self.alignments.get()[Self::grid_index(id)],
         }
     }
@@ -1135,9 +1175,10 @@ impl AudioController {
         let alignment = self.alignments.get()[Self::grid_index(id)];
         let (_, frame, _) = self
             .engine
+            .borrow()
             .sync_observation(id, alignment)
             .ok_or("Wait for fresh playing deck frames before Sync")?;
-        self.engine.phase_sync_once(id, alignment)?;
+        self.engine.borrow().phase_sync_once(id, alignment)?;
         *self.sync_session.borrow_mut() = Some(self.capture_sync(id, frame));
         Ok(())
     }
@@ -1165,10 +1206,12 @@ impl AudioController {
         let factor = self.sync_start_ready(id)?;
         let (_, frame, _) = self
             .engine
+            .borrow()
             .sync_observation(id, self.alignments.get()[Self::grid_index(id)])
             .ok_or("Wait for fresh playing deck frames before Sync")?;
         if self
             .engine
+            .borrow()
             .keylock_factor(id)
             .is_some_and(|prepared| (prepared - factor).abs() > 1e-10)
         {
@@ -1185,8 +1228,8 @@ impl AudioController {
     fn pending_sync_valid(&self, pending: &PendingSync) -> bool {
         let session = &pending.session;
         let snapshots = [
-            self.engine.snapshot(DeckId::A),
-            self.engine.snapshot(DeckId::B),
+            self.engine.borrow().snapshot(DeckId::A),
+            self.engine.borrow().snapshot(DeckId::B),
         ];
         [DeckId::A, DeckId::B]
             .into_iter()
@@ -1201,7 +1244,7 @@ impl AudioController {
                         .detail
                         .as_ref()
                         .is_some_and(|s| Arc::ptr_eq(s, &session.sources[i]))
-                    && self.engine.command_version(id) == Some(session.versions[i])
+                    && self.engine.borrow().command_version(id) == Some(session.versions[i])
             })
             && self.grid_editors.borrow().iter().all(Option::is_none)
             && self.nudges.borrow().iter().all(Option::is_none)
@@ -1209,12 +1252,14 @@ impl AudioController {
             && self.keylock_requested(session.target)
             && self
                 .engine
+                .borrow()
                 .tempo_match_factor(session.target)
                 .is_ok_and(|tempo| (tempo - pending.tempo).abs() < 1e-10)
             && self.pitch_ranges.get()[Self::grid_index(session.target)].contains(pending.tempo)
             && self.alignments.get()[Self::grid_index(session.target)] == session.alignment
             && self
                 .engine
+                .borrow()
                 .control_now()
                 .checked_duration_since(session.last_good)
                 .is_some_and(|age| age <= std::time::Duration::from_secs(30))
@@ -1242,6 +1287,7 @@ impl AudioController {
         if !pending.prepared
             || self
                 .engine
+                .borrow()
                 .sync_observation(pending.session.target, pending.session.alignment)
                 .is_none()
         {
@@ -1250,6 +1296,7 @@ impl AudioController {
         }
         let result = if self
             .engine
+            .borrow()
             .keylock_factor(pending.session.target)
             .is_some_and(|factor| (factor - pending.tempo).abs() < 1e-10)
         {
@@ -1271,8 +1318,8 @@ impl AudioController {
             return;
         };
         let snapshots = [
-            self.engine.snapshot(DeckId::A),
-            self.engine.snapshot(DeckId::B),
+            self.engine.borrow().snapshot(DeckId::A),
+            self.engine.borrow().snapshot(DeckId::B),
         ];
         let valid = [DeckId::A, DeckId::B]
             .into_iter()
@@ -1287,7 +1334,7 @@ impl AudioController {
                         .detail
                         .as_ref()
                         .is_some_and(|s| Arc::ptr_eq(s, &session.sources[i]))
-                    && self.engine.command_version(id) == Some(session.versions[i])
+                    && self.engine.borrow().command_version(id) == Some(session.versions[i])
             })
             && self.grid_editors.borrow().iter().all(Option::is_none)
             && self.nudges.borrow().iter().all(Option::is_none)
@@ -1301,6 +1348,7 @@ impl AudioController {
             Err("Sync stopped after input, transport or freshness change".to_string())
         } else if let Some((error, frame, nominal)) = self
             .engine
+            .borrow()
             .sync_observation(session.target, session.alignment)
         {
             let base = snapshots[Self::grid_index(session.target)].requested_speed;
@@ -1314,12 +1362,14 @@ impl AudioController {
                         nominal,
                         base,
                         elapsed,
-                        self.engine.output_rate(),
+                        self.engine.borrow().output_rate(),
                         session.alignment,
                     )
                 })
                 .and_then(|factor| {
-                    self.engine.apply_sync_factor(session.target, factor)?;
+                    self.engine
+                        .borrow()
+                        .apply_sync_factor(session.target, factor)?;
                     session.factor = factor;
                     session.last_frame = frame;
                     session.last_good = now;
@@ -1327,19 +1377,19 @@ impl AudioController {
                 })
         } else {
             session.factor = 1.;
-            session.last_frame = self.engine.rendered_frames();
-            self.engine.apply_sync_factor(session.target, 1.)
+            session.last_frame = self.engine.borrow().rendered_frames();
+            self.engine.borrow().apply_sync_factor(session.target, 1.)
         };
         match result {
             Ok(()) => {
                 session.versions = [
-                    self.engine.command_version(DeckId::A).unwrap(),
-                    self.engine.command_version(DeckId::B).unwrap(),
+                    self.engine.borrow().command_version(DeckId::A).unwrap(),
+                    self.engine.borrow().command_version(DeckId::B).unwrap(),
                 ];
                 *self.sync_session.borrow_mut() = Some(session);
             }
             Err(error) => {
-                let _ = self.engine.apply_sync_factor(session.target, 1.);
+                let _ = self.engine.borrow().apply_sync_factor(session.target, 1.);
                 if let Some(ui) = self.ui.upgrade() {
                     ui.set_status(error.into());
                 }
@@ -1352,6 +1402,7 @@ impl AudioController {
         }
         self.tempo_match_target(id)?;
         self.engine
+            .borrow()
             .phase_sync_frame(id, self.alignments.get()[Self::grid_index(id)])?;
         Ok(())
     }
@@ -1361,7 +1412,7 @@ impl AudioController {
             // Preserve the current prepared rate until the worker result is adopted.
             self.start_keylock(id, factor)
         } else {
-            self.engine.set_speed(id, factor)
+            self.engine.borrow().set_speed(id, factor)
         }
     }
     fn queue_pitch(&self, id: DeckId, percent: f32) -> Result<(), String> {
@@ -1371,6 +1422,7 @@ impl AudioController {
         }
         let source = self
             .engine
+            .borrow()
             .snapshot(id)
             .detail
             .ok_or("Load a track first")?;
@@ -1420,7 +1472,7 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Finish loading before changing pitch".into());
         }
-        let snapshot = self.engine.snapshot(id);
+        let snapshot = self.engine.borrow().snapshot(id);
         let source = snapshot.detail.ok_or("Load a track first")?;
         let factor = self.desired_pitch(id, &source, snapshot.requested_speed);
         let target = self.pitch_ranges.get()[Self::grid_index(id)].step(factor, up)?;
@@ -1429,11 +1481,11 @@ impl AudioController {
     fn cancel_nudge(&self, id: DeckId) {
         self.nudges.borrow_mut()[Self::grid_index(id)] = None;
         // Release bypasses all busy guards and never starts a deck.
-        let _ = self.engine.set_nudge(id, 0);
+        let _ = self.engine.borrow().set_nudge(id, 0);
     }
     fn cancel_stale_nudges(&self) {
         for id in [DeckId::A, DeckId::B] {
-            let snapshot = self.engine.snapshot(id);
+            let snapshot = self.engine.borrow().snapshot(id);
             let stale = self.nudges.borrow()[Self::grid_index(id)]
                 .as_ref()
                 .is_some_and(|session| {
@@ -1466,7 +1518,7 @@ impl AudioController {
         if held && !self.can_control_deck(id) {
             return Err("Nudge unavailable during loading".into());
         }
-        let snapshot = self.engine.snapshot(id);
+        let snapshot = self.engine.borrow().snapshot(id);
         let mut sessions = self.nudges.borrow_mut();
         if held && sessions[index].is_none() {
             if !snapshot.playing {
@@ -1487,7 +1539,7 @@ impl AudioController {
         let mut next = session.held;
         next[button] = held;
         let target = i32::from(next[1]) - i32::from(next[0]);
-        if let Err(error) = self.engine.set_nudge(id, target) {
+        if let Err(error) = self.engine.borrow().set_nudge(id, target) {
             if !held || session.held == [false; 2] {
                 // A failed remaining direction must not retain already released inputs.
                 drop(sessions);
@@ -1587,6 +1639,7 @@ impl AudioController {
                 if let Some(c) = weak.upgrade() {
                     let result = c.phase_sync_ready(id).and_then(|()| {
                         c.engine
+                            .borrow()
                             .phase_sync_once(id, c.alignments.get()[Self::grid_index(id)])
                     });
                     if let Some(ui) = c.ui.upgrade() {
@@ -1704,7 +1757,7 @@ impl AudioController {
         }
     }
     pub fn keylock_active(&self, id: DeckId) -> bool {
-        self.engine.keylock_factor(id).is_some()
+        self.engine.borrow().keylock_factor(id).is_some()
     }
     fn keylock_requested(&self, id: DeckId) -> bool {
         self.ui.upgrade().is_some_and(|ui| match id {
@@ -1724,12 +1777,13 @@ impl AudioController {
         }
         let source = self
             .engine
+            .borrow()
             .snapshot(id)
             .detail
             .ok_or("Load a track first")?;
         self.stop_sync();
         self.cancel_nudge(id);
-        let job = self.engine.prepare_keylock(id, 0, tempo)?;
+        let job = self.engine.borrow().prepare_keylock(id, 0, tempo)?;
         self.keylock_jobs.borrow_mut()[Self::grid_index(id)] = Some((source, job, tempo));
         if let Some(ui) = self.ui.upgrade() {
             ui.set_status(format!("Deck {id:?}: preparing Keylock tempo").into());
@@ -1746,11 +1800,11 @@ impl AudioController {
                 let mut next = self.keylock_next.get();
                 next[index] = None;
                 self.keylock_next.set(next);
-                if self.engine.keylock_factor(id).is_some() {
+                if self.engine.borrow().keylock_factor(id).is_some() {
                     // Mode changes cancel following explicitly: replacement render versions restart at zero.
                     self.stop_sync();
                     self.cancel_nudge(id);
-                    let _ = self.engine.adopt_keylock(id, None);
+                    let _ = self.engine.borrow().adopt_keylock(id, None);
                 }
                 continue;
             }
@@ -1768,6 +1822,7 @@ impl AudioController {
                 let (source, _, _) = self.keylock_jobs.borrow_mut()[index].take().unwrap();
                 if self
                     .engine
+                    .borrow()
                     .snapshot(id)
                     .detail
                     .as_ref()
@@ -1791,6 +1846,7 @@ impl AudioController {
                 }
                 result.and_then(|result| {
                     self.engine
+                        .borrow()
                         .adopt_keylock(id, Some((result.tempo, result.clip)))
                         .inspect(|()| {
                             if let Some(pending) = self
@@ -1801,7 +1857,7 @@ impl AudioController {
                             {
                                 pending.prepared = true;
                                 pending.session.versions[Self::grid_index(id)] =
-                                    self.engine.command_version(id).unwrap();
+                                    self.engine.borrow().command_version(id).unwrap();
                             }
                             if let Some(ui) = self.ui.upgrade() {
                                 ui.set_status(format!("Deck {id:?}: Keylock tempo ready").into());
@@ -1809,9 +1865,9 @@ impl AudioController {
                         })
                 })
             } else if self.keylock_jobs.borrow()[index].is_none()
-                && self.engine.keylock_factor(id).is_none()
+                && self.engine.borrow().keylock_factor(id).is_none()
             {
-                self.start_keylock(id, self.engine.snapshot(id).requested_speed)
+                self.start_keylock(id, self.engine.borrow().snapshot(id).requested_speed)
             } else {
                 continue;
             };
@@ -1825,7 +1881,7 @@ impl AudioController {
                     {
                         self.stop_sync();
                     }
-                    let enabled = self.engine.keylock_factor(id).is_some();
+                    let enabled = self.engine.borrow().keylock_factor(id).is_some();
                     match id {
                         DeckId::A => ui.set_left_keylock(enabled),
                         DeckId::B => ui.set_right_keylock(enabled),
@@ -1844,6 +1900,7 @@ impl AudioController {
                 Err("Pending pitch discarded during loading".into())
             } else if self
                 .engine
+                .borrow()
                 .snapshot(id)
                 .detail
                 .as_ref()
@@ -1854,7 +1911,7 @@ impl AudioController {
                 if self.keylock_requested(id) {
                     self.start_keylock(id, request.factor)
                 } else {
-                    self.engine.set_speed(id, request.factor)
+                    self.engine.borrow().set_speed(id, request.factor)
                 }
             };
             if let Some(ui) = self.ui.upgrade() {
@@ -1877,18 +1934,18 @@ impl AudioController {
                         let result = if !c.can_control_deck(id) {
                             Err("Finish loading before changing a loop".into())
                         } else {
-                            let position = c.engine.snapshot(id).position;
+                            let position = c.engine.borrow().snapshot(id).position;
                             match command {
-                                0 => c.engine.set_loop_in(id, position),
-                                1 => c.engine.set_loop_out(id, position),
+                                0 => c.engine.borrow().set_loop_in(id, position),
+                                1 => c.engine.borrow().set_loop_out(id, position),
                                 2 => {
-                                    if c.engine.snapshot(id).loop_active {
-                                        c.engine.exit_loop(id)
+                                    if c.engine.borrow().snapshot(id).loop_active {
+                                        c.engine.borrow().exit_loop(id)
                                     } else {
-                                        c.engine.activate_loop(id)
+                                        c.engine.borrow().activate_loop(id)
                                     }
                                 }
-                                3 => c.engine.exit_loop(id),
+                                3 => c.engine.borrow().exit_loop(id),
                                 4 => {
                                     let index =
                                         c.ui.upgrade()
@@ -1910,11 +1967,13 @@ impl AudioController {
                                             [1, 2, 4, 8, 16, 32, 64, 128, 256].get(i).copied()
                                         })
                                         .ok_or_else(|| "Choose a supported beat length".to_string())
-                                        .and_then(|eighths| c.engine.auto_loop(id, eighths, snap))
+                                        .and_then(|eighths| {
+                                            c.engine.borrow().auto_loop(id, eighths, snap)
+                                        })
                                 }
-                                5 => c.engine.resize_loop(id, false),
-                                6 => c.engine.resize_loop(id, true),
-                                _ => c.engine.reloop(id),
+                                5 => c.engine.borrow().resize_loop(id, false),
+                                6 => c.engine.borrow().resize_loop(id, true),
+                                _ => c.engine.borrow().reloop(id),
                             }
                         };
                         if result.is_ok() {
@@ -1986,7 +2045,7 @@ impl AudioController {
             .ok()
             .filter(|s| *s < crate::hot_cues::SLOT_COUNT)
             .ok_or("Invalid cue slot")?;
-        let snapshot = self.engine.snapshot(id);
+        let snapshot = self.engine.borrow().snapshot(id);
         let path = snapshot.path.ok_or("Load a track first")?;
         let source = snapshot.detail.ok_or("Track source unavailable")?;
         let cue = self.library.borrow().hot_cues(&path).slots()[slot]
@@ -2017,7 +2076,7 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Finish loading before saving a cue".into());
         }
-        let snapshot = self.engine.snapshot(id);
+        let snapshot = self.engine.borrow().snapshot(id);
         let ui = self.ui.upgrade().ok_or("Window closed")?;
         let (name, rgb) = match id {
             DeckId::A => (ui.get_left_cue_name(), ui.get_left_cue_rgb()),
@@ -2060,7 +2119,7 @@ impl AudioController {
             .ok()
             .filter(|s| *s < crate::hot_cues::SLOT_COUNT)
             .ok_or("Cue slot must be 1 through 8")?;
-        let source = self.engine.snapshot(id);
+        let source = self.engine.borrow().snapshot(id);
         let path = source.path.ok_or("Load a track first")?;
         let cues = self.library.borrow().hot_cues(&path);
         if !delete {
@@ -2089,9 +2148,11 @@ impl AudioController {
                         DeckId::A => ui.get_left_quantize_step(),
                         DeckId::B => ui.get_right_quantize_step(),
                     })?;
-                    self.engine.schedule_cue(id, cue.position(), step)?;
+                    self.engine
+                        .borrow()
+                        .schedule_cue(id, cue.position(), step)?;
                 } else {
-                    self.engine.seek_position(id, cue.position())?;
+                    self.engine.borrow().seek_position(id, cue.position())?;
                 }
                 if !scheduled {
                     self.cancel_nudge(id);
@@ -2164,13 +2225,13 @@ impl AudioController {
                 .is_some_and(|ui| !ui.get_quantize_enabled())
             {
                 // Globales Bypass verwirft nur wartende Trigger, keine Deck-Präferenzen.
-                engine.cancel_scheduled_cue(DeckId::A);
-                engine.cancel_scheduled_cue(DeckId::B);
+                engine.borrow().cancel_scheduled_cue(DeckId::A);
+                engine.borrow().cancel_scheduled_cue(DeckId::B);
             }
         });
         for id in [DeckId::A, DeckId::B] {
             let engine = Rc::clone(&self.engine);
-            let cancel = move || engine.cancel_scheduled_cue(id);
+            let cancel = move || engine.borrow().cancel_scheduled_cue(id);
             match id {
                 DeckId::A => ui.on_cancel_trigger_left(cancel),
                 DeckId::B => ui.on_cancel_trigger_right(cancel),
@@ -2262,7 +2323,7 @@ impl AudioController {
         if self.grid_editors.borrow()[Self::grid_index(id)].is_some() {
             return Err("Save or cancel the existing grid draft first".into());
         }
-        let snapshot = self.engine.snapshot(id);
+        let snapshot = self.engine.borrow().snapshot(id);
         let path = snapshot
             .path
             .ok_or("Load a track before editing its grid")?;
@@ -2320,7 +2381,9 @@ impl AudioController {
         }
         match action {
             GridAction::Tempo => Ok(()),
-            GridAction::Anchor => editor.draft.anchor_here(self.engine.snapshot(id).position),
+            GridAction::Anchor => editor
+                .draft
+                .anchor_here(self.engine.borrow().snapshot(id).position),
             GridAction::Nudge(ms) => editor.draft.nudge(ms),
             GridAction::MeterSet | GridAction::MeterRemove => {
                 let (bar, beats) = match id {
@@ -2346,8 +2409,9 @@ impl AudioController {
         }
     }
     fn apply_saved_grid(&self, id: DeckId) -> Result<(), String> {
-        if let Some(path) = self.engine.snapshot(id).path {
+        if let Some(path) = self.engine.borrow().snapshot(id).path {
             self.engine
+                .borrow()
                 .set_grid(id, self.library.borrow().grid(&path))?;
         }
         Ok(())
@@ -2356,7 +2420,7 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Finish library loading before saving its grid".into());
         }
-        let snapshot = self.engine.snapshot(id);
+        let snapshot = self.engine.borrow().snapshot(id);
         let index = Self::grid_index(id);
         let (path, value) = {
             let mut editors = self.grid_editors.borrow_mut();
@@ -2389,7 +2453,7 @@ impl AudioController {
         };
         let inserted = self.library.borrow_mut().insert([path.to_path_buf()]);
         self.library.borrow_mut().set_grid(&path, value)?;
-        self.engine.set_grid(id, value)?;
+        self.engine.borrow().set_grid(id, value)?;
         self.library_changed();
         self.cancel_grid_editor(id);
         if inserted > 0 {
@@ -2402,12 +2466,14 @@ impl AudioController {
         };
         if self
             .engine
+            .borrow()
             .snapshot(other)
             .path
             .as_ref()
             .is_some_and(|p| crate::library::identity(p) == crate::library::identity(&path))
         {
             self.engine
+                .borrow()
                 .set_grid(other, value)
                 .map_err(|e| format!("Grid saved; other deck: {e}"))?;
         }
@@ -2610,24 +2676,26 @@ impl AudioController {
         }
     }
     fn output_route(&self) -> Option<crate::output_preferences::OutputRoute> {
-        self.engine.output_device_key().cloned().map(|device| {
-            crate::output_preferences::OutputRoute {
+        self.engine
+            .borrow()
+            .output_device_key()
+            .cloned()
+            .map(|device| crate::output_preferences::OutputRoute {
                 device,
-                pair: self.engine.output_pair(),
+                pair: self.engine.borrow().output_pair(),
 
-                monitor: (self.engine.output_channels() >= 4).then(|| {
-                    let settings = self.engine.monitor_settings();
+                monitor: (self.engine.borrow().output_channels() >= 4).then(|| {
+                    let settings = self.engine.borrow().monitor_settings();
                     crate::output_preferences::MonitorPreferences {
                         gain: settings.gain,
                         mix: settings.mix,
                         cues: [
-                            self.engine.headphone_cue(DeckId::A),
-                            self.engine.headphone_cue(DeckId::B),
+                            self.engine.borrow().headphone_cue(DeckId::A),
+                            self.engine.borrow().headphone_cue(DeckId::B),
                         ],
                     }
                 }),
-            }
-        })
+            })
     }
     fn pending_fx(&self, include_inflight: bool) -> Option<crate::delay_fx::FxPreferences> {
         if !self.fx_writable.get() {
@@ -2655,7 +2723,7 @@ impl AudioController {
             }
         };
         for (id, setting) in [DeckId::A, DeckId::B].into_iter().zip(value.decks) {
-            let _ = self.engine.set_fx(id, setting);
+            let _ = self.engine.borrow().set_fx(id, setting);
             self.put_fx_ui(id, setting);
         }
         *self.fx_state.borrow_mut() = value.clone();
@@ -2694,10 +2762,11 @@ impl AudioController {
         &self,
         profiles: Result<crate::output_preferences::OutputRoutes, String>,
     ) -> Option<String> {
+        *self.output_profiles_cache.borrow_mut() = profiles.clone();
         let mut warning = None;
         let mut monitor = None;
         let pair = match profiles {
-            Ok(profiles) => match self.engine.output_device_key() {
+            Ok(profiles) => match self.engine.borrow().output_device_key() {
                 Some(key) => {
                     let saved = profiles.pair_for(key);
                     monitor = profiles
@@ -2726,22 +2795,22 @@ impl AudioController {
                 0
             }
         };
-        if self.engine.output_channels() >= 4 {
-            let _ =
-                self.engine
-                    .restore_monitor_state(crate::output_preferences::MonitorPreferences {
-                        gain: 1.,
-                        mix: 0.,
-                        cues: [false; 2],
-                    });
+        if self.engine.borrow().output_channels() >= 4 {
+            let _ = self.engine.borrow().restore_monitor_state(
+                crate::output_preferences::MonitorPreferences {
+                    gain: 1.,
+                    mix: 0.,
+                    cues: [false; 2],
+                },
+            );
         }
-        if let Err(error) = self.engine.set_output_pair(pair) {
+        if let Err(error) = self.engine.borrow().set_output_pair(pair) {
             self.output_profiles_writable.set(false);
             warning = Some(error);
-            let _ = self.engine.set_output_pair(0);
+            let _ = self.engine.borrow().set_output_pair(0);
         }
         if let Some(preferences) = monitor {
-            if let Err(error) = self.engine.restore_monitor_state(preferences) {
+            if let Err(error) = self.engine.borrow().restore_monitor_state(preferences) {
                 self.output_profiles_writable.set(false);
                 warning = Some(format!(
                     "{error}; saved monitor profile preserved, session only"
@@ -2761,7 +2830,7 @@ impl AudioController {
                 }
                 .into(),
             );
-            ui.set_output_pair_index(i32::from(self.engine.output_pair()));
+            ui.set_output_pair_index(i32::from(self.engine.borrow().output_pair()));
             ui.set_output_profile_status(
                 if self.output_profiles_writable.get() {
                     "Profile ready"
@@ -2909,6 +2978,11 @@ impl AudioController {
                             }
                         }
                         if output.is_some() {
+                            if let (Ok(profiles), Some(route)) =
+                                (&mut *self.output_profiles_cache.borrow_mut(), &output)
+                            {
+                                let _ = profiles.update(route.clone());
+                            }
                             *self.saved_output.borrow_mut() = output;
                             if let Some(ui) = self.ui.upgrade() {
                                 ui.set_output_profile_status(
@@ -3091,7 +3165,7 @@ impl AudioController {
     }
     fn apply_levels(&self) {
         if let Some(ui) = self.ui.upgrade() {
-            self.engine.set_levels(MixerLevels {
+            self.engine.borrow().set_levels(MixerLevels {
                 crossfader: ui.get_crossfader(),
                 channel_a: ui.get_channel_a(),
                 channel_b: ui.get_channel_b(),
@@ -3118,8 +3192,8 @@ impl AudioController {
                 filter: ui.get_eq_filter_b().into(),
             },
         };
-        if let Err(error) = self.engine.set_eq(id, settings) {
-            let old = self.engine.eq_settings(id);
+        if let Err(error) = self.engine.borrow().set_eq(id, settings) {
+            let old = self.engine.borrow().eq_settings(id);
             match id {
                 DeckId::A => {
                     ui.set_eq_trim_a(old.trim as f32);
@@ -3182,7 +3256,7 @@ impl AudioController {
         let result = if !time.is_finite() || !(20. ..=1000.).contains(&time) {
             Err("Invalid delay time".into())
         } else {
-            self.engine.set_fx(
+            self.engine.borrow().set_fx(
                 id,
                 crate::delay_fx::DelaySettings {
                     enabled,
@@ -3193,10 +3267,11 @@ impl AudioController {
             )
         };
         if let Err(error) = result {
-            self.put_fx_ui(id, self.engine.fx_settings(id));
+            self.put_fx_ui(id, self.engine.borrow().fx_settings(id));
             ui.set_status(error.into());
         } else {
-            self.fx_state.borrow_mut().decks[Self::grid_index(id)] = self.engine.fx_settings(id);
+            self.fx_state.borrow_mut().decks[Self::grid_index(id)] =
+                self.engine.borrow().fx_settings(id);
             self.observe_quantize_preferences();
         }
     }
@@ -3211,7 +3286,7 @@ impl AudioController {
             return;
         }
         if save {
-            self.fx_state.borrow_mut().presets[slot] = Some(self.engine.fx_settings(id));
+            self.fx_state.borrow_mut().presets[slot] = Some(self.engine.borrow().fx_settings(id));
         } else {
             let value = self.fx_state.borrow().presets[slot];
             let Some(value) = value else {
@@ -3220,7 +3295,7 @@ impl AudioController {
                 }
                 return;
             };
-            if self.engine.set_fx(id, value).is_ok() {
+            if self.engine.borrow().set_fx(id, value).is_ok() {
                 self.put_fx_ui(id, value);
                 self.fx_state.borrow_mut().decks[Self::grid_index(id)] = value;
             }
@@ -3240,7 +3315,7 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
-        if self.engine.snapshot(id).playing {
+        if self.engine.borrow().snapshot(id).playing {
             ui.set_status(format!("Pause deck {id:?} before replacing its track").into());
             return;
         }
@@ -3286,9 +3361,9 @@ impl AudioController {
                 self.library.borrow_mut().set_metadata(&path, metadata);
                 self.library_changed();
                 self.publish_library();
-                if self.engine.snapshot(id).playing {
+                if self.engine.borrow().snapshot(id).playing {
                     ui.set_status(format!("Load discarded: deck {id:?} started playing").into());
-                } else if let Err(error) = self.engine.try_install(id, track) {
+                } else if let Err(error) = self.engine.borrow().try_install(id, track) {
                     ui.set_status(format!("Deck {id:?}: {error}").into());
                 } else {
                     ui.set_status(format!("Deck {id:?} loaded and paused").into());
@@ -3303,6 +3378,149 @@ impl AudioController {
             None => ui.set_status("Selection cancelled".into()),
         }
         self.refresh();
+    }
+    pub fn audio_owner(&self) -> Rc<RefCell<Rc<DualDeckEngine>>> {
+        self.engine.clone()
+    }
+    pub fn transport_accept_after(&self) -> std::time::Instant {
+        self.transport_accept_after.get()
+    }
+    fn device_switch_allowed(&self) -> Result<(), String> {
+        if !self.storage_ready.get() {
+            return Err("Wait for library/profile loading before changing output".into());
+        }
+        if [DeckId::A, DeckId::B]
+            .into_iter()
+            .any(|id| self.engine.borrow().snapshot(id).playing)
+        {
+            return Err("Pause both decks before changing audio device".into());
+        }
+        if self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+            || self.keylock_jobs.borrow().iter().any(Option::is_some)
+            || self.pending_pitch.borrow().iter().any(Option::is_some)
+            || self.pending_sync.borrow().is_some()
+            || self.sync_session.borrow().is_some()
+            || self.nudges.borrow().iter().any(Option::is_some)
+        {
+            return Err("Finish loading and tempo preparation before changing audio device".into());
+        }
+        if self.cue_editors.borrow().iter().any(Option::is_some)
+            || self.grid_editors.borrow().iter().any(Option::is_some)
+        {
+            return Err("Close deck editors before changing audio device".into());
+        }
+        Ok(())
+    }
+    fn request_device_switch(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let result = (|| {
+            if self.pending_device_switch.borrow().is_some()
+                || self.device_scan.borrow().is_some()
+                || self.startup_audio_saving.get()
+            {
+                return Err("Wait for the pending audio operation".to_string());
+            }
+            self.device_switch_allowed()?;
+            let index = usize::try_from(ui.get_audio_device_choice())
+                .map_err(|_| "Invalid audio device selection")?;
+            let choices = self.device_choices.borrow();
+            let device = if index == 0 {
+                None
+            } else {
+                let choice = choices
+                    .get(index - 1)
+                    .ok_or("Invalid audio device selection")?;
+                crate::audio_devices::unique_choice(&choices, &choice.selector)?;
+                Some(choice.selector.clone())
+            };
+            Ok(crate::audio_devices::StartupSelection { version: 1, device })
+        })();
+        match result {
+            Ok(selection) => {
+                *self.pending_device_switch.borrow_mut() = Some(selection);
+                ui.set_audio_device_switching(true);
+                ui.set_audio_device_status(
+                    "Preparing output change; saving pending settings first…".into(),
+                );
+                self.save_library();
+            }
+            Err(error) => ui.set_audio_device_status(error.into()),
+        }
+    }
+    fn poll_device_switch(&self) {
+        if self.pending_device_switch.borrow().is_none() {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else { return };
+        let error = self.device_switch_allowed().err().or_else(|| {
+            self.save_failed
+                .get()
+                .then(|| "Save failed; retry saving before changing audio device".to_string())
+        });
+        if let Some(error) = error {
+            self.pending_device_switch.borrow_mut().take();
+            ui.set_audio_device_switching(false);
+            ui.set_audio_device_status(error.into());
+            return;
+        }
+        if self.saving.get()
+            || (self.dirty.get() && self.persistence.borrow().is_some())
+            || self.startup_audio_saving.get()
+        {
+            self.save_library();
+            return;
+        }
+        let selection = self.pending_device_switch.borrow_mut().take().unwrap();
+        let old = self.engine.borrow().clone();
+        let result = (self.device_opener)(selection.device.as_ref()).and_then(|engine| {
+            engine.inherit_paused_decks(&old)?;
+            Ok(Rc::new(engine))
+        });
+        match result {
+            Ok(engine) => {
+                if let (Ok(profiles), Some(route)) = (
+                    &mut *self.output_profiles_cache.borrow_mut(),
+                    self.output_route(),
+                ) {
+                    let _ = profiles.update(route);
+                }
+                let previous = self.engine.replace(engine);
+                let profiles = self.output_profiles_cache.borrow().clone();
+                let warning = self.restore_output_routes(profiles);
+                let count = (self.engine.borrow().output_channels() / 2).max(1);
+                let names = (0..count)
+                    .map(|pair| {
+                        if self.engine.borrow().output_channels() == 1 {
+                            "OUT 1 (mono)".into()
+                        } else {
+                            format!("OUT {}/{}", pair * 2 + 1, pair * 2 + 2).into()
+                        }
+                    })
+                    .collect::<Vec<slint::SharedString>>();
+                ui.set_output_pair_options(ModelRc::new(VecModel::from(names)));
+                ui.set_audio_device_current(
+                    format!(
+                        "{} ({} channels)",
+                        self.engine.borrow().output_device_label(),
+                        self.engine.borrow().output_channels()
+                    )
+                    .into(),
+                );
+                ui.set_audio_startup_warning("".into());
+                ui.set_audio_device_status(warning.map_or_else(||"Audio device changed; decks remain paused. Save separately for next start".to_string(),|warning|format!("Audio device changed; {warning}")).into());
+                self.displayed_overviews.borrow_mut().fill(None);
+                self.displayed_details.borrow_mut().fill_with(|| None);
+                self.refresh();
+                drop(previous);
+            }
+            Err(error) => ui.set_audio_device_status(
+                format!("Output change failed; previous device retained: {error}").into(),
+            ),
+        }
+        drop(old);
+        self.transport_accept_after.set(std::time::Instant::now());
+        ui.set_audio_device_switching(false);
     }
     fn start_device_scan(&self) {
         if self.device_scan.borrow().is_some() || self.startup_audio_saving.get() {
@@ -3426,7 +3644,7 @@ impl AudioController {
     }
     pub fn tick(&self) {
         self.poll_device_scan();
-        self.engine.collect_retired();
+        self.engine.borrow().collect_retired();
         self.cancel_stale_nudges();
         self.apply_pending_pitch();
         self.poll_keylock();
@@ -3510,8 +3728,9 @@ impl AudioController {
                 },
             );
         }
-        self.maintain_sync(self.engine.control_now());
+        self.maintain_sync(self.engine.borrow().control_now());
         self.save_library();
+        self.poll_device_switch();
         self.refresh();
     }
     pub fn import_paths(&self, paths: Vec<PathBuf>) {
@@ -3832,25 +4051,27 @@ impl AudioController {
             return;
         };
         ui.set_audio_device_ready(self.storage_ready.get() && self.persistence.borrow().is_some());
-        ui.set_monitor_available(self.engine.output_channels() >= 4 && self.storage_ready.get());
-        ui.set_monitor_cue_a(self.engine.headphone_cue(DeckId::A));
-        ui.set_monitor_cue_b(self.engine.headphone_cue(DeckId::B));
-        let monitor = self.engine.monitor_settings();
+        ui.set_monitor_available(
+            self.engine.borrow().output_channels() >= 4 && self.storage_ready.get(),
+        );
+        ui.set_monitor_cue_a(self.engine.borrow().headphone_cue(DeckId::A));
+        ui.set_monitor_cue_b(self.engine.borrow().headphone_cue(DeckId::B));
+        let monitor = self.engine.borrow().monitor_settings();
         ui.set_monitor_gain(monitor.gain * 100.);
         ui.set_monitor_mix(monitor.mix * 100.);
-        let (caption, level, warning) = peak_display(self.engine.output_peak());
+        let (caption, level, warning) = peak_display(self.engine.borrow().output_peak());
         ui.set_output_peak_caption(caption.into());
         ui.set_output_peak_level(level);
         ui.set_output_peak_warning(warning);
         for (id, name) in [(DeckId::A, "A"), (DeckId::B, "B")] {
-            let (caption, level, invalid) = peak_display(self.engine.channel_peak(id));
-            let state = if self.engine.snapshot(id).playing {
+            let (caption, level, invalid) = peak_display(self.engine.borrow().channel_peak(id));
+            let state = if self.engine.borrow().snapshot(id).playing {
                 "PRE"
             } else {
                 "PRE LAST"
             };
             let caption = caption.replacen("BUS", &format!("{name} {state}"), 1);
-            let clipped = self.engine.channel_clipped(id);
+            let clipped = self.engine.borrow().channel_clipped(id);
             match id {
                 DeckId::A => {
                     ui.set_channel_a_peak_caption(caption.into());
@@ -3902,7 +4123,7 @@ impl AudioController {
         ui.set_left_busy(!self.can_control_deck(DeckId::A));
         ui.set_right_busy(!self.can_control_deck(DeckId::B));
         for id in [DeckId::A, DeckId::B] {
-            let s = self.engine.snapshot(id);
+            let s = self.engine.borrow().snapshot(id);
             let index = Self::grid_index(id);
             let desired = s.detail.as_ref().map_or(s.requested_speed, |source| {
                 self.desired_pitch(id, source, s.requested_speed)
@@ -3932,7 +4153,7 @@ impl AudioController {
                 "Requested {:+.2}% · effective {:+.4}% · {}",
                 (desired - 1.) * 100.,
                 (s.effective_speed - 1.) * 100.,
-                if self.engine.keylock_factor(id).is_some() {
+                if self.engine.borrow().keylock_factor(id).is_some() {
                     "Keylock"
                 } else {
                     "coupled"
@@ -4389,7 +4610,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         fn finish_keylock(c: &AudioController, id: DeckId) {
             let deadline = Instant::now() + Duration::from_secs(15);
-            while c.engine.keylock_factor(id).is_none()
+            while c.engine.borrow().keylock_factor(id).is_none()
                 || c.keylock_jobs.borrow()[AudioController::grid_index(id)].is_some()
             {
                 c.poll_keylock();
@@ -8512,6 +8733,67 @@ mod tests {
         assert!(!c.startup_audio_saving.get());
         ui.hide().unwrap();
         c.close_library().unwrap();
+    }
+    #[test]
+    fn paused_device_switch_is_transactional_and_replaces_shared_owner() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 4, 48000));
+        let weak = Rc::downgrade(&engine);
+        let fail = Rc::new(Cell::new(true));
+        let fail_open = fail.clone();
+        let c = AudioController::wire_with_audio_services(
+            &ui,
+            engine.clone(),
+            Arc::new(|| None),
+            Arc::new(|| None),
+            Arc::new(|| Ok(vec![])),
+            Rc::new(move |_| {
+                if fail_open.get() {
+                    return Err("injected open failure".into());
+                }
+                let (mixer, _output) = rodio::mixer::mixer(2, 44100);
+                Ok(DualDeckEngine::from_mixer(mixer, 2, 44100))
+            }),
+        );
+        let track = wav_file(8192, 192000);
+        engine.load_a(track.path()).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(250))
+            .unwrap();
+        ui.set_audio_device_choice(0);
+        engine.play(DeckId::A);
+        ui.invoke_audio_device_apply();
+        assert!(c.pending_device_switch.borrow().is_none());
+        assert!(ui.get_audio_device_status().contains("Pause both"));
+        engine.pause(DeckId::A);
+        ui.invoke_audio_device_apply();
+        c.poll_device_switch();
+        assert!(Rc::ptr_eq(&c.engine.borrow(), &engine));
+        assert!(ui
+            .get_audio_device_status()
+            .contains("previous device retained"));
+        let owner = c.audio_owner();
+        fail.set(false);
+        ui.invoke_audio_device_apply();
+        c.poll_device_switch();
+        assert!(!Rc::ptr_eq(&owner.borrow(), &engine));
+        assert_eq!(owner.borrow().output_channels(), 2);
+        assert_eq!(
+            owner.borrow().snapshot(DeckId::A).position,
+            engine.snapshot(DeckId::A).position
+        );
+        assert_eq!(
+            owner.borrow().snapshot(DeckId::A).path,
+            engine.snapshot(DeckId::A).path
+        );
+        assert!(!owner.borrow().snapshot(DeckId::A).playing);
+        assert!(!ui.get_audio_device_switching());
+        drop(engine);
+        assert!(weak.upgrade().is_none());
+        ui.invoke_toggle_left();
+        assert!(owner.borrow().snapshot(DeckId::A).playing);
     }
     #[test]
     fn monitor_profiles_restore_latest_ack_and_close_flush_only_for_matching_device() {

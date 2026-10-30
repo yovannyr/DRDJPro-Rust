@@ -782,6 +782,8 @@ export component AppWindow inherits Window {
     in property <string> audio-startup-warning:"";
     callback audio-device-scan();
     callback audio-device-save();
+    callback audio-device-apply();
+    in property <bool> audio-device-switching:false;
     in property <string> channel-a-peak-caption: "A PRE —";
     in property <string> channel-b-peak-caption: "B PRE —";
     in property <float> channel-a-peak-level;
@@ -1173,11 +1175,12 @@ export component AppWindow inherits Window {
             padding:10px;spacing:8px;
             HorizontalLayout {Text {text:"CURRENT: " + root.audio-device-current;color:#edf2fa;} Button {text:"CLOSE AUDIO";accessible-label:"Close audio device settings";clicked=>{root.audio-device-open=false;}}}
             Text {text:root.audio-startup-warning;color:#ffb86c;wrap:word-wrap;}
-            Text {text:"OUTPUT FOR NEXT START (current playback is preserved)";color:#edf2fa;}
-            ComboBox {accessible-label:"Next startup audio device";model:root.audio-device-names;current-index <=> root.audio-device-choice;enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving;}
+            Text {text:"OUTPUT DEVICE — apply now with paused decks, or save for next start";color:#edf2fa;}
+            ComboBox {accessible-label:"Audio output device selection";model:root.audio-device-names;current-index <=> root.audio-device-choice;enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;}
             HorizontalLayout {
-                Button {text:root.audio-device-scanning ? "SCANNING…":"REFRESH";accessible-label:"Refresh audio devices";enabled:!root.audio-device-scanning && !root.audio-device-saving;clicked=>{root.audio-device-scan();}}
-                Button {text:root.audio-device-saving ? "SAVING…":"SAVE FOR NEXT START";accessible-label:"Save next startup audio device";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving;clicked=>{root.audio-device-save();}}
+                Button {text:root.audio-device-scanning ? "SCANNING…":"REFRESH";accessible-label:"Refresh audio devices";enabled:!root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-scan();}}
+                Button {text:root.audio-device-saving ? "SAVING…":"SAVE FOR NEXT START";accessible-label:"Save next startup audio device";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-save();}}
+                Button {text:root.audio-device-switching ? "SWITCHING…":"APPLY NOW";accessible-label:"Apply audio device now";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-apply();}}
             }
             Text {text:root.audio-device-status;color:#edf2fa;wrap:word-wrap;}
         }

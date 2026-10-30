@@ -199,6 +199,10 @@ fn main() -> Result<(), slint::PlatformError> {
         None
     };
 
+    let audio_owner = controller
+        .as_ref()
+        .map(|controller| controller.audio_owner());
+    drop(audio_engine);
     let mut midi = if controller.is_some() {
         match mc4000::Input::connect() {
             Ok(input) => {
@@ -244,6 +248,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 }
                 if let Some(midi) = &mut midi {
+                    midi.discard_buttons_before(controller.transport_accept_after());
                     if midi.poll(|command| {
                         let before = (ui.get_left_playing(), ui.get_right_playing());
                         let transport = matches!(&command, mc4000::Command::Toggle(_));
@@ -295,7 +300,7 @@ fn main() -> Result<(), slint::PlatformError> {
     lifecycle_trace("MIDI/timer release complete");
     drop(ui);
     lifecycle_trace("UI released");
-    drop(audio_engine);
+    drop(audio_owner);
     lifecycle_trace("audio released");
     result
 }
