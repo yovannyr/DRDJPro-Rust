@@ -321,7 +321,14 @@ component CompactDeck inherits Rectangle {
     callback edit-hot-cue(int); callback save-hot-cue(); callback cancel-hot-cue();
     callback hot-cue(int); callback delete-hot-cue(int);
     callback load(); callback toggle(); callback cue(); callback seek(float);
-    background: #171c24; border-width: 1px; border-color: #303b4b;
+    pure callback accepts-drop(data-transfer) -> bool;
+    callback drop-track(data-transfer) -> bool;
+    background: #171c24; border-width: 1px; border-color: deck-drop.has-drag ? root.accent : #303b4b;
+    deck-drop := DropArea {
+        width: 100%; height: 100%;
+        can-drop(event) => { return root.accepts-drop(event.data) ? DragAction.copy : DragAction.none; }
+        dropped(event) => { return root.drop-track(event.data) ? DragAction.copy : DragAction.none; }
+    }
     VerticalLayout {
         padding: 8px; spacing: 4px;
         HorizontalLayout {
@@ -596,6 +603,7 @@ component CratePanel inherits Rectangle {
 }
 
 component TrackLibrary inherits Rectangle {
+    pure callback track-transfer(string) -> data-transfer;
     in property <bool> job-active;
     callback cancel-job();
     in property <[LibraryRow]> rows;
@@ -661,7 +669,12 @@ component TrackLibrary inherits Rectangle {
                         Text { text: row.available ? (row.metadata-error == "" ? row.format : row.format + " ?") : "MISSING"; color: row.available ? #9faec2 : #ffae58; width: 70px; }
                         Text { text: row.path; color: #9faec2; overflow: elide; horizontal-stretch: 2; }
                     }
-                    TouchArea { clicked => { root.select-track(row.id); nav.focus(); } }
+                    DragArea {
+                        width: 100%; height: 100%; allow-copy: true;
+                        enabled: row.available && !root.busy;
+                        data: root.track-transfer(row.path);
+                        TouchArea { clicked => { root.select-track(row.id); nav.focus(); } }
+                    }
                 }
             }
             Text { text: empty-text; visible: rows.length == 0; color: #9faec2; horizontal-alignment: center; vertical-alignment: center; }
@@ -679,6 +692,9 @@ component TrackLibrary inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
+    pure callback track-transfer(string) -> data-transfer;
+    pure callback accepts-track-drop(int, data-transfer) -> bool;
+    callback drop-track(int, data-transfer) -> bool;
     title: "DrDJ Pro"; preferred-width: 1280px; preferred-height: 860px;
     min-width: 850px; min-height: 740px; background: #090d13;
     in property <[float]> left-waveform;
@@ -963,6 +979,8 @@ export component AppWindow inherits Window {
             height: 260px; spacing: 8px;
             CompactDeck {
                 deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
+                accepts-drop(data) => { return root.accepts-track-drop(0,data); }
+                drop-track(data) => { return root.drop-track(0,data); }
                 waveform: root.left-waveform; colors: root.left-waveform-colors;
                 pitch-range-index <=> root.left-pitch-range-index; pitch-min: root.left-pitch-min; pitch-max: root.left-pitch-max; pitch-outside: root.left-pitch-outside; pitch-can-down: root.left-pitch-can-down; pitch-can-up: root.left-pitch-can-up;
                 pitch-range => { root.pitch-range-left(); } pitch-down => { root.pitch-down-left(); } pitch-up => { root.pitch-up-left(); }
@@ -999,6 +1017,8 @@ export component AppWindow inherits Window {
             }
             CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
+                accepts-drop(data) => { return root.accepts-track-drop(1,data); }
+                drop-track(data) => { return root.drop-track(1,data); }
                 waveform: root.right-waveform; colors: root.right-waveform-colors;
                 pitch-range-index <=> root.right-pitch-range-index; pitch-min: root.right-pitch-min; pitch-max: root.right-pitch-max; pitch-outside: root.right-pitch-outside; pitch-can-down: root.right-pitch-can-down; pitch-can-up: root.right-pitch-can-up;
                 pitch-range => { root.pitch-range-right(); } pitch-down => { root.pitch-down-right(); } pitch-up => { root.pitch-up-right(); }
@@ -1156,6 +1176,7 @@ export component AppWindow inherits Window {
             change-page(delta) => { root.library-change-page(delta); }
             storage-text: root.library-storage; save-failed: root.library-save-failed;
             selection: root.selected-track; query <=> root.library-query;
+            track-transfer(path) => { return root.track-transfer(path); }
             busy: root.loading || root.library-busy || !root.audio-enabled;
             can-load-left: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.left-playing;
             can-load-right: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.right-playing;

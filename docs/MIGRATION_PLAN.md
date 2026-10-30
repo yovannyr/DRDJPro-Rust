@@ -40,6 +40,9 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 
 ### Nächste und offene Arbeitspakete
 
+- [x] ✅ Track aus der Bibliothek auf Deck A/B ziehen: interne DragArea/DropArea, einzelner Audiodateipfad, pausiertes Ziel und bestehender Hintergrund-Loader; tatsächliche Pointer-Drag-Tests bei beiden Fenstergrößen sowie Payload-/Busy-/Playing-Schutz. Kein Dateiverschieben und kein automatischer Start.
+- [ ] ☐ Externe Explorer-Dateidrops: Windows-Winit-Brücke und native Drag-and-drop-Bedienabnahme; interne Headless-Tests sind kein nativer Nachweis.
+
 - [x] ✅ Manuelle Loop-Engine mit framegenauem In/Out, Aktivieren/Verlassen und deterministischen Offline-Tests.
 - [x] ✅ Loop-In/Out, Aktivieren/Verlassen und echte Loop-Zustandsanzeige in beiden Decks.
 - [x] ✅ Datenbasis für acht persistente Saved-Loop-Slots je Track mit validierten Grenzen/Namen und SQLite-Migration.

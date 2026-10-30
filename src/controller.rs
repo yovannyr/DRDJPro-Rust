@@ -402,6 +402,34 @@ impl AudioController {
             )
             .into(),
         );
+        ui.on_track_transfer(|path| {
+            let mut transfer = slint::DataTransfer::default();
+            transfer.set_file_paths([std::path::PathBuf::from(path.as_str())]);
+            transfer
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_accepts_track_drop(move |deck, data| {
+            weak.upgrade()
+                .is_some_and(|c| c.track_drop_path(deck, &data).is_ok())
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_drop_track(move |deck, data| {
+            let Some(c) = weak.upgrade() else {
+                return false;
+            };
+            match c.track_drop_path(deck, &data) {
+                Ok((id, path)) => {
+                    c.start_load(id, Arc::new(move || Some(path.clone())));
+                    c.pending.borrow().is_some()
+                }
+                Err(error) => {
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
+                    false
+                }
+            }
+        });
         let weak = Rc::downgrade(&controller);
         ui.on_audio_device_scan(move || {
             if let Some(c) = weak.upgrade() {
@@ -3331,6 +3359,39 @@ impl AudioController {
             }
         }
         self.observe_quantize_preferences();
+    }
+    // Nur Pfade/Status auf dem UI-Thread prüfen; Dateizugriff und Decode bleiben im Worker.
+    fn track_drop_path(
+        &self,
+        deck: i32,
+        data: &slint::DataTransfer,
+    ) -> Result<(DeckId, PathBuf), String> {
+        let id = match deck {
+            0 => DeckId::A,
+            1 => DeckId::B,
+            _ => return Err("Invalid drop deck".into()),
+        };
+        if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+            || self.pending_device_switch.borrow().is_some()
+        {
+            return Err("Wait for loading or audio operations before dropping a track".into());
+        }
+        if self.engine.borrow().snapshot(id).playing {
+            return Err("Pause the target deck before dropping a replacement track".into());
+        }
+        let mut paths = data
+            .file_paths()
+            .map_err(|_| "Drop one audio file from the library or file manager")?;
+        let path = paths.next().ok_or("Drop one audio file")?;
+        if paths.next().is_some() {
+            return Err("Drop exactly one track onto a deck".into());
+        }
+        if !path.is_absolute() || !crate::audio_formats::supported(path) {
+            return Err("Drop one supported audio file using an absolute path".into());
+        }
+        Ok((id, path.to_owned()))
     }
     fn request_load(&self, id: DeckId) {
         self.start_load(id, Arc::clone(&self.picker));
@@ -8823,6 +8884,156 @@ mod tests {
         assert!(!c.startup_audio_saving.get());
         ui.hide().unwrap();
         c.close_library().unwrap();
+    }
+    #[test]
+    fn track_drop_rejects_invalid_payloads_busy_and_playing_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let c = AudioController::wire(
+            &ui,
+            engine.clone(),
+            Arc::new(|| panic!("drop must not open picker")),
+            Arc::new(|| None),
+        );
+        let wav = wav_file(8192, 192000);
+        let data = ui.invoke_track_transfer(wav.path().to_string_lossy().as_ref().into());
+        assert!(ui.invoke_accepts_track_drop(0, data.clone()));
+        assert!(!ui.invoke_accepts_track_drop(2, data.clone()));
+        assert!(!ui.invoke_accepts_track_drop(
+            0,
+            slint::DataTransfer::from(slint::SharedString::from("text is not a file"))
+        ));
+        let mut multiple = slint::DataTransfer::default();
+        multiple.set_file_paths([wav.path(), wav.path()]);
+        assert!(!ui.invoke_drop_track(0, multiple));
+        assert!(ui.invoke_drop_track(0, data.clone()));
+        assert!(!ui.invoke_drop_track(1, data.clone()));
+        finish(&c);
+        engine.play(DeckId::A);
+        let before = engine.snapshot(DeckId::A);
+        assert!(!ui.invoke_drop_track(0, data.clone()));
+        assert_eq!(engine.snapshot(DeckId::A).path, before.path);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(ui.invoke_drop_track(1, data));
+        finish(&c);
+        assert!(engine.snapshot(DeckId::B).path.is_some());
+        assert!(!engine.snapshot(DeckId::B).playing);
+    }
+    #[test]
+    fn library_pointer_drag_loads_both_decks_at_supported_sizes() {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        i_slint_backend_testing::init_no_event_loop();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            let ui = AppWindow::new().unwrap();
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+            let c = AudioController::wire(
+                &ui,
+                engine.clone(),
+                Arc::new(|| panic!("drag must not open picker")),
+                Arc::new(|| None),
+            );
+            let wav = wav_file(8192, 192000);
+            c.library.borrow_mut().insert([wav.path().to_owned()]);
+            c.publish_library();
+            finish_search(&c);
+            ui.show().unwrap();
+            for (id, label) in [
+                (DeckId::A, "DECK A load track"),
+                (DeckId::B, "DECK B load track"),
+            ] {
+                let row = control(&ui, "Library track 1");
+                let source = row.absolute_position();
+                let button = control(&ui, label);
+                let dest = button.absolute_position();
+                let from = slint::LogicalPosition::new(source.x + 20., source.y + 15.);
+                let target =
+                    slint::LogicalPosition::new(dest.x + 20., dest.y + button.size().height + 8.);
+                ui.window().dispatch_event(WindowEvent::PointerPressed {
+                    position: from,
+                    button: PointerEventButton::Left,
+                });
+                ui.window().dispatch_event(WindowEvent::PointerMoved {
+                    position: slint::LogicalPosition::new(from.x + 20., from.y),
+                });
+                ui.window()
+                    .dispatch_event(WindowEvent::PointerMoved { position: target });
+                ui.window().dispatch_event(WindowEvent::PointerReleased {
+                    position: target,
+                    button: PointerEventButton::Left,
+                });
+                assert!(
+                    c.pending.borrow().is_some(),
+                    "drag did not reach {id:?} at {width}"
+                );
+                finish(&c);
+                assert!(engine.snapshot(id).path.is_some());
+                assert!(!engine.snapshot(id).playing);
+            }
+            ui.hide().unwrap();
+        }
+    }
+    #[test]
+    fn standalone_default_output_plays_both_decks_without_midi() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _old_output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let rendered = Rc::new(RefCell::new(None));
+        let sink = rendered.clone();
+        let c = AudioController::wire_with_audio_services(
+            &ui,
+            engine.clone(),
+            Arc::new(|| None),
+            Arc::new(|| None),
+            Arc::new(|| Ok(vec![])),
+            Rc::new(move |selector| {
+                assert!(
+                    selector.is_none(),
+                    "System default must not require a named controller"
+                );
+                let (mixer, output) = rodio::mixer::mixer(2, 48000);
+                *sink.borrow_mut() = Some(output);
+                Ok(DualDeckEngine::from_mixer(mixer, 2, 48000))
+            }),
+        );
+        let track = wav_file(8192, 192000);
+        engine.load_a(track.path()).unwrap();
+        engine.load_b(track.path()).unwrap();
+        ui.set_audio_device_choice(0);
+        ui.invoke_audio_device_apply();
+        c.poll_device_switch();
+        assert_eq!(c.engine.borrow().output_channels(), 2);
+        assert!(!c.engine.borrow().snapshot(DeckId::A).playing);
+        assert!(!c.engine.borrow().snapshot(DeckId::B).playing);
+        ui.set_channel_a(0.4);
+        ui.set_channel_b(0.8);
+        ui.set_crossfader(0.5);
+        ui.invoke_mixer_changed();
+        ui.invoke_toggle_left();
+        ui.invoke_toggle_right();
+        let samples = rendered
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .by_ref()
+            .take(4800)
+            .collect::<Vec<_>>();
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+        assert!(samples
+            .iter()
+            .skip(2400)
+            .all(|sample| (*sample - 0.15).abs() < 1e-5));
+        c.tick();
+        assert!(ui.get_left_position() > 0.);
+        assert!(ui.get_right_position() > 0.);
+        ui.invoke_toggle_left();
+        ui.invoke_toggle_right();
+        assert!(!c.engine.borrow().snapshot(DeckId::A).playing);
+        assert!(!c.engine.borrow().snapshot(DeckId::B).playing);
     }
     #[test]
     fn failed_output_pauses_and_reopen_preserves_tracks_but_rejects_other_identity() {

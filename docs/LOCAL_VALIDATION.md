@@ -1492,3 +1492,17 @@ GPT-6.1 Sol / medium independent source review accepted with no actionable block
 The previous native test app was closed normally for EXE replacement. At close, the user had loaded Ay! Ven into A and selected OUT 3/4; A was paused and B empty. These current test-profile preferences/catalog changes were preserved by normal shutdown. No native USB fault, recovery or listening acceptance of this new release is inferred from headless tests.
 
 Final sequential gates exited 0: cargo fmt --all --check; cargo clippy --workspace --locked --all-targets -- -D warnings; cargo test --workspace --locked --quiet (306 application plus five DSP passed, six qualifications ignored; application suite 33.32s); cargo build --workspace --release --locked (1m 07s); git diff --check. Runtime source unchanged after these gates. GPT-6.1 Sol / medium also accepted final documentation scope.
+
+## Library-to-deck track dragging (2026-10-30)
+
+User-requested loading interaction: copy-only Slint library row DragArea payloads and deck DropAreas, wired to the existing background load worker without opening a file picker. Hover/drop validate one absolute supported file path, target pause and storage/track/import/device-operation readiness. No filesystem work on hover, no move/delete and no auto-play. UI bindings preserve click selection and shared controller callbacks use weak ownership.
+
+Independent GPT-6.1 Sol / medium static review and follow-up accepted without actionable blocking findings. Headless pointer events load the actual library row into both decks at both supported window sizes. Initial fixture failed to find the row because asynchronous search publication was not awaited; finish_search now establishes the ready source before the drag. An initial test compile used an unsupported DataTransfer From<&str>; corrected to SharedString. Full final checks passed after those fixes. Other regressions reject text/multiple payloads, invalid decks, busy loading and playing-target replacement, and load the other paused deck while A plays.
+
+The previously uncommitted standalone default-output regression was preserved and is included in the passing suite: selects System default via an unnamed selector, retains loaded tracks, renders the expected mixed stereo PCM from both GUI-started decks and pauses both without constructing MIDI input. This is offline/headless evidence; user previously confirmed actual PC playback on both decks after B's closed fader was opened. No additional native listening test was performed for this checkpoint.
+
+Final cargo fmt --all --check and cargo clippy --workspace --locked --all-targets -- -D warnings exited 0. cargo test --workspace --locked --quiet exited 0: 309 application plus five DSP passed, six qualifications ignored; application suite 30.66s. Runtime source unchanged after these gates. Release build result is recorded below when completed. No DrDJ window remained open when the release build started; no user app was closed by automation.
+
+Scope limitation: current Windows Winit backend has no Explorer/native file-drop forwarding into Slint DropArea. Internal library -> deck loading is implemented; external Explorer drop/native interaction/visual acceptance are not inferred from the headless pointer tests. No dependency upgrade or Windows hook was added.
+
+Final cargo build --workspace --release --locked exited 0 (1m 30s). git diff --check exited 0; no runtime source changes followed the final checks.
