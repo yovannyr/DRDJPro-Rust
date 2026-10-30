@@ -1293,3 +1293,10 @@ The intermittent initially silent controller starts remain unresolved. DRDJ_MIDI
 A new A/B regression confirms note-on press triggers one GUI action and note-on-zero/note-off releases plus unrelated notes do not trigger a second action. Local fmt check, strict workspace locked all-target Clippy and workspace locked tests passed: 275 application plus five DSP tests, five qualifications ignored (application 29.39s). Independent gpt-6.1-sol / medium static review found no blocking issue. Physical reproduction and root-cause correction are still pending; no speculative mapping fix or successful resolution is claimed.
 
 Final release retry exited 0 (cargo build --workspace --release --locked, 1m 36s) after normal shutdown of the owned test GUI. The initial build failed to replace the running EXE with Windows access denied; no check was bypassed. Final git diff --check passed.
+
+
+## Instrumented physical controller starts A/B (2026-10-30)
+
+The user confirmed both decks running and audible in the diagnostic release with the isolated profile, both channel faders initially 25 percent and centered crossfader. A raw press 90 00 7F decoded to Toggle(0), changing playing (false,false) to (true,false); release 90 00 00 decoded to None. A later second press toggled A back to paused and its release again did not dispatch. B raw press 91 00 7F decoded to Toggle(1), changing (false,false) to (false,true); release 91 00 00 decoded to None. No extra toggle on release or dropped action was reported in this captured sequence. B was left playing after the user's audible confirmation.
+
+These are successful instrumented controller-start observations on each deck, not a reproduction or correction of the previous initially silent attempts. Their cause remains unresolved; do not close the intermittent-start investigation based on two successful starts. No code changed, no additional Cargo tests were run, and this does not establish repeated-start/hotplug/endurance acceptance.
