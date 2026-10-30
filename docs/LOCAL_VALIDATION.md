@@ -1327,3 +1327,14 @@ Other added tests cover closed B fader with A master/B dry cue despite full-wet 
 Final local fmt check, strict workspace locked all-target Clippy and workspace locked tests exited 0: 281 application plus five DSP passed, five qualifications ignored (application suite 33.87s). No native independent-cue listening was performed. The new controls stay unused by production UI until the next bounded wiring slice; no completed end-user cue capability is claimed. Detailed topology/meter behavior and limitations are in AUDIO_PLAYBACK.md.
 
 Final cargo build --workspace --release --locked exited 0 (1m 06s); git diff --check passed. Earlier release builds were superseded by the final race fix and were not used as final evidence.
+
+
+## Headphone monitor GUI wiring (2026-10-30)
+
+Continued the routing package with MON overlay, separate pre-fader Cue A/B checkboxes, fixed OUT 3/4 caption and session/error status. Controller callbacks validate deck identity, call the engine's admission checks and refresh the controls from actual cue state after both success and rejection. Devices below four channels disable selections; an incompatible master route or multichannel track returns a visible error. No implicit master reroute, MIDI cue binding, software headphone gain/blend or persistent cue state was added.
+
+The new headless integration test opens MON through its accessible action, selects B through the checkbox action, and checks actual four-channel output [0,0,0.25,0.25] with muted master. It verifies disabling cue, restoring a rejected A selection when master occupies 3/4, unchanged B transport, and bounds for both checkboxes/close at 850x740 and 1280x860. This is headless interaction/geometry evidence, not native listening or visual acceptance. Independent gpt-6.1-sol / medium initial and enhanced-test/documentation follow-up reviews reported no actionable findings.
+
+Final cargo fmt --all --check, cargo clippy --workspace --locked --all-targets -- -D warnings, cargo test --workspace --locked --quiet and git diff --check exited 0. Tests: 282 application plus five DSP passed, five qualifications ignored; application suite 29.80s. No source changes followed these checks. Simultaneous physical MASTER/headphone cue acceptance is still pending.
+
+Final cargo build --workspace --release --locked exited 0 (1m 45s).

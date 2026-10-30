@@ -451,6 +451,34 @@ impl AudioController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        ui.set_monitor_status(
+            if controller.engine.output_channels() >= 4 {
+                "Select a master pair other than OUT 3/4; cue uses OUT 3/4 (session only)"
+            } else {
+                "Independent cue requires an output device with at least four channels"
+            }
+            .into(),
+        );
+        ui.on_monitor_cue_changed(move |deck| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(ui) = c.ui.upgrade() {
+                    let request = match deck {
+                        0 => Some((DeckId::A, ui.get_monitor_cue_a())),
+                        1 => Some((DeckId::B, ui.get_monitor_cue_b())),
+                        _ => None,
+                    };
+                    if let Some((id, enabled)) = request {
+                        let status = match c.engine.set_headphone_cue(id, enabled) {
+                            Ok(()) => "Headphone cue updated (session only)".to_string(),
+                            Err(error) => error,
+                        };
+                        ui.set_monitor_status(status.into());
+                    }
+                    c.refresh();
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         ui.on_fx_changed(move |deck| {
             if let Some(c) = weak.upgrade() {
                 match deck {
@@ -3509,6 +3537,9 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        ui.set_monitor_available(self.engine.output_channels() >= 4);
+        ui.set_monitor_cue_a(self.engine.headphone_cue(DeckId::A));
+        ui.set_monitor_cue_b(self.engine.headphone_cue(DeckId::B));
         let (caption, level, warning) = peak_display(self.engine.output_peak());
         ui.set_output_peak_caption(caption.into());
         ui.set_output_peak_level(level);
@@ -4493,6 +4524,60 @@ mod tests {
                 .unwrap()
                 .enabled
         );
+    }
+    #[test]
+    fn headphone_monitor_gui_drives_pre_fader_bus_and_restores_rejected_selection() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 4, 48000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let track = wav_file(8192, 48000 * 3);
+        engine.load_b(track.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            channel_a: 0.,
+            channel_b: 0.,
+            crossfader: 0.,
+        });
+        engine.play(DeckId::B);
+        ui.show().unwrap();
+        control(&ui, "Show headphone monitor").invoke_accessible_default_action();
+        assert!(ui.get_monitor_open());
+        control(&ui, "Deck B headphone cue").invoke_accessible_default_action();
+        assert!(engine.headphone_cue(DeckId::B));
+        assert!(ui.get_monitor_available());
+        assert!(!ui.get_monitor_cue_a());
+        output.by_ref().take(10000).for_each(drop);
+        assert_eq!(
+            output.by_ref().take(4).collect::<Vec<_>>(),
+            vec![0., 0., 0.25, 0.25]
+        );
+        ui.set_monitor_cue_b(false);
+        ui.invoke_monitor_cue_changed(1);
+        engine.set_output_pair(1).unwrap();
+        ui.set_monitor_cue_a(true);
+        ui.invoke_monitor_cue_changed(0);
+        assert!(!ui.get_monitor_cue_a());
+        assert!(ui.get_monitor_status().contains("master pair"));
+        assert!(!engine.headphone_cue(DeckId::A));
+        c.tick();
+        assert!(engine.snapshot(DeckId::B).playing);
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for label in [
+                "Deck A headphone cue",
+                "Deck B headphone cue",
+                "Close headphone monitor",
+            ] {
+                let item = control(&ui, label);
+                assert!(item.size().width > 0. && item.size().height > 0.);
+                let pos = item.absolute_position();
+                assert!(pos.x >= 0. && pos.y >= 0.);
+                assert!(pos.x + item.size().width <= width + 1.);
+                assert!(pos.y + item.size().height <= height + 1.);
+            }
+        }
+        ui.hide().unwrap();
     }
     #[test]
     fn channel_meter_gui_is_pre_fader_independent_and_clip_hold_is_explicit() {

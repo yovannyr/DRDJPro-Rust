@@ -762,6 +762,12 @@ export component AppWindow inherits Window {
     in property <string> fx-status:"FX session only";
     callback fx-changed(int);
     callback fx-preset(int,int,bool);
+    in-out property <bool> monitor-open: false;
+    in-out property <bool> monitor-cue-a: false;
+    in-out property <bool> monitor-cue-b: false;
+    in property <bool> monitor-available: false;
+    in property <string> monitor-status: "Independent cue unavailable";
+    callback monitor-cue-changed(int);
     in property <string> channel-a-peak-caption: "A PRE —";
     in property <string> channel-b-peak-caption: "B PRE —";
     in property <float> channel-a-peak-level;
@@ -1011,6 +1017,7 @@ export component AppWindow inherits Window {
                 Text { text: "A"; color: #36c9ef; vertical-alignment: center; }
                 Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.eq-open = !root.eq-open; } }
                 Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{root.fx-open=!root.fx-open;}}
+                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.monitor-open=!root.monitor-open;}}
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -1138,6 +1145,24 @@ export component AppWindow inherits Window {
             }
         }
         Text { height: 22px; accessible-role: text; accessible-label: "Application status"; text: root.status; color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; }
+    }
+    if root.monitor-open : Rectangle {
+        x:16px;y:60px;width:parent.width - 32px;height:170px;
+        background:#0b1119;border-width:1px;border-color:#53657d;
+        accessible-role:groupbox;accessible-label:"Headphone monitor panel";
+        VerticalLayout {
+            padding:10px;spacing:8px;
+            HorizontalLayout {
+                Text {text:"HEADPHONE CUE — OUT 3/4";color:#edf2fa;}
+                Button {text:"CLOSE MON";accessible-label:"Close headphone monitor";clicked=>{root.monitor-open=false;}}
+            }
+            Text {text:root.monitor-status;color:#edf2fa;}
+            HorizontalLayout {
+                CheckBox {text:"CUE A (pre-fader)";accessible-label:"Deck A headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-a;toggled=>{root.monitor-cue-changed(0);}}
+                CheckBox {text:"CUE B (pre-fader)";accessible-label:"Deck B headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-b;toggled=>{root.monitor-cue-changed(1);}}
+            }
+            Text {text:"Session only. Use hardware headphone level; no Cue/Master blend yet.";color:#a6b4c8;}
+        }
     }
     if root.fx-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:340px;

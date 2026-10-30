@@ -1498,13 +1498,9 @@ impl DualDeckEngine {
         self.mix_controls[0].set_gain(a);
         self.mix_controls[1].set_gain(b);
     }
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Engine cue boundary; GUI wiring follows in next slice"
-        )
-    )]
+    pub fn headphone_cue(&self, id: DeckId) -> bool {
+        self.cue_enabled[id.index()].get()
+    }
     pub fn set_headphone_cue(&self, id: DeckId, enabled: bool) -> Result<(), String> {
         if enabled
             && self.decks.iter().any(|d| {
