@@ -1532,6 +1532,35 @@ impl DualDeckEngine {
     pub fn monitor_settings(&self) -> crate::output_routing::MonitorSettings {
         self.monitor_settings.get()
     }
+    pub fn restore_monitor_state(
+        &self,
+        preferences: crate::output_preferences::MonitorPreferences,
+    ) -> Result<(), String> {
+        preferences.settings().validate()?;
+        let active = preferences.mix > 0. || preferences.cues.into_iter().any(|v| v);
+        if self.output_channels < 4 {
+            return Err("Monitor preferences require at least four output channels".into());
+        }
+        if active
+            && self.decks.iter().any(|d| {
+                d.borrow()
+                    .track
+                    .as_ref()
+                    .is_some_and(|t| t.samples.channels() > 2)
+            })
+        {
+            return Err("Saved monitor preferences require mono/stereo tracks".into());
+        }
+        self.output_routing.set_cue_enabled(active)?;
+        self.output_routing.set_monitor(preferences.settings());
+        for (index, selected) in preferences.cues.into_iter().enumerate() {
+            self.mix_controls[index].set_monitor_mode(active);
+            self.mix_controls[index].set_cue(selected);
+            self.cue_enabled[index].set(selected);
+        }
+        self.monitor_settings.set(preferences.settings());
+        Ok(())
+    }
     pub fn set_monitor_settings(
         &self,
         settings: crate::output_routing::MonitorSettings,

@@ -1429,6 +1429,64 @@ mod tests {
     }
     use super::*;
     #[test]
+    fn monitor_profile_roundtrip_and_combined_save_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let delta = library::CatalogDelta {
+            revision: 1,
+            tracks: vec![],
+            crates: None,
+            memberships: vec![],
+        };
+        let mut route = OutputRoute {
+            device: crate::output_preferences::OutputDeviceKey {
+                backend: "Test".into(),
+                name: "MC4000".into(),
+                channels: 4,
+            },
+            pair: 0,
+            monitor: Some(crate::output_preferences::MonitorPreferences {
+                gain: 0.4,
+                mix: 0.5,
+                cues: [false, true],
+            }),
+        };
+        store
+            .save_all_state(&delta, None, Some(route.clone()))
+            .unwrap();
+        assert_eq!(store.read_output_routes().unwrap().routes[0], route);
+        store.connection.execute_batch("CREATE TRIGGER reject_monitor BEFORE INSERT ON library_meta WHEN NEW.key='audio_output_routes_v1' BEGIN SELECT RAISE(ABORT,'injected monitor failure'); END;").unwrap();
+        route.monitor.as_mut().unwrap().gain = 0.8;
+        assert!(store
+            .save_all_state(
+                &delta,
+                Some(QuantizePreferences {
+                    enabled: false,
+                    ..Default::default()
+                }),
+                Some(route)
+            )
+            .is_err());
+        assert!(store.read_quantize_preferences().unwrap().enabled);
+        assert_eq!(
+            store.read_output_routes().unwrap().routes[0]
+                .monitor
+                .unwrap()
+                .gain,
+            0.4
+        );
+        drop(store);
+        let (store, _, _) = Store::open(db).unwrap();
+        assert_eq!(
+            store.read_output_routes().unwrap().routes[0]
+                .monitor
+                .unwrap()
+                .cues,
+            [false, true]
+        );
+    }
+    #[test]
     fn output_profiles_merge_and_roll_back_with_catalog_and_quantize() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("library.sqlite3");
@@ -1440,6 +1498,8 @@ mod tests {
                 channels: 4,
             },
             pair: 1,
+
+            monitor: None,
         };
         let delta = library::CatalogDelta {
             revision: 1,
@@ -1470,6 +1530,8 @@ mod tests {
                 ..route.device.clone()
             },
             pair: 0,
+
+            monitor: None,
         };
         let empty = library::CatalogDelta {
             revision: 2,

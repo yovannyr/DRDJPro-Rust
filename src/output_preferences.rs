@@ -35,22 +35,49 @@ impl OutputDeviceKey {
         (matches == 1 && key.validate().is_ok()).then_some(key)
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonitorPreferences {
+    pub gain: f32,
+    pub mix: f32,
+    pub cues: [bool; 2],
+}
+impl MonitorPreferences {
+    pub fn settings(self) -> crate::output_routing::MonitorSettings {
+        crate::output_routing::MonitorSettings {
+            gain: self.gain,
+            mix: self.mix,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputRoute {
     pub device: OutputDeviceKey,
     pub pair: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<MonitorPreferences>,
 }
 impl OutputRoute {
     pub fn validate(&self) -> Result<(), String> {
         self.device.validate()?;
+        if let Some(monitor) = self.monitor {
+            monitor.settings().validate()?;
+            if self.device.channels < 4
+                || (self.pair == 1 && (monitor.mix > 0. || monitor.cues.into_iter().any(|v| v)))
+            {
+                return Err(
+                    "Saved monitor profile conflicts with the output format or master route".into(),
+                );
+            }
+        }
         if self.pair != 0 && u32::from(self.pair) * 2 + 1 >= u32::from(self.device.channels) {
             return Err("Saved audio output pair is unavailable".into());
         }
         Ok(())
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputRoutes {
     pub version: u8,
@@ -103,6 +130,34 @@ impl OutputRoutes {
 mod tests {
     use super::*;
     #[test]
+    fn monitor_profiles_are_optional_strict_and_validate_routing_conflicts() {
+        let old = r#"{"version":1,"routes":[{"device":{"backend":"Test","name":"MC4000","channels":4},"pair":0}]}"#;
+        let mut profiles: OutputRoutes = serde_json::from_str(old).unwrap();
+        profiles.validate().unwrap();
+        assert_eq!(profiles.routes[0].monitor, None);
+        let settings = MonitorPreferences {
+            gain: 0.4,
+            mix: 0.75,
+            cues: [true, false],
+        };
+        profiles.routes[0].monitor = Some(settings);
+        profiles.validate().unwrap();
+        let saved = serde_json::to_string(&profiles).unwrap();
+        assert_eq!(
+            serde_json::from_str::<OutputRoutes>(&saved).unwrap(),
+            profiles
+        );
+        profiles.routes[0].pair = 1;
+        assert!(profiles.validate().is_err());
+        profiles.routes[0].pair = 0;
+        profiles.routes[0].monitor.as_mut().unwrap().gain = f32::NAN;
+        assert!(profiles.validate().is_err());
+        assert!(serde_json::from_str::<MonitorPreferences>(
+            r#"{"gain":1,"mix":0,"cues":[false,false],"future":1}"#
+        )
+        .is_err());
+    }
+    #[test]
     fn profiles_match_exact_device_shape_and_reject_ambiguity_or_invalid_data() {
         let key = OutputDeviceKey::unique("WASAPI".into(), "MC4000".into(), 4, 1).unwrap();
         assert!(OutputDeviceKey::unique("WASAPI".into(), "MC4000".into(), 4, 2).is_none());
@@ -111,6 +166,8 @@ mod tests {
             .update(OutputRoute {
                 device: key.clone(),
                 pair: 1,
+
+                monitor: None,
             })
             .unwrap();
         assert_eq!(profiles.pair_for(&key), Some(1));
@@ -133,7 +190,8 @@ mod tests {
         assert!(profiles
             .update(OutputRoute {
                 device: key.clone(),
-                pair: 2
+                pair: 2,
+                monitor: None,
             })
             .is_err());
         let mut duplicate = profiles.clone();
@@ -143,6 +201,8 @@ mod tests {
             .update(OutputRoute {
                 device: key,
                 pair: 0,
+
+                monitor: None,
             })
             .unwrap();
         assert_eq!(profiles.routes.len(), 1);
@@ -155,6 +215,8 @@ mod tests {
                         channels: 2,
                     },
                     pair: 0,
+
+                    monitor: None,
                 })
                 .unwrap();
         }
@@ -165,7 +227,8 @@ mod tests {
                     name: "overflow".into(),
                     channels: 2
                 },
-                pair: 0
+                pair: 0,
+                monitor: None,
             })
             .is_err());
         profiles.version = 2;

@@ -1168,7 +1168,7 @@ export component AppWindow inherits Window {
             Slider {accessible-label:"Headphone monitor gain";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-gain;changed=>{root.monitor-changed();}}
             Text {text:"CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:#edf2fa;}
             Slider {accessible-label:"Headphone cue master mix";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-mix;changed=>{root.monitor-changed();}}
-            Text {text:"Session only. MC4000 Monitor Level / Pan control these sliders.";color:#a6b4c8;}
+            Text {text:"Settings follow audio profile status. MC4000 Monitor Level / Pan control these sliders.";color:#a6b4c8;}
         }
     }
     if root.fx-open : Rectangle {

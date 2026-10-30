@@ -461,6 +461,10 @@ impl AudioController {
         );
         ui.on_monitor_changed(move || {
             if let Some(c) = weak.upgrade() {
+                if !c.storage_ready.get() {
+                    c.refresh();
+                    return;
+                }
                 if let Some(ui) = c.ui.upgrade() {
                     let result =
                         c.engine
@@ -469,7 +473,12 @@ impl AudioController {
                                 mix: ui.get_monitor_mix() / 100.,
                             });
                     ui.set_monitor_status(match result {
-                        Ok(()) => "Monitor updated (session only)".into(),
+                        Ok(()) => if c.output_profiles_writable.get() {
+                            "Monitor changed"
+                        } else {
+                            "Monitor updated (session only)"
+                        }
+                        .into(),
                         Err(error) => error.into(),
                     });
                     c.refresh();
@@ -479,6 +488,10 @@ impl AudioController {
         let weak = Rc::downgrade(&controller);
         ui.on_monitor_cue_changed(move |deck| {
             if let Some(c) = weak.upgrade() {
+                if !c.storage_ready.get() {
+                    c.refresh();
+                    return;
+                }
                 if let Some(ui) = c.ui.upgrade() {
                     let request = match deck {
                         0 => Some((DeckId::A, ui.get_monitor_cue_a())),
@@ -487,7 +500,12 @@ impl AudioController {
                     };
                     if let Some((id, enabled)) = request {
                         let status = match c.engine.set_headphone_cue(id, enabled) {
-                            Ok(()) => "Headphone cue updated (session only)".to_string(),
+                            Ok(()) => if c.output_profiles_writable.get() {
+                                "Headphone cue changed"
+                            } else {
+                                "Headphone cue updated (session only)"
+                            }
+                            .to_string(),
                             Err(error) => error,
                         };
                         ui.set_monitor_status(status.into());
@@ -2526,7 +2544,7 @@ impl AudioController {
             *self.observed_output.borrow_mut() = output;
             self.library_changed();
             if let Some(ui) = self.ui.upgrade() {
-                ui.set_output_profile_status("Route changed".into());
+                ui.set_output_profile_status("Profile changed".into());
             }
         }
         match self.quantize_preferences() {
@@ -2547,6 +2565,18 @@ impl AudioController {
             crate::output_preferences::OutputRoute {
                 device,
                 pair: self.engine.output_pair(),
+
+                monitor: (self.engine.output_channels() >= 4).then(|| {
+                    let settings = self.engine.monitor_settings();
+                    crate::output_preferences::MonitorPreferences {
+                        gain: settings.gain,
+                        mix: settings.mix,
+                        cues: [
+                            self.engine.headphone_cue(DeckId::A),
+                            self.engine.headphone_cue(DeckId::B),
+                        ],
+                    }
+                }),
             }
         })
     }
@@ -2616,10 +2646,16 @@ impl AudioController {
         profiles: Result<crate::output_preferences::OutputRoutes, String>,
     ) -> Option<String> {
         let mut warning = None;
+        let mut monitor = None;
         let pair = match profiles {
             Ok(profiles) => match self.engine.output_device_key() {
                 Some(key) => {
                     let saved = profiles.pair_for(key);
+                    monitor = profiles
+                        .routes
+                        .iter()
+                        .find(|route| &route.device == key)
+                        .and_then(|route| route.monitor);
                     let writable = saved.is_some()
                         || profiles.routes.len() < crate::output_preferences::MAX_OUTPUT_PROFILES;
                     self.output_profiles_writable.set(writable);
@@ -2641,12 +2677,41 @@ impl AudioController {
                 0
             }
         };
+        if self.engine.output_channels() >= 4 {
+            let _ =
+                self.engine
+                    .restore_monitor_state(crate::output_preferences::MonitorPreferences {
+                        gain: 1.,
+                        mix: 0.,
+                        cues: [false; 2],
+                    });
+        }
         if let Err(error) = self.engine.set_output_pair(pair) {
             self.output_profiles_writable.set(false);
             warning = Some(error);
             let _ = self.engine.set_output_pair(0);
         }
+        if let Some(preferences) = monitor {
+            if let Err(error) = self.engine.restore_monitor_state(preferences) {
+                self.output_profiles_writable.set(false);
+                warning = Some(format!(
+                    "{error}; saved monitor profile preserved, session only"
+                ));
+            }
+        }
         if let Some(ui) = self.ui.upgrade() {
+            ui.set_monitor_status(
+                if self.output_profiles_writable.get() {
+                    if monitor.is_some() {
+                        "Monitor profile restored"
+                    } else {
+                        "Monitor defaults; changes follow audio profile status"
+                    }
+                } else {
+                    "Monitor settings are session only"
+                }
+                .into(),
+            );
             ui.set_output_pair_index(i32::from(self.engine.output_pair()));
             ui.set_output_profile_status(
                 if self.output_profiles_writable.get() {
@@ -2768,7 +2833,14 @@ impl AudioController {
                         if output.is_some() {
                             *self.saved_output.borrow_mut() = output;
                             if let Some(ui) = self.ui.upgrade() {
-                                ui.set_output_profile_status("Profile saved".into());
+                                ui.set_output_profile_status(
+                                    if self.pending_output(false).is_some() {
+                                        "Profile changed"
+                                    } else {
+                                        "Profile saved"
+                                    }
+                                    .into(),
+                                );
                             }
                         }
                         if let Some(prefs) = quantize {
@@ -3555,7 +3627,7 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
-        ui.set_monitor_available(self.engine.output_channels() >= 4);
+        ui.set_monitor_available(self.engine.output_channels() >= 4 && self.storage_ready.get());
         ui.set_monitor_cue_a(self.engine.headphone_cue(DeckId::A));
         ui.set_monitor_cue_b(self.engine.headphone_cue(DeckId::B));
         let monitor = self.engine.monitor_settings();
@@ -8111,6 +8183,148 @@ mod tests {
         assert!(!c.dirty.get());
     }
     #[test]
+    fn monitor_profiles_restore_latest_ack_and_close_flush_only_for_matching_device() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        for (round, name) in [(0, "MC4000"), (1, "MC4000"), (2, "Other")] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+            let engine = Rc::new(
+                DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
+                    crate::output_preferences::OutputDeviceKey {
+                        backend: "Test".into(),
+                        name: name.into(),
+                        channels: 4,
+                    },
+                ),
+            );
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            c.restore_library(Ok(db.clone()), vec![]);
+            ui.set_monitor_gain(77.);
+            ui.invoke_monitor_changed();
+            ui.set_monitor_cue_a(true);
+            ui.invoke_monitor_cue_changed(0);
+            assert_eq!(engine.monitor_settings().gain, 1.);
+            assert!(!engine.headphone_cue(DeckId::A));
+            finish_storage(&c);
+            assert!(!engine.snapshot(DeckId::A).loaded && !engine.snapshot(DeckId::B).playing);
+            if round == 1 {
+                assert!((engine.monitor_settings().gain - 0.6).abs() < 1e-6);
+                assert_eq!(engine.monitor_settings().mix, 0.5);
+                assert!(!engine.headphone_cue(DeckId::A) && engine.headphone_cue(DeckId::B));
+                assert!(ui.get_monitor_status().contains("restored"));
+            } else {
+                assert_eq!(
+                    engine.monitor_settings(),
+                    crate::output_routing::MonitorSettings::default()
+                );
+                assert!(!engine.headphone_cue(DeckId::A) && !engine.headphone_cue(DeckId::B));
+            }
+            if round == 0 {
+                ui.set_monitor_gain(40.);
+                ui.set_monitor_mix(25.);
+                ui.invoke_monitor_changed();
+                ui.set_monitor_cue_a(true);
+                ui.invoke_monitor_cue_changed(0);
+                c.save_library();
+                assert!(c.saving.get());
+                ui.set_monitor_gain(20.);
+                ui.set_monitor_mix(75.);
+                ui.invoke_monitor_changed();
+                ui.set_monitor_cue_b(true);
+                ui.invoke_monitor_cue_changed(1);
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while c.saving.get() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "monitor save acknowledgement timed out"
+                    );
+                    c.poll_storage();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert_eq!(ui.get_output_profile_status(), "Profile changed");
+                finish_storage(&c);
+                assert_eq!(
+                    c.saved_output
+                        .borrow()
+                        .as_ref()
+                        .unwrap()
+                        .monitor
+                        .unwrap()
+                        .mix,
+                    0.75
+                );
+                ui.set_monitor_gain(60.);
+                ui.set_monitor_mix(50.);
+                ui.invoke_monitor_changed();
+                ui.set_monitor_cue_a(false);
+                ui.invoke_monitor_cue_changed(0);
+                // No tick: close must capture the final monitor/cue state itself.
+            }
+            c.close_library().unwrap();
+        }
+    }
+    #[test]
+    fn malformed_monitor_profile_is_preserved_while_unrelated_preferences_save() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        worker.events.recv().unwrap();
+        worker.close_delta(None).unwrap();
+        let raw = r#"{"version":1,"routes":[{"device":{"backend":"Test","name":"MC4000","channels":4},"pair":0,"monitor":{"gain":2,"mix":0,"cues":[false,false]}}]}"#;
+        let sql = rusqlite::Connection::open(&db).unwrap();
+        sql.execute(
+            "INSERT INTO library_meta(key,value) VALUES('audio_output_routes_v1',?1)",
+            [raw],
+        )
+        .unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(
+            DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
+                crate::output_preferences::OutputDeviceKey {
+                    backend: "Test".into(),
+                    name: "MC4000".into(),
+                    channels: 4,
+                },
+            ),
+        );
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db), vec![]);
+        finish_storage(&c);
+        assert!(!c.output_profiles_writable.get());
+        ui.set_monitor_gain(50.);
+        ui.set_monitor_mix(50.);
+        ui.invoke_monitor_changed();
+        assert!(ui.get_monitor_status().contains("session only"));
+        ui.set_quantize_enabled(false);
+        finish_storage(&c);
+        c.close_library().unwrap();
+        let saved: String = sql
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='audio_output_routes_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, raw);
+        let prefs: String = sql
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='quantize_preferences_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !serde_json::from_str::<crate::preferences::QuantizePreferences>(&prefs)
+                .unwrap()
+                .enabled
+        );
+    }
+    #[test]
     fn output_profiles_restore_matching_device_and_keep_other_profiles() {
         i_slint_backend_testing::init_no_event_loop();
         let dir = tempfile::tempdir().unwrap();
@@ -8228,6 +8442,8 @@ mod tests {
                         channels: 4,
                     },
                     pair: 0,
+
+                    monitor: None,
                 })
                 .unwrap();
         }
