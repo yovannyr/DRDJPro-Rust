@@ -205,6 +205,8 @@ impl SearchWorker {
 pub struct AudioController {
     device_opener: DeviceOpener,
     pending_device_switch: RefCell<Option<crate::audio_devices::StartupSelection>>,
+    recovery_key: RefCell<Option<crate::output_preferences::OutputDeviceKey>>,
+    output_failure_handled: Cell<bool>,
     transport_accept_after: Cell<std::time::Instant>,
     output_profiles_cache: RefCell<Result<crate::output_preferences::OutputRoutes, String>>,
     device_catalog: DeviceCatalog,
@@ -317,6 +319,8 @@ impl AudioController {
         let controller = Rc::new(Self {
             device_opener,
             pending_device_switch: RefCell::new(None),
+            recovery_key: RefCell::new(None),
+            output_failure_handled: Cell::new(false),
             transport_accept_after: Cell::new(std::time::Instant::now()),
             output_profiles_cache: RefCell::new(Ok(Default::default())),
             device_catalog,
@@ -417,6 +421,12 @@ impl AudioController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        ui.on_audio_device_reopen(move || {
+            if let Some(c) = weak.upgrade() {
+                c.request_output_reopen();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         ui.on_output_pair_changed(move || {
             if let Some(c) = weak.upgrade() {
                 if let Some(ui) = c.ui.upgrade() {
@@ -446,6 +456,15 @@ impl AudioController {
             let weak = Rc::downgrade(&controller);
             let toggle = move || {
                 if let Some(c) = weak.upgrade() {
+                    if c.engine.borrow().output_failed() {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(
+                                "Audio output failed; reopen the output in AUDIO before playing"
+                                    .into(),
+                            );
+                        }
+                        return;
+                    }
                     if c.engine.borrow().snapshot(id).playing {
                         c.cancel_nudge(id);
                         c.engine.borrow().pause(id);
@@ -3423,7 +3442,59 @@ impl AudioController {
         }
         Ok(())
     }
+    fn handle_output_failure(&self) {
+        if !self.engine.borrow().output_failed() || self.output_failure_handled.replace(true) {
+            return;
+        }
+        self.stop_sync();
+        for id in [DeckId::A, DeckId::B] {
+            self.cancel_nudge(id);
+            self.engine.borrow().cancel_scheduled_cue(id);
+            self.engine.borrow().pause(id);
+        }
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_audio_startup_warning("Audio output failed. Reconnect the device, then AUDIO → REOPEN CURRENT. Both decks are paused.".into());
+        }
+    }
+    fn request_output_reopen(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let result =
+            (|| {
+                self.device_switch_allowed()?;
+                if self.pending_device_switch.borrow().is_some()
+                    || self.device_scan.borrow().is_some()
+                    || self.startup_audio_saving.get()
+                {
+                    return Err("Wait for the pending audio operation".to_string());
+                }
+                let key =
+                    self.engine.borrow().output_device_key().cloned().ok_or(
+                        "Current output has no unique identity; select an output explicitly",
+                    )?;
+                let selection = crate::audio_devices::StartupSelection {
+                    version: 1,
+                    device: Some(crate::audio_devices::DeviceSelector {
+                        backend: key.backend.clone(),
+                        name: key.name.clone(),
+                    }),
+                };
+                *self.recovery_key.borrow_mut() = Some(key);
+                *self.pending_device_switch.borrow_mut() = Some(selection);
+                ui.set_audio_device_switching(true);
+                ui.set_audio_device_status(
+                    "Reopening current output after saving; decks stay paused".into(),
+                );
+                self.save_library();
+                Ok::<_, String>(())
+            })();
+        if let Err(error) = result {
+            ui.set_audio_device_status(error.into());
+        }
+    }
     fn request_device_switch(&self) {
+        if self.pending_device_switch.borrow().is_none() {
+            self.recovery_key.borrow_mut().take();
+        }
         let Some(ui) = self.ui.upgrade() else { return };
         let result = (|| {
             if self.pending_device_switch.borrow().is_some()
@@ -3471,6 +3542,7 @@ impl AudioController {
         });
         if let Some(error) = error {
             self.pending_device_switch.borrow_mut().take();
+            self.recovery_key.borrow_mut().take();
             ui.set_audio_device_switching(false);
             ui.set_audio_device_status(error.into());
             return;
@@ -3484,12 +3556,18 @@ impl AudioController {
         }
         let selection = self.pending_device_switch.borrow_mut().take().unwrap();
         let old = self.engine.borrow().clone();
+        let recovery_key = self.recovery_key.borrow_mut().take();
         let result = (self.device_opener)(selection.device.as_ref()).and_then(|engine| {
+            if engine.output_failed() { return Err("New audio output already reported a stream error".into()); }
+            if recovery_key.as_ref().is_some_and(|expected| !engine.output_device_key().is_some_and(|actual| expected.same_device(actual))) {
+                return Err("Output identity or channel shape changed; select the output explicitly instead".into());
+            }
             engine.inherit_paused_decks(&old)?;
             Ok(Rc::new(engine))
         });
         match result {
             Ok(engine) => {
+                self.output_failure_handled.set(false);
                 if let (Ok(profiles), Some(route)) = (
                     &mut *self.output_profiles_cache.borrow_mut(),
                     self.output_route(),
@@ -3654,6 +3732,7 @@ impl AudioController {
         }
     }
     pub fn tick(&self) {
+        self.handle_output_failure();
         self.poll_device_scan();
         self.engine.borrow().collect_retired();
         self.cancel_stale_nudges();
@@ -8744,6 +8823,82 @@ mod tests {
         assert!(!c.startup_audio_saving.get());
         ui.hide().unwrap();
         c.close_library().unwrap();
+    }
+    #[test]
+    fn failed_output_pauses_and_reopen_preserves_tracks_but_rejects_other_identity() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let key = crate::output_preferences::OutputDeviceKey {
+            endpoint_id: Some("endpoint-a".into()),
+            backend: "Test".into(),
+            name: "Output".into(),
+            channels: 2,
+        };
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(
+            DualDeckEngine::from_mixer(mixer, 2, 48000).with_output_device_key(key.clone()),
+        );
+        let wrong = Rc::new(Cell::new(true));
+        let wrong_open = wrong.clone();
+        let c = AudioController::wire_with_audio_services(
+            &ui,
+            engine.clone(),
+            Arc::new(|| None),
+            Arc::new(|| None),
+            Arc::new(|| Ok(vec![])),
+            Rc::new(move |selector| {
+                assert_eq!(selector.unwrap().name, "Output");
+                let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+                let mut actual = key.clone();
+                if wrong_open.get() {
+                    actual.endpoint_id = Some("endpoint-b".into());
+                }
+                Ok(DualDeckEngine::from_mixer(mixer, 2, 48000).with_output_device_key(actual))
+            }),
+        );
+        let track = wav_file(8192, 192000);
+        engine.load_a(track.path()).unwrap();
+        engine.load_b(track.path()).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(250))
+            .unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        engine.inject_output_failure();
+        c.tick();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::B).playing);
+        assert!(ui
+            .get_audio_startup_warning()
+            .contains("Audio output failed"));
+        ui.invoke_toggle_left();
+        engine.play(DeckId::B);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::B).playing);
+        ui.invoke_audio_device_reopen();
+        c.poll_device_switch();
+        assert!(Rc::ptr_eq(&c.engine.borrow(), &engine));
+        assert!(ui
+            .get_audio_device_status()
+            .contains("identity or channel shape changed"));
+        wrong.set(false);
+        ui.invoke_audio_device_reopen();
+        c.poll_device_switch();
+        assert!(!Rc::ptr_eq(&c.engine.borrow(), &engine));
+        assert!(!c.engine.borrow().output_failed());
+        assert_eq!(
+            c.engine.borrow().snapshot(DeckId::A).position,
+            engine.snapshot(DeckId::A).position
+        );
+        assert_eq!(
+            c.engine.borrow().snapshot(DeckId::B).path,
+            engine.snapshot(DeckId::B).path
+        );
+        assert!(!c.engine.borrow().snapshot(DeckId::A).playing);
+        assert!(!c.engine.borrow().snapshot(DeckId::B).playing);
+        assert!(ui.get_audio_startup_warning().is_empty());
+        ui.invoke_toggle_left();
+        assert!(c.engine.borrow().snapshot(DeckId::A).playing);
     }
     #[test]
     fn paused_device_switch_is_transactional_and_replaces_shared_owner() {

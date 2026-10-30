@@ -150,7 +150,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [ ] ☐ Hotplug, LED-Feedback, weitere Regler, vollständige Cue-Semantik und tatsächliche Bedienabnahme der Anwendung mit Hardware.
     - [x] ✅ MIDI-/LED-Verbindungsverwaltung: eindeutige Portwahl, Fehler-/Trennungsstatus, separate LED-Wiederverbindung mit neuer Startanimation; RECONNECT MIDI verwirft alte Handles/Queues auch ohne beobachtete Abwesenheit. Automatisierte Port-/Retry-/Freigabetests; Dauerlicht bleibt erhalten.
     - [x] ✅ Physischer MC4000-USB-Zyklus mit mindestens fünf Sekunden Trennung: DrDJ zeigt disconnected und danach input + LEDs connected; Nutzer bestätigt erneute Animation/Dauerlicht. Frische Hardwarebewegungen liefern A/B-Fader 0 % und Crossfader 100 %, ohne RECONNECT MIDI oder Programmneustart (2026-10-30). Keine Tracks/Wiedergabe im Test.
-    - [ ] ☐ Automatische Erkennung schneller USB-Wechsel, native RECONNECT-MIDI-Abnahme, Audio-Stream-Wiederherstellung und Transport-/weitere Bedienabnahme nach Wiederverbindung bleiben offen.
+    - [x] ✅ Gemeldeten Audio-Streamfehler atomar erfassen, beide Decks pausieren und PLAY sperren; AUDIO / REOPEN CURRENT öffnet denselben Ausgang nach Speicherbestätigung neu, prüft Endpunkt/Backend/Kanalform und übernimmt pausierte Tracks/Zustand. Headless-Fehler-/Identitäts-/Positions-/Wiederanlauftest; keine automatische Audio-Wiederverbindung oder native Hörabnahme.
+    - [ ] ☐ Native Audio-Fehler-/REOPEN-CURRENT-/Hörabnahme nach USB-Wiederverbindung; automatische Audio-Wiederverbindung, schnelle USB-Wechsel, native RECONNECT-MIDI-Abnahme und Transport-/weitere Bedienabnahme bleiben offen.
     - [ ] ☐ Weitere Regler, vollständige Transport-Cue-Drück-/Loslass-Semantik und vollständige Hardware-Bedienabnahme.
 - [ ] ☐ Erweiterte Bibliothek: Sub-/Smart-Crates, History, Relocation und Session-Wiederherstellung.
 - [ ] ☐ Erweiterte Grid-Funktionen: variable Tempi, Warp-Marker und Taktartwechsel.

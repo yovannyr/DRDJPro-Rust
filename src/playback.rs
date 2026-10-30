@@ -331,6 +331,7 @@ pub struct DualDeckEngine {
     output_routing: Arc<crate::output_routing::RoutingControl>,
     output_device_key: Option<crate::output_preferences::OutputDeviceKey>,
     output_device_label: String,
+    output_failed: Arc<AtomicBool>,
     retired: RefCell<Vec<RetiredTrack>>,
     // Shared producer timeline; completed-frame stamps are consumed by one-shot sync.
     render_clock: Arc<crate::render_bus::RenderClock>,
@@ -412,7 +413,13 @@ impl DualDeckEngine {
             })
             .unwrap_or(0);
         // Format fallback stays on this device: a different device cannot inherit its route.
-        let stream = OutputStreamBuilder::from_device(device)?.open_stream_or_fallback()?;
+        let output_failed = Arc::new(AtomicBool::new(false));
+        let failure = output_failed.clone();
+        let stream = OutputStreamBuilder::from_device(device)?
+            .with_error_callback(move |_| {
+                failure.store(true, Ordering::Release);
+            })
+            .open_stream_or_fallback()?;
         if stream.config().channel_count() > crate::mixer_dsp::MAX_CHANNELS {
             return Err("Mixer DSP supports output devices with at most 32 channels".into());
         }
@@ -423,6 +430,7 @@ impl DualDeckEngine {
             Box::new(std::time::Instant::now),
         )?;
         engine._stream = Some(stream);
+        engine.output_failed = output_failed;
         engine.output_device_label = name
             .clone()
             .unwrap_or_else(|| "Unnamed output device".into());
@@ -550,6 +558,7 @@ impl DualDeckEngine {
             output_routing,
             output_device_key: None,
             output_device_label: "Injected audio output".into(),
+            output_failed: Arc::new(AtomicBool::new(false)),
             retired: RefCell::new(Vec::new()),
             render_clock,
             clock_observer: RefCell::new(crate::render_bus::ClockObserver::default()),
@@ -1052,6 +1061,13 @@ impl DualDeckEngine {
     pub fn output_device_label(&self) -> &str {
         &self.output_device_label
     }
+    pub fn output_failed(&self) -> bool {
+        self.output_failed.load(Ordering::Acquire)
+    }
+    #[cfg(test)]
+    pub(crate) fn inject_output_failure(&self) {
+        self.output_failed.store(true, Ordering::Release);
+    }
     pub fn output_device_key(&self) -> Option<&crate::output_preferences::OutputDeviceKey> {
         self.output_device_key.as_ref()
     }
@@ -1409,6 +1425,9 @@ impl DualDeckEngine {
         Ok(())
     }
     pub fn play(&self, id: DeckId) {
+        if self.output_failed() {
+            return;
+        }
         let _ = self.apply_sync_factor(id, 1.);
         let restart = {
             let deck = self.decks[id.index()].borrow();

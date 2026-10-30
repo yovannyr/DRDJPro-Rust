@@ -785,6 +785,7 @@ export component AppWindow inherits Window {
     callback audio-device-scan();
     callback audio-device-save();
     callback audio-device-apply();
+    callback audio-device-reopen();
     in property <bool> audio-device-switching:false;
     in property <string> channel-a-peak-caption: "A PRE —";
     in property <string> channel-b-peak-caption: "B PRE —";
@@ -1186,6 +1187,7 @@ export component AppWindow inherits Window {
                 Button {text:root.audio-device-scanning ? "SCANNING…":"REFRESH";accessible-label:"Refresh audio devices";enabled:!root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-scan();}}
                 Button {text:root.audio-device-saving ? "SAVING…":"SAVE FOR NEXT START";accessible-label:"Save next startup audio device";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-save();}}
                 Button {text:root.audio-device-switching ? "SWITCHING…":"APPLY NOW";accessible-label:"Apply audio device now";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-apply();}}
+                Button {text:"REOPEN CURRENT";accessible-label:"Reopen current audio output";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-reopen();}}
             }
             Text {text:root.audio-device-status;color:#edf2fa;wrap:word-wrap;}
         }
