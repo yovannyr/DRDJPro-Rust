@@ -26,6 +26,12 @@ The corrected final native Windows smoke used a separate catalog directory, init
 
 Real-library repeated DJ-load reports and hearing/usability acceptance remain pending with the user. No numeric qualification or migration-parent completion is claimed from the smoke run or unit-test timings.
 
+## User native performance runs — search/sort/page coverage (2026-10-30)
+
+The user supplied report `drdj-library-perf-20261030-223934.json`: Windows x86_64, 3,484 tracks in scope and 146.7 seconds of sampled dual-deck load. It contains 122 qualifying search actions and 27 sort actions. Sort completed under-load handler maximum was 0.3786 ms; AfterRendering p95 was 41.9953 ms and maximum 55.3654 ms. GUI tick-gap maximum was 52.7183 ms. This satisfies the native sort-action sample-count and measured sort-budget subcriterion.
+
+The later report `drdj-library-perf-20261030-225635.json` contains 126 qualifying searches and 42 page actions over 162.4 sampled seconds at the same track scope; page AfterRendering p95 was 52.5308 ms, maximum 56.7643 ms, and tick-gap maximum 52.9444 ms. It contains no sort samples, while the earlier report contains no page samples. Both individually remain `insufficient_coverage`; they establish the respective operation results, not a single complete report. The complete repeated-window-size and user hearing/usability acceptance gate remains open. These reports do not measure physical input/display latency or detect audible dropouts.
+
 ## Baseline
 
 - `cargo fmt --check`: passed.
