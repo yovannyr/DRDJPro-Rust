@@ -68,7 +68,6 @@ const LED_PATH: [[u8; 3]; 16] = [
 ];
 const GREETING_STEPS: usize = LED_PATH.len() * 5;
 const ALL_LEDS_OFF: [u8; 3] = [0xb0, 0x75, 0];
-const ALL_LEDS_ON: [u8; 3] = [0xb0, 0x75, 127];
 /// Five circuits in 5.2 seconds. Each step switches the previous LED off first.
 struct Greeting {
     started: std::time::Instant,
@@ -95,10 +94,106 @@ impl Greeting {
             if step < GREETING_STEPS {
                 LED_PATH[step % LED_PATH.len()]
             } else {
-                ALL_LEDS_ON
+                ALL_LEDS_OFF
             },
         ])
     }
+}
+const FEEDBACK_MESSAGES: usize = 20;
+#[derive(Default)]
+struct Feedback {
+    last: Option<[[u8; 3]; FEEDBACK_MESSAGES]>,
+}
+impl Feedback {
+    fn send(
+        &mut self,
+        messages: [[u8; 3]; FEEDBACK_MESSAGES],
+        mut send: impl FnMut(&[u8; 3]) -> Result<(), String>,
+    ) -> Result<(), String> {
+        for (index, message) in messages.iter().enumerate() {
+            if self
+                .last
+                .as_ref()
+                .is_none_or(|last| last[index] != *message)
+            {
+                send(message)?;
+            }
+        }
+        self.last = Some(messages);
+        Ok(())
+    }
+}
+fn meter_value(level: f32, clipped: bool, warning: bool) -> u8 {
+    if clipped || warning || !level.is_finite() {
+        return 127;
+    }
+    // Manufacturer table: seven segments, ranges 1..18, 19..36, ...109..127.
+    let segments = (level.clamp(0., 1.) * 7.).ceil() as u8;
+    if segments == 0 {
+        0
+    } else {
+        1 + (segments - 1) * 18
+    }
+}
+fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
+    use slint::Model;
+    let decks = [
+        (
+            ui.get_left_playing(),
+            ui.get_left_loaded(),
+            ui.get_left_keylock(),
+            ui.get_monitor_cue_a(),
+            ui.get_fx_active_a(),
+            ui.get_left_hot_cues(),
+        ),
+        (
+            ui.get_right_playing(),
+            ui.get_right_loaded(),
+            ui.get_right_keylock(),
+            ui.get_monitor_cue_b(),
+            ui.get_fx_active_b(),
+            ui.get_right_hot_cues(),
+        ),
+    ];
+    let mut messages = [[0; 3]; FEEDBACK_MESSAGES];
+    for (deck, (playing, loaded, keylock, monitor, fx, cues)) in decks.into_iter().enumerate() {
+        let channel = deck as u8;
+        for (index, (status, note, active)) in [
+            (0x90 | channel, 0, playing),
+            (0x90 | channel, 1, loaded && !playing),
+            (0x90 | channel, 13, keylock),
+            (0x90 | channel, 27, monitor),
+            (0x98 | channel, 0, fx),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            messages[deck * 9 + index] = [status, note, if active { 127 } else { 0 }];
+        }
+        for slot in 0..4 {
+            let occupied = cues.row_data(slot).is_some_and(|cue| cue.occupied);
+            messages[deck * 9 + 5 + slot] = [0x94 | channel, 0x14 + slot as u8, u8::from(occupied)];
+        }
+    }
+    messages[18] = [
+        0xbf,
+        0x44,
+        meter_value(
+            ui.get_channel_a_peak_level(),
+            ui.get_channel_a_clipped(),
+            ui.get_channel_a_peak_warning(),
+        ),
+    ];
+    messages[19] = [
+        0xbf,
+        0x45,
+        meter_value(
+            ui.get_channel_b_peak_level(),
+            ui.get_channel_b_clipped(),
+            ui.get_channel_b_peak_warning(),
+        ),
+    ];
+    messages
 }
 pub fn present() -> Result<bool, String> {
     let midi = midir::MidiInput::new("DrDJ discovery").map_err(|e| e.to_string())?;
@@ -136,6 +231,7 @@ pub struct Input {
     _connection: midir::MidiInputConnection<()>,
     output: Option<midir::MidiOutputConnection>,
     greeting: Greeting,
+    feedback: Feedback,
     buttons: Receiver<(std::time::Instant, Command)>,
     accept_buttons_after: std::time::Instant,
     levels: Arc<[AtomicU8; 5]>,
@@ -210,9 +306,16 @@ impl Input {
             )
             .map_err(|e| e.to_string())?;
         // Ein fehlender LED-Port darf den bereits geöffneten Eingang nicht verwerfen.
-        let output = open_output().ok().flatten();
+        let output = match open_output() {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("MC4000 LED output unavailable: {error}; retrying");
+                None
+            }
+        };
         Ok(Some(Self {
             output,
+            feedback: Feedback::default(),
             greeting: Greeting {
                 started: std::time::Instant::now(),
                 last: None,
@@ -243,6 +346,7 @@ impl Input {
             Ok(unique_port(&names)?.is_some())
         })();
         if reconcile_output(&mut self.output, available, open_output)? {
+            self.feedback = Feedback::default();
             self.greeting = Greeting {
                 started: std::time::Instant::now(),
                 last: None,
@@ -252,6 +356,30 @@ impl Input {
     }
     pub fn leds_connected(&self) -> bool {
         self.output.is_some()
+    }
+    pub fn sync_feedback(&mut self, ui: &crate::AppWindow) -> Result<(), String> {
+        let Some(output) = &mut self.output else {
+            return Ok(());
+        };
+        let now = std::time::Instant::now();
+        let result = (|| {
+            if let Some(messages) = self.greeting.messages(now) {
+                for message in messages {
+                    output.send(&message).map_err(|error| error.to_string())?;
+                }
+            }
+            if self.greeting.last == Some(GREETING_STEPS) {
+                self.feedback.send(feedback_messages(ui), |message| {
+                    output.send(message).map_err(|error| error.to_string())
+                })?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.output = None;
+            self.feedback = Feedback::default();
+        }
+        result
     }
     pub fn poll(&mut self, mut apply: impl FnMut(Command)) -> bool {
         if let Some(InputTrace { receiver, overflow }) = &self.trace {
@@ -266,16 +394,6 @@ impl Input {
             }
             if overflow.swap(false, Ordering::AcqRel) {
                 eprintln!("MC4000 diagnostic queue overflow: raw messages omitted");
-            }
-        }
-        if let Some(messages) = self.greeting.messages(std::time::Instant::now()) {
-            if let Some(output) = &mut self.output {
-                for message in messages {
-                    if output.send(&message).is_err() {
-                        self.output = None;
-                        break;
-                    }
-                }
             }
         }
         // Coalesced levels are applied before transport in this UI tick.
@@ -576,7 +694,7 @@ mod tests {
         assert!(!ui.get_fx_active_b());
     }
     #[test]
-    fn greeting_runs_five_circuits_then_keeps_all_leds_on() {
+    fn greeting_runs_five_circuits_then_releases_leds_to_feedback() {
         assert_eq!(LED_PATH[0], [0x94, 0x14, 1]);
         assert_eq!(LED_PATH[4], [0x9f, 0x21, 127]);
         assert_eq!(LED_PATH[8], [0x95, 0x17, 1]);
@@ -606,7 +724,7 @@ mod tests {
             .messages(start + std::time::Duration::from_millis(5200))
             .unwrap();
         assert_eq!(messages[0][2], 0);
-        assert_eq!(messages[1], ALL_LEDS_ON);
+        assert_eq!(messages[1], ALL_LEDS_OFF);
         assert_eq!(
             greeting.messages(start + std::time::Duration::from_secs(10)),
             None
@@ -617,7 +735,7 @@ mod tests {
         };
         assert_eq!(
             late.messages(start + std::time::Duration::from_secs(10)),
-            Some([ALL_LEDS_OFF, ALL_LEDS_ON])
+            Some([ALL_LEDS_OFF, ALL_LEDS_OFF])
         );
         for time in [11, 60, 3600, 86400] {
             assert_eq!(
@@ -629,6 +747,212 @@ mod tests {
                 None
             );
         }
+    }
+    #[test]
+    fn meter_values_match_all_seven_manufacturer_ranges_and_gui_clip_hold() {
+        assert_eq!(meter_value(0., false, false), 0);
+        assert_eq!(meter_value(-1., false, false), 0);
+        for segments in 1..=7 {
+            let level = (segments as f32 - 0.5) / 7.;
+            assert_eq!(meter_value(level, false, false), 1 + (segments - 1) * 18);
+        }
+        assert_eq!(meter_value(1., false, false), 109);
+        assert_eq!(meter_value(2., false, false), 109);
+        assert_eq!(meter_value(0., true, false), 127);
+        assert_eq!(meter_value(0., false, true), 127);
+        assert_eq!(meter_value(f32::NAN, false, false), 127);
+        assert_eq!(meter_value(f32::INFINITY, false, false), 127);
+    }
+    #[test]
+    fn feedback_uses_main_view_states_and_coalesces_unchanged_ticks() {
+        use slint::ModelRc;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        ui.set_left_loaded(true);
+        ui.set_left_playing(true);
+        ui.set_right_loaded(true);
+        ui.set_left_keylock(true);
+        ui.set_monitor_cue_b(true);
+        ui.set_fx_active_a(true);
+        ui.set_channel_a_peak_level(0.5);
+        ui.set_channel_b_peak_level(0.1);
+        ui.set_left_hot_cues(ModelRc::new(slint::VecModel::from(vec![
+            crate::HotCueRow {
+                occupied: true,
+                ..Default::default()
+            },
+            crate::HotCueRow::default(),
+            crate::HotCueRow {
+                occupied: true,
+                ..Default::default()
+            },
+            crate::HotCueRow::default(),
+        ])));
+        let messages = feedback_messages(&ui);
+        assert_eq!(
+            &messages[..5],
+            &[
+                [0x90, 0, 127],
+                [0x90, 1, 0],
+                [0x90, 13, 127],
+                [0x90, 27, 0],
+                [0x98, 0, 127],
+            ]
+        );
+        assert_eq!(
+            &messages[5..9],
+            &[
+                [0x94, 0x14, 1],
+                [0x94, 0x15, 0],
+                [0x94, 0x16, 1],
+                [0x94, 0x17, 0],
+            ]
+        );
+        assert_eq!(
+            &messages[9..14],
+            &[
+                [0x91, 0, 0],
+                [0x91, 1, 127],
+                [0x91, 13, 0],
+                [0x91, 27, 127],
+                [0x99, 0, 0],
+            ]
+        );
+        assert_eq!(messages[18], [0xbf, 0x44, 55]);
+        assert_eq!(messages[19], [0xbf, 0x45, 1]);
+        let mut feedback = Feedback::default();
+        let mut sent = Vec::new();
+        feedback
+            .send(messages, |message| {
+                sent.push(*message);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(sent.len(), FEEDBACK_MESSAGES);
+        feedback
+            .send(messages, |_| panic!("unchanged tick must not send"))
+            .unwrap();
+
+        ui.set_left_playing(false);
+        ui.set_channel_a_peak_level(0.);
+        ui.set_channel_b_clipped(true);
+        let mut changed = Vec::new();
+        feedback
+            .send(feedback_messages(&ui), |message| {
+                changed.push(*message);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            changed,
+            vec![
+                [0x90, 0, 0],
+                [0x90, 1, 127],
+                [0xbf, 0x44, 0],
+                [0xbf, 0x45, 127],
+            ]
+        );
+        ui.set_channel_b_clipped(false);
+        let mut cleared = Vec::new();
+        feedback
+            .send(feedback_messages(&ui), |message| {
+                cleared.push(*message);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(cleared, vec![[0xbf, 0x45, 1]]);
+    }
+    #[test]
+    fn feedback_failure_does_not_acknowledge_frame_and_reconnect_replays_state() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        let messages = feedback_messages(&ui);
+        let mut feedback = Feedback::default();
+        let mut count = 0;
+        assert!(feedback
+            .send(messages, |_| {
+                count += 1;
+                if count == 3 {
+                    Err("disconnected".into())
+                } else {
+                    Ok(())
+                }
+            })
+            .is_err());
+        assert!(feedback.last.is_none());
+        let mut count = 0;
+        feedback
+            .send(messages, |_| {
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(count, FEEDBACK_MESSAGES);
+        feedback = Feedback::default();
+        let start = std::time::Instant::now();
+        let mut greeting = Greeting {
+            started: start,
+            last: None,
+        };
+        assert_eq!(greeting.messages(start).unwrap()[1], LED_PATH[0]);
+        assert_ne!(greeting.last, Some(GREETING_STEPS));
+        assert_eq!(
+            greeting
+                .messages(start + std::time::Duration::from_millis(5200))
+                .unwrap()[1],
+            ALL_LEDS_OFF
+        );
+        ui.set_right_playing(true);
+        let messages = feedback_messages(&ui);
+        let mut sent = Vec::new();
+        feedback
+            .send(messages, |message| {
+                sent.push(*message);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(sent.len(), FEEDBACK_MESSAGES);
+        assert!(sent.contains(&[0x91, 0, 127]));
+    }
+    #[test]
+    fn engine_tick_feedback_matches_main_view_after_gui_and_midi_transport() {
+        use std::rc::Rc;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(crate::playback::DualDeckEngine::from_mixer(
+            mixer, 1, 48_000,
+        ));
+        let track = crate::test_support::wav_file(8192, 48_000);
+        engine.load_a(track.path()).unwrap();
+        let controller = crate::controller::AudioController::wire(
+            &ui,
+            engine.clone(),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.invoke_toggle_left();
+        output.by_ref().take(4096).for_each(drop);
+        controller.tick();
+        let messages = feedback_messages(&ui);
+        assert_eq!(
+            messages[0],
+            [0x90, 0, if ui.get_left_playing() { 127 } else { 0 }]
+        );
+        assert_eq!(
+            messages[18][2],
+            meter_value(
+                ui.get_channel_a_peak_level(),
+                ui.get_channel_a_clipped(),
+                ui.get_channel_a_peak_warning(),
+            )
+        );
+        assert!(ui.get_channel_a_peak_level() > 0.);
+        apply(&ui, Command::Toggle(0));
+        controller.tick();
+        assert!(!ui.get_left_playing());
+        assert_eq!(feedback_messages(&ui)[0], [0x90, 0, 0]);
+        controller.close_library().unwrap();
     }
     #[test]
     fn mapped_commands_reach_existing_gui_actions_and_mixer_values() {

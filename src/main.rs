@@ -353,6 +353,13 @@ fn main() -> Result<(), slint::PlatformError> {
                     }
                 }
                 controller.tick();
+                if let Some(midi) = &mut midi {
+                    if let Err(error) = midi.sync_feedback(&ui) {
+                        ui.set_controller_status(
+                            format!("MC4000 LED feedback failed: {error}; retrying").into(),
+                        );
+                    }
+                }
                 return;
             }
             ui.set_left_position(transport::advance_position(

@@ -363,11 +363,21 @@ Legacy version-1 records without an ID remain readable and preserved; they match
 
 ## MC4000 MIDI hotplug and LED output recovery (2026-10-30)
 
+The all-on policy described in earlier checkpoints is superseded by the state-feedback slice below (2026-10-31).
+
 The existing two-second MIDI discovery now requires one uniquely named MC4000 input port; duplicate matches fail closed. Missing ports or discovery errors release the input connection and its queued commands, with a persistent controller status prefixed to the existing application-status row (full text exposed accessibly). Reconnection obtains fresh queues and a new greeting, without replaying old actions. This is polling and can miss a complete unplug/replug cycle shorter than its interval; it is not OS-notification detection or MIDI hardware-ID matching.
 
 LED output is independently checked on each discovery interval. Input remains usable when initial LED opening fails. Missing/ambiguous outputs are released, failed opens are retried and a successful new output restarts the five-round greeting followed by the user's requested all-on illumination. Existing outputs are retained while present. No transport-dependent LED-state mode is introduced because it would contradict the current permanent-all-on preference. Failed sends discard the LED output for the next retry. Repeated failures remain visible instead of silently disabling LED recovery permanently.
 
 This slice addresses MIDI/LED connection lifecycle only. Unplugging the combined MC4000 also removes its audio endpoint; rebuilding the audio stream and restoring audio after physical reconnection is a separate open gate. No automatic playback start or restoration is added. Remaining controller controls, full transport Cue press/release semantics and complete hardware workflow acceptance remain under the existing open plan item.
+
+## MC4000 MainView LED feedback (2026-10-31)
+
+The five-round greeting remains, but now ends with All LEDs Off and a complete state frame instead of permanent all-on illumination. After each 33-ms controller tick refreshes MainView, the MIDI output reads those same Slint properties: PLAY follows playing, transport CUE indicates loaded/paused, Keylock follows its GUI state, headphone CUE follows the actual MON selection, and FX1 follows the single delay toggle. Four physical hot-cue pads per deck show occupied slots in blue; arbitrary GUI cue colors, additional FX slots, sampler and other unmapped lamps are not implemented.
+
+The left/right seven-segment meters use manufacturer channel-16 CC68/69 and the same linear pre-fader peak levels as MainView. Zero extinguishes the meter; levels are rounded up to one of seven segments. Clip hold or an invalid-peak warning lights the full meter, until MainView clears it. Paused PRE LAST values are retained exactly as in MainView, rather than independently decaying or switching to post-fader MASTER. This deliberately follows the requested GUI display, not the manufacturer's default mixer-meter behavior.
+
+Only changed three-byte messages are sent (at most 20 per feedback frame); all output work is on the GUI control plane, never the real-time audio callback. Failed sends release the output, report a visible retry status and do not acknowledge the state frame. Output recovery repeats the greeting and publishes a fresh full frame. Tests cover exact manufacturer ranges, independent A/B state, unchanged-tick coalescing, partial failure/replay and real engine/GUI/MIDI transport. Native LED timing, appearance and listening acceptance remain open: a shared tick is not a guarantee of simultaneous physical MIDI/display presentation.
 
 RECONNECT MIDI provides explicit recovery if a same-name device disappears and returns between polling ticks: before further MIDI dispatch the application drops both old connections and queued inputs, forces discovery and opens fresh handles. The accessible footer action remains available even if no controller is detected. It does not rebuild the audio stream or resume tracks. Automatic detection of sub-two-second USB cycles remains open.
 
