@@ -66,6 +66,8 @@ enum GridAction {
     MeterRemove,
     TempoSet,
     TempoRemove,
+    WarpSet,
+    WarpRemove,
     Clear,
 }
 struct DetailCache {
@@ -2507,6 +2509,16 @@ impl AudioController {
                 ui.set_right_grid_tempo_bpm(tempo_bpm);
             }
         }
+        let warp_beat = self.grid_editors.borrow()[Self::grid_index(id)]
+            .as_ref()
+            .and_then(|editor| editor.draft.value())
+            .and_then(|grid| grid.warp_markers().first().map(|marker| marker.beat))
+            .unwrap_or(1)
+            .min(i32::MAX as u64) as i32;
+        match id {
+            DeckId::A => ui.set_left_grid_warp_beat(warp_beat),
+            DeckId::B => ui.set_right_grid_warp_beat(warp_beat),
+        }
         self.set_grid_editing(id, true);
         Ok(())
     }
@@ -2576,6 +2588,18 @@ impl AudioController {
                         draft.set_tempo_change(beat, &bpm)
                     } else {
                         draft.remove_tempo_change(beat)
+                    }
+                }
+                GridAction::WarpSet | GridAction::WarpRemove => {
+                    let beat = match id {
+                        DeckId::A => ui.get_left_grid_warp_beat(),
+                        DeckId::B => ui.get_right_grid_warp_beat(),
+                    };
+                    let beat = u64::try_from(beat).map_err(|_| "Invalid warp-marker beat")?;
+                    if matches!(action, GridAction::WarpSet) {
+                        draft.set_warp_marker(beat, self.engine.borrow().snapshot(id).position)
+                    } else {
+                        draft.remove_warp_marker(beat)
                     }
                 }
                 GridAction::Clear => {
@@ -2689,6 +2713,8 @@ impl AudioController {
                 GridAction::MeterRemove,
                 GridAction::TempoSet,
                 GridAction::TempoRemove,
+                GridAction::WarpSet,
+                GridAction::WarpRemove,
                 GridAction::Clear,
             ] {
                 let weak = Rc::downgrade(self);
@@ -2722,6 +2748,10 @@ impl AudioController {
                     (DeckId::B, GridAction::TempoSet) => ui.on_grid_tempo_set_right(change),
                     (DeckId::A, GridAction::TempoRemove) => ui.on_grid_tempo_remove_left(change),
                     (DeckId::B, GridAction::TempoRemove) => ui.on_grid_tempo_remove_right(change),
+                    (DeckId::A, GridAction::WarpSet) => ui.on_grid_warp_set_left(change),
+                    (DeckId::B, GridAction::WarpSet) => ui.on_grid_warp_set_right(change),
+                    (DeckId::A, GridAction::WarpRemove) => ui.on_grid_warp_remove_left(change),
+                    (DeckId::B, GridAction::WarpRemove) => ui.on_grid_warp_remove_right(change),
                     (DeckId::A, GridAction::Clear) => ui.on_clear_grid_left(change),
                     (DeckId::B, GridAction::Clear) => ui.on_clear_grid_right(change),
                 }
@@ -4877,6 +4907,7 @@ impl AudioController {
                                 position: line.percent,
                                 downbeat: line.downbeat,
                                 first: line.first,
+                                warp_marker: line.warp_marker,
                                 bar: line.bar,
                             })
                             .collect::<Vec<_>>(),
@@ -4942,14 +4973,37 @@ impl AudioController {
                     summary
                 },
             );
+            let warp_summary = preview.map_or_else(
+                || "No warp markers".to_string(),
+                |grid| {
+                    if grid.warp_markers().is_empty() {
+                        "No warp markers".to_string()
+                    } else {
+                        let mut summary = String::new();
+                        for marker in grid.warp_markers() {
+                            if !summary.is_empty() {
+                                summary.push_str(" · ");
+                            }
+                            summary.push_str(&format!(
+                                "Beat {}: {:.3}s",
+                                marker.beat,
+                                marker.position_ns as f64 / 1_000_000_000.
+                            ));
+                        }
+                        summary
+                    }
+                },
+            );
             match id {
                 DeckId::A => {
                     ui.set_left_grid_meter_summary(meter_summary.into());
                     ui.set_left_grid_tempo_summary(tempo_summary.into());
+                    ui.set_left_grid_warp_summary(warp_summary.into());
                 }
                 DeckId::B => {
                     ui.set_right_grid_meter_summary(meter_summary.into());
                     ui.set_right_grid_tempo_summary(tempo_summary.into());
+                    ui.set_right_grid_warp_summary(warp_summary.into());
                 }
             }
             let caption = if editing {
@@ -11653,6 +11707,99 @@ mod tests {
                 engine.snapshot(id).grid.unwrap().tempo_changes(),
                 &[crate::beatgrid::TempoChange { beat: 8, bpm: 90. }]
             );
+        }
+    }
+
+    #[test]
+    fn warp_marker_gui_preview_save_cancel_and_remove_on_both_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        for id in [DeckId::A, DeckId::B] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+            let file = wav_file(8192, 48_000 * 10);
+            match id {
+                DeckId::A => engine.load_a(file.path()).unwrap(),
+                DeckId::B => engine.load_b(file.path()).unwrap(),
+            }
+            let base = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+            engine.set_grid(id, Some(base)).unwrap();
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+
+            for save in [false, true] {
+                match id {
+                    DeckId::A => {
+                        ui.invoke_grid_left();
+                        ui.set_left_grid_warp_beat(6);
+                    }
+                    DeckId::B => {
+                        ui.invoke_grid_right();
+                        ui.set_right_grid_warp_beat(6);
+                    }
+                }
+                engine
+                    .seek_position(id, Duration::from_millis(3_250))
+                    .unwrap();
+                match id {
+                    DeckId::A => ui.invoke_grid_warp_set_left(),
+                    DeckId::B => ui.invoke_grid_warp_set_right(),
+                }
+                assert!(engine.snapshot(id).grid.unwrap().warp_markers().is_empty());
+                let draft = c.grid_editors.borrow()[AudioController::grid_index(id)]
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .value()
+                    .unwrap();
+                assert_eq!(
+                    draft.warp_markers(),
+                    &[crate::beatgrid::WarpMarker {
+                        beat: 6,
+                        position_ns: 3_250_000_000,
+                    }]
+                );
+                let summary = match id {
+                    DeckId::A => ui.get_left_grid_warp_summary(),
+                    DeckId::B => ui.get_right_grid_warp_summary(),
+                };
+                assert!(summary.contains("Beat 6: 3.250s"));
+                let lines = match id {
+                    DeckId::A => ui.get_left_beats(),
+                    DeckId::B => ui.get_right_beats(),
+                };
+                assert!((0..lines.row_count())
+                    .any(|index| { lines.row_data(index).is_some_and(|line| line.warp_marker) }));
+
+                match (id, save) {
+                    (DeckId::A, false) => ui.invoke_cancel_grid_left(),
+                    (DeckId::B, false) => ui.invoke_cancel_grid_right(),
+                    (DeckId::A, true) => ui.invoke_save_grid_left(),
+                    (DeckId::B, true) => ui.invoke_save_grid_right(),
+                }
+                assert_eq!(
+                    engine.snapshot(id).grid.unwrap().warp_markers().len(),
+                    usize::from(save)
+                );
+            }
+
+            match id {
+                DeckId::A => {
+                    ui.invoke_grid_left();
+                    ui.set_left_grid_warp_beat(6);
+                    ui.invoke_grid_warp_remove_left();
+                    ui.invoke_save_grid_left();
+                }
+                DeckId::B => {
+                    ui.invoke_grid_right();
+                    ui.set_right_grid_warp_beat(6);
+                    ui.invoke_grid_warp_remove_right();
+                    ui.invoke_save_grid_right();
+                }
+            }
+            let path = engine.snapshot(id).path.unwrap();
+            assert!(engine.snapshot(id).grid.unwrap().warp_markers().is_empty());
+            assert_eq!(c.library.borrow().grid(&path), engine.snapshot(id).grid);
         }
     }
 

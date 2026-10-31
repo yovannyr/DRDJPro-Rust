@@ -2,6 +2,7 @@
 use std::time::Duration;
 pub const MAX_METER_CHANGES: usize = 16;
 pub const MAX_TEMPO_CHANGES: usize = 64;
+pub const MAX_WARP_MARKERS: usize = 64;
 const MAX_BAR: u32 = 1_000_000;
 const MAX_BEAT: u64 = MAX_BAR as u64 * 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,12 +54,22 @@ pub struct TempoChange {
     pub beat: u64,
     pub bpm: f64,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WarpMarker {
+    pub beat: u64,
+    pub position_ns: u64,
+}
 const EMPTY_METER: MeterChange = MeterChange {
     bar: 0,
     beats: 0,
     denominator: 4,
 };
 const EMPTY_TEMPO: TempoChange = TempoChange { beat: 0, bpm: 0. };
+const EMPTY_WARP_MARKER: WarpMarker = WarpMarker {
+    beat: 0,
+    position_ns: 0,
+};
 const fn quarter_note_denominator() -> u8 {
     4
 }
@@ -92,6 +103,8 @@ pub struct BeatGrid {
     change_count: u8,
     tempo_changes: [TempoChange; MAX_TEMPO_CHANGES],
     tempo_change_count: u8,
+    warp_markers: [WarpMarker; MAX_WARP_MARKERS],
+    warp_marker_count: u8,
 }
 
 #[derive(Debug)]
@@ -99,6 +112,7 @@ pub struct GridLine {
     pub percent: f32,
     pub downbeat: bool,
     pub first: bool,
+    pub warp_marker: bool,
     pub bar: i32,
 }
 
@@ -117,6 +131,8 @@ impl BeatGrid {
             change_count: 0,
             tempo_changes: [EMPTY_TEMPO; MAX_TEMPO_CHANGES],
             tempo_change_count: 0,
+            warp_markers: [EMPTY_WARP_MARKER; MAX_WARP_MARKERS],
+            warp_marker_count: 0,
         })
     }
     pub fn with_time_signature(mut self, beats: u8, denominator: u8) -> Result<Self, String> {
@@ -216,6 +232,57 @@ impl BeatGrid {
         self.tempo_changes[count - 1] = EMPTY_TEMPO;
         Ok(self)
     }
+    pub fn warp_markers(&self) -> &[WarpMarker] {
+        &self.warp_markers[..usize::from(self.warp_marker_count)]
+    }
+    pub fn with_warp_marker(mut self, beat: u64, position: Duration) -> Result<Self, String> {
+        if !(1..=MAX_BEAT).contains(&beat)
+            || position > MAX_ANCHOR
+            || position.as_nanos() <= self.anchor.as_nanos()
+        {
+            return Err("Warp markers require a positive beat and a later source position".into());
+        }
+        let marker = WarpMarker {
+            beat,
+            position_ns: position.as_nanos() as u64,
+        };
+        let index = match self
+            .warp_markers()
+            .binary_search_by_key(&beat, |change| change.beat)
+        {
+            Ok(index) => index,
+            Err(index) => {
+                let count = usize::from(self.warp_marker_count);
+                if count == MAX_WARP_MARKERS {
+                    return Err("At most sixty-four warp markers per track".into());
+                }
+                self.warp_markers.copy_within(index..count, index + 1);
+                self.warp_marker_count += 1;
+                index
+            }
+        };
+        if index > 0 && self.warp_markers[index - 1].position_ns >= marker.position_ns {
+            return Err("Warp marker positions must increase with beat indices".into());
+        }
+        if index + 1 < usize::from(self.warp_marker_count)
+            && self.warp_markers[index + 1].position_ns <= marker.position_ns
+        {
+            return Err("Warp marker positions must increase with beat indices".into());
+        }
+        self.warp_markers[index] = marker;
+        Ok(self)
+    }
+    pub fn without_warp_marker(mut self, beat: u64) -> Result<Self, String> {
+        let index = self
+            .warp_markers()
+            .binary_search_by_key(&beat, |marker| marker.beat)
+            .map_err(|_| "No warp marker at this beat")?;
+        let count = usize::from(self.warp_marker_count);
+        self.warp_markers.copy_within(index + 1..count, index);
+        self.warp_marker_count -= 1;
+        self.warp_markers[count - 1] = EMPTY_WARP_MARKER;
+        Ok(self)
+    }
     pub fn bar_start_beat(self, bar: u32) -> Result<f64, String> {
         if !(1..=MAX_BAR).contains(&bar) {
             return Err("Invalid bar number".into());
@@ -277,9 +344,37 @@ impl BeatGrid {
                 return Err("Tempo change is outside this track".into());
             }
         }
+        if self
+            .warp_markers()
+            .iter()
+            .any(|marker| u128::from(marker.position_ns) >= duration.as_nanos())
+        {
+            return Err("Warp marker is outside this track".into());
+        }
         Ok(())
     }
     fn time_at_beat(self, beat: f64) -> f64 {
+        let base_time = self.base_time_at_beat(beat);
+        if beat <= 0. || self.warp_markers().is_empty() {
+            return base_time;
+        }
+        let (mut previous_base_time, mut previous_position) =
+            (self.anchor.as_secs_f64(), self.anchor.as_secs_f64());
+        for marker in self.warp_markers() {
+            let next_beat = marker.beat as f64;
+            let next_base_time = self.base_time_at_beat(next_beat);
+            let next_position = marker.position_ns as f64 / 1_000_000_000.;
+            if beat <= next_beat {
+                let proportion =
+                    (base_time - previous_base_time) / (next_base_time - previous_base_time);
+                return previous_position + proportion * (next_position - previous_position);
+            }
+            previous_base_time = next_base_time;
+            previous_position = next_position;
+        }
+        previous_position + (base_time - previous_base_time)
+    }
+    fn base_time_at_beat(self, beat: f64) -> f64 {
         if beat <= 0. || self.tempo_changes().is_empty() {
             return self.anchor.as_secs_f64() + beat * 60. / self.bpm;
         }
@@ -298,6 +393,28 @@ impl BeatGrid {
         seconds + (beat - current_beat) * 60. / current_bpm
     }
     fn beat_at_time(self, seconds: f64) -> f64 {
+        if seconds <= self.anchor.as_secs_f64() || self.warp_markers().is_empty() {
+            return self.base_beat_at_time(seconds);
+        }
+        let (mut previous_base_time, mut previous_position) =
+            (self.anchor.as_secs_f64(), self.anchor.as_secs_f64());
+        for marker in self.warp_markers() {
+            let next_beat = marker.beat as f64;
+            let next_base_time = self.base_time_at_beat(next_beat);
+            let next_position = marker.position_ns as f64 / 1_000_000_000.;
+            if seconds <= next_position {
+                let proportion =
+                    (seconds - previous_position) / (next_position - previous_position);
+                return self.base_beat_at_time(
+                    previous_base_time + proportion * (next_base_time - previous_base_time),
+                );
+            }
+            previous_base_time = next_base_time;
+            previous_position = next_position;
+        }
+        self.base_beat_at_time(previous_base_time + seconds - previous_position)
+    }
+    fn base_beat_at_time(self, seconds: f64) -> f64 {
         let elapsed = seconds - self.anchor.as_secs_f64();
         if elapsed <= 0. || self.tempo_changes().is_empty() {
             return elapsed * self.bpm / 60.;
@@ -318,6 +435,9 @@ impl BeatGrid {
         current_beat + (seconds - current_seconds) * current_bpm / 60.
     }
     fn time_at_beat_nanos(self, beat: f64) -> i128 {
+        if !self.warp_markers().is_empty() {
+            return (self.time_at_beat(beat) * 1_000_000_000.).round() as i128;
+        }
         const NANOS_PER_MINUTE: f64 = 60_000_000_000.;
         let mut time = self.anchor.as_nanos() as i128;
         if beat <= 0. || self.tempo_changes().is_empty() {
@@ -339,6 +459,13 @@ impl BeatGrid {
     }
     fn reposition(self, bpm: f64, anchor: Duration) -> Result<Self, String> {
         Self::new(bpm, anchor)?;
+        if self
+            .warp_markers()
+            .first()
+            .is_some_and(|marker| marker.position_ns <= anchor.as_nanos() as u64)
+        {
+            return Err("Grid anchor must precede all warp markers".into());
+        }
         Ok(Self {
             bpm,
             anchor,
@@ -355,7 +482,7 @@ impl BeatGrid {
         self.bpm
     }
     pub fn is_constant_tempo(self) -> bool {
-        self.tempo_change_count == 0
+        self.tempo_change_count == 0 && self.warp_marker_count == 0
     }
     pub fn anchor(self) -> Duration {
         self.anchor
@@ -474,19 +601,60 @@ impl BeatGrid {
             Ok(frame as usize)
         };
         if next {
-            for offset in 0..=32_i64 {
-                let index = lower - 1 + offset;
-                let target_beat = index as f64 * unit;
-                let target_ns = self.time_at_beat_nanos(target_beat);
-                if target_ns < 0 {
-                    continue;
+            let is_later = |index: i128| -> Result<bool, String> {
+                let frame = frame_at(index as f64 * unit)?;
+                Ok(crate::looping::frame_time(frame, rate) > position)
+            };
+            let mut low = i128::from(lower);
+            let mut high;
+            if is_later(low)? {
+                high = low;
+                let mut step = 1_i128;
+                loop {
+                    let candidate = high
+                        .checked_sub(step)
+                        .ok_or("Quantization search exceeded beat range")?;
+                    if !is_later(candidate)? {
+                        low = candidate;
+                        break;
+                    }
+                    high = candidate;
+                    step = step
+                        .checked_mul(2)
+                        .ok_or("Quantization search exceeded beat range")?;
                 }
-                let frame = frame_at(target_beat)?;
-                if crate::looping::frame_time(frame, rate) > position {
-                    return Ok(frame);
+            } else {
+                let mut step = 1_i128;
+                high = low
+                    .checked_add(step)
+                    .ok_or("Quantization search exceeded beat range")?;
+                let mut found = false;
+                for _ in 0..128 {
+                    if is_later(high)? {
+                        found = true;
+                        break;
+                    }
+                    low = high;
+                    step = step
+                        .checked_mul(2)
+                        .ok_or("Quantization search exceeded beat range")?;
+                    high = low
+                        .checked_add(step)
+                        .ok_or("Quantization search exceeded beat range")?;
+                }
+                if !found {
+                    return Err("No later representable quantization frame".into());
                 }
             }
-            return Err("No later representable quantization frame".into());
+            while high - low > 1 {
+                let midpoint = low + (high - low) / 2;
+                if is_later(midpoint)? {
+                    high = midpoint;
+                } else {
+                    low = midpoint;
+                }
+            }
+            return frame_at(high as f64 * unit);
         }
         let mut nearest: Option<(i64, i128, i128)> = None;
         for index in (lower - 1)..=(lower + 2) {
@@ -511,49 +679,88 @@ impl BeatGrid {
         }
         let start = start.as_secs_f64();
         let end = end.as_secs_f64();
-        let first = (self.beat_at_time(start) - 1e-9).ceil() as i64;
-        let last = (self.beat_at_time(end) + 1e-9).floor() as i64;
-        let mut lines: Vec<(f64, GridLine)> = (first..=last)
-            .take(132)
-            .filter_map(|index| {
-                let beat = index as f64;
-                let time = self.time_at_beat(beat);
-                if time < start - 1e-7 || time > end + 1e-7 {
-                    return None;
-                }
-                let (bar, downbeat) = self.bar_at_beat(beat);
-                Some((
-                    time,
-                    GridLine {
-                        percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
-                        downbeat,
-                        first: index == 0,
-                        bar: bar.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                    },
-                ))
-            })
-            .collect();
-        let first_beat = self.beat_at_time(start);
-        let last_beat = self.beat_at_time(end);
-        let first_bar = self.bar_at_beat(first_beat).0 - 1;
-        let last_bar = self.bar_at_beat(last_beat).0 + 1;
-        for bar in (first_bar..=last_bar).take(660) {
-            let beat = self.bar_start_beat_signed(bar);
-            if (beat - beat.round()).abs() < 1e-9 {
+        const BEAT_SAMPLES: usize = 132;
+        const DOWNBEAT_SAMPLES: usize = 330;
+        let mut lines: Vec<(f64, GridLine)> =
+            Vec::with_capacity(BEAT_SAMPLES + DOWNBEAT_SAMPLES * 2 + self.warp_markers().len());
+        for sample in 0..BEAT_SAMPLES {
+            let proportion = sample as f64 / (BEAT_SAMPLES - 1) as f64;
+            let target_time = start + (end - start) * proportion;
+            let index = self.beat_at_time(target_time).round() as i64;
+            let beat = index as f64;
+            let time = self.time_at_beat(beat);
+            if time < start - 1e-7 || time > end + 1e-7 {
                 continue;
             }
-            let time = self.time_at_beat(beat);
-            if time >= start - 1e-7 && time <= end + 1e-7 {
+            let (bar, downbeat) = self.bar_at_beat(beat);
+            lines.push((
+                time,
+                GridLine {
+                    percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
+                    downbeat,
+                    first: index == 0,
+                    warp_marker: index > 0
+                        && self
+                            .warp_markers()
+                            .binary_search_by_key(&(index as u64), |marker| marker.beat)
+                            .is_ok(),
+                    bar: bar.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                },
+            ));
+        }
+        for sample in 0..DOWNBEAT_SAMPLES {
+            let proportion = sample as f64 / (DOWNBEAT_SAMPLES - 1) as f64;
+            let target_time = start + (end - start) * proportion;
+            let bar = self.bar_at_beat(self.beat_at_time(target_time)).0;
+            for bar in [bar, bar.saturating_add(1)] {
+                let beat = self.bar_start_beat_signed(bar);
+                let time = self.time_at_beat(beat);
+                if time < start - 1e-7 || time > end + 1e-7 {
+                    continue;
+                }
+                if let Some((_, line)) = lines
+                    .iter_mut()
+                    .find(|(existing, _)| (existing - time).abs() < 1e-9)
+                {
+                    line.downbeat = true;
+                    line.bar = bar.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+                    continue;
+                }
                 lines.push((
                     time,
                     GridLine {
                         percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
                         downbeat: true,
                         first: beat.abs() < 1e-9,
+                        warp_marker: false,
                         bar: bar.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
                     },
                 ));
             }
+        }
+        for marker in self.warp_markers() {
+            let time = marker.position_ns as f64 / 1_000_000_000.;
+            if time < start - 1e-7 || time > end + 1e-7 {
+                continue;
+            }
+            if let Some((_, line)) = lines
+                .iter_mut()
+                .find(|(existing, _)| (existing - time).abs() < 1e-9)
+            {
+                line.warp_marker = true;
+                continue;
+            }
+            let (bar, downbeat) = self.bar_at_beat(marker.beat as f64);
+            lines.push((
+                time,
+                GridLine {
+                    percent: (100.0 * (time - start) / (end - start)).clamp(0.0, 100.0) as f32,
+                    downbeat,
+                    first: false,
+                    warp_marker: true,
+                    bar: bar.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+                },
+            ));
         }
         lines.sort_by(|left, right| left.0.total_cmp(&right.0));
         lines.dedup_by(|left, right| (left.0 - right.0).abs() < 1e-9);
@@ -662,6 +869,24 @@ impl GridDraft {
         self.value = Some(grid);
         Ok(())
     }
+    pub fn set_warp_marker(&mut self, beat: u64, position: Duration) -> Result<(), String> {
+        let grid = self
+            .value
+            .ok_or("Set a grid before adding warp markers")?
+            .with_warp_marker(beat, position)?;
+        grid.validate_duration(self.duration)?;
+        self.value = Some(grid);
+        Ok(())
+    }
+    pub fn remove_warp_marker(&mut self, beat: u64) -> Result<(), String> {
+        let grid = self
+            .value
+            .ok_or("Set a grid first")?
+            .without_warp_marker(beat)?;
+        grid.validate_duration(self.duration)?;
+        self.value = Some(grid);
+        Ok(())
+    }
     pub fn set_bpm(&mut self, text: &str) -> Result<(), String> {
         let bpm = parse_bpm(text)?;
         let grid = self
@@ -694,7 +919,7 @@ impl GridDraft {
         Ok(())
     }
     pub fn nudge(&mut self, milliseconds: i32) -> Result<(), String> {
-        let grid = self
+        let mut grid = self
             .value
             .ok_or("Set a downbeat before shifting the grid")?;
         let delta = Duration::from_millis(u64::from(milliseconds.unsigned_abs()));
@@ -703,6 +928,15 @@ impl GridDraft {
         } else {
             grid.anchor().saturating_add(delta).min(self.duration)
         };
+        let shift = anchor.as_nanos() as i128 - grid.anchor().as_nanos() as i128;
+        for marker in &mut grid.warp_markers[..usize::from(grid.warp_marker_count)] {
+            let position = i128::from(marker.position_ns) + shift;
+            marker.position_ns =
+                u64::try_from(position).map_err(|_| "Shifted warp marker is outside range")?;
+            if marker.position_ns > MAX_ANCHOR.as_nanos() as u64 {
+                return Err("Shifted warp marker exceeds seven days".into());
+            }
+        }
         let grid = grid.reposition(grid.bpm(), anchor)?;
         grid.validate_duration(self.duration)?;
         self.value = Some(grid);
@@ -869,6 +1103,133 @@ mod tests {
         assert!((times[4] - 2.).abs() < 1e-6);
         assert!((times[8] - 6.).abs() < 1e-6);
         assert_eq!(lines[8].bar, 3);
+    }
+
+    #[test]
+    fn warp_markers_remap_variable_tempo_monotonically_and_invertibly() {
+        let grid = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(4, 60.)
+            .unwrap()
+            .with_warp_marker(8, Duration::from_millis(5_500))
+            .unwrap()
+            .with_warp_marker(12, Duration::from_secs(9))
+            .unwrap();
+        assert_eq!(grid.warp_markers().len(), 2);
+        assert!(!grid.is_constant_tempo());
+        assert!((grid.time_at_beat(4.) - 1.8333333333333333).abs() < 1e-12);
+        assert!((grid.time_at_beat(8.) - 5.5).abs() < 1e-12);
+        assert!((grid.time_at_beat(10.) - 7.25).abs() < 1e-12);
+        assert!((grid.time_at_beat(12.) - 9.).abs() < 1e-12);
+        assert!((grid.time_at_beat(16.) - 13.).abs() < 1e-12);
+
+        for beat in [-2., 0., 1., 4., 7., 8., 10., 12., 16., 24.] {
+            let time = grid.time_at_beat(beat);
+            assert!((grid.beat_at_time(time) - beat).abs() < 1e-9);
+        }
+        for pair in [(-1., 0.), (0., 1.), (7., 8.), (8., 9.), (12., 13.)] {
+            assert!(grid.time_at_beat(pair.0) < grid.time_at_beat(pair.1));
+        }
+        assert_eq!(
+            grid.nearest_beat_frame(Duration::from_millis(5_500), 48_000)
+                .unwrap(),
+            264_000
+        );
+        let compressed = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_warp_marker(1_000, Duration::from_millis(1))
+            .unwrap();
+        assert_eq!(
+            compressed
+                .next_quantized_frame(Duration::ZERO, 48_000, QuantizeStep::Eighth)
+                .unwrap(),
+            1
+        );
+        assert!(grid
+            .lines(Duration::from_secs(5), Duration::from_secs(6))
+            .iter()
+            .any(|line| line.warp_marker && line.downbeat && line.bar == 3));
+    }
+
+    #[test]
+    fn warp_markers_reject_invalid_order_and_preserve_drafts_on_failure() {
+        let base = BeatGrid::new(120., Duration::from_secs(1)).unwrap();
+        assert!(base.with_warp_marker(0, Duration::from_secs(2)).is_err());
+        assert!(base.with_warp_marker(1, Duration::from_secs(1)).is_err());
+        assert!(base
+            .with_warp_marker(1, Duration::from_secs(8))
+            .unwrap()
+            .with_warp_marker(3, Duration::from_secs(7))
+            .is_err());
+
+        let grid = base
+            .with_warp_marker(2, Duration::from_secs(3))
+            .unwrap()
+            .with_warp_marker(4, Duration::from_secs(5))
+            .unwrap();
+        assert!(grid.with_warp_marker(2, Duration::from_secs(6)).is_err());
+        let mut draft = GridDraft::new(
+            Some(grid),
+            120.,
+            Duration::from_secs(2),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        draft.nudge(10).unwrap();
+        assert_eq!(
+            draft.value().unwrap().anchor(),
+            Duration::from_millis(1_010)
+        );
+        assert_eq!(
+            draft.value().unwrap().warp_markers()[0].position_ns,
+            3_010_000_000
+        );
+        let before = draft.value();
+        assert!(draft
+            .set_warp_marker(4, Duration::from_millis(2_500))
+            .is_err());
+        assert_eq!(draft.value(), before);
+        assert!(draft.set_warp_marker(5, Duration::from_secs(10)).is_err());
+        assert_eq!(draft.value(), before);
+        assert!(draft.nudge(10_000).is_err());
+        assert_eq!(draft.value(), before);
+        draft.remove_warp_marker(2).unwrap();
+        assert_eq!(draft.value().unwrap().warp_markers()[0].beat, 4);
+
+        let full = (1..=MAX_WARP_MARKERS as u64).fold(
+            BeatGrid::new(120., Duration::ZERO).unwrap(),
+            |grid, beat| {
+                grid.with_warp_marker(beat, Duration::from_secs(beat + 1))
+                    .unwrap()
+            },
+        );
+        assert!(full
+            .with_warp_marker(
+                MAX_WARP_MARKERS as u64 + 1,
+                Duration::from_secs(MAX_WARP_MARKERS as u64 + 2)
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn dense_warped_waveform_thins_beats_but_keeps_visible_marker() {
+        let grid = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_warp_marker(141, Duration::from_secs(30))
+            .unwrap();
+        let lines = grid.lines(Duration::ZERO, Duration::from_secs(32));
+        let marker = lines.iter().find(|line| line.warp_marker).unwrap();
+        assert!((marker.percent - 93.75).abs() < 1e-4);
+        assert!(lines.len() <= 132 + 660 + MAX_WARP_MARKERS);
+        assert!(lines.iter().any(|line| line.percent > 97.));
+
+        let compressed = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_warp_marker(100_000, Duration::from_millis(1))
+            .unwrap();
+        let lines = compressed.lines(Duration::ZERO, Duration::from_secs(32));
+        assert!(lines.iter().any(|line| line.warp_marker));
+        assert!(lines.iter().any(|line| line.percent > 97.));
     }
 
     #[test]

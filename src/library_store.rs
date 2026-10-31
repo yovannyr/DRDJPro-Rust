@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 fn startup_selection(
     connection: &Connection,
 ) -> Result<crate::audio_devices::StartupSelection, String> {
@@ -207,16 +207,18 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     }
     if version >= 4 {
         let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
-        let mut statement = connection.prepare(if version >= 12 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,base_meter_denominator,meter_changes,tempo_changes FROM track_grids LIMIT ?1"
+        let mut statement = connection.prepare(if version >= 13 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,base_meter_denominator,meter_changes,tempo_changes,warp_markers FROM track_grids LIMIT ?1"
+        } else if version >= 12 {
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,base_meter_denominator,meter_changes,tempo_changes,'[]' FROM track_grids LIMIT ?1"
         } else if version >= 10 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,meter_changes,tempo_changes FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,meter_changes,tempo_changes,'[]' FROM track_grids LIMIT ?1"
         } else if version >= 8 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,meter_changes,'[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,meter_changes,'[]','[]' FROM track_grids LIMIT ?1"
         } else if version >= 7 {
-            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,'[]','[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,beats_per_bar,4,'[]','[]','[]' FROM track_grids LIMIT ?1"
         } else {
-            "SELECT track_id,bpm,anchor_ns,4,4,'[]','[]' FROM track_grids LIMIT ?1"
+            "SELECT track_id,bpm,anchor_ns,4,4,'[]','[]','[]' FROM track_grids LIMIT ?1"
         })?;
         let mut rows = statement.query([library::MAX_TRACKS as i64 + 1])?;
         let mut count = 0;
@@ -281,6 +283,29 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
                 last = change.beat;
                 grid = grid
                     .with_tempo_change(change.beat, change.bpm)
+                    .map_err(InspectError::Damaged)?;
+            }
+            let json: String = row.get(7)?;
+            if json.len() > 4096 {
+                return Err(InspectError::Damaged("Oversized warp-marker map".into()));
+            }
+            let markers: Vec<crate::beatgrid::WarpMarker> =
+                serde_json::from_str(&json).map_err(|e| InspectError::Damaged(e.to_string()))?;
+            if markers.len() > crate::beatgrid::MAX_WARP_MARKERS {
+                return Err(InspectError::Damaged("Too many warp markers".into()));
+            }
+            let mut last_beat = 0;
+            let mut last_position = anchor;
+            for marker in markers {
+                if marker.beat <= last_beat || marker.position_ns <= last_position {
+                    return Err(InspectError::Damaged(
+                        "Unsorted or duplicate warp markers".into(),
+                    ));
+                }
+                last_beat = marker.beat;
+                last_position = marker.position_ns;
+                grid = grid
+                    .with_warp_marker(marker.beat, Duration::from_nanos(marker.position_ns))
                     .map_err(InspectError::Damaged)?;
             }
             tracks[*index].grid = Some(grid);
@@ -542,6 +567,21 @@ fn add_grid_base_meter_denominator(connection: &Connection) -> Result<(), String
     drop(statement);
     connection.execute_batch("ALTER TABLE track_grids ADD COLUMN base_meter_denominator INTEGER NOT NULL DEFAULT 4 CHECK(base_meter_denominator IN (2,4,8,16));").map_err(|e| e.to_string())
 }
+fn add_grid_warp_markers(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(track_grids)")
+        .map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let name: String = row.get(1).map_err(|e| e.to_string())?;
+        if name == "warp_markers" {
+            return Ok(());
+        }
+    }
+    drop(rows);
+    drop(statement);
+    connection.execute_batch("ALTER TABLE track_grids ADD COLUMN warp_markers TEXT NOT NULL DEFAULT '[]' CHECK(length(warp_markers)<=4096);").map_err(|e| e.to_string())
+}
 fn add_grid_meter_changes(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("ALTER TABLE track_grids ADD COLUMN meter_changes TEXT NOT NULL DEFAULT '[]' CHECK(length(meter_changes)<=2048);").map_err(|e| e.to_string())
 }
@@ -569,7 +609,7 @@ fn write_grids(connection: &Connection, catalog: &Catalog) -> Result<(), String>
 fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<(), String> {
     let mut statement = connection
         .prepare(
-            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar,base_meter_denominator,meter_changes,tempo_changes) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO track_grids(track_id,bpm,anchor_ns,beats_per_bar,base_meter_denominator,meter_changes,tempo_changes,warp_markers) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         )
         .map_err(|e| e.to_string())?;
     for track in tracks {
@@ -582,7 +622,8 @@ fn write_grids_rows(connection: &Connection, tracks: &[SavedTrack]) -> Result<()
                     grid.beats_per_bar(),
                     grid.meter_denominator(),
                     serde_json::to_string(grid.meter_changes()).map_err(|e| e.to_string())?,
-                    serde_json::to_string(grid.tempo_changes()).map_err(|e| e.to_string())?
+                    serde_json::to_string(grid.tempo_changes()).map_err(|e| e.to_string())?,
+                    serde_json::to_string(grid.warp_markers()).map_err(|e| e.to_string())?
                 ])
                 .map_err(|e| e.to_string())?;
         }
@@ -736,6 +777,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     add_grid_meter_changes(&transaction)?;
     add_grid_tempo_changes(&transaction)?;
     add_grid_base_meter_denominator(&transaction)?;
+    add_grid_warp_markers(&transaction)?;
     create_hot_cue_schema(&transaction)?;
     create_saved_loop_schema(&transaction)?;
     transaction
@@ -938,6 +980,9 @@ impl Store {
             }
             if version < 12 {
                 add_grid_base_meter_denominator(&tx)?;
+            }
+            if version < 13 {
+                add_grid_warp_markers(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
@@ -2229,6 +2274,106 @@ mod tests {
                 .unwrap(),
             SCHEMA_VERSION
         );
+    }
+
+    #[test]
+    fn warp_markers_survive_restart_with_variable_tempo() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let path = dir.path().join("missing.wav");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(path.clone(), 27);
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(4, 90.)
+            .unwrap()
+            .with_warp_marker(4, Duration::from_millis(2_500))
+            .unwrap()
+            .with_warp_marker(8, Duration::from_millis(5_500))
+            .unwrap();
+        data.tracks[0].grid = Some(grid);
+        store.save(&data).unwrap();
+        drop(store);
+
+        let (_, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.grid(&path), Some(grid));
+        assert_eq!(
+            restored.grid(&path).unwrap().warp_markers(),
+            grid.warp_markers()
+        );
+    }
+
+    #[test]
+    fn schema_twelve_upgrade_defaults_warp_marker_map_to_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let path = dir.path().join("missing.wav");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(path.clone(), 27);
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap();
+        data.tracks[0].grid = Some(grid);
+        store.save(&data).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE track_grids DROP COLUMN warp_markers; PRAGMA user_version=12;",
+            )
+            .unwrap();
+        drop(store);
+
+        let (store, restored, _) = Store::open(db).unwrap();
+        assert_eq!(restored.grid(&path), Some(grid));
+        assert!(restored.grid(&path).unwrap().warp_markers().is_empty());
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn malformed_warp_marker_maps_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let mut data = catalog(dir.path().join("missing.wav"), 27);
+        data.tracks[0].grid = Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap());
+        store.save(&data).unwrap();
+        for json in [
+            "[",
+            r#"[{"beat":0,"position_ns":1000000000}]"#,
+            r#"[{"beat":2,"position_ns":1000000000},{"beat":2,"position_ns":2000000000}]"#,
+            r#"[{"beat":3,"position_ns":2000000000},{"beat":2,"position_ns":3000000000}]"#,
+            r#"[{"beat":2,"position_ns":2000000000},{"beat":3,"position_ns":1000000000}]"#,
+            r#"[{"beat":2,"position_ns":2000000000,"unknown":true}]"#,
+        ] {
+            store
+                .connection
+                .execute("UPDATE track_grids SET warp_markers=?1", [json])
+                .unwrap();
+            assert!(
+                matches!(inspect(&store.connection), Err(InspectError::Damaged(_))),
+                "{json}"
+            );
+        }
+        let excessive: Vec<_> = (1..=crate::beatgrid::MAX_WARP_MARKERS + 1)
+            .map(|beat| crate::beatgrid::WarpMarker {
+                beat: beat as u64,
+                position_ns: beat as u64 * 1_000_000_000,
+            })
+            .collect();
+        store
+            .connection
+            .execute(
+                "UPDATE track_grids SET warp_markers=?1",
+                [serde_json::to_string(&excessive).unwrap()],
+            )
+            .unwrap();
+        assert!(matches!(
+            inspect(&store.connection),
+            Err(InspectError::Damaged(_))
+        ));
     }
 
     #[test]

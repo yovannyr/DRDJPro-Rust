@@ -3,7 +3,7 @@ export struct LoopRange { valid: bool, active: bool, visible: bool, in-visible: 
 export struct SavedLoopRow { occupied: bool, description: string }
 export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string }
 export struct CrateRow { id: int, name: string, count: int, depth: int }
-export struct BeatLine { position: float, downbeat: bool, first: bool, bar: int }
+export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
 
 component FxStrip inherits Rectangle {
@@ -135,10 +135,10 @@ component WaveformStrip inherits Rectangle {
         background: i < colors.length ? colors[i] : accent;
     }
     for line in beats : Rectangle {
-        accessible-role: image; accessible-label: deck-label + " beat line"; accessible-value: line.position;
+        accessible-role: image; accessible-label: deck-label + (line.warp-marker ? " warp marker" : " beat line"); accessible-value: line.position;
         x: clamp(line.position, 0, 100) / 100 * max(0px, parent.width - self.width);
-        width: line.downbeat ? 2px : 1px; height: parent.height;
-        background: line.first ? #ff4444 : (line.downbeat ? #ffffff99 : #ffffff40);
+        width: line.warp-marker || line.downbeat ? 2px : 1px; height: parent.height;
+        background: line.first ? #ff4444 : (line.warp-marker ? #ffae58 : (line.downbeat ? #ffffff99 : #ffffff40));
     }
     for line in beats : Text {
         visible: line.downbeat; x: clamp(line.position,0,100)/100*max(0px,parent.width - 14px); y: 1px;
@@ -481,6 +481,9 @@ component DetailWaveform inherits Rectangle {
     in-out property <string> grid-tempo-bpm;
     in property <string> grid-tempo-summary;
     callback tempo-set(); callback tempo-remove();
+    in-out property <int> grid-warp-beat: 1;
+    in property <string> grid-warp-summary;
+    callback warp-set(); callback warp-remove();
     callback edit-bpm(); callback anchor-grid(); callback earlier-grid(); callback later-grid(); callback save-grid(); callback cancel-grid();
     in property <string> grid-caption;
     in-out property <int> grid-bpm: 120;
@@ -545,6 +548,14 @@ component DetailWaveform inherits Rectangle {
             Button { text: "SET TEMPO"; width: 90px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " set tempo change"; clicked => { root.tempo-set(); } }
             Button { text: "REMOVE"; width: 76px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " remove tempo change"; clicked => { root.tempo-remove(); } }
             Text { text: root.grid-tempo-summary; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; accessible-description: root.grid-tempo-summary; }
+        }
+        if root.grid-editing : HorizontalLayout {
+            height: 28px; spacing: 4px;
+            Text { text: "At beat"; color: #abb6c6; width: 48px; vertical-alignment: center; }
+            SpinBox { width: 110px; minimum: 1; maximum: 16000000; value <=> root.grid-warp-beat; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " warp marker beat"; }
+            Button { text: "SET WARP"; width: 90px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " set warp marker at playhead"; clicked => { root.warp-set(); } }
+            Button { text: "REMOVE"; width: 76px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " remove warp marker"; clicked => { root.warp-remove(); } }
+            Text { text: root.grid-warp-summary; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; accessible-description: root.grid-warp-summary; }
         }
         WaveformStrip {
             keyboard-zoom: true;
@@ -961,6 +972,9 @@ export component AppWindow inherits Window {
     in-out property <string> left-grid-tempo-bpm;
     in property <string> left-grid-tempo-summary;
     callback grid-tempo-set-left(); callback grid-tempo-remove-left();
+    in-out property <int> left-grid-warp-beat: 1;
+    in property <string> left-grid-warp-summary;
+    callback grid-warp-set-left(); callback grid-warp-remove-left();
     in-out property <string> right-grid-draft-bpm;
     in-out property <int> right-grid-draft-beats: 4;
     in-out property <int> right-grid-draft-denominator-index: 1;
@@ -973,6 +987,9 @@ export component AppWindow inherits Window {
     in-out property <string> right-grid-tempo-bpm;
     in property <string> right-grid-tempo-summary;
     callback grid-tempo-set-right(); callback grid-tempo-remove-right();
+    in-out property <int> right-grid-warp-beat: 1;
+    in property <string> right-grid-warp-summary;
+    callback grid-warp-set-right(); callback grid-warp-remove-right();
     callback edit-grid-bpm-left(); callback edit-grid-bpm-right();
     callback grid-anchor-left(); callback grid-anchor-right();
     callback grid-earlier-left(); callback grid-earlier-right();
@@ -1185,6 +1202,8 @@ export component AppWindow inherits Window {
                     meter-set => { root.grid-meter-set-left(); } meter-remove => { root.grid-meter-remove-left(); }
                     grid-tempo-beat <=> root.left-grid-tempo-beat; grid-tempo-bpm <=> root.left-grid-tempo-bpm; grid-tempo-summary: root.left-grid-tempo-summary;
                     tempo-set => { root.grid-tempo-set-left(); } tempo-remove => { root.grid-tempo-remove-left(); }
+                    grid-warp-beat <=> root.left-grid-warp-beat; grid-warp-summary: root.left-grid-warp-summary;
+                    warp-set => { root.grid-warp-set-left(); } warp-remove => { root.grid-warp-remove-left(); }
                     grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.left-busy;
                     edit-bpm => { root.edit-grid-bpm-left(); } anchor-grid => { root.grid-anchor-left(); }
                     earlier-grid => { root.grid-earlier-left(); } later-grid => { root.grid-later-left(); }
@@ -1205,6 +1224,8 @@ export component AppWindow inherits Window {
                     meter-set => { root.grid-meter-set-right(); } meter-remove => { root.grid-meter-remove-right(); }
                     grid-tempo-beat <=> root.right-grid-tempo-beat; grid-tempo-bpm <=> root.right-grid-tempo-bpm; grid-tempo-summary: root.right-grid-tempo-summary;
                     tempo-set => { root.grid-tempo-set-right(); } tempo-remove => { root.grid-tempo-remove-right(); }
+                    grid-warp-beat <=> root.right-grid-warp-beat; grid-warp-summary: root.right-grid-warp-summary;
+                    warp-set => { root.grid-warp-set-right(); } warp-remove => { root.grid-warp-remove-right(); }
                     grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.right-busy;
                     edit-bpm => { root.edit-grid-bpm-right(); } anchor-grid => { root.grid-anchor-right(); }
                     earlier-grid => { root.grid-earlier-right(); } later-grid => { root.grid-later-right(); }
