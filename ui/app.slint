@@ -690,6 +690,7 @@ component CratePanel inherits Rectangle {
     in property <[CrateRow]> rows;
     in property <[string]> names;
     in property <int> selection;
+    in property <bool> history-selected;
     in property <bool> busy;
     in property <bool> has-track;
     in property <bool> selected-smart;
@@ -708,6 +709,7 @@ component CratePanel inherits Rectangle {
     VerticalLayout {
         padding: 5px; spacing: 3px;
         Button { text: "ALL TRACKS"; accessible-label: "All library tracks"; enabled: !busy; clicked => { root.select-crate(0); } }
+        Button { text: root.history-selected ? "HISTORY *" : "HISTORY"; accessible-label: "Playback history"; enabled: !busy; clicked => { root.select-crate(-1); } }
         ListView {
             for entry in root.rows : Rectangle {
                 height: 28px; background: root.selection == entry.id ? #194b70 : #1a222e;
@@ -1420,6 +1422,7 @@ export component AppWindow inherits Window {
                 CratePanel {
                     accessible-role: groupbox; accessible-label: "Crate navigation"; width: 190px;
                     rows: root.crate-rows; names: root.crate-names; selection: root.selected-crate;
+                    history-selected: root.selected-crate == -1;
                     busy: root.loading || root.library-busy || !root.audio-enabled;
                     has-track: root.selected-track >= 0;
                     selected-smart: root.selected-crate-smart;

@@ -41,18 +41,19 @@ Every item needs source file(s), target crate(s), acceptance criteria, reference
 | --- | --- | --- |
 | R-UI-EXT-01 | Compact heads, shared stacked detail waveforms, library and separate status (`ui/app.slint`) | Headless geometry at 850x740 and 1280x860; visual/framework acceptance open |
 | R-LIB-01 | Worker import of existing MP3/WAV paths, duplicates/invalid paths counted, cancel preserved (`library.rs`, `controller.rs`) | Real generated WAV and bundled MP3 imports; decode occurs at load; persistence/folder scans open |
-| R-LIB-02 | Case-insensitive search, deterministic name/type/path sort and stable selected IDs | Domain and accessible UI tests, hidden selections cleared; tags/crates/history open |
+| R-LIB-02 | Case-insensitive search, deterministic name/type/path sort, history scope and stable selected IDs | Domain and accessible UI tests, hidden selections cleared, history ordering/search and cue-preview semantics; native visuals open |
 | R-LIB-03 | Selected path loads into A/B, selection independent of sorting | Actual worker/engine headless test; native picker and physical output acceptance open |
 | R-LOAD-03 | Playing decks cannot be replaced, even when started during decode | UI guard plus controller completion guard tested; old track survives decode failure |
-| R-LIB-04 | Versioned durable IDs/paths and missing-file retention (`library.rs`, `library_store.rs`) | Unicode/ID/missing-file restart and real restored-track headless load; tags/crates/relocation open |
+| R-LIB-04 | Versioned durable IDs/paths and missing-file retention (`library.rs`, `library_store.rs`) | Unicode/ID/missing-file restart and real restored-track headless load; tag editing and relocation open |
 | R-LIB-05 | Atomic catalog replacement, previous-good backup, unknown/corrupt data preservation | Interrupted temp, forced write failure, backup recovery and invalid/future schema tests; power-loss qualification open |
 | R-LIB-06 | Background storage, OS writer lock, visible errors/retry, latest-snapshot shutdown flush | Lock exclusion/release, pending-save close and GUI failure/retry tests; maximum-scale performance and cross-platform acceptance open |
-| R-LIB-07 | Versioned SQLite schema and one-time JSON primary/backup migration (`library_store.rs`, `legacy_catalog.rs`) | Stable-ID/Unicode/missing-path migration, source byte preservation, transactional schema rollback/retry and headless engine/controller restart; metadata/crates deferred |
+| R-LIB-07 | Versioned SQLite schema and one-time JSON primary/backup migration (`library_store.rs`, `legacy_catalog.rs`) | Stable-ID/Unicode/missing-path migration, source byte preservation, transactional schema rollback/retry, schema-14-to-15 history upgrade and headless engine/controller restart |
 | R-LIB-08 | Transactional changed-row saves and SQLite online backups | Partial insert/delete rollback, external-writer contention/retry, backup recovery, foreign/newer schema protection and forced-process hot-journal recovery with integrity check; physical power-loss and scale qualification open |
 | R-LIB-09 | Cached MP3/WAV title/artist/album/duration and table search/sort (`track_metadata.rs`, library/controller/Slint) | Generated UTF-8 ID3/WAV INFO, missing/error/bounded metadata, numeric sort, restarted stable-ID A/B workflow; real-music corpus and native visuals open |
 | R-LIB-10 | Transactional metadata schema/backfill preserving track IDs (introduced in schema 2) | Successful upgrade/cache/missing-file retention and failed-upgrade row/version preservation; crates tracked in R-LIB-11/12, tag editing deferred |
 | R-LIB-11 | Hierarchical static crates and saved-query smart crates (`crates.rs`, library/controller/Slint) | Name/reference/query validation, membership isolation, scoped search/selection, active-import capture, restart and schema migration; manual ordering open |
 | R-LIB-12 | Schema 1/2-to-3 crate persistence and durable ID high-water mark | Restart/ID non-reuse, relationship rollback/retry and successful/failed metadata-preserving schema upgrade; scale and platform qualification open |
+| R-LIB-13 | Persisted playback history with bounded recent-track view (`library.rs`, `library_store.rs`, `controller.rs`, `app.slint`) | Unique track rows, recent-first order, repeated-start count/deck, 5,000-entry cap, search, SQLite delta/restart/upgrade, normal Play and promoted Cue preview; native visual acceptance open |
 
 ## Local Rust loading/mixer slice (2026-10-24)
 

@@ -539,6 +539,7 @@ impl AudioController {
                         c.engine.borrow().pause(id);
                     } else {
                         c.engine.borrow().play(id);
+                        c.record_history(id);
                     }
                     c.refresh();
                 }
@@ -2565,6 +2566,8 @@ impl AudioController {
         if !snapshot.playing {
             self.engine.borrow().play(id);
         }
+        drop(sessions);
+        self.record_history(id);
         true
     }
     fn cancel_stale_hot_cue_holds(&self) {
@@ -3099,6 +3102,43 @@ impl AudioController {
     fn library_changed(&self) {
         self.dirty.set(true);
         self.save_failed.set(false);
+    }
+    fn record_history(&self, id: DeckId) {
+        let Some(path) = self.engine.borrow().snapshot(id).path else {
+            return;
+        };
+        let played_at_ms = match std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        {
+            Some(timestamp) => timestamp,
+            None => {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status("Cannot record playback history: invalid system time".into());
+                }
+                return;
+            }
+        };
+        let deck = u8::from(id == DeckId::B);
+        let result = self
+            .library
+            .borrow_mut()
+            .record_play_for_path(&path, played_at_ms, deck);
+        match result {
+            Ok(true) => {
+                self.library_changed();
+                if self.library.borrow().active_crate() == crate::library::HISTORY_SCOPE {
+                    self.publish_library();
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status(format!("Cannot record playback history: {error}").into());
+                }
+            }
+        }
     }
     fn quantize_preferences(&self) -> Result<crate::preferences::QuantizePreferences, String> {
         use crate::preferences::{DeckQuantizePreferences, QuantizePreferences};
@@ -9903,6 +9943,7 @@ mod tests {
         assert!(!c.engine.borrow().snapshot(DeckId::A).playing);
         assert!(!c.engine.borrow().snapshot(DeckId::B).playing);
     }
+
     #[test]
     fn failed_output_pauses_and_reopen_preserves_tracks_but_rejects_other_identity() {
         i_slint_backend_testing::init_no_event_loop();
@@ -11105,7 +11146,7 @@ mod tests {
 
     #[test]
     fn hot_cue_number_keys_preview_until_release_and_play_promotes_on_both_decks() {
-        use slint::platform::WindowEvent;
+        use slint::{platform::WindowEvent, Model};
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
@@ -11165,6 +11206,7 @@ mod tests {
             .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });
         assert!(engine.snapshot(DeckId::A).playing);
         assert!(!engine.snapshot(DeckId::B).playing);
+        assert!(c.library.borrow().catalog().history.is_empty());
         for _ in 0..2400 {
             output.next();
         }
@@ -11177,6 +11219,7 @@ mod tests {
             .dispatch_event(WindowEvent::KeyReleased { text: "1".into() });
         assert!(!engine.snapshot(DeckId::A).playing);
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+        assert!(c.library.borrow().catalog().history.is_empty());
 
         c.hold_hot_cue(DeckId::A, 0, true, 1).unwrap();
         c.hold_hot_cue(DeckId::A, 0, true, 5).unwrap();
@@ -11193,10 +11236,12 @@ mod tests {
         }
         ui.invoke_toggle_left();
         assert!(engine.snapshot(DeckId::A).playing);
+        assert_eq!(c.library.borrow().catalog().history[0].play_count, 1);
         ui.invoke_toggle_left();
         assert!(!engine.snapshot(DeckId::A).playing);
         ui.invoke_toggle_left();
         assert!(engine.snapshot(DeckId::A).playing);
+        assert_eq!(c.library.borrow().catalog().history[0].play_count, 2);
         ui.window()
             .dispatch_event(WindowEvent::KeyReleased { text: "1".into() });
         assert!(engine.snapshot(DeckId::A).playing);
@@ -11204,6 +11249,14 @@ mod tests {
             output.next();
         }
         assert!(engine.snapshot(DeckId::A).position > Duration::from_millis(1100));
+        ui.invoke_select_crate(crate::library::HISTORY_SCOPE);
+        assert_eq!(
+            c.library.borrow().active_crate(),
+            crate::library::HISTORY_SCOPE
+        );
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 1);
 
         engine
             .seek_position(DeckId::B, Duration::from_secs(5))
@@ -11211,6 +11264,7 @@ mod tests {
         ui.window()
             .dispatch_event(WindowEvent::KeyPressed { text: "6".into() });
         assert!(engine.snapshot(DeckId::B).playing);
+        assert_eq!(c.library.borrow().catalog().history.len(), 1);
         for _ in 0..2400 {
             output.next();
         }
@@ -11624,6 +11678,7 @@ mod tests {
                 metadata: Default::default(),
                 grid: None,
             }],
+            history: Vec::new(),
         };
         let original = serde_json::to_vec(&catalog).unwrap();
         std::fs::write(&legacy, &original).unwrap();
@@ -12753,6 +12808,7 @@ mod tests {
                 hot_cues: Default::default(),
                 saved_loops: Default::default(),
             }],
+            history: Vec::new(),
         };
         let worker = crate::library_store::Worker::start(db.clone()).unwrap();
         assert!(matches!(

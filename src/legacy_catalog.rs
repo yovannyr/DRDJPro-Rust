@@ -52,6 +52,7 @@ pub fn load(path: &Path) -> Result<(Catalog, &'static str), String> {
             version: 1,
             crates: Default::default(),
             tracks: Vec::new(),
+            history: Vec::new(),
         },
         "New SQLite library",
     ))

@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 14;
+const SCHEMA_VERSION: i32 = 15;
 fn startup_selection(
     connection: &Connection,
 ) -> Result<crate::audio_devices::StartupSelection, String> {
@@ -317,6 +317,11 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     if version >= 6 {
         read_saved_loops(connection, &mut tracks)?;
     }
+    let history = if version >= 15 {
+        read_history(connection, &tracks)?
+    } else {
+        Vec::new()
+    };
     let crates = if version >= 3 {
         read_crates(connection, version)?
     } else {
@@ -326,6 +331,7 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
         version: 1,
         tracks,
         crates,
+        history,
     };
     catalog.validate().map_err(InspectError::Damaged)?;
     Ok(Some(catalog))
@@ -468,6 +474,76 @@ fn write_saved_loops_rows(connection: &Connection, tracks: &[SavedTrack]) -> Res
         }
     }
     Ok(())
+}
+fn read_history(
+    connection: &Connection,
+    tracks: &[SavedTrack],
+) -> Result<Vec<library::HistoryEntry>, InspectError> {
+    let track_ids: HashSet<_> = tracks.iter().map(|track| track.id).collect();
+    let mut statement = connection.prepare(
+        "SELECT track_id,last_played_ms,play_count,last_deck FROM track_history LIMIT ?1",
+    )?;
+    let mut rows = statement.query([library::MAX_HISTORY as i64 + 1])?;
+    let mut history = Vec::new();
+    while let Some(row) = rows.next()? {
+        if history.len() >= library::MAX_HISTORY {
+            return Err(InspectError::Damaged(
+                "Too many playback history entries".into(),
+            ));
+        }
+        let entry = library::HistoryEntry {
+            track_id: row.get(0)?,
+            last_played_ms: u64::try_from(row.get::<_, i64>(1)?)
+                .map_err(|_| InspectError::Damaged("Negative history timestamp".into()))?,
+            play_count: u32::try_from(row.get::<_, i64>(2)?)
+                .map_err(|_| InspectError::Damaged("Invalid history play count".into()))?,
+            last_deck: row.get(3)?,
+        };
+        if !track_ids.contains(&entry.track_id) || entry.play_count == 0 || entry.last_deck > 1 {
+            return Err(InspectError::Damaged(
+                "Invalid playback history entry".into(),
+            ));
+        }
+        history.push(entry);
+    }
+    Ok(history)
+}
+fn write_history(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM track_history", [])
+        .map_err(|error| error.to_string())?;
+    write_history_rows(connection, &catalog.history)
+}
+fn write_history_rows(
+    connection: &Connection,
+    history: &[library::HistoryEntry],
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("INSERT INTO track_history(track_id,last_played_ms,play_count,last_deck) VALUES(?1,?2,?3,?4) ON CONFLICT(track_id) DO UPDATE SET last_played_ms=excluded.last_played_ms,play_count=excluded.play_count,last_deck=excluded.last_deck")
+        .map_err(|error| error.to_string())?;
+    for entry in history {
+        statement
+            .execute(rusqlite::params![
+                entry.track_id,
+                i64::try_from(entry.last_played_ms).map_err(|_| "Invalid history timestamp")?,
+                entry.play_count,
+                entry.last_deck
+            ])
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+fn create_history_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS track_history(
+                track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+                last_played_ms INTEGER NOT NULL CHECK(last_played_ms>=0),
+                play_count INTEGER NOT NULL CHECK(play_count>0 AND play_count<=4294967295),
+                last_deck INTEGER NOT NULL CHECK(last_deck IN (0,1))
+            ) STRICT;",
+        )
+        .map_err(|error| error.to_string())
 }
 fn create_hot_cue_schema(connection: &Connection) -> Result<(), String> {
     connection
@@ -781,7 +857,8 @@ fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String
     write_crates(connection, &catalog.crates)?;
     write_grids(connection, catalog)?;
     write_hot_cues(connection, catalog)?;
-    write_saved_loops(connection, catalog)
+    write_saved_loops(connection, catalog)?;
+    write_history(connection, catalog)
 }
 fn create_metadata_schema(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("CREATE TABLE track_metadata(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
@@ -805,6 +882,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     add_grid_warp_markers(&transaction)?;
     create_hot_cue_schema(&transaction)?;
     create_saved_loop_schema(&transaction)?;
+    create_history_schema(&transaction)?;
     transaction
         .pragma_update(None, "application_id", APPLICATION_ID)
         .map_err(|e| e.to_string())?;
@@ -1012,6 +1090,9 @@ impl Store {
             if version < 14 {
                 add_smart_crate_query(&tx)?;
             }
+            if version < 15 {
+                create_history_schema(&tx)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
             tx.commit().map_err(|e| e.to_string())?;
@@ -1164,6 +1245,7 @@ impl Store {
         if delta.tracks.is_empty()
             && delta.crates.is_none()
             && delta.memberships.is_empty()
+            && delta.history.is_empty()
             && preferences.is_none()
             && output_json.is_none()
             && fx_json.is_none()
@@ -1174,6 +1256,7 @@ impl Store {
             version: 1,
             tracks: delta.tracks.clone(),
             crates: Default::default(),
+            history: Vec::new(),
         }
         .validate()?;
         self.checkpoint(false)?;
@@ -1343,6 +1426,43 @@ impl Store {
             };
             tx.execute(sql, rusqlite::params![crate_id, track_id])
                 .map_err(|e| e.to_string())?;
+        }
+        let mut history_ids = HashSet::new();
+        for (track_id, entry) in &delta.history {
+            if *track_id <= 0
+                || *track_id == i32::MAX
+                || !history_ids.insert(*track_id)
+                || entry.as_ref().is_some_and(|entry| {
+                    entry.track_id != *track_id
+                        || entry.last_played_ms > i64::MAX as u64
+                        || entry.play_count == 0
+                        || entry.last_deck > 1
+                })
+            {
+                return Err("Invalid playback history entry".into());
+            }
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tracks WHERE id=?1)",
+                    [track_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if !exists {
+                return Err("Playback history references an unknown track".into());
+            }
+            if let Some(entry) = entry {
+                write_history_rows(&tx, std::slice::from_ref(entry))?;
+            } else {
+                tx.execute("DELETE FROM track_history WHERE track_id=?1", [track_id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        let history_count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM track_history", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        if history_count > library::MAX_HISTORY as i64 {
+            return Err("Playback history limit exceeded".into());
         }
         if let Some(json) = preferences_json {
             tx.execute("INSERT INTO library_meta(key,value) VALUES('quantize_preferences_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [json]).map_err(|e| e.to_string())?;
@@ -1521,6 +1641,7 @@ impl Worker {
                                     tracks: vec![],
                                     crates: None,
                                     memberships: vec![],
+                                    history: vec![],
                                 });
                                 store.save_session_state(&delta, preferences, output, fx)?;
                             }
@@ -1641,6 +1762,7 @@ mod tests {
             tracks: vec![],
             crates: None,
             memberships: vec![],
+            history: vec![],
         };
         store
             .save_session_state(&empty, None, None, Some(fx.clone()))
@@ -1681,6 +1803,7 @@ mod tests {
             tracks: vec![],
             crates: None,
             memberships: vec![],
+            history: vec![],
         };
         store
             .save_session_state(&empty, Some(Default::default()), None, None)
@@ -1754,6 +1877,7 @@ mod tests {
             tracks: vec![],
             crates: None,
             memberships: vec![],
+            history: vec![],
         };
         let legacy = OutputRoute {
             device: crate::output_preferences::OutputDeviceKey::unique(
@@ -1804,6 +1928,7 @@ mod tests {
             tracks: vec![],
             crates: None,
             memberships: vec![],
+            history: vec![],
         };
         let mut route = OutputRoute {
             device: crate::output_preferences::OutputDeviceKey {
@@ -1874,6 +1999,7 @@ mod tests {
             tracks: catalog(dir.path().join("missing.wav"), 27).tracks,
             crates: None,
             memberships: vec![],
+            history: vec![],
         };
         let prefs = QuantizePreferences {
             enabled: false,
@@ -1906,6 +2032,7 @@ mod tests {
             tracks: vec![],
             crates: None,
             memberships: vec![],
+            history: vec![],
         };
         store
             .save_all_state(&empty, None, Some(other.clone()))
@@ -1985,6 +2112,7 @@ mod tests {
             tracks: data.tracks,
             crates: None,
             memberships: vec![],
+            history: vec![],
         };
         store.connection.execute_batch("CREATE TRIGGER reject_prefs BEFORE INSERT ON library_meta WHEN NEW.key='quantize_preferences_v1' BEGIN SELECT RAISE(ABORT,'injected preference failure'); END;").unwrap();
         assert!(store.save_state(&delta, Some(prefs)).is_err());
@@ -2083,6 +2211,7 @@ mod tests {
                 metadata: Default::default(),
                 grid: None,
             }],
+            history: Vec::new(),
         }
     }
     fn rows(store: &Store) -> Vec<i32> {
@@ -2408,6 +2537,59 @@ mod tests {
     }
 
     #[test]
+    fn playback_history_delta_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let path = dir.path().join("history-track.wav");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        library.insert([path.clone()]);
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+
+        library.record_play_for_path(&path, 123_456, 1).unwrap();
+        let delta = library.changes();
+        assert_eq!(delta.history.len(), 1);
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+        drop(store);
+
+        let (_, restored, _) = Store::open(db).unwrap();
+        let entry = restored.catalog().history;
+        assert_eq!(
+            entry,
+            vec![library::HistoryEntry {
+                track_id: 1,
+                last_played_ms: 123_456,
+                play_count: 1,
+                last_deck: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn schema_fourteen_upgrade_adds_empty_playback_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (store, _, _) = Store::open(db.clone()).unwrap();
+        store
+            .connection
+            .execute_batch("DROP TABLE track_history; PRAGMA user_version=14;")
+            .unwrap();
+        drop(store);
+
+        let (store, restored, _) = Store::open(db).unwrap();
+        assert!(restored.catalog().history.is_empty());
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
+    #[test]
     fn malformed_warp_marker_maps_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
@@ -2508,6 +2690,7 @@ mod tests {
                 tracks: data.tracks,
                 crates: None,
                 memberships: Vec::new(),
+                history: Vec::new(),
             })
             .unwrap();
         let backup = side_path(&db, ".bak");
@@ -2524,6 +2707,7 @@ mod tests {
                 tracks: Vec::new(),
                 crates: None,
                 memberships: Vec::new(),
+                history: Vec::new(),
             })
             .unwrap();
         assert!(backup.is_file());
@@ -2546,6 +2730,7 @@ mod tests {
                 tracks: data.tracks,
                 crates: None,
                 memberships: Vec::new(),
+                history: Vec::new(),
             })
             .unwrap();
         assert!(matches!(
@@ -2601,6 +2786,7 @@ mod tests {
                 tracks: vec![target],
                 crates: None,
                 memberships: Vec::new(),
+                history: Vec::new(),
             };
             store.save_delta(&delta).unwrap();
             let checkpoint = store.last_checkpoint;
@@ -3559,6 +3745,7 @@ mod tests {
                 tracks: Vec::new(),
                 crates: None,
                 memberships: vec![(id, track, present)],
+                history: Vec::new(),
             };
             assert!(store.save_delta(&bad).is_err());
             let restored = inspect(&store.connection).unwrap().unwrap();

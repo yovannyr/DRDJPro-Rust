@@ -8,6 +8,8 @@ use std::{
 pub const MAX_IMPORT: usize = 5000;
 const MAX_DIRECTORY_ENTRIES: usize = 100_000;
 pub(crate) const MAX_TRACKS: usize = 100_000;
+pub const MAX_HISTORY: usize = 5_000;
+pub const HISTORY_SCOPE: i32 = -1;
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
@@ -15,6 +17,15 @@ pub struct Catalog {
     pub tracks: Vec<SavedTrack>,
     #[serde(skip)]
     pub crates: crate::crates::CrateCatalog,
+    #[serde(skip)]
+    pub history: Vec<HistoryEntry>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub track_id: i32,
+    pub last_played_ms: u64,
+    pub play_count: u32,
+    pub last_deck: u8,
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,6 +46,7 @@ pub struct CatalogDelta {
     pub tracks: Vec<SavedTrack>,
     pub crates: Option<CrateDelta>,
     pub memberships: Vec<(i32, i32, bool)>,
+    pub history: Vec<(i32, Option<HistoryEntry>)>,
 }
 pub type CrateDeltaEntry = (i32, Option<String>, Option<i32>, Option<String>);
 pub struct CrateDelta {
@@ -61,6 +73,20 @@ impl Catalog {
                 || !crate::audio_formats::supported(&track.path)
             {
                 return Err("Invalid or duplicate library identity/path".into());
+            }
+        }
+        if self.history.len() > MAX_HISTORY {
+            return Err("Playback history limit exceeded".into());
+        }
+        let mut history_ids = HashSet::new();
+        for entry in &self.history {
+            if !ids.contains(&entry.track_id)
+                || entry.last_played_ms > i64::MAX as u64
+                || entry.play_count == 0
+                || entry.last_deck > 1
+                || !history_ids.insert(entry.track_id)
+            {
+                return Err("Invalid playback history entry".into());
             }
         }
         self.crates.validate(&ids)
@@ -348,6 +374,7 @@ pub(crate) struct SearchProjection {
     tracks: SearchRecordChunks,
     count: usize,
     members: Option<Arc<Vec<u64>>>,
+    history_order: Option<Arc<HashMap<i32, usize>>>,
     index: Arc<OnceLock<SearchIndex>>,
 }
 
@@ -418,9 +445,13 @@ impl SearchProjection {
                 .filter(|t| t.matches(&spec.query) && t.matches(&spec.smart_query))
                 .collect(),
         };
-        matches.sort_by(|a, b| a.sort_key(spec.field).cmp(&b.sort_key(spec.field)));
-        if spec.descending {
-            matches.reverse();
+        if let Some(history_order) = &self.history_order {
+            matches.sort_by_key(|track| history_order[&track.id]);
+        } else {
+            matches.sort_by(|a, b| a.sort_key(spec.field).cmp(&b.sort_key(spec.field)));
+            if spec.descending {
+                matches.reverse();
+            }
         }
         matches.into_iter().map(|track| track.id).collect()
     }
@@ -512,6 +543,8 @@ pub struct Library {
     changed_tracks: BTreeMap<usize, u64>,
     changed_crates: BTreeMap<i32, u64>,
     changed_memberships: BTreeMap<(i32, i32), (u64, bool)>,
+    changed_history: BTreeMap<i32, (u64, Option<HistoryEntry>)>,
+    history: HashMap<i32, HistoryEntry>,
     tracks: Vec<Track>,
     search_records: SearchRecordChunks,
     scope_bits: HashMap<i32, Arc<Vec<u64>>>,
@@ -628,12 +661,15 @@ impl Library {
         !self.changed_tracks.is_empty()
             || !self.changed_crates.is_empty()
             || !self.changed_memberships.is_empty()
+            || !self.changed_history.is_empty()
     }
     pub fn acknowledge(&mut self, revision: u64) {
         self.changed_tracks.retain(|_, changed| *changed > revision);
         self.changed_memberships
             .retain(|_, (changed, _)| *changed > revision);
         self.changed_crates.retain(|_, changed| *changed > revision);
+        self.changed_history
+            .retain(|_, (changed, _)| *changed > revision);
     }
     pub fn changes(&self) -> CatalogDelta {
         CatalogDelta {
@@ -664,7 +700,74 @@ impl Library {
                 .iter()
                 .map(|(&(crate_id, track_id), &(_, present))| (crate_id, track_id, present))
                 .collect(),
+            history: self
+                .changed_history
+                .iter()
+                .map(|(&id, (_, entry))| (id, entry.clone()))
+                .collect(),
         }
+    }
+
+    fn mark_history(&mut self, id: i32, entry: Option<HistoryEntry>) {
+        self.missing_cache.set(None);
+        *self.view_cache.get_mut() = None;
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("Library revision overflow");
+        self.search_revision = self
+            .search_revision
+            .checked_add(1)
+            .expect("Search revision overflow");
+        self.changed_history.insert(id, (self.revision, entry));
+    }
+
+    pub fn record_play(
+        &mut self,
+        track_id: i32,
+        played_at_ms: u64,
+        deck: u8,
+    ) -> Result<bool, String> {
+        if played_at_ms > i64::MAX as u64 || deck > 1 {
+            return Err("Invalid playback history value".into());
+        }
+        if !self.id_indices.contains_key(&track_id) {
+            return Ok(false);
+        }
+        let entry = HistoryEntry {
+            track_id,
+            last_played_ms: played_at_ms,
+            play_count: self
+                .history
+                .get(&track_id)
+                .map_or(1, |previous| previous.play_count.saturating_add(1)),
+            last_deck: deck,
+        };
+        self.history.insert(track_id, entry.clone());
+        self.mark_history(track_id, Some(entry));
+        if self.history.len() > MAX_HISTORY {
+            let oldest = self
+                .history
+                .values()
+                .min_by_key(|entry| (entry.last_played_ms, entry.track_id))
+                .map(|entry| entry.track_id)
+                .expect("non-empty history");
+            self.history.remove(&oldest);
+            self.mark_history(oldest, None);
+        }
+        Ok(true)
+    }
+
+    pub fn record_play_for_path(
+        &mut self,
+        path: &Path,
+        played_at_ms: u64,
+        deck: u8,
+    ) -> Result<bool, String> {
+        let Some(index) = self.keys.get(&identity(path)).copied() else {
+            return Ok(false);
+        };
+        self.record_play(self.tracks[index].id, played_at_ms, deck)
     }
 
     pub fn saved_loops(&self, path: &Path) -> crate::saved_loops::SavedLoops {
@@ -737,7 +840,7 @@ impl Library {
         self.active_crate
     }
     pub fn select_crate(&mut self, id: i32) -> Result<(), String> {
-        if id != 0 && !self.crates.entries.iter().any(|c| c.id == id) {
+        if id != 0 && id != HISTORY_SCOPE && !self.crates.entries.iter().any(|c| c.id == id) {
             return Err("Crate no longer exists".into());
         }
         if self.active_crate != id {
@@ -864,6 +967,7 @@ impl Library {
     /// Called by the storage worker: availability checks never run in the UI tick.
     pub fn restore(catalog: Catalog) -> Result<Self, String> {
         catalog.validate()?;
+        let history = catalog.history;
         let mut library = Self {
             crates: catalog.crates,
             ..Default::default()
@@ -912,13 +1016,19 @@ impl Library {
             }
             library.scope_bits.insert(entry.id, Arc::new(words));
         }
+        for entry in history {
+            library.history.insert(entry.track_id, entry);
+        }
         Ok(library)
     }
     pub fn catalog(&self) -> Catalog {
+        let mut history: Vec<_> = self.history.values().cloned().collect();
+        history.sort_by_key(|entry| (std::cmp::Reverse(entry.last_played_ms), entry.track_id));
         Catalog {
             version: 1,
             crates: self.crates.clone(),
             tracks: self.tracks.iter().map(Track::saved).collect(),
+            history,
         }
     }
     pub fn missing_count(&self) -> usize {
@@ -941,7 +1051,9 @@ impl Library {
             .map(|c| &c.tracks)
     }
     pub fn scope_len(&self) -> usize {
-        if self.active_crate == 0 {
+        if self.active_crate == HISTORY_SCOPE {
+            self.history.len()
+        } else if self.active_crate == 0 {
             self.len()
         } else if let Some(query) = self.active_smart_query() {
             self.tracks
@@ -953,7 +1065,9 @@ impl Library {
         }
     }
     fn in_active_scope(&self, track: &Track) -> bool {
-        if self.active_crate == 0 {
+        if self.active_crate == HISTORY_SCOPE {
+            self.history.contains_key(&track.id)
+        } else if self.active_crate == 0 {
             true
         } else if let Some(query) = self.active_smart_query() {
             track.matches_query(query)
@@ -1054,15 +1168,38 @@ impl Library {
     }
 
     pub(crate) fn search_projection(&self) -> SearchProjection {
+        let (members, history_order) = if self.active_crate == HISTORY_SCOPE {
+            let mut words = Vec::new();
+            let mut order = HashMap::with_capacity(self.history.len());
+            let mut history: Vec<_> = self.history.values().collect();
+            history.sort_by_key(|entry| (std::cmp::Reverse(entry.last_played_ms), entry.track_id));
+            for (rank, entry) in history.into_iter().enumerate() {
+                order.insert(entry.track_id, rank);
+                if let Some(index) = self.id_indices.get(&entry.track_id) {
+                    let word = index / 64;
+                    if words.len() <= word {
+                        words.resize(word + 1, 0);
+                    }
+                    words[word] |= 1_u64 << (index % 64);
+                }
+            }
+            (Some(Arc::new(words)), Some(Arc::new(order)))
+        } else {
+            (
+                (self.active_crate != 0 && self.active_smart_query().is_none()).then(|| {
+                    self.scope_bits
+                        .get(&self.active_crate)
+                        .cloned()
+                        .unwrap_or_default()
+                }),
+                None,
+            )
+        };
         SearchProjection {
             tracks: Arc::clone(&self.search_records),
             count: self.tracks.len(),
-            members: (self.active_crate != 0 && self.active_smart_query().is_none()).then(|| {
-                self.scope_bits
-                    .get(&self.active_crate)
-                    .cloned()
-                    .unwrap_or_default()
-            }),
+            members,
+            history_order,
             index: Arc::new(OnceLock::new()),
         }
     }
@@ -1123,19 +1260,24 @@ impl Library {
                 .collect(),
         };
 
-        tracks.sort_by(|a, b| {
-            a.view_sort_key(self.sort_field)
-                .cmp(&b.view_sort_key(self.sort_field))
-        });
+        if self.active_crate == HISTORY_SCOPE {
+            tracks.sort_by_key(|track| std::cmp::Reverse(self.history[&track.id].last_played_ms));
+        } else {
+            tracks.sort_by(|a, b| {
+                a.view_sort_key(self.sort_field)
+                    .cmp(&b.view_sort_key(self.sort_field))
+            });
 
-        if self.descending {
-            tracks.reverse();
+            if self.descending {
+                tracks.reverse();
+            }
         }
 
         tracks
     }
     fn matches_visible(&self, track: &Track, members: Option<&HashSet<i32>>) -> bool {
         (self.active_crate == 0
+            || (self.active_crate == HISTORY_SCOPE && self.history.contains_key(&track.id))
             || self
                 .active_smart_query()
                 .is_some_and(|query| track.matches_query(query))
@@ -1303,6 +1445,74 @@ mod tests {
     }
 
     #[test]
+    fn playback_history_is_unique_recent_first_searchable_and_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [
+            dir.path().join("first-track.wav"),
+            dir.path().join("second-track.wav"),
+            dir.path().join("never-played.wav"),
+        ];
+        let mut library = Library::default();
+        library.insert(paths.clone());
+
+        assert!(library.record_play_for_path(&paths[0], 100, 0).unwrap());
+        assert!(library.record_play_for_path(&paths[1], 200, 1).unwrap());
+        assert!(library.record_play_for_path(&paths[0], 300, 1).unwrap());
+        assert!(!library
+            .record_play_for_path(&dir.path().join("outside.wav"), 400, 0)
+            .unwrap());
+        library.select_crate(HISTORY_SCOPE).unwrap();
+        assert_eq!(library.scope_len(), 2);
+        assert_eq!(
+            library.search_projection().search(&library.search_spec(1)),
+            vec![1, 2]
+        );
+        assert_eq!(library.history[&1].play_count, 2);
+        assert_eq!(library.history[&1].last_deck, 1);
+        assert_eq!(library.history[&1].last_played_ms, 300);
+
+        library.set_query("second-track".into());
+        assert_eq!(
+            library.search_projection().search(&library.search_spec(2)),
+            vec![2]
+        );
+
+        let mut restored = Library::restore(library.catalog()).unwrap();
+        restored.select_crate(HISTORY_SCOPE).unwrap();
+        assert_eq!(
+            restored
+                .search_projection()
+                .search(&restored.search_spec(3)),
+            vec![1, 2]
+        );
+        assert_eq!(restored.history[&1].play_count, 2);
+        assert!(!restored.history.contains_key(&3));
+    }
+
+    #[test]
+    fn playback_history_is_bounded_and_oldest_play_is_removed() {
+        let mut library = Library::default();
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..=MAX_HISTORY)
+            .map(|index| dir.path().join(format!("history-{index}.wav")))
+            .collect();
+        library.insert(paths.clone());
+        for (index, path) in paths.iter().enumerate() {
+            library
+                .record_play_for_path(path, index as u64 + 1, 0)
+                .unwrap();
+        }
+        assert_eq!(library.history.len(), MAX_HISTORY);
+        assert!(!library.history.contains_key(&1));
+        assert!(library.history.contains_key(&(MAX_HISTORY as i32 + 1)));
+        assert!(library
+            .changes()
+            .history
+            .iter()
+            .any(|(id, entry)| *id == 1 && entry.is_none()));
+    }
+
+    #[test]
     fn chunked_snapshots_keep_old_data_and_share_unchanged_chunks() {
         let mut library = Library::default();
         let dir = tempfile::tempdir().unwrap();
@@ -1461,6 +1671,7 @@ mod tests {
                 },
             ],
             crates: crate::crates::CrateCatalog::default(),
+            history: Vec::new(),
         };
 
         let mut library = Library::restore(catalog).unwrap();
