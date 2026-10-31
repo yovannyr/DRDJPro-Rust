@@ -6,7 +6,7 @@ use crate::{
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{
         mpsc::{self, Receiver, TryRecvError},
@@ -275,6 +275,7 @@ pub struct AudioController {
     hot_cue_holds: RefCell<[Option<HotCueHoldSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
+    pending_relocation_id: Cell<Option<i32>>,
     pending_cancel: RefCell<Option<crate::cancellation::Cancellation>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
     displayed_loops: RefCell<[Option<crate::saved_loops::SavedLoops>; 2]>,
@@ -409,6 +410,7 @@ impl AudioController {
             hot_cue_holds: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
+            pending_relocation_id: Cell::new(None),
             pending_cancel: RefCell::new(None),
             pending: RefCell::new(None),
             displayed_loops: RefCell::new([None, None]),
@@ -722,6 +724,12 @@ impl AudioController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        ui.on_relocate_library_track(move || {
+            if let Some(c) = weak.upgrade() {
+                c.start_relocation();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         ui.on_library_search(move || {
             if let Some(c) = weak.upgrade() {
                 if let Some(ui) = c.ui.upgrade() {
@@ -755,7 +763,7 @@ impl AudioController {
                 return;
             }
             c.library.borrow_mut().select(id);
-            ui.set_selected_track(c.library.borrow().selected_id());
+            c.publish_selected_library_track(&ui);
         });
         let weak = Rc::downgrade(&controller);
         ui.on_move_library_selection(move |delta| {
@@ -793,7 +801,7 @@ impl AudioController {
                 model.rows[index]
             };
             c.library.borrow_mut().select(target);
-            ui.set_selected_track(c.library.borrow().selected_id());
+            c.publish_selected_library_track(&ui);
         });
         let weak = Rc::downgrade(&controller);
         ui.on_sort_library(move |field| {
@@ -4339,6 +4347,7 @@ impl AudioController {
                 Err(TryRecvError::Disconnected) => Some(Err("Library worker stopped unexpectedly")),
             });
         if let Some(result) = import {
+            let relocation_id = self.pending_relocation_id.take();
             let cancelled = self
                 .pending_cancel
                 .borrow_mut()
@@ -4354,26 +4363,34 @@ impl AudioController {
                 ui.set_library_busy(false);
                 match result {
                     Ok(Some(Ok(batch))) => {
-                        let total = batch.paths.len();
-                        let added = self
-                            .library
-                            .borrow_mut()
-                            .insert(batch.paths.iter().cloned());
-                        let assigned = self
-                            .library
-                            .borrow_mut()
-                            .add_paths_to_crate(self.import_crate.get(), &batch.paths);
-                        for (path, metadata) in batch.metadata {
-                            self.library.borrow_mut().set_metadata(&path, metadata);
+                        if let Some(track_id) = relocation_id {
+                            self.complete_relocation(track_id, batch);
+                        } else {
+                            let total = batch.paths.len();
+                            let added = self
+                                .library
+                                .borrow_mut()
+                                .insert(batch.paths.iter().cloned());
+                            let assigned = self
+                                .library
+                                .borrow_mut()
+                                .add_paths_to_crate(self.import_crate.get(), &batch.paths);
+                            for (path, metadata) in batch.metadata {
+                                self.library.borrow_mut().set_metadata(&path, metadata);
+                            }
+                            self.library_changed();
+                            ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
+                            if let Err(error) = assigned {
+                                ui.set_status(format!("Added {added} library tracks; crate assignment failed: {error}").into());
+                            }
+                            self.publish_library();
                         }
-                        self.library_changed();
-                        ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
-                        if let Err(error) = assigned {
-                            ui.set_status(format!("Added {added} library tracks; crate assignment failed: {error}").into());
-                        }
-                        self.publish_library();
                     }
-                    Ok(None) => ui.set_status("Library import cancelled".into()),
+                    Ok(None) => ui.set_status(if relocation_id.is_some() {
+                        "Track relocation cancelled".into()
+                    } else {
+                        "Library import cancelled".into()
+                    }),
                     Ok(Some(Err(error))) => ui.set_status(error.into()),
                     Err(error) => ui.set_status(error.into()),
                 }
@@ -4479,6 +4496,107 @@ impl AudioController {
             picker().map(|paths| crate::library::inspect_paths_cancellable(paths, cancel))
         });
     }
+    fn start_relocation(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+        {
+            ui.set_status("Wait for the current library operation to finish".into());
+            return;
+        }
+        let track_id = self.library.borrow().selected_id();
+        let selected = self
+            .library
+            .borrow()
+            .track_by_id(track_id)
+            .map(|track| (track.path.clone(), track.available));
+        let Some((track_path, available)) = selected else {
+            ui.set_status("Select a missing library track to relocate".into());
+            return;
+        };
+        if available {
+            ui.set_status("Only missing library tracks can be relocated".into());
+            return;
+        }
+        if self.deck_uses_library_path(&track_path) {
+            ui.set_status("Unload this missing track from both decks before relocating it".into());
+            return;
+        }
+        let picker = Arc::clone(&self.library_picker);
+        self.pending_relocation_id.set(Some(track_id));
+        self.start_import_work(move |cancel| {
+            picker().map(|paths| crate::library::inspect_paths_cancellable(paths, cancel))
+        });
+        if self.pending_import.borrow().is_none() {
+            self.pending_relocation_id.set(None);
+        } else {
+            ui.set_status("Choose one replacement audio file".into());
+        }
+    }
+
+    fn deck_uses_library_path(&self, path: &Path) -> bool {
+        let key = crate::library::identity(path);
+        [DeckId::A, DeckId::B].into_iter().any(|id| {
+            self.engine
+                .borrow()
+                .snapshot(id)
+                .path
+                .is_some_and(|loaded| crate::library::identity(&loaded) == key)
+        })
+    }
+
+    fn complete_relocation(&self, track_id: i32, batch: crate::library::ImportBatch) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        if batch.paths.len() != 1 || batch.metadata.len() != 1 || batch.rejected != 0 {
+            ui.set_status("Choose exactly one supported replacement audio file".into());
+            return;
+        }
+        let path = batch
+            .paths
+            .into_iter()
+            .next()
+            .expect("checked one replacement");
+        let (metadata_path, metadata) = batch
+            .metadata
+            .into_iter()
+            .next()
+            .expect("checked one replacement metadata result");
+        if crate::library::identity(&metadata_path) != crate::library::identity(&path) {
+            ui.set_status("Replacement file metadata does not match the selected file".into());
+            return;
+        }
+        let old_path = self
+            .library
+            .borrow()
+            .track_by_id(track_id)
+            .map(|track| track.path.clone());
+        let Some(old_path) = old_path else {
+            ui.set_status("The selected library track no longer exists".into());
+            return;
+        };
+        if self.deck_uses_library_path(&old_path) {
+            ui.set_status("Unload this missing track from both decks before relocating it".into());
+            return;
+        }
+        let result = self
+            .library
+            .borrow_mut()
+            .relocate_track(track_id, path, metadata);
+        match result {
+            Ok(true) => {
+                self.library_changed();
+                ui.set_status("Track relocated; library save queued".into());
+                self.publish_library();
+            }
+            Ok(false) => ui.set_status("Track already points to this file".into()),
+            Err(error) => ui.set_status(error.into()),
+        }
+    }
     pub fn set_library_folder_picker(&self, picker: LibraryFolderPicker) {
         *self.library_folder_picker.borrow_mut() = Some(picker);
     }
@@ -4550,7 +4668,13 @@ impl AudioController {
             .borrow_mut()
             .set_query_background(ui.get_library_query().to_string());
         let library = self.library.borrow();
-        ui.set_selected_track(library.selected_id());
+        let selected = library.selected_id();
+        ui.set_selected_track(selected);
+        ui.set_library_can_relocate_selected(
+            library
+                .track_by_id(selected)
+                .is_some_and(|track| !track.available),
+        );
         let crates = library.crates().ordered_with_depth();
         let target_crates: Vec<_> = crates
             .iter()
@@ -4616,6 +4740,7 @@ impl AudioController {
                     ui.set_library_can_previous_page(false);
                     ui.set_library_can_next_page(false);
                     ui.set_selected_track(-1);
+                    ui.set_library_can_relocate_selected(false);
                     ui.set_library_count("Search unavailable".into());
                     ui.set_library_empty("Search unavailable. Change search to retry.".into());
                     return;
@@ -4681,6 +4806,7 @@ impl AudioController {
             ui.set_library_can_previous_page(false);
             ui.set_library_can_next_page(false);
             ui.set_selected_track(-1);
+            ui.set_library_can_relocate_selected(false);
             ui.set_library_count("Search unavailable".into());
             ui.set_library_empty("Search unavailable. Change search to retry.".into());
             return;
@@ -4688,11 +4814,22 @@ impl AudioController {
         ui.set_library_can_previous_page(false);
         ui.set_library_can_next_page(false);
         ui.set_selected_track(-1);
+        ui.set_library_can_relocate_selected(false);
         ui.set_library_count("Searching library…".into());
         ui.set_library_rows(ModelRc::new(Rc::new(
             VecModel::<crate::LibraryRow>::default(),
         )));
         ui.set_library_empty("Searching library…".into());
+    }
+    fn publish_selected_library_track(&self, ui: &AppWindow) {
+        let library = self.library.borrow();
+        let selected = library.selected_id();
+        ui.set_selected_track(selected);
+        ui.set_library_can_relocate_selected(
+            library
+                .track_by_id(selected)
+                .is_some_and(|track| !track.available),
+        );
     }
     fn change_library_page(&self, delta: i32, select_edge: i8) {
         if self.search_in_progress() {
@@ -4777,6 +4914,7 @@ impl AudioController {
                 ui.set_library_can_previous_page(false);
                 ui.set_library_can_next_page(false);
                 ui.set_selected_track(-1);
+                ui.set_library_can_relocate_selected(false);
                 ui.set_library_count("Search unavailable".into());
                 ui.set_library_empty("Search unavailable. Change search to retry.".into());
             }
@@ -4853,7 +4991,13 @@ impl AudioController {
             #[cfg(test)]
             row_data_calls: Cell::new(0),
         })));
-        ui.set_selected_track(library.selected_id());
+        let selected = library.selected_id();
+        ui.set_selected_track(selected);
+        ui.set_library_can_relocate_selected(
+            library
+                .track_by_id(selected)
+                .is_some_and(|track| !track.available),
+        );
     }
 
     fn refresh(&self) {
@@ -13390,6 +13534,107 @@ mod tests {
                     <= library.absolute_position().x + library.size().width
             );
         }
+    }
+    #[test]
+    fn missing_library_track_can_be_relocated_without_importing_a_duplicate() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let replacement = wav_file(8192, 48_000);
+        let replacement_path = std::fs::canonicalize(replacement.path()).unwrap();
+        let picker_path = replacement_path.clone();
+        let selected_path = picker_path.clone();
+        let missing_dir = tempfile::tempdir().unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(move || Some(vec![selected_path.clone()])),
+        );
+        let old_path = missing_dir.path().join("missing-track.wav");
+        *c.library.borrow_mut() = crate::library::Library::restore(crate::library::Catalog {
+            version: 1,
+            tracks: vec![crate::library::SavedTrack {
+                id: 1,
+                path: old_path,
+                metadata: Default::default(),
+                grid: None,
+                hot_cues: Default::default(),
+                saved_loops: Default::default(),
+            }],
+            crates: Default::default(),
+            history: vec![],
+        })
+        .unwrap();
+        c.library.borrow_mut().select(1);
+        c.publish_library();
+        finish_search(&c);
+        ui.show().unwrap();
+
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert!(ui.get_library_can_relocate_selected());
+        for width in [850.0, 1280.0] {
+            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            let button = control(&ui, "Relocate selected missing library track");
+            let library_area = control(&ui, "Track library area");
+            assert!(button.absolute_position().x >= library_area.absolute_position().x);
+            assert!(
+                button.absolute_position().x + button.size().width
+                    <= library_area.absolute_position().x + library_area.size().width
+            );
+        }
+        control(&ui, "Relocate selected missing library track").invoke_accessible_default_action();
+        assert!(ui.get_library_busy());
+        finish_import(&c);
+
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(c.library.borrow().track_by_id(1).unwrap().path, picker_path);
+        assert!(!ui.get_library_can_relocate_selected());
+        assert!(ui.get_status().contains("Track relocated"));
+    }
+    #[test]
+    fn page_edge_selection_updates_relocation_action_for_missing_track() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let tracks = (1..=201)
+            .map(|id| crate::library::SavedTrack {
+                id,
+                path: dir.path().join(format!("missing-{id}.wav")),
+                metadata: Default::default(),
+                grid: None,
+                hot_cues: Default::default(),
+                saved_loops: Default::default(),
+            })
+            .collect();
+        *c.library.borrow_mut() = crate::library::Library::restore(crate::library::Catalog {
+            version: 1,
+            tracks,
+            crates: Default::default(),
+            history: vec![],
+        })
+        .unwrap();
+        c.publish_library();
+        finish_search(&c);
+        ui.show().unwrap();
+        assert!(ui.get_library_can_next_page());
+
+        c.library.borrow_mut().select(200);
+        c.publish_selected_library_track(&ui);
+        ui.invoke_move_library_selection(1);
+        finish_search(&c);
+
+        assert_eq!(c.library.borrow().selected_id(), 201);
+        assert_eq!(ui.get_selected_track(), 201);
+        assert!(ui.get_library_can_relocate_selected());
     }
     #[test]
     fn keyboard_zoom_is_focus_scoped_bounded_and_preserves_audio_state() {

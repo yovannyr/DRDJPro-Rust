@@ -1273,30 +1273,74 @@ impl Store {
         if app != APPLICATION_ID || version != SCHEMA_VERSION {
             return Err("Library schema changed; original preserved".into());
         }
-        let mut added = 0;
+        let changed_ids: HashSet<_> = delta.tracks.iter().map(|track| track.id).collect();
+        let mut final_path_keys = HashSet::with_capacity(delta.tracks.len());
+        let mut existing_paths = HashMap::with_capacity(delta.tracks.len());
+        let mut relocating_ids = Vec::new();
         for track in &delta.tracks {
             let path = track
                 .path
                 .to_str()
                 .ok_or("Library path is not valid UTF-8")?;
+            let key = library::identity(&track.path);
+            let key = key.to_str().ok_or("Invalid path identity")?;
+            if !final_path_keys.insert(key.to_owned()) {
+                return Err("Delta contains duplicate track paths".into());
+            }
             let existing: Option<String> = tx
                 .query_row("SELECT path FROM tracks WHERE id=?1", [track.id], |r| {
                     r.get(0)
                 })
                 .optional()
                 .map_err(|e| e.to_string())?;
+            let owner: Option<i32> = tx
+                .query_row("SELECT id FROM tracks WHERE path_key=?1", [key], |row| {
+                    row.get(0)
+                })
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if owner.is_some_and(|owner| owner != track.id && !changed_ids.contains(&owner)) {
+                return Err("Replacement path already belongs to another library track".into());
+            }
             if existing.as_ref().is_some_and(|old| old != path) {
-                return Err("Delta cannot change track identity/path".into());
+                relocating_ids.push(track.id);
             }
-            if existing.is_none() {
-                added += 1;
-            }
-            let key = library::identity(&track.path);
+            existing_paths.insert(track.id, existing);
+        }
+        for id in relocating_ids {
             tx.execute(
-                "INSERT INTO tracks(id,path,path_key) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING",
-                rusqlite::params![track.id, path, key.to_str().ok_or("Invalid path identity")?],
+                "UPDATE tracks SET path_key=?2 WHERE id=?1",
+                rusqlite::params![id, format!("\0relocation:{id}")],
             )
             .map_err(|e| e.to_string())?;
+        }
+        let mut added = 0;
+        for track in &delta.tracks {
+            let path = track
+                .path
+                .to_str()
+                .ok_or("Library path is not valid UTF-8")?;
+            let existing = existing_paths.remove(&track.id).flatten();
+            let key = library::identity(&track.path);
+            let key = key.to_str().ok_or("Invalid path identity")?;
+            match existing {
+                Some(old) if old != path => {
+                    tx.execute(
+                        "UPDATE tracks SET path=?2,path_key=?3 WHERE id=?1",
+                        rusqlite::params![track.id, path, key],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Some(_) => (),
+                None => {
+                    added += 1;
+                    tx.execute(
+                        "INSERT INTO tracks(id,path,path_key) VALUES(?1,?2,?3)",
+                        rusqlite::params![track.id, path, key],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
             let m = &track.metadata;
             tx.execute("INSERT INTO track_metadata(track_id,title,artist,album,duration_ms,scanned,error,duration_exact) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
                 ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact
@@ -2564,6 +2608,107 @@ mod tests {
                 play_count: 1,
                 last_deck: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn relocation_delta_updates_path_preserves_track_data_and_rolls_back_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let original_path = dir.path().join("missing-original.wav");
+        let existing_file = crate::test_support::wav_file(100, 4_800);
+        let replacement_file = crate::test_support::wav_file(200, 4_800);
+        let second_replacement_file = crate::test_support::wav_file(300, 4_800);
+        let existing_path = std::fs::canonicalize(existing_file.path()).unwrap();
+        let replacement_path = std::fs::canonicalize(replacement_file.path()).unwrap();
+        let second_replacement_path =
+            std::fs::canonicalize(second_replacement_file.path()).unwrap();
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        library.insert([original_path.clone(), existing_path.clone()]);
+        let crate_id = library.create_crate("Favorites").unwrap();
+        library.select(1);
+        library.add_selected_to_crate(crate_id).unwrap();
+        let grid = crate::beatgrid::BeatGrid::new(120.0, std::time::Duration::ZERO).unwrap();
+        library.set_grid(&original_path, Some(grid)).unwrap();
+        let cue = crate::hot_cues::HotCue::new(
+            std::time::Duration::from_secs(1),
+            "Intro".into(),
+            0x112233,
+        )
+        .unwrap();
+        library
+            .set_hot_cue(&original_path, 0, Some(cue.clone()))
+            .unwrap();
+        let saved_loop = crate::saved_loops::SavedLoop::new(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(2),
+            "Chorus".into(),
+        )
+        .unwrap();
+        library
+            .set_saved_loop(&original_path, 0, Some(saved_loop.clone()))
+            .unwrap();
+        library.record_play(1, 123_456, 1).unwrap();
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+
+        assert!(library
+            .relocate_track(1, replacement_path.clone(), Default::default())
+            .unwrap());
+        assert!(library
+            .relocate_track(2, second_replacement_path.clone(), Default::default())
+            .unwrap());
+        assert!(library
+            .relocate_track(1, existing_path.clone(), Default::default())
+            .unwrap());
+        let relocation = library.changes();
+        store.save_delta(&relocation).unwrap();
+        library.acknowledge(relocation.revision);
+
+        let mut collision = library
+            .catalog()
+            .tracks
+            .into_iter()
+            .find(|track| track.id == 1)
+            .unwrap();
+        collision.path = second_replacement_path.clone();
+        let conflicting_delta = library::CatalogDelta {
+            revision: 1,
+            tracks: vec![collision],
+            crates: None,
+            memberships: vec![],
+            history: vec![],
+        };
+        assert!(store.save_delta(&conflicting_delta).is_err());
+        drop(store);
+
+        let (_, restored, _) = Store::open(db).unwrap();
+        let restored_track = restored.track_by_id(1).unwrap();
+        assert_eq!(restored_track.path, existing_path);
+        assert_eq!(restored_track.id, 1);
+        assert_eq!(
+            restored.track_by_id(2).unwrap().path,
+            second_replacement_path
+        );
+        assert_eq!(restored.crates().entries[0].tracks, HashSet::from([1]));
+        assert_eq!(
+            restored.catalog().history,
+            vec![library::HistoryEntry {
+                track_id: 1,
+                last_played_ms: 123_456,
+                play_count: 1,
+                last_deck: 1,
+            }]
+        );
+        assert_eq!(restored.grid(&existing_path), Some(grid));
+        assert_eq!(
+            restored.hot_cues(&existing_path).slots()[0],
+            Some(cue.clone())
+        );
+        assert_eq!(
+            restored.saved_loops(&existing_path).slots()[0],
+            Some(saved_loop.clone())
         );
     }
 

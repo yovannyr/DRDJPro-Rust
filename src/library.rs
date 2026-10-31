@@ -964,6 +964,59 @@ impl Library {
             }
         }
     }
+    pub fn relocate_track(
+        &mut self,
+        track_id: i32,
+        path: PathBuf,
+        metadata: crate::track_metadata::TrackMetadata,
+    ) -> Result<bool, String> {
+        if !path.is_absolute()
+            || !path.is_file()
+            || !crate::audio_formats::supported(&path)
+            || !metadata.validate()
+        {
+            return Err("Invalid replacement audio file".into());
+        }
+        let index = *self
+            .id_indices
+            .get(&track_id)
+            .ok_or("Track is not in the library")?;
+        let new_key = identity(&path);
+        if self
+            .keys
+            .get(&new_key)
+            .is_some_and(|existing| *existing != index)
+        {
+            return Err("Replacement file already belongs to another library track".into());
+        }
+        let track = &self.tracks[index];
+        if track.path == path && track.available && track.metadata == metadata {
+            return Ok(false);
+        }
+        let old_key = identity(&track.path);
+        self.keys.remove(&old_key);
+        self.keys.insert(new_key, index);
+        let track = &mut self.tracks[index];
+        track.name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        track.format = path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_uppercase();
+        track.path = path;
+        track.available = true;
+        track.metadata = metadata;
+        track.refresh_search();
+        self.mark_search_track(index);
+        #[cfg(test)]
+        self.search_index.add(index, &self.tracks[index].search);
+        self.mark_track(index);
+        Ok(true)
+    }
     /// Called by the storage worker: availability checks never run in the UI tick.
     pub fn restore(catalog: Catalog) -> Result<Self, String> {
         catalog.validate()?;
@@ -1510,6 +1563,103 @@ mod tests {
             .history
             .iter()
             .any(|(id, entry)| *id == 1 && entry.is_none()));
+    }
+
+    #[test]
+    fn relocating_track_preserves_id_crate_grid_cues_loops_and_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("missing-old.wav");
+        let existing = crate::test_support::wav_file(100, 4_800);
+        let replacement = crate::test_support::wav_file(200, 4_800);
+        let existing_path = existing.path().to_owned();
+        let replacement_path = std::fs::canonicalize(replacement.path()).unwrap();
+        let catalog = Catalog {
+            version: 1,
+            tracks: vec![
+                SavedTrack {
+                    id: 1,
+                    path: old_path.clone(),
+                    metadata: Default::default(),
+                    grid: None,
+                    hot_cues: Default::default(),
+                    saved_loops: Default::default(),
+                },
+                SavedTrack {
+                    id: 2,
+                    path: existing_path.clone(),
+                    metadata: Default::default(),
+                    grid: None,
+                    hot_cues: Default::default(),
+                    saved_loops: Default::default(),
+                },
+            ],
+            crates: Default::default(),
+            history: vec![HistoryEntry {
+                track_id: 1,
+                last_played_ms: 500,
+                play_count: 3,
+                last_deck: 0,
+            }],
+        };
+        let mut library = Library::restore(catalog).unwrap();
+        let crate_id = library.create_crate("Favorites").unwrap();
+        library.select(1);
+        library.add_selected_to_crate(crate_id).unwrap();
+        let grid = crate::beatgrid::BeatGrid::new(120., std::time::Duration::ZERO).unwrap();
+        library.set_grid(&old_path, Some(grid)).unwrap();
+        let cue = crate::hot_cues::HotCue::new(
+            std::time::Duration::from_secs(1),
+            "Intro".into(),
+            0x112233,
+        )
+        .unwrap();
+        library
+            .set_hot_cue(&old_path, 0, Some(cue.clone()))
+            .unwrap();
+        let saved_loop = crate::saved_loops::SavedLoop::new(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(2),
+            "Chorus".into(),
+        )
+        .unwrap();
+        library
+            .set_saved_loop(&old_path, 0, Some(saved_loop.clone()))
+            .unwrap();
+
+        assert!(library
+            .relocate_track(
+                1,
+                replacement_path.clone(),
+                crate::track_metadata::TrackMetadata {
+                    title: "Replacement".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap());
+        assert_eq!(library.track_by_id(1).unwrap().path, replacement_path);
+        assert_eq!(
+            library.track_by_id(1).unwrap().metadata.title,
+            "Replacement"
+        );
+        assert_eq!(library.track_by_id(1).unwrap().id, 1);
+        assert_eq!(library.crates().entries[0].tracks, HashSet::from([1]));
+        assert_eq!(library.grid(&replacement_path), Some(grid));
+        assert_eq!(
+            library.hot_cues(&replacement_path).slots()[0],
+            Some(cue.clone())
+        );
+        assert_eq!(
+            library.saved_loops(&replacement_path).slots()[0],
+            Some(saved_loop.clone())
+        );
+        assert_eq!(library.catalog().history[0].play_count, 3);
+        assert!(!library.keys.contains_key(&identity(&old_path)));
+
+        assert!(library
+            .relocate_track(1, existing_path, Default::default())
+            .is_err());
+        assert_eq!(library.track_by_id(1).unwrap().path, replacement_path);
+        library.catalog().validate().unwrap();
     }
 
     #[test]
