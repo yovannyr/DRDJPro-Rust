@@ -4,7 +4,7 @@ export struct SavedLoopRow { occupied: bool, description: string }
 export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string, label-row: int, label-column: int }
 export struct CrateRow { id: int, name: string, count: int, depth: int, smart: bool }
 export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
-export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
+export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, prepare-duration: string, bpm: string, key: string, gain: string, analysis-status: string, metadata-error: string, format: string, path: string, available: bool }
 
 component FxStrip inherits Rectangle {
     in property <string> deck;
@@ -794,6 +794,8 @@ component TrackLibrary inherits Rectangle {
     in property <string> analysis-summary;
     in property <[float]> analysis-waveform;
     in property <bool> can-analyze;
+    in property <string> analysis-progress;
+    in property <bool> analysis-running;
     in-out property <int> tab;
     callback tab-selected(int);
     pure callback track-transfer(string) -> data-transfer;
@@ -827,10 +829,10 @@ component TrackLibrary inherits Rectangle {
         padding: 3px; spacing: 2px;
         HorizontalLayout {
             spacing: 2px;
-            LibraryButton { text: "Analyze Files"; accessible-label: "Analyze selected library track"; enabled: root.can-analyze; clicked => { root.analyze(); } }
+            LibraryButton { text: "Analyze Files"; accessible-label: "Analyze all library files"; enabled: root.can-analyze; clicked => { root.analyze(); } }
             for title[index] in ["Library", "Files", "Crates", "History", "Prepare"] : LibraryButton {
                 text: title; active: root.tab == index;
-                enabled: !root.busy;
+                enabled: !root.busy || root.analysis-running;
                 accessible-label: title + " library tab";
                 clicked => { root.tab-selected(index); }
             }
@@ -851,10 +853,11 @@ component TrackLibrary inherits Rectangle {
         }
         if tab == 4 : VerticalLayout {
             spacing: 2px;
-            Text { text: root.analysis-title; font-size: 11px; color: #eeeeee; overflow: elide; }
-            Text { text: root.analysis-summary; accessible-role: text; accessible-label: "Prepare analysis results"; font-size: 11px; color: #cccccc; wrap: word-wrap; }
-            Rectangle {
-                height: 30px; background: #0a0a0a;
+            if root.analysis-progress != "" : Text { height: 14px; text: root.analysis-progress; accessible-role: text; accessible-label: "Library analysis progress"; accessible-description: root.analysis-progress; font-size: 11px; color: #cccccc; overflow: elide; }
+            Text { height: 14px; text: root.analysis-title; font-size: 11px; color: #eeeeee; overflow: elide; }
+            Text { height: 14px; text: root.analysis-summary; accessible-role: text; accessible-label: "Prepare analysis results"; accessible-description: root.analysis-summary; font-size: 11px; color: #cccccc; overflow: elide; }
+            if root.analysis-waveform.length > 0 : Rectangle {
+                height: 20px; background: #0a0a0a;
                 for peak[index] in root.analysis-waveform : Rectangle {
                     x: index * parent.width / root.analysis-waveform.length;
                     width: max(1px, parent.width / root.analysis-waveform.length);
@@ -870,12 +873,17 @@ component TrackLibrary inherits Rectangle {
         }
         HorizontalLayout {
             spacing: 0px;
-            LibraryButton { text: "Title"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
+            if root.tab == 4 : Text { text: "#"; width: 28px; color: #cccccc; font-size: 11px; }
+            LibraryButton { text: root.tab == 4 ? "Song" : "Title"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
             LibraryButton { text: "Artist"; horizontal-stretch: 1; accessible-label: "Sort library by artist"; clicked => { root.sort-column(3); } }
+            if root.tab == 4 : Text { text: "BPM"; width: 42px; color: #cccccc; font-size: 11px; }
+            if root.tab == 4 : Text { text: "Key"; width: 34px; color: #cccccc; font-size: 11px; }
             LibraryButton { text: "Album"; horizontal-stretch: 1; accessible-label: "Sort library by album"; clicked => { root.sort-column(4); } }
-            LibraryButton { text: "Time"; width: 60px; accessible-label: "Sort library by duration"; clicked => { root.sort-column(5); } }
-            LibraryButton { text: "Type"; width: 60px; accessible-label: "Sort library by type"; clicked => { root.sort-column(1); } }
-            LibraryButton { text: "Location"; horizontal-stretch: 2; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
+            LibraryButton { text: root.tab == 4 ? "Length" : "Time"; width: root.tab == 4 ? 72px : 60px; accessible-label: "Sort library by duration"; clicked => { root.sort-column(5); } }
+            if root.tab == 4 : Text { text: "Gain dB"; width: 48px; color: #cccccc; font-size: 11px; }
+            if root.tab == 4 : Text { text: "Analysis"; width: 65px; color: #cccccc; font-size: 11px; }
+            if root.tab != 4 : LibraryButton { text: "Type"; width: 60px; accessible-label: "Sort library by type"; clicked => { root.sort-column(1); } }
+            if root.tab != 4 : LibraryButton { text: "Location"; horizontal-stretch: 2; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
         }
         nav := FocusScope {
             key-pressed(event) => {
@@ -888,16 +896,21 @@ component TrackLibrary inherits Rectangle {
                 for row[index] in root.rows : Rectangle {
                     height: 22px; background: root.selection == row.id ? #07577e : (mod(index, 2) == 0 ? #202020 : #111111);
                     accessible-role: button; accessible-label: "Library track " + row.id;
-                    accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.artist + " " + row.album + " " + row.duration + " " + row.path + (row.metadata-error == "" ? "" : " Metadata unavailable: " + row.metadata-error);
+                    accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.artist + " BPM " + row.bpm + " Key " + row.key + " " + row.album + " " + row.prepare-duration + " Gain dB " + row.gain + " " + row.analysis-status + " " + row.path + (row.metadata-error == "" ? "" : " Metadata unavailable: " + row.metadata-error);
                     accessible-action-default => { root.select-track(row.id); nav.focus(); }
                     HorizontalLayout {
                         padding-left: 4px; spacing: 0px;
+                        if root.tab == 4 : Text { text: row.id; width: 24px; font-size: 11px; color: #cccccc; vertical-alignment: center; }
                         Text { text: row.name; font-size: 11px; vertical-alignment: center; color: #eeeeee; overflow: elide; horizontal-stretch: 2; }
                         Text { text: row.artist == "" ? "—" : row.artist; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 1; }
+                        if root.tab == 4 : Text { text: row.bpm; width: 42px; font-size: 11px; vertical-alignment: center; color: #4fc2ed; accessible-role: text; accessible-label: "Track " + row.id + " BPM"; }
+                        if root.tab == 4 : Text { text: row.key; width: 34px; font-size: 11px; vertical-alignment: center; color: #d597ed; accessible-role: text; accessible-label: "Track " + row.id + " key"; }
                         Text { text: row.album == "" ? "—" : row.album; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 1; }
-                        Text { text: row.duration; font-size: 11px; vertical-alignment: center; color: #cccccc; width: 60px; }
-                        Text { text: row.available ? (row.metadata-error == "" ? row.format : row.format + " ?") : "MISSING"; font-size: 11px; vertical-alignment: center; color: row.available ? #cccccc : #ffae58; width: 60px; }
-                        Text { text: row.path; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 2; }
+                        Text { text: root.tab == 4 ? row.prepare-duration : row.duration; font-size: 11px; vertical-alignment: center; color: #cccccc; width: root.tab == 4 ? 72px : 60px; }
+                        if root.tab == 4 : Text { text: row.gain; width: 48px; font-size: 11px; vertical-alignment: center; color: #cccccc; }
+                        if root.tab == 4 : Text { text: row.available ? row.analysis-status : "Missing"; width: 65px; font-size: 11px; vertical-alignment: center; color: #cccccc; }
+                        if root.tab != 4 : Text { text: row.available ? (row.metadata-error == "" ? row.format : row.format + " ?") : "MISSING"; font-size: 11px; vertical-alignment: center; color: row.available ? #cccccc : #ffae58; width: 60px; }
+                        if root.tab != 4 : Text { text: row.path; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 2; }
                     }
                     DragArea {
                         width: 100%; height: 100%; allow-copy: true;
@@ -1227,6 +1240,9 @@ export component AppWindow inherits Window {
     callback analyze-library();
     in property <string> analysis-title;
     in property <string> analysis-summary;
+    in property <string> analysis-progress;
+    in property <bool> library-has-analysis-targets;
+    in property <bool> analysis-running;
     in property <[float]> analysis-waveform;
     callback library-tab-selected(int);
     in property <string> library-count: "0 tracks";
@@ -1522,7 +1538,9 @@ export component AppWindow inherits Window {
                 }
         track-library := TrackLibrary {
             analysis-title: root.analysis-title; analysis-summary: root.analysis-summary; analysis-waveform: root.analysis-waveform;
-            can-analyze: root.selected-track >= 0 && !root.loading && !root.library-busy && !root.library-can-relocate-selected;
+            analysis-progress: root.analysis-progress;
+            analysis-running: root.analysis-running;
+            can-analyze: root.library-has-analysis-targets && !root.loading && !root.library-busy;
             analyze => { root.analyze-library(); }
             tab <=> root.library-tab;
             tab-selected(index) => { root.library-tab-selected(index); }

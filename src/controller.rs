@@ -18,6 +18,14 @@ use std::{
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<Result<crate::library::ImportBatch, String>>;
+#[derive(Default)]
+struct AnalysisBatch {
+    queue: VecDeque<(i32, PathBuf)>,
+    total: usize,
+    completed: usize,
+    failed: usize,
+    last_error: Option<String>,
+}
 type DeviceScanResult = Result<Vec<crate::audio_devices::DeviceChoice>, String>;
 type DeviceCatalog = Arc<dyn Fn() -> DeviceScanResult + Send + Sync>;
 type DeviceOpener =
@@ -124,7 +132,38 @@ impl slint::Model for LibraryRows {
     }
 }
 fn library_row(track: &crate::library::Track) -> crate::LibraryRow {
+    let analysis = track.metadata.analysis.as_ref();
     crate::LibraryRow {
+        bpm: analysis
+            .filter(|a| a.bpm > 0.)
+            .map_or("—".into(), |a| format!("{:.1}", a.bpm).into()),
+        key: analysis
+            .filter(|a| !a.musical_key.is_empty())
+            .map_or("—".into(), |a| a.musical_key.clone().into()),
+        gain: analysis.map_or("—".into(), |a| {
+            format!("{:+.1}", 20. * a.gain.log10()).into()
+        }),
+        analysis_status: analysis.map_or("Pending".into(), |a| {
+            if a.is_corrupt {
+                "Warning".into()
+            } else {
+                "Analyzed".into()
+            }
+        }),
+        prepare_duration: track.metadata.duration_ms.map_or("—".into(), |ms| {
+            format!(
+                "{}{:02}:{:02}.{:02}",
+                if track.metadata.duration_exact {
+                    ""
+                } else {
+                    "~"
+                },
+                ms / 60000,
+                (ms / 1000) % 60,
+                (ms % 1000) / 10
+            )
+            .into()
+        }),
         id: track.id,
         name: track.display_title().into(),
         artist: track.metadata.artist.clone().into(),
@@ -286,6 +325,7 @@ pub struct AudioController {
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending_relocation_id: Cell<Option<i32>>,
     pending_analysis_id: Cell<Option<i32>>,
+    analysis_batch: RefCell<Option<AnalysisBatch>>,
     displayed_analysis: RefCell<Option<(i32, Option<crate::audio_analyzer::TrackAnalysisResult>)>>,
     pending_cancel: RefCell<Option<crate::cancellation::Cancellation>>,
     pending: RefCell<Option<(DeckId, Receiver<LoadResult>)>>,
@@ -431,6 +471,7 @@ impl AudioController {
             pending_import: RefCell::new(None),
             pending_relocation_id: Cell::new(None),
             pending_analysis_id: Cell::new(None),
+            analysis_batch: RefCell::new(None),
             displayed_analysis: RefCell::new(None),
             pending_cancel: RefCell::new(None),
             pending: RefCell::new(None),
@@ -950,7 +991,7 @@ impl AudioController {
                 }
                 if !c.storage_ready.get()
                     || c.pending.borrow().is_some()
-                    || c.pending_import.borrow().is_some()
+                    || (c.pending_import.borrow().is_some() && c.analysis_batch.borrow().is_none())
                 {
                     ui.set_status("Wait for the library operation before changing tabs".into());
                     return;
@@ -3816,6 +3857,7 @@ impl AudioController {
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
+        self.analysis_batch.borrow_mut().take();
         for job in self.keylock_jobs.borrow_mut().iter_mut() {
             job.take();
         }
@@ -4661,63 +4703,109 @@ impl AudioController {
             };
             self.pending_import.borrow_mut().take();
             let sync_session = self.sync_session_after_import.replace(false);
-            if let Some(ui) = self.ui.upgrade() {
-                ui.set_library_busy(false);
-                match result {
+            if let Some(track_id) = analysis_id {
+                let outcome = match result {
                     Ok(Some(Ok(batch))) => {
-                        if let Some(track_id) = analysis_id {
-                            let selected_path = self
-                                .library
-                                .borrow()
-                                .track_by_id(track_id)
-                                .map(|t| t.path.clone());
-                            if let Some((path, metadata)) = batch.metadata.into_iter().next() {
-                                if selected_path.as_ref() == Some(&path) {
-                                    self.library.borrow_mut().set_metadata(&path, metadata);
-                                    self.library_changed();
-                                    self.publish_library();
-                                    ui.set_status("Analysis complete; saving estimates without changing decks or grid".into());
-                                } else {
-                                    ui.set_status(
-                                        "Analysis discarded: track location changed".into(),
-                                    );
+                        let current_path = self
+                            .library
+                            .borrow()
+                            .track_by_id(track_id)
+                            .map(|track| track.path.clone());
+                        if let Some((path, metadata)) = batch.metadata.into_iter().next() {
+                            if current_path.as_ref() == Some(&path) {
+                                match metadata.analysis {
+                                    Some(analysis) => {
+                                        let changed = self
+                                            .library
+                                            .borrow_mut()
+                                            .set_analysis(track_id, &path, analysis);
+                                        match changed {
+                                            Ok(changed) => {
+                                                if changed {
+                                                    self.library_changed();
+                                                }
+                                                self.publish_library();
+                                                Ok(())
+                                            }
+                                            Err(error) => Err(error),
+                                        }
+                                    }
+                                    None => Err("Analysis returned no result".into()),
                                 }
                             } else {
-                                ui.set_status("Analysis returned no result".into());
+                                Err("Track location changed during analysis".into())
                             }
-                        } else if let Some(track_id) = relocation_id {
-                            self.complete_relocation(track_id, batch);
                         } else {
-                            let total = batch.paths.len();
-                            let added = self
-                                .library
-                                .borrow_mut()
-                                .insert(batch.paths.iter().cloned());
-                            let assigned = self
-                                .library
-                                .borrow_mut()
-                                .add_paths_to_crate(self.import_crate.get(), &batch.paths);
-                            for (path, metadata) in batch.metadata {
-                                self.library.borrow_mut().set_metadata(&path, metadata);
-                            }
-                            self.library_changed();
-                            if sync_session {
-                                self.sync_session_from_engine();
-                            }
-                            ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
-                            if let Err(error) = assigned {
-                                ui.set_status(format!("Added {added} library tracks; crate assignment failed: {error}").into());
-                            }
-                            self.publish_library();
+                            Err("Analysis returned no result".into())
                         }
                     }
-                    Ok(None) => ui.set_status(if relocation_id.is_some() {
-                        "Track relocation cancelled".into()
-                    } else {
-                        "Library import cancelled".into()
-                    }),
-                    Ok(Some(Err(error))) => ui.set_status(error.into()),
-                    Err(error) => ui.set_status(error.into()),
+                    Ok(Some(Err(error))) => Err(error),
+                    Ok(None) => Err("Analysis cancelled".into()),
+                    Err(error) => Err(error.to_string()),
+                };
+                if let Some(batch) = self.analysis_batch.borrow_mut().as_mut() {
+                    if !cancelled {
+                        batch.completed += 1;
+                    }
+                    if let Err(error) = &outcome {
+                        if !cancelled {
+                            batch.failed += 1;
+                        }
+                        batch.last_error = Some(format!("Track {track_id}: {error}"));
+                    }
+                }
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_library_busy(false);
+                    if self.analysis_batch.borrow().is_none() {
+                        ui.set_status(
+                            outcome
+                                .map_or_else(|error| error.into(), |_| "Analysis complete".into()),
+                        );
+                    }
+                }
+                self.update_analysis_progress(cancelled);
+                if !cancelled {
+                    self.start_next_analysis();
+                }
+            } else {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_library_busy(false);
+                    match result {
+                        Ok(Some(Ok(batch))) => {
+                            if let Some(track_id) = relocation_id {
+                                self.complete_relocation(track_id, batch);
+                            } else {
+                                let total = batch.paths.len();
+                                let added = self
+                                    .library
+                                    .borrow_mut()
+                                    .insert(batch.paths.iter().cloned());
+                                let assigned = self
+                                    .library
+                                    .borrow_mut()
+                                    .add_paths_to_crate(self.import_crate.get(), &batch.paths);
+                                for (path, metadata) in batch.metadata {
+                                    self.library.borrow_mut().set_metadata(&path, metadata);
+                                }
+                                self.library_changed();
+                                if sync_session {
+                                    self.sync_session_from_engine();
+                                }
+                                ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
+                                if let Err(error) = assigned {
+                                    ui.set_status(format!("Added {added} library tracks; crate assignment failed: {error}").into());
+                                }
+                                self.publish_library();
+                            }
+                        }
+                        Ok(None) => ui.set_status(if relocation_id.is_some() {
+                            "Track relocation cancelled".into()
+                        } else {
+                            "Library import cancelled".into()
+                        }),
+                        Ok(Some(Err(error))) => ui.set_status(error.into()),
+                        Err(error) => ui.set_status(error.into()),
+                    }
                 }
             }
         }
@@ -4821,11 +4909,92 @@ impl AudioController {
         if !self.storage_ready.get()
             || self.pending.borrow().is_some()
             || self.pending_import.borrow().is_some()
+            || self.analysis_batch.borrow().is_some()
         {
             ui.set_status("Wait for the current operation before analyzing".into());
             return;
         }
-        let selected = self.library.borrow().selected_id();
+        let queue = self.library.borrow().analysis_targets();
+        if queue.is_empty() {
+            ui.set_status("No available library files to analyze".into());
+            return;
+        }
+        let total = queue.len();
+        *self.analysis_batch.borrow_mut() = Some(AnalysisBatch {
+            queue,
+            total,
+            ..Default::default()
+        });
+        ui.set_library_tab(4);
+        self.start_next_analysis();
+    }
+    fn start_next_analysis(&self) {
+        loop {
+            let target = self
+                .analysis_batch
+                .borrow_mut()
+                .as_mut()
+                .and_then(|batch| batch.queue.pop_front());
+            let Some((id, path)) = target else { return };
+            let valid = self
+                .library
+                .borrow()
+                .track_by_id(id)
+                .is_some_and(|track| track.available && track.path == path);
+            if valid {
+                self.start_track_analysis(id);
+                if self.pending_import.borrow().is_some() {
+                    return;
+                }
+            }
+            if let Some(batch) = self.analysis_batch.borrow_mut().as_mut() {
+                batch.completed += 1;
+                batch.failed += 1;
+                batch.last_error = Some(format!(
+                    "Track {id}: unavailable or analysis worker could not start"
+                ));
+            }
+            self.update_analysis_progress(false);
+        }
+    }
+    fn update_analysis_progress(&self, cancelled: bool) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let mut slot = self.analysis_batch.borrow_mut();
+        let Some(batch) = slot.as_ref() else { return };
+        let finished =
+            cancelled || (batch.queue.is_empty() && self.pending_analysis_id.get().is_none());
+        let text = format!(
+            "Analysis {}: {}/{} processed, {} failed{}",
+            if cancelled {
+                "cancelled"
+            } else if finished {
+                "complete"
+            } else {
+                "running"
+            },
+            batch.completed,
+            batch.total,
+            batch.failed,
+            batch
+                .last_error
+                .as_ref()
+                .map_or(String::new(), |error| format!(" — {error}"))
+        );
+        ui.set_analysis_progress(text.clone().into());
+        ui.set_status(text.into());
+        if finished {
+            slot.take();
+        }
+    }
+    fn start_track_analysis(&self, selected: i32) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+        {
+            ui.set_status("Wait for the current operation before analyzing".into());
+            return;
+        }
         let track = self
             .library
             .borrow()
@@ -4857,8 +5026,7 @@ impl AudioController {
         if self.pending_import.borrow().is_none() {
             self.pending_analysis_id.set(None);
         } else {
-            ui.set_library_tab(4);
-            ui.set_status("Analyzing selected track in background...".into());
+            self.update_analysis_progress(false);
         }
     }
     fn start_import(&self, picker: LibraryPicker) {
@@ -5040,6 +5208,7 @@ impl AudioController {
         let library = self.library.borrow();
         let selected = library.selected_id();
         ui.set_selected_track(selected);
+        ui.set_library_has_analysis_targets(library.has_analysis_targets());
         ui.set_library_can_relocate_selected(
             library
                 .track_by_id(selected)
@@ -5374,6 +5543,7 @@ impl AudioController {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        ui.set_analysis_running(self.analysis_batch.borrow().is_some());
         let library = self.library.borrow();
         let track = library.track_by_id(library.selected_id());
         let result = track.and_then(|t| t.metadata.analysis.as_ref());
@@ -12566,7 +12736,7 @@ mod tests {
                     "Crates library tab",
                     "History library tab",
                     "Prepare library tab",
-                    "Analyze selected library track",
+                    "Analyze all library files",
                     "Load selected into deck A",
                     "Load selected into deck B",
                     "Clear library search",
@@ -12574,11 +12744,12 @@ mod tests {
                     "Sort library by artist",
                     "Sort library by album",
                     "Sort library by duration",
-                    "Sort library by type",
-                    "Sort library by path",
                     "Previous library page",
                     "Next library page",
                 ];
+                if index != 4 {
+                    labels.extend(["Sort library by type", "Sort library by path"]);
+                }
                 if index == 1 {
                     labels.extend(["Import library files", "Import library folder"]);
                 }
@@ -12627,7 +12798,7 @@ mod tests {
         c.close_library().unwrap();
     }
     #[test]
-    fn analyze_button_works_without_audio_and_respects_selection_and_busy_state() {
+    fn analyze_button_works_without_audio_or_selection_and_respects_busy_state() {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
@@ -12642,19 +12813,11 @@ mod tests {
         finish_import(&c);
         ui.show().unwrap();
         ui.set_audio_enabled(false);
-        let button = control(&ui, "Analyze selected library track");
+        let button = control(&ui, "Analyze all library files");
         ui.invoke_select_library(-1);
-        button.invoke_accessible_default_action();
-        assert!(c.pending_import.borrow().is_none());
-        ui.invoke_select_library(1);
-        for (loading, busy, missing) in [
-            (true, false, false),
-            (false, true, false),
-            (false, false, true),
-        ] {
+        for (loading, busy) in [(true, false), (false, true)] {
             ui.set_loading(loading);
             ui.set_library_busy(busy);
-            ui.set_library_can_relocate_selected(missing);
             button.invoke_accessible_default_action();
             assert!(c.pending_import.borrow().is_none());
         }
@@ -12679,7 +12842,194 @@ mod tests {
         c.close_library().unwrap();
     }
     #[test]
-    fn selected_analysis_prepare_cancel_error_and_restart_preserve_playing_decks() {
+    fn whole_library_analysis_publishes_each_result_and_continues_after_failure() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let first = wav_file(0, 48_000);
+        let bad = wav_file(0, 48_000);
+        let last = wav_file(0, 48_000);
+        c.import_paths(vec![
+            first.path().into(),
+            bad.path().into(),
+            last.path().into(),
+        ]);
+        finish_import(&c);
+        let crate_id = c.library.borrow_mut().create_crate("Only first").unwrap();
+        c.library.borrow_mut().select(1);
+        c.library
+            .borrow_mut()
+            .add_selected_to_crate(crate_id)
+            .unwrap();
+        ui.invoke_select_crate(crate_id);
+        finish_search(&c);
+        ui.set_library_query("drdj".into());
+        ui.invoke_library_search();
+        finish_search(&c);
+        let search_revision = c
+            .library
+            .borrow()
+            .search_spec(c.library_generation.get())
+            .revision;
+        std::fs::write(bad.path(), b"not audio").unwrap();
+        ui.invoke_select_library(-1);
+        ui.show().unwrap();
+        control(&ui, "Analyze all library files").invoke_accessible_default_action();
+        assert_eq!(c.analysis_batch.borrow().as_ref().unwrap().total, 3);
+        let receiver = c.pending_import.borrow_mut().take().unwrap();
+        let result = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(result).unwrap();
+        *c.pending_import.borrow_mut() = Some(receiver);
+        c.tick();
+        assert!(c
+            .library
+            .borrow()
+            .track_by_id(1)
+            .unwrap()
+            .metadata
+            .analysis
+            .is_some());
+        assert!(c
+            .library
+            .borrow()
+            .track_by_id(3)
+            .unwrap()
+            .metadata
+            .analysis
+            .is_none());
+        assert!(ui.get_analysis_progress().contains("1/3 processed"));
+        assert_eq!(
+            c.library
+                .borrow()
+                .search_spec(c.library_generation.get())
+                .revision,
+            search_revision
+        );
+        assert!(
+            !c.search_in_progress(),
+            "analysis-only result must republish rows without a full-library search"
+        );
+        assert_eq!(
+            ui.get_library_rows().row_data(0).unwrap().analysis_status,
+            "Analyzed"
+        );
+        assert!(c.pending_import.borrow().is_some());
+        control(&ui, "Library library tab").invoke_accessible_default_action();
+        assert_eq!(ui.get_library_tab(), 0);
+        finish_import(&c);
+        assert!(c.analysis_batch.borrow().is_none());
+        assert!(c
+            .library
+            .borrow()
+            .track_by_id(2)
+            .unwrap()
+            .metadata
+            .analysis
+            .is_none());
+        assert!(c
+            .library
+            .borrow()
+            .track_by_id(3)
+            .unwrap()
+            .metadata
+            .analysis
+            .is_some());
+        assert!(ui
+            .get_analysis_progress()
+            .contains("3/3 processed, 1 failed"));
+        assert!(ui.get_analysis_progress().contains("Track 2:"));
+        assert_eq!(
+            ui.get_library_tab(),
+            0,
+            "next jobs must not force Prepare again"
+        );
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn prepare_rows_expose_all_real_metadata_and_analysis_fields() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let file = wav_file(0, 48_000);
+        c.import_paths(vec![file.path().into()]);
+        finish_import(&c);
+        let path = c.library.borrow().track_by_id(1).unwrap().path.clone();
+        let metadata = crate::track_metadata::TrackMetadata {
+            title: "Actual Song".into(),
+            artist: "Actual Artist".into(),
+            album: "Actual Album".into(),
+            duration_ms: Some(254_900),
+            duration_exact: true,
+            scanned: true,
+            analysis: Some(crate::audio_analyzer::TrackAnalysisResult {
+                file_path: path.to_string_lossy().into_owned(),
+                bpm: 127.,
+                musical_key: "10A".into(),
+                gain: 1.,
+                waveform_overview: vec![0, 128, 255],
+                is_corrupt: false,
+            }),
+            ..Default::default()
+        };
+        c.library.borrow_mut().set_metadata(&path, metadata);
+        assert_eq!(
+            c.library.borrow().track_by_id(1).unwrap().metadata.title,
+            "Actual Song"
+        );
+        c.library_changed();
+        c.publish_library();
+        finish_search(&c);
+        ui.invoke_library_tab_selected(4);
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        c.tick();
+        ui.set_analysis_progress(
+            "Analysis running: 1234/5000 processed, 12 failed — Track 42: Unsupported audio format"
+                .into(),
+        );
+        ui.show().unwrap();
+        let row = ui.get_library_rows().row_data(0).unwrap();
+        assert_eq!(row.name, "Actual Song");
+        assert_eq!(row.artist, "Actual Artist");
+        assert_eq!(row.album, "Actual Album");
+        assert_eq!(row.bpm, "127.0");
+        assert_eq!(row.key, "10A");
+        assert_eq!(row.prepare_duration, "04:14.90");
+        assert_eq!(row.gain, "+0.0");
+        assert_eq!(row.analysis_status, "Analyzed");
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for label in [
+                "Track 1 BPM",
+                "Track 1 key",
+                "Previous library page",
+                "Next library page",
+            ] {
+                let element = control(&ui, label);
+                let position = element.absolute_position();
+                let size = element.size();
+                assert!(size.width > 0. && size.height > 0.);
+                assert!(position.x >= 0. && position.x + size.width <= width);
+                assert!(position.y >= 0. && position.y + size.height <= height);
+            }
+        }
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn library_analysis_prepare_cancel_error_and_restart_preserve_playing_decks() {
         use slint::Model;
         i_slint_backend_testing::init_no_event_loop();
         let dir = tempfile::tempdir().unwrap();
@@ -12722,7 +13072,7 @@ mod tests {
             .unwrap()
             .metadata
             .analysis
-            .is_none());
+            .is_some());
         let good = c
             .library
             .borrow()
@@ -12739,8 +13089,9 @@ mod tests {
         assert!(ui
             .get_analysis_summary()
             .contains("BPM estimate: Unavailable"));
+        let path = c.library.borrow().track_by_id(1).unwrap().path.clone();
         c.library.borrow_mut().set_metadata(
-            file.path(),
+            &path,
             crate::track_metadata::TrackMetadata {
                 title: "Refreshed".into(),
                 ..Default::default()
@@ -12759,6 +13110,10 @@ mod tests {
         ui.invoke_analyze_library();
         ui.invoke_cancel_background_job();
         finish_import(&c);
+        assert!(
+            c.analysis_batch.borrow().is_none(),
+            "cancellation must drop the remaining queue"
+        );
         assert!(ui.get_status().contains("cancelled"));
         assert_eq!(
             c.library
@@ -12773,7 +13128,7 @@ mod tests {
         std::fs::write(file.path(), b"not audio").unwrap();
         ui.invoke_analyze_library();
         finish_import(&c);
-        assert!(!ui.get_status().contains("Analysis complete"));
+        assert!(ui.get_analysis_progress().contains("1 failed"));
         assert_eq!(
             c.library
                 .borrow()

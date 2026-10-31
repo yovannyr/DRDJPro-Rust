@@ -1,8 +1,8 @@
 # Local library storage — SQLite
 
-## Selected-track analysis (schema 16)
+## Library background analysis (schema 16)
 
-Analyze Files runs the user-provided analyzer on the selected available track in the existing cancellable background lane. Prepare displays estimates and a peak overview, not an automatic grid/gain edit. Schema 16 adds STRICT `track_analysis` with a cascading track-ID foreign key and JSON limited to 65,536 UTF-8 bytes. Reads reject invalid/unknown fields, non-finite or out-of-range BPM/gain, invalid Camelot keys, more than 4,096 peak bins, orphaned IDs and mismatched paths. Full and delta saves use the existing transaction/ack/retry/close protocol. Older databases migrate with no analysis results.
+Analyze Files snapshots all available library ID/path pairs and runs the user-provided analyzer sequentially in the existing cancellable background lane. Search, crate and selection do not restrict that snapshot. Each successful file updates its captured track and schedules a normal delta save; failure reports track ID/error and continues with the next file. Cancel/close discards the remainder and cancels current work; completed results remain. New imports are not included until another click. Prepare displays per-row estimates and existing tags/length, plus a selected peak overview, not an automatic grid/gain edit. Schema 16 adds STRICT `track_analysis` with a cascading track-ID foreign key and JSON limited to 65,536 UTF-8 bytes. Reads reject invalid/unknown fields, non-finite or out-of-range BPM/gain, invalid Camelot keys, more than 4,096 peak bins, orphaned IDs and mismatched paths. Full and delta saves use the existing transaction/ack/retry/close protocol. Older databases migrate with no analysis results.
 
 Successful results survive normal metadata refresh. Relocation replaces metadata and invalidates old analysis; reanalyze the replacement. Cancelled/failed work never erases a previous result. The UI applies a completed result to its captured ID/path, not the current selection. Results are snapshots: external file edits are not automatically fingerprinted or detected.
 

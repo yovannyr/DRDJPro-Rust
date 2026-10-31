@@ -1,6 +1,6 @@
 //! Session library state. File inspection runs on the control worker, not the UI/audio thread.
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
@@ -605,6 +605,9 @@ impl Library {
     fn mark_track(&mut self, index: usize) {
         self.missing_cache.set(None);
         *self.view_cache.get_mut() = None;
+        self.mark_track_dirty(index);
+    }
+    fn mark_track_dirty(&mut self, index: usize) {
         self.revision = self
             .revision
             .checked_add(1)
@@ -971,6 +974,29 @@ impl Library {
             }
         }
     }
+    pub(crate) fn set_analysis(
+        &mut self,
+        track_id: i32,
+        path: &Path,
+        analysis: crate::audio_analyzer::TrackAnalysisResult,
+    ) -> Result<bool, String> {
+        let index = *self
+            .id_indices
+            .get(&track_id)
+            .ok_or("Analysis track no longer exists")?;
+        if self.tracks[index].path != path
+            || analysis.file_path != path.to_string_lossy()
+            || !analysis.validate()
+        {
+            return Err("Analysis track location changed or result is invalid".into());
+        }
+        if self.tracks[index].metadata.analysis.as_ref() == Some(&analysis) {
+            return Ok(false);
+        }
+        self.tracks[index].metadata.analysis = Some(analysis);
+        self.mark_track_dirty(index);
+        Ok(true)
+    }
     pub fn relocate_track(
         &mut self,
         track_id: i32,
@@ -1039,7 +1065,9 @@ impl Library {
                 .insert(identity(&saved.path), library.tracks.len());
             let enriched = available && saved.metadata.needs_refresh(&saved.path);
             let metadata = if enriched {
-                crate::track_metadata::read(&saved.path)
+                let mut metadata = crate::track_metadata::read(&saved.path);
+                metadata.analysis = saved.metadata.analysis;
+                metadata
             } else {
                 saved.metadata
             };
@@ -1165,6 +1193,16 @@ impl Library {
     }
     pub fn len(&self) -> usize {
         self.tracks.len()
+    }
+    pub(crate) fn analysis_targets(&self) -> VecDeque<(i32, PathBuf)> {
+        self.tracks
+            .iter()
+            .filter(|track| track.available)
+            .map(|track| (track.id, track.path.clone()))
+            .collect()
+    }
+    pub(crate) fn has_analysis_targets(&self) -> bool {
+        self.tracks.iter().any(|track| track.available)
     }
     pub fn set_query(&mut self, query: String) {
         let normalized = query.trim().to_lowercase();
