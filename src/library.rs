@@ -1266,6 +1266,11 @@ impl Library {
             .get(&id)
             .and_then(|index| self.tracks.get(*index))
     }
+    pub(crate) fn track_id_for_path(&self, path: &Path) -> Option<i32> {
+        self.keys
+            .get(&identity(path))
+            .map(|index| self.tracks[*index].id)
+    }
     pub(crate) fn cached_visible_ids(&self) -> Option<Vec<i32>> {
         self.view_cache
             .borrow()

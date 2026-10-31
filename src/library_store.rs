@@ -19,6 +19,26 @@ use std::{
 };
 const APPLICATION_ID: i32 = 0x4452444a;
 const SCHEMA_VERSION: i32 = 15;
+const DECK_SESSION_QUERY: &str = "SELECT CASE WHEN length(CAST(value AS BLOB))<=256 THEN value ELSE '' END FROM library_meta WHERE key='deck_session_v1'";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeckSession {
+    pub decks: [Option<i32>; 2],
+}
+impl DeckSession {
+    fn validate(&self) -> Result<(), String> {
+        if self
+            .decks
+            .iter()
+            .flatten()
+            .any(|id| *id <= 0 || *id == i32::MAX)
+        {
+            return Err("Invalid saved deck track ID".into());
+        }
+        Ok(())
+    }
+}
 fn startup_selection(
     connection: &Connection,
 ) -> Result<crate::audio_devices::StartupSelection, String> {
@@ -1181,6 +1201,31 @@ impl Store {
         profiles.validate()?;
         Ok(profiles)
     }
+    fn read_deck_session(&self, library: &Library) -> Result<DeckSession, String> {
+        let value: Option<String> = self
+            .connection
+            .query_row(DECK_SESSION_QUERY, [], |row| row.get(0))
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let Some(value) = value else {
+            return Ok(DeckSession::default());
+        };
+        if value.is_empty() {
+            return Err("Saved deck session is empty or exceeds size limit".into());
+        }
+        let session: DeckSession = serde_json::from_str(&value)
+            .map_err(|error| format!("Invalid saved deck session: {error}"))?;
+        session.validate()?;
+        if session
+            .decks
+            .iter()
+            .flatten()
+            .any(|id| library.track_by_id(*id).is_none())
+        {
+            return Err("Saved deck session references an unknown library track".into());
+        }
+        Ok(session)
+    }
     #[cfg(test)]
     fn save_state(
         &mut self,
@@ -1208,6 +1253,7 @@ impl Store {
         state.validate()?;
         Ok(state)
     }
+    #[cfg(test)]
     fn save_session_state(
         &mut self,
         delta: &crate::library::CatalogDelta,
@@ -1215,12 +1261,32 @@ impl Store {
         output: Option<OutputRoute>,
         fx: Option<crate::delay_fx::FxPreferences>,
     ) -> Result<(), String> {
+        self.save_session_state_with_decks(delta, preferences, output, fx, None)
+    }
+    fn save_session_state_with_decks(
+        &mut self,
+        delta: &crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+        deck_session: Option<DeckSession>,
+    ) -> Result<(), String> {
         let fx_json = fx
             .map(|value| -> Result<String, String> {
                 value.validate()?;
                 let json = serde_json::to_string(&value).map_err(|e| e.to_string())?;
                 if json.len() > 8192 {
                     return Err("Delay preferences exceed size limit".into());
+                }
+                Ok(json)
+            })
+            .transpose()?;
+        let deck_session_json = deck_session
+            .map(|session| -> Result<String, String> {
+                session.validate()?;
+                let json = serde_json::to_string(&session).map_err(|error| error.to_string())?;
+                if json.len() > 256 {
+                    return Err("Saved deck session exceeds size limit".into());
                 }
                 Ok(json)
             })
@@ -1249,6 +1315,7 @@ impl Store {
             && preferences.is_none()
             && output_json.is_none()
             && fx_json.is_none()
+            && deck_session_json.is_none()
         {
             return self.checkpoint(true);
         }
@@ -1508,6 +1575,20 @@ impl Store {
         if history_count > library::MAX_HISTORY as i64 {
             return Err("Playback history limit exceeded".into());
         }
+        if let Some(session) = deck_session {
+            for track_id in session.decks.into_iter().flatten() {
+                let exists: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM tracks WHERE id=?1)",
+                        [track_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())?;
+                if !exists {
+                    return Err("Saved deck session references an unknown library track".into());
+                }
+            }
+        }
         if let Some(json) = preferences_json {
             tx.execute("INSERT INTO library_meta(key,value) VALUES('quantize_preferences_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [json]).map_err(|e| e.to_string())?;
         }
@@ -1516,6 +1597,13 @@ impl Store {
         }
         if let Some(json) = fx_json {
             tx.execute("INSERT INTO library_meta(key,value) VALUES('delay_fx_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|e|e.to_string())?;
+        }
+        if let Some(json) = deck_session_json {
+            tx.execute(
+                "INSERT INTO library_meta(key,value) VALUES('deck_session_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [json],
+            )
+            .map_err(|error| error.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
         self.has_tracks = self.has_tracks || added > 0;
@@ -1548,6 +1636,7 @@ impl Store {
 pub struct LoadedLibrary {
     pub startup_audio: Result<crate::audio_devices::StartupSelection, String>,
     pub fx_preferences: Result<crate::delay_fx::FxPreferences, String>,
+    pub deck_session: Result<DeckSession, String>,
     pub library: Library,
     pub note: String,
     pub backfill_error: Option<String>,
@@ -1572,12 +1661,14 @@ enum Command {
         Option<QuantizePreferences>,
         Option<OutputRoute>,
         Option<crate::delay_fx::FxPreferences>,
+        Option<DeckSession>,
     ),
     CloseDelta(
         Option<crate::library::CatalogDelta>,
         Option<QuantizePreferences>,
         Option<OutputRoute>,
         Option<crate::delay_fx::FxPreferences>,
+        Option<DeckSession>,
     ),
 }
 pub struct Worker {
@@ -1616,9 +1707,11 @@ impl Worker {
                         Ok(prefs) => (prefs, None),
                         Err(error) => (QuantizePreferences::default(), Some(error)),
                     };
+                let deck_session = store.read_deck_session(&library);
                 let loaded = LoadedLibrary {
                     startup_audio: startup_selection(&store.connection),
                     fx_preferences: store.read_fx_preferences(),
+                    deck_session,
                     library,
                     note,
                     backfill_error: store.backfill_error.take(),
@@ -1669,16 +1762,23 @@ impl Worker {
                             })();
                             let _=events_tx.send(Event::StartupAudioSaved(result));
                         }
-                        Command::SaveDelta(delta, preferences, output, fx) => {
-                            let result = store.save_session_state(&delta, preferences, output, fx);
+                        Command::SaveDelta(delta, preferences, output, fx, deck_session) => {
+                            let result = store.save_session_state_with_decks(
+                                &delta,
+                                preferences,
+                                output,
+                                fx,
+                                deck_session,
+                            );
                             retry_wait = result.is_err();
                             let _ = events_tx.send(Event::Saved(result));
                         }
-                        Command::CloseDelta(delta, preferences, output, fx) => {
+                        Command::CloseDelta(delta, preferences, output, fx, deck_session) => {
                             if delta.is_some()
                                 || preferences.is_some()
                                 || output.is_some()
                                 || fx.is_some()
+                                || deck_session.is_some()
                             {
                                 let delta = delta.unwrap_or(crate::library::CatalogDelta {
                                     revision: 0,
@@ -1687,7 +1787,13 @@ impl Worker {
                                     memberships: vec![],
                                     history: vec![],
                                 });
-                                store.save_session_state(&delta, preferences, output, fx)?;
+                                store.save_session_state_with_decks(
+                                    &delta,
+                                    preferences,
+                                    output,
+                                    fx,
+                                    deck_session,
+                                )?;
                             }
                             return store.checkpoint(true);
                         }
@@ -1728,6 +1834,7 @@ impl Worker {
     ) -> Result<(), String> {
         self.save_session_state(delta, preferences, output, None)
     }
+    #[cfg(test)]
     pub fn save_session_state(
         &self,
         delta: crate::library::CatalogDelta,
@@ -1736,7 +1843,25 @@ impl Worker {
         fx: Option<crate::delay_fx::FxPreferences>,
     ) -> Result<(), String> {
         self.tx
-            .try_send(Command::SaveDelta(delta, preferences, output, fx))
+            .try_send(Command::SaveDelta(delta, preferences, output, fx, None))
+            .map_err(|e| e.to_string())
+    }
+    pub fn save_session_state_with_decks(
+        &self,
+        delta: crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+        deck_session: Option<DeckSession>,
+    ) -> Result<(), String> {
+        self.tx
+            .try_send(Command::SaveDelta(
+                delta,
+                preferences,
+                output,
+                fx,
+                deck_session,
+            ))
             .map_err(|e| e.to_string())
     }
     #[cfg(test)]
@@ -1760,6 +1885,7 @@ impl Worker {
     ) -> Result<(), String> {
         self.close_session_state(delta, preferences, output, None)
     }
+    #[cfg(test)]
     pub fn close_session_state(
         self,
         delta: Option<crate::library::CatalogDelta>,
@@ -1767,9 +1893,23 @@ impl Worker {
         output: Option<OutputRoute>,
         fx: Option<crate::delay_fx::FxPreferences>,
     ) -> Result<(), String> {
-        let _ = self
-            .tx
-            .send(Command::CloseDelta(delta, preferences, output, fx));
+        self.close_session_state_with_decks(delta, preferences, output, fx, None)
+    }
+    pub fn close_session_state_with_decks(
+        self,
+        delta: Option<crate::library::CatalogDelta>,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+        deck_session: Option<DeckSession>,
+    ) -> Result<(), String> {
+        let _ = self.tx.send(Command::CloseDelta(
+            delta,
+            preferences,
+            output,
+            fx,
+            deck_session,
+        ));
         self.join
             .join()
             .map_err(|_| "Library worker panicked".to_string())?
@@ -2609,6 +2749,88 @@ mod tests {
                 last_deck: 1,
             }]
         );
+    }
+
+    #[test]
+    fn deck_session_roundtrips_with_stable_track_ids_and_rejects_unknown_tracks() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        library.insert([dir.path().join("deck-a.wav"), dir.path().join("deck-b.wav")]);
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+
+        let session = DeckSession {
+            decks: [Some(1), Some(2)],
+        };
+        let empty = library::CatalogDelta {
+            revision: library.revision(),
+            tracks: vec![],
+            crates: None,
+            memberships: vec![],
+            history: vec![],
+        };
+        store
+            .save_session_state_with_decks(&empty, None, None, None, Some(session))
+            .unwrap();
+        assert_eq!(store.read_deck_session(&library).unwrap(), session);
+        assert!(store
+            .save_session_state_with_decks(
+                &empty,
+                None,
+                None,
+                None,
+                Some(DeckSession {
+                    decks: [Some(1), Some(999)],
+                }),
+            )
+            .is_err());
+        drop(store);
+
+        let (store, restored, _) = Store::open(db).unwrap();
+        assert_eq!(store.read_deck_session(&restored).unwrap(), session);
+    }
+
+    #[test]
+    fn invalid_deck_sessions_are_rejected_and_preserved_by_unrelated_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, mut library, _) = Store::open(dir.path().join("session.sqlite3")).unwrap();
+        library.insert([dir.path().join("track.wav")]);
+        let delta = library.changes();
+        store.save_delta(&delta).unwrap();
+        library.acknowledge(delta.revision);
+        for raw in [
+            String::new(),
+            "x".repeat(257),
+            "{invalid".into(),
+            r#"{"decks":[0,null]}"#.into(),
+            r#"{"decks":[2147483647,null]}"#.into(),
+            r#"{"decks":[2,null]}"#.into(),
+            r#"{"decks":[1]}"#.into(),
+            r#"{"decks":[1,null],"extra":true}"#.into(),
+        ] {
+            store
+                .connection
+                .execute(
+                    "INSERT OR REPLACE INTO library_meta(key,value) VALUES('deck_session_v1',?1)",
+                    [&raw],
+                )
+                .unwrap();
+            assert!(store.read_deck_session(&library).is_err(), "{raw}");
+            store
+                .save_session_state_with_decks(&library.changes(), None, None, None, None)
+                .unwrap();
+            let preserved: String = store
+                .connection
+                .query_row(
+                    "SELECT value FROM library_meta WHERE key='deck_session_v1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(preserved, raw);
+        }
     }
 
     #[test]

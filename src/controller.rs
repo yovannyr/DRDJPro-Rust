@@ -6,6 +6,7 @@ use crate::{
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     cell::{Cell, RefCell},
+    collections::VecDeque,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
@@ -245,6 +246,13 @@ pub struct AudioController {
     dirty: Cell<bool>,
     saving: Cell<bool>,
     inflight_revision: Cell<Option<u64>>,
+    deck_session: RefCell<crate::library_store::DeckSession>,
+    saved_deck_session: RefCell<Option<crate::library_store::DeckSession>>,
+    inflight_deck_session: RefCell<Option<crate::library_store::DeckSession>>,
+    deck_session_writable: Cell<bool>,
+    session_restore_queue: RefCell<VecDeque<(DeckId, PathBuf)>>,
+    restoring_deck: Cell<Option<DeckId>>,
+    session_restore_errors: RefCell<Vec<String>>,
     saved_quantize: Cell<crate::preferences::QuantizePreferences>,
     observed_quantize: Cell<crate::preferences::QuantizePreferences>,
     inflight_quantize: Cell<Option<crate::preferences::QuantizePreferences>>,
@@ -259,6 +267,7 @@ pub struct AudioController {
     fx_writable: Cell<bool>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
+    sync_session_after_import: Cell<bool>,
     crate_editor: Cell<Option<(i32, Option<i32>, bool)>>,
     crate_delete: Cell<Option<i32>>,
     crate_target: Cell<i32>,
@@ -380,6 +389,13 @@ impl AudioController {
             dirty: Cell::new(false),
             saving: Cell::new(false),
             inflight_revision: Cell::new(None),
+            deck_session: RefCell::new(Default::default()),
+            saved_deck_session: RefCell::new(Some(Default::default())),
+            inflight_deck_session: RefCell::new(None),
+            deck_session_writable: Cell::new(true),
+            session_restore_queue: RefCell::new(VecDeque::new()),
+            restoring_deck: Cell::new(None),
+            session_restore_errors: RefCell::new(Vec::new()),
             saved_quantize: Cell::new(Default::default()),
             observed_quantize: Cell::new(Default::default()),
             inflight_quantize: Cell::new(None),
@@ -394,6 +410,7 @@ impl AudioController {
             fx_writable: Cell::new(false),
             save_failed: Cell::new(false),
             initial_paths: RefCell::new(Vec::new()),
+            sync_session_after_import: Cell::new(false),
             crate_editor: Cell::new(None),
             crate_delete: Cell::new(None),
             crate_target: Cell::new(0),
@@ -3427,6 +3444,8 @@ impl AudioController {
             }
             Some(Ok(crate::library_store::Event::Loaded(result))) => {
                 self.storage_ready.set(true);
+                let paths = self.initial_paths.take();
+                let explicit_paths = !paths.is_empty();
                 if let Some(ui) = self.ui.upgrade() {
                     ui.set_library_busy(false);
                     ui.set_quantize_preferences_ready(true);
@@ -3435,6 +3454,7 @@ impl AudioController {
                     Ok(loaded) => {
                         let crate::library_store::LoadedLibrary {
                             startup_audio,
+                            deck_session,
                             library,
                             note,
                             backfill_error,
@@ -3443,6 +3463,25 @@ impl AudioController {
                             output_routes,
                             fx_preferences,
                         } = *loaded;
+                        let (session_to_restore, session_warning) = match deck_session {
+                            Ok(session) => {
+                                *self.deck_session.borrow_mut() = session;
+                                *self.saved_deck_session.borrow_mut() = Some(session);
+                                self.deck_session_writable.set(true);
+                                (Some(session), None)
+                            }
+                            Err(error) => {
+                                *self.deck_session.borrow_mut() = Default::default();
+                                *self.saved_deck_session.borrow_mut() = None;
+                                self.deck_session_writable.set(false);
+                                (
+                                    None,
+                                    Some(format!(
+                                        "Saved deck session unavailable: {error}; preserved until deck change"
+                                    )),
+                                )
+                            }
+                        };
                         match startup_audio {
                             Ok(selection) => {
                                 *self.saved_startup_audio.borrow_mut() = selection;
@@ -3483,6 +3522,7 @@ impl AudioController {
                                     .map(|w| format!("{w}; default Quantize preferences active")),
                                 output_warning,
                                 fx_warning,
+                                session_warning.clone(),
                             ]
                             .into_iter()
                             .flatten()
@@ -3497,6 +3537,18 @@ impl AudioController {
                                 .into(),
                             );
                         }
+                        if !explicit_paths {
+                            if let Some(session) = session_to_restore {
+                                self.queue_session_restoration(session);
+                            }
+                        } else {
+                            self.sync_session_after_import.set(true);
+                        }
+                        if let Some(warning) = session_warning {
+                            if let Some(ui) = self.ui.upgrade() {
+                                ui.set_status(warning.into());
+                            }
+                        }
                     }
                     Err(error) => {
                         self.persistence.borrow_mut().take();
@@ -3507,7 +3559,6 @@ impl AudioController {
                         self.storage_error(&format!("{error}; session only"), false);
                     }
                 }
-                let paths = self.initial_paths.take();
                 if !paths.is_empty() {
                     self.import_paths(paths);
                 }
@@ -3518,8 +3569,12 @@ impl AudioController {
                 let quantize = self.inflight_quantize.take();
                 let output = self.inflight_output.borrow_mut().take();
                 let fx = self.inflight_fx.borrow_mut().take();
+                let deck_session = self.inflight_deck_session.borrow_mut().take();
                 match result {
                     Ok(()) => {
+                        if let Some(session) = deck_session {
+                            *self.saved_deck_session.borrow_mut() = Some(session);
+                        }
                         if let Some(value) = fx {
                             *self.saved_fx.borrow_mut() = value;
                             if let Some(ui) = self.ui.upgrade() {
@@ -3563,7 +3618,8 @@ impl AudioController {
                                 || self.pending_fx(false).is_some()
                                 || self
                                     .quantize_preferences()
-                                    .is_ok_and(|p| p != self.saved_quantize.get()),
+                                    .is_ok_and(|p| p != self.saved_quantize.get())
+                                || self.deck_session_to_save(false).is_some(),
                         );
                         self.save_failed.set(false);
 
@@ -3640,11 +3696,19 @@ impl AudioController {
         };
         let output = self.pending_output(false);
         let fx = self.pending_fx(false);
-        match worker.save_session_state(delta, preferences, output.clone(), fx.clone()) {
+        let deck_session = self.deck_session_to_save(false);
+        match worker.save_session_state_with_decks(
+            delta,
+            preferences,
+            output.clone(),
+            fx.clone(),
+            deck_session,
+        ) {
             Ok(()) => {
                 self.inflight_revision.set(Some(revision));
                 self.inflight_quantize.set(preferences);
                 *self.inflight_fx.borrow_mut() = fx;
+                *self.inflight_deck_session.borrow_mut() = deck_session;
                 if output.is_some() {
                     if let Some(ui) = self.ui.upgrade() {
                         ui.set_output_profile_status("Saving route".into());
@@ -3662,6 +3726,24 @@ impl AudioController {
                 self.save_failed.set(true);
                 self.storage_error(&error, true);
             }
+        }
+    }
+    fn deck_session_to_save(&self, closing: bool) -> Option<crate::library_store::DeckSession> {
+        if !self.deck_session_writable.get() {
+            return None;
+        }
+        let current = *self.deck_session.borrow();
+        let inflight = *self.inflight_deck_session.borrow();
+        if !closing && inflight == Some(current) {
+            return None;
+        }
+        if self.saved_deck_session.borrow().as_ref() != Some(&current)
+            || inflight.is_some()
+            || (closing && self.saving.get())
+        {
+            Some(current)
+        } else {
+            None
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
@@ -3692,6 +3774,11 @@ impl AudioController {
             None
         };
         if let Some(worker) = self.persistence.borrow_mut().take() {
+            let deck_session = if self.storage_ready.get() {
+                self.deck_session_to_save(true)
+            } else {
+                None
+            };
             let fx = if self.storage_ready.get() {
                 self.pending_fx(true)
             } else {
@@ -3701,18 +3788,26 @@ impl AudioController {
                 && (preferences.is_some()
                     || output.is_some()
                     || fx.is_some()
+                    || deck_session.is_some()
                     || self.dirty.get()
                     || self.saving.get()
                     || self.library.borrow().has_changes()))
             .then(|| self.library.borrow().changes());
             let revision = final_delta.as_ref().map(|d| d.revision);
-            worker.close_session_state(final_delta, preferences, output, fx)?;
+            worker.close_session_state_with_decks(
+                final_delta,
+                preferences,
+                output,
+                fx,
+                deck_session,
+            )?;
             if let Some(revision) = revision {
                 self.library.borrow_mut().acknowledge(revision);
             }
             self.inflight_revision.set(None);
             self.inflight_quantize.set(None);
             self.inflight_fx.borrow_mut().take();
+            self.inflight_deck_session.borrow_mut().take();
             self.inflight_output.borrow_mut().take();
             self.saving.set(false);
             self.dirty.set(false);
@@ -3895,6 +3990,9 @@ impl AudioController {
         self.start_load(id, Arc::clone(&self.picker));
     }
     fn start_load(&self, id: DeckId, picker: TrackPicker) {
+        self.start_load_work(id, picker, false);
+    }
+    fn start_load_work(&self, id: DeckId, picker: TrackPicker, restoring: bool) {
         if !self.storage_ready.get()
             || self.pending.borrow().is_some()
             || self.pending_import.borrow().is_some()
@@ -3909,7 +4007,11 @@ impl AudioController {
             return;
         }
         ui.set_loading(true);
-        ui.set_status("Select an audio file; decoding runs in the background".into());
+        ui.set_status(if restoring {
+            format!("Restoring saved track to deck {id:?}…").into()
+        } else {
+            "Select an audio file; decoding runs in the background".into()
+        });
         let (tx, rx) = mpsc::sync_channel(1);
         let cancel = crate::cancellation::Cancellation::default();
         *self.pending_cancel.borrow_mut() = Some(cancel.clone());
@@ -3930,19 +4032,116 @@ impl AudioController {
             }) {
             Ok(_) => {
                 *self.pending.borrow_mut() = Some((id, rx));
+                if restoring {
+                    self.restoring_deck.set(Some(id));
+                }
             }
             Err(err) => {
                 self.pending_cancel.borrow_mut().take();
                 ui.set_loading(false);
-                ui.set_status(format!("Cannot start loader: {err}").into());
+                let error = format!("Cannot start loader for deck {id:?}: {err}");
+                if restoring {
+                    self.session_restore_errors.borrow_mut().push(error.clone());
+                }
+                ui.set_status(error.into());
             }
         }
         self.refresh();
     }
+    fn start_next_session_restore(&self) {
+        if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+        {
+            return;
+        }
+        let next = self.session_restore_queue.borrow_mut().pop_front();
+        let Some((id, path)) = next else {
+            if !self.session_restore_errors.borrow().is_empty() {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status(self.session_restore_errors.borrow().join("; ").into());
+                }
+            }
+            return;
+        };
+        let picker: TrackPicker = Arc::new(move || Some(path.clone()));
+        self.start_load_work(id, picker, true);
+        if self.pending.borrow().is_none() {
+            self.start_next_session_restore();
+        }
+    }
+
+    fn queue_session_restoration(&self, session: crate::library_store::DeckSession) {
+        self.session_restore_errors.borrow_mut().clear();
+        let library = self.library.borrow();
+        let queue = [DeckId::A, DeckId::B]
+            .into_iter()
+            .zip(session.decks)
+            .filter_map(|(deck, track_id)| {
+                let track_id = track_id?;
+                let Some(track) = library.track_by_id(track_id) else {
+                    if let Some(ui) = self.ui.upgrade() {
+                        ui.set_status(
+                            format!("Saved session track {track_id} is no longer in the library")
+                                .into(),
+                        );
+                    }
+                    return None;
+                };
+                Some((deck, track.path.clone()))
+            })
+            .collect::<VecDeque<_>>();
+        *self.session_restore_queue.borrow_mut() = queue;
+        drop(library);
+        if !self.session_restore_queue.borrow().is_empty() {
+            self.start_next_session_restore();
+        }
+    }
+
+    fn set_session_track(&self, id: DeckId, track_id: i32) {
+        let mut session = self.deck_session.borrow_mut();
+        let slot = match id {
+            DeckId::A => 0,
+            DeckId::B => 1,
+        };
+        if session.decks[slot] != Some(track_id) {
+            session.decks[slot] = Some(track_id);
+            self.deck_session_writable.set(true);
+            self.dirty.set(true);
+        }
+    }
+
+    fn sync_session_from_engine(&self) {
+        let mut session = crate::library_store::DeckSession::default();
+        let library = self.library.borrow();
+        for id in [DeckId::A, DeckId::B] {
+            let path = self.engine.borrow().snapshot(id).path;
+            let Some(path) = path else {
+                continue;
+            };
+            let Some(track_id) = library.track_id_for_path(&path) else {
+                continue;
+            };
+            let slot = match id {
+                DeckId::A => 0,
+                DeckId::B => 1,
+            };
+            session.decks[slot] = Some(track_id);
+        }
+        drop(library);
+        if *self.deck_session.borrow() != session {
+            *self.deck_session.borrow_mut() = session;
+            self.deck_session_writable.set(true);
+            self.dirty.set(true);
+        }
+    }
+
     fn complete_load(&self, id: DeckId, result: LoadResult) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
+        let restoring = self.restoring_deck.replace(None) == Some(id);
+        let mut restore_failed = false;
         ui.set_loading(false);
         match result {
             Some(Ok((path, track, metadata))) => {
@@ -3951,22 +4150,54 @@ impl AudioController {
                 self.library_changed();
                 self.publish_library();
                 if self.engine.borrow().snapshot(id).playing {
+                    restore_failed = true;
                     ui.set_status(format!("Load discarded: deck {id:?} started playing").into());
                 } else if let Err(error) = self.engine.borrow().try_install(id, track) {
+                    restore_failed = true;
                     ui.set_status(format!("Deck {id:?}: {error}").into());
                 } else {
-                    ui.set_status(format!("Deck {id:?} loaded and paused").into());
+                    if let Some(track_id) = self.library.borrow().track_id_for_path(&path) {
+                        self.set_session_track(id, track_id);
+                    }
+                    ui.set_status(if restoring {
+                        format!("Deck {id:?} restored paused at start").into()
+                    } else {
+                        format!("Deck {id:?} loaded and paused").into()
+                    });
                     if let Err(error) = self.apply_saved_grid(id) {
+                        restore_failed = true;
                         ui.set_status(
                             format!("Deck loaded; saved grid unavailable: {error}").into(),
                         );
                     }
                 }
             }
-            Some(Err(err)) => ui.set_status(format!("Deck {id:?}: {err}").into()),
-            None => ui.set_status("Selection cancelled".into()),
+            Some(Err(err)) => {
+                restore_failed = true;
+                ui.set_status(if restoring {
+                    format!("Session restore skipped for deck {id:?}: {err}").into()
+                } else {
+                    format!("Deck {id:?}: {err}").into()
+                });
+            }
+            None => {
+                restore_failed = true;
+                ui.set_status(if restoring {
+                    format!("Session restore cancelled for deck {id:?}").into()
+                } else {
+                    "Selection cancelled".into()
+                });
+            }
         }
         self.refresh();
+        if restoring {
+            if restore_failed {
+                self.session_restore_errors
+                    .borrow_mut()
+                    .push(ui.get_status().to_string());
+            }
+            self.start_next_session_restore();
+        }
     }
     pub fn audio_owner(&self) -> Rc<RefCell<Rc<DualDeckEngine>>> {
         self.engine.clone()
@@ -4359,6 +4590,7 @@ impl AudioController {
                 result
             };
             self.pending_import.borrow_mut().take();
+            let sync_session = self.sync_session_after_import.replace(false);
             if let Some(ui) = self.ui.upgrade() {
                 ui.set_library_busy(false);
                 match result {
@@ -4379,6 +4611,9 @@ impl AudioController {
                                 self.library.borrow_mut().set_metadata(&path, metadata);
                             }
                             self.library_changed();
+                            if sync_session {
+                                self.sync_session_from_engine();
+                            }
                             ui.set_status(format!("Added {added} tracks; {} skipped (duplicate, unsupported, missing or limit)", total - added + batch.rejected).into());
                             if let Err(error) = assigned {
                                 ui.set_status(format!("Added {added} library tracks; crate assignment failed: {error}").into());
@@ -7384,6 +7619,8 @@ mod tests {
             c.tick();
             if c.storage_ready.get()
                 && !c.saving.get()
+                && c.restoring_deck.get().is_none()
+                && c.session_restore_queue.borrow().is_empty()
                 && (!c.dirty.get() || c.save_failed.get() || c.persistence.borrow().is_none())
             {
                 break;
@@ -11854,9 +12091,16 @@ mod tests {
         let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
         let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
         c.restore_library(Ok(legacy.with_extension("sqlite3")), Vec::new());
-        finish_storage(&c);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !c.storage_ready.get() {
+            assert!(Instant::now() < deadline, "SQLite startup did not finish");
+            c.tick();
+            thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(ui.get_library_storage(), "SQLite library restored");
-        assert!(!ui.get_right_loaded());
+        finish_storage(&c);
+        assert!(ui.get_right_loaded());
+        assert!(!ui.get_right_playing());
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 73);
         ui.invoke_select_library(73);
         ui.invoke_load_library_left();
@@ -13635,6 +13879,367 @@ mod tests {
         assert_eq!(c.library.borrow().selected_id(), 201);
         assert_eq!(ui.get_selected_track(), 201);
         assert!(ui.get_library_can_relocate_selected());
+    }
+    #[test]
+    fn startup_restores_saved_tracks_paused_and_cli_paths_override_session() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let deck_a = wav_file(8192, 48_000);
+        let deck_b = wav_file(4096, 48_000);
+        let path_a = std::fs::canonicalize(deck_a.path()).unwrap();
+        let path_b = std::fs::canonicalize(deck_b.path()).unwrap();
+
+        let mut library = crate::library::Library::default();
+        library.insert([path_a.clone(), path_b.clone()]);
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Loaded(Ok(_))
+        ));
+        worker
+            .save_session_state_with_decks(
+                library.changes(),
+                None,
+                None,
+                None,
+                Some(crate::library_store::DeckSession {
+                    decks: [Some(1), Some(2)],
+                }),
+            )
+            .unwrap();
+        worker.close_session_state(None, None, None, None).unwrap();
+
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), vec![]);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !c.storage_ready.get() {
+            assert!(Instant::now() < deadline, "library storage loaded");
+            c.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        while c.pending.borrow().is_some() || !c.session_restore_queue.borrow().is_empty() {
+            assert!(Instant::now() < deadline, "saved decks restored");
+            c.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        finish_search(&c);
+        for (deck, expected) in [(DeckId::A, &path_a), (DeckId::B, &path_b)] {
+            let snapshot = c.engine.borrow().snapshot(deck);
+            assert_eq!(snapshot.path.as_deref(), Some(expected.as_path()));
+            assert!(!snapshot.playing);
+            assert_eq!(snapshot.position, Duration::ZERO);
+        }
+        c.close_library().unwrap();
+
+        let cli_track = wav_file(2048, 48_000);
+        let cli_path = std::fs::canonicalize(cli_track.path()).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        engine.load_a(&cli_path).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), vec![cli_path.clone()]);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !c.storage_ready.get() {
+            assert!(Instant::now() < deadline, "library storage loaded");
+            c.tick();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        finish_import(&c);
+        assert_eq!(
+            engine.snapshot(DeckId::A).path.as_deref(),
+            Some(cli_path.as_path())
+        );
+        assert_eq!(engine.snapshot(DeckId::B).path, None);
+        c.close_library().unwrap();
+
+        let worker = crate::library_store::Worker::start(db).unwrap();
+        let crate::library_store::Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+            panic!("library restored")
+        };
+        assert_eq!(loaded.deck_session.unwrap().decks, [Some(3), None]);
+        worker.close_session_state(None, None, None, None).unwrap();
+    }
+    #[test]
+    fn deck_session_save_retries_and_missing_media_is_preserved_on_close() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let track = wav_file(8192, 48_000);
+        let track_path = std::fs::canonicalize(track.path()).unwrap();
+
+        let mut library = crate::library::Library::default();
+        library.insert([track_path.clone()]);
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Loaded(Ok(_))
+        ));
+        worker.save(library.catalog()).unwrap();
+        worker.close_session_state(None, None, None, None).unwrap();
+
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+
+        let blocker = rusqlite::Connection::open(&db).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let picker_path = track_path.clone();
+        c.start_load(DeckId::A, Arc::new(move || Some(picker_path.clone())));
+        finish(&c);
+        finish_storage(&c);
+        assert!(c.save_failed.get());
+        assert!(ui.get_library_storage().contains("NOT saved"));
+        blocker.execute_batch("ROLLBACK").unwrap();
+        drop(blocker);
+
+        ui.invoke_retry_library_save();
+        finish_storage(&c);
+        assert!(!c.save_failed.get());
+        assert_eq!(
+            engine.snapshot(DeckId::A).path.as_deref(),
+            Some(track_path.as_path())
+        );
+        c.close_library().unwrap();
+        drop(track);
+
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !c.storage_ready.get() {
+            assert!(Instant::now() < deadline, "library storage loaded");
+            c.tick();
+            thread::sleep(Duration::from_millis(1));
+        }
+        while c.pending.borrow().is_some() || !c.session_restore_queue.borrow().is_empty() {
+            assert!(Instant::now() < deadline, "missing media restore reported");
+            c.tick();
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(ui.get_status().contains("Session restore skipped"));
+        assert!(c.engine.borrow().snapshot(DeckId::A).path.is_none());
+        c.close_library().unwrap();
+
+        let worker = crate::library_store::Worker::start(db).unwrap();
+        let crate::library_store::Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+            panic!("library restored")
+        };
+        assert_eq!(loaded.deck_session.unwrap().decks, [Some(1), None]);
+        worker.close_session_state(None, None, None, None).unwrap();
+    }
+    #[test]
+    fn session_restore_keeps_first_deck_error_after_second_deck_succeeds() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let missing = wav_file(1024, 48_000);
+        let present = wav_file(2048, 48_000);
+        let missing_path = std::fs::canonicalize(missing.path()).unwrap();
+        let present_path = std::fs::canonicalize(present.path()).unwrap();
+        let mut library = crate::library::Library::default();
+        library.insert([missing_path, present_path.clone()]);
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Loaded(Ok(_))
+        ));
+        worker
+            .save_session_state_with_decks(
+                library.changes(),
+                None,
+                None,
+                None,
+                Some(crate::library_store::DeckSession {
+                    decks: [Some(1), Some(2)],
+                }),
+            )
+            .unwrap();
+        worker.close_session_state(None, None, None, None).unwrap();
+        drop(missing);
+
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        assert!(ui
+            .get_status()
+            .contains("Session restore skipped for deck A"));
+        assert!(engine.snapshot(DeckId::A).path.is_none());
+        let snapshot = engine.snapshot(DeckId::B);
+        assert_eq!(snapshot.path.as_deref(), Some(present_path.as_path()));
+        assert!(!snapshot.playing);
+        assert_eq!(snapshot.position, Duration::ZERO);
+        c.close_library().unwrap();
+        let worker = crate::library_store::Worker::start(db).unwrap();
+        let crate::library_store::Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+            panic!("library restored")
+        };
+        assert_eq!(loaded.deck_session.unwrap().decks, [Some(1), Some(2)]);
+        worker.close_session_state(None, None, None, None).unwrap();
+    }
+    #[test]
+    fn deck_session_close_replays_failed_unacknowledged_save() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let track = wav_file(1024, 48_000);
+        let path = std::fs::canonicalize(track.path()).unwrap();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        c.library.borrow_mut().insert([path]);
+        c.library_changed();
+        finish_storage(&c);
+
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_session BEFORE INSERT ON library_meta
+             WHEN NEW.key='deck_session_v1'
+             BEGIN SELECT RAISE(ABORT, 'session test failure'); END;",
+            )
+            .unwrap();
+        c.set_session_track(DeckId::A, 1);
+        c.save_library();
+        assert!(c.saving.get());
+        // Leave the controller's in-flight state unacknowledged, as at GUI shutdown.
+        let event = c
+            .persistence
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .events
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(event, crate::library_store::Event::Saved(Err(_))));
+        connection
+            .execute_batch("DROP TRIGGER fail_session")
+            .unwrap();
+        c.close_library().unwrap();
+
+        let worker = crate::library_store::Worker::start(db).unwrap();
+        let crate::library_store::Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+            panic!("library restored")
+        };
+        assert_eq!(loaded.deck_session.unwrap().decks, [Some(1), None]);
+        worker.close_session_state(None, None, None, None).unwrap();
+    }
+    #[test]
+    fn invalid_deck_session_survives_unrelated_saves_until_explicit_load() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let track = wav_file(1024, 48_000);
+        let path = std::fs::canonicalize(track.path()).unwrap();
+        let mut library = crate::library::Library::default();
+        library.insert([path.clone()]);
+        let worker = crate::library_store::Worker::start(db.clone()).unwrap();
+        assert!(matches!(
+            worker.events.recv().unwrap(),
+            crate::library_store::Event::Loaded(Ok(_))
+        ));
+        worker.save(library.catalog()).unwrap();
+        worker.close_session_state(None, None, None, None).unwrap();
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        let raw = "{invalid-session";
+        connection
+            .execute(
+                "INSERT INTO library_meta(key,value) VALUES ('deck_session_v1',?1)",
+                [raw],
+            )
+            .unwrap();
+
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), Vec::new());
+        finish_storage(&c);
+        assert!(ui
+            .get_library_storage()
+            .contains("Saved deck session unavailable"));
+        assert!(!c.deck_session_writable.get());
+        c.library
+            .borrow_mut()
+            .create_crate("Unrelated edit")
+            .unwrap();
+        c.library_changed();
+        finish_storage(&c);
+        let stored: String = connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='deck_session_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, raw);
+        c.close_library().unwrap();
+        let stored: String = connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='deck_session_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, raw);
+
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        c.start_load(DeckId::A, Arc::new(move || Some(path.clone())));
+        finish(&c);
+        c.close_library().unwrap();
+        let stored: String = connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='deck_session_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<crate::library_store::DeckSession>(&stored)
+                .unwrap()
+                .decks,
+            [Some(1), None]
+        );
     }
     #[test]
     fn keyboard_zoom_is_focus_scoped_bounded_and_preserves_audio_state() {

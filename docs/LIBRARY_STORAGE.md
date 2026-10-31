@@ -36,7 +36,7 @@ Only the latest matching request completes a sample. Replaced requests/catalog c
 
 The JSON contains thresholds, per-operation count/min/p95/max, raw bounded timing samples, sampled load coverage and counters. It omits queries, filenames, tags and device identities. Outcomes are `insufficient_coverage`, `budget_exceeded`, `measurement_failed` or `within_budgets`; the latter is numerical evidence only, not a claim of listening/visual/native product acceptance. Reports with missing coverage remain incomplete even if individual timings look fast.
 
-The current storage backend is SQLite, replacing the published JSON writer. The current catalog persists stable track IDs/paths plus title, artist, album, duration and metadata-inspection state. It also persists hierarchical crates and direct track membership, beatgrids, hot cues, saved loops and a bounded recent-playback history. History stores one row per library track with the latest start timestamp, cumulative play count and last deck; schema 15 adds the table. A missing track can be relocated to one inspected replacement file without changing its ID or related crate/grid/cue/loop/history rows. The track path and unique `path_key` update in one SQLite transaction; a path already owned by another track is rejected without partial writes. Relocation is blocked while either deck still has the old path loaded. Directory-wide path mapping and deck/session restoration remain open. Decks start unloaded/paused unless explicit CLI tracks were supplied.
+The current storage backend is SQLite, replacing the published JSON writer. The current catalog persists stable track IDs/paths plus title, artist, album, duration and metadata-inspection state. It also persists hierarchical crates and direct track membership, beatgrids, hot cues, saved loops and a bounded recent-playback history. History stores one row per library track with the latest start timestamp, cumulative play count and last deck; schema 15 adds the table. A missing track can be relocated to one inspected replacement file without changing its ID or related crate/grid/cue/loop/history rows. The track path and unique `path_key` update in one SQLite transaction; a path already owned by another track is rejected without partial writes. Relocation is blocked while either deck still has the old path loaded. Directory-wide path mapping and full workspace restoration remain open. Saved A/B library tracks are restored sequentially, paused at source position zero; explicit CLI deck tracks take precedence. Playback positions, playing state and mixer/workspace state are not restored by this deck-session feature.
 
 ## Location and compatibility
 
@@ -107,7 +107,7 @@ Only committed values are persisted. Drafts, editor state and unsaved invalid te
 
 Tests cover primary/backup JSON migration, byte preservation, Unicode and missing paths, stable IDs/additions, one-time migration, invalid/newer legacy data, transactional schema rollback/retry, partial-write rollback/retry, foreign/newer SQLite preservation, SQLite backup recovery, unrecoverable-data preservation, old/new writer locks and latest-snapshot shutdown flush.
 
-Headless controller tests migrate real MP3/WAV entries, recreate controller/engine/storage, load the same restored ID into A/B paused, retain missing entries and preserve installed audio on error. SQLite writer contention exercises visible failure and Retry Save.
+Headless controller tests migrate real MP3/WAV entries, recreate controller/engine/storage, load the same restored ID into A/B paused, retain missing entries and preserve installed audio on error. Deck-session tests additionally cover paused startup restoration, explicit CLI precedence, save failure/retry, close flush and missing-media preservation. SQLite writer contention exercises visible failure and Retry Save.
 
 An isolated child process writes a committed catalog, starts an uncommitted transaction with cache spills, and is forcibly terminated. Reopening in the parent restores the committed rows through SQLite's hot journal, releases OS locks and passes `PRAGMA integrity_check`. This is actual process-termination evidence, not physical power-loss qualification.
 
@@ -161,6 +161,13 @@ Create, rename and delete now record changed crate IDs with their current name o
 
 A 1,000-track fixture with 1,000 and 500 memberships checks name swapping, bounded row writes and preserved members with a trigger forbidding membership deletion; an injected failure tests rollback and restart. A separate test covers in-flight create/delete/recreate, combined membership and ID high-water across restart. Deleting a crate necessarily deletes its members. Whole-catalog initialization/backups, filtering/sorting and large-view virtualization remain separate scaling work; no maximum-scale timing guarantee is made.
 
+## Deck session restoration
+
+The bounded `deck_session_v1` library metadata value stores two optional stable track IDs (A/B), not filesystem paths. Reads are size-limited, validated, and rejected visibly if malformed or if an ID no longer exists; invalid stored bytes are not silently replaced. Successful deck loads update the session through the existing asynchronous library save, Retry Save, and final-close flush paths.
+
+On startup, saved tracks are loaded one at a time through the background decoder, paused at source position zero. A missing or undecodable file reports a deck-specific status and leaves its saved ID intact for a later retry. Failures remain visible after the other deck finishes restoring. Explicit `--gui A B` startup tracks take precedence over the stored deck assignment and become the new session after library import completes. Neither transport position nor play/pause state is persisted; audio callbacks and SQLite operations remain separate.
+
+Controller restart tests cover both-deck paused restoration, CLI precedence, database writer failure/retry, replay of an unacknowledged failed save on close, mixed missing/present decks, and preserving a missing-media session after close. Invalid or oversized session data is rejected and preserved through unrelated saves; a successful explicit deck load allows replacement. This is headless behavior evidence, not native startup/visual or listening acceptance.
 
 ## Lazy library rows (2026-10-27)
 

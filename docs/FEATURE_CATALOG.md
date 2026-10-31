@@ -55,6 +55,7 @@ Every item needs source file(s), target crate(s), acceptance criteria, reference
 | R-LIB-12 | Schema 1/2-to-3 crate persistence and durable ID high-water mark | Restart/ID non-reuse, relationship rollback/retry and successful/failed metadata-preserving schema upgrade; scale and platform qualification open |
 | R-LIB-13 | Persisted playback history with bounded recent-track view (`library.rs`, `library_store.rs`, `controller.rs`, `app.slint`) | Unique track rows, recent-first order, repeated-start count/deck, 5,000-entry cap, search, SQLite delta/restart/upgrade, normal Play and promoted Cue preview; native visual acceptance open |
 | R-LIB-14 | Relocate one selected missing track to an inspected replacement file (`library.rs`, `library_store.rs`, `controller.rs`, `app.slint`) | Preserves stable ID, crate/grid/cue/loop/history data; rejects deck-loaded old paths and cross-track destination collisions; model, transactional SQLite restart/rollback, and background GUI worker tests; directory-wide remapping and native visual acceptance open |
+| R-LIB-15 | Restore paused deck A/B assignments from stable library IDs (`library_store.rs`, `controller.rs`) | Restart restores sequentially at source zero; explicit CLI tracks win; writer-failure retry, final-close flush and missing-media preservation tested; no position/play-state restoration or native startup acceptance |
 
 ## Local Rust loading/mixer slice (2026-10-24)
 
