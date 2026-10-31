@@ -2531,6 +2531,7 @@ impl AudioController {
         }
         Ok(())
     }
+    #[cfg(any(target_os = "windows", test))]
     fn cancel_hot_cue_holds(&self) -> Result<(), String> {
         let mut first_error = None;
         for id in [DeckId::A, DeckId::B] {
@@ -2542,6 +2543,7 @@ impl AudioController {
         }
         first_error.map_or(Ok(()), Err)
     }
+    #[cfg(any(target_os = "windows", test))]
     pub(crate) fn handle_window_deactivated(&self) {
         if let Some(ui) = self.ui.upgrade() {
             ui.set_active_hot_cue_key(-1);
@@ -2552,6 +2554,7 @@ impl AudioController {
             }
         }
     }
+    #[cfg(any(target_os = "windows", test))]
     pub(crate) fn handle_global_hot_cue_key_released(&self, key: i32) {
         let Some(ui) = self.ui.upgrade() else {
             return;

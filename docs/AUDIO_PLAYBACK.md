@@ -90,6 +90,8 @@ The manual's two-deck number mapping is available as `1`–`5` for Deck A slots 
 
 Pressing an empty pad still sets its cue. Pressing an occupied cue on a paused deck seeks to the exact saved source position and starts temporary playback; releasing the pointer/key pauses and returns to that cue. Activating PLAY/PAUSE while the preview is held promotes it to normal playback, which then continues after cue release. A cue pressed on an already-playing deck keeps the existing immediate or Next-grid recall behavior. Preview state is source-bound, and lost keyboard focus releases it. These actions run on the control plane; they do not add work to the real-time render callback.
 
+Windows additionally forwards native window deactivation and number-key release through the window hook. Those controller entry points compile only on Windows or in tests; other platforms retain the Slint focus/key handling, without a native-hook acceptance claim.
+
 Waveform cue labels use four rows and two columns, derived from the fixed slot identity, so all eight labels remain independently visible at coincident positions. Marker lines and accessible values retain their exact source positions. Native visual/keyboard usability and physical hardware acceptance remain open.
 
 ## Global Quantize master (2026-10-29)
