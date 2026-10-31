@@ -1522,7 +1522,7 @@ export component AppWindow inherits Window {
                 }
         track-library := TrackLibrary {
             analysis-title: root.analysis-title; analysis-summary: root.analysis-summary; analysis-waveform: root.analysis-waveform;
-            can-analyze: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.library-can-relocate-selected;
+            can-analyze: root.selected-track >= 0 && !root.loading && !root.library-busy && !root.library-can-relocate-selected;
             analyze => { root.analyze-library(); }
             tab <=> root.library-tab;
             tab-selected(index) => { root.library-tab-selected(index); }

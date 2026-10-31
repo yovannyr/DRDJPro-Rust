@@ -12627,6 +12627,58 @@ mod tests {
         c.close_library().unwrap();
     }
     #[test]
+    fn analyze_button_works_without_audio_and_respects_selection_and_busy_state() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let file = wav_file(0, 48_000);
+        c.import_paths(vec![file.path().into()]);
+        finish_import(&c);
+        ui.show().unwrap();
+        ui.set_audio_enabled(false);
+        let button = control(&ui, "Analyze selected library track");
+        ui.invoke_select_library(-1);
+        button.invoke_accessible_default_action();
+        assert!(c.pending_import.borrow().is_none());
+        ui.invoke_select_library(1);
+        for (loading, busy, missing) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            ui.set_loading(loading);
+            ui.set_library_busy(busy);
+            ui.set_library_can_relocate_selected(missing);
+            button.invoke_accessible_default_action();
+            assert!(c.pending_import.borrow().is_none());
+        }
+        ui.set_loading(false);
+        ui.set_library_busy(false);
+        ui.set_library_can_relocate_selected(false);
+        button.invoke_accessible_default_action();
+        assert!(
+            c.pending_import.borrow().is_some(),
+            "offline analysis button must start the worker"
+        );
+        assert_eq!(ui.get_library_tab(), 4);
+        finish_import(&c);
+        assert!(c
+            .library
+            .borrow()
+            .track_by_id(1)
+            .unwrap()
+            .metadata
+            .analysis
+            .is_some());
+        c.close_library().unwrap();
+    }
+    #[test]
     fn selected_analysis_prepare_cancel_error_and_restart_preserve_playing_decks() {
         use slint::Model;
         i_slint_backend_testing::init_no_event_loop();

@@ -9,6 +9,8 @@ The compact tab strip includes Analyze Files and Prepare. Analyze Files processe
 
 Completed results persist in SQLite schema 16 and survive restart and ordinary metadata refresh. Relocation invalidates them. Cancellation or analysis failure retains the previous result and reports the error in the status area. Selection changes do not redirect the result to another track. Analysis never changes beatgrids, deck gain or transport. Batch analysis, automatic gain/grid application and musical-corpus/native quality acceptance remain separate work; this is not full Serato Prepare-queue parity.
 
+Analyze Files requires an available selected track and an idle library/load worker, not an enabled audio output. Select a track row first; no selection, a missing track or a running job disables the button.
+
 ### Compact library tabs (2026-10-31)
 
 The library layout now follows the user-provided compact dark table screenshot and the Files/History panel organization on manual page 15. Library, Files, Crates and History form a compact tab strip above the table. Files exposes the existing native file/folder import actions and explains the target crate and reference-only storage. Crates exposes create/subcrate/smart/rename/delete and membership actions in the left navigation. History selects the real persisted history scope; leaving it restores the previously selected library/crate scope. Search, deck loading, page navigation, missing-track relocation, cancellation and Retry Save stay available.
