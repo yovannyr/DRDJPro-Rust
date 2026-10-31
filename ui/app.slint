@@ -789,6 +789,11 @@ component CratePanel inherits Rectangle {
 }
 
 component TrackLibrary inherits Rectangle {
+    callback analyze();
+    in property <string> analysis-title;
+    in property <string> analysis-summary;
+    in property <[float]> analysis-waveform;
+    in property <bool> can-analyze;
     in-out property <int> tab;
     callback tab-selected(int);
     pure callback track-transfer(string) -> data-transfer;
@@ -822,7 +827,8 @@ component TrackLibrary inherits Rectangle {
         padding: 3px; spacing: 2px;
         HorizontalLayout {
             spacing: 2px;
-            for title[index] in ["Library", "Files", "Crates", "History"] : LibraryButton {
+            LibraryButton { text: "Analyze Files"; accessible-label: "Analyze selected library track"; enabled: root.can-analyze; clicked => { root.analyze(); } }
+            for title[index] in ["Library", "Files", "Crates", "History", "Prepare"] : LibraryButton {
                 text: title; active: root.tab == index;
                 enabled: !root.busy;
                 accessible-label: title + " library tab";
@@ -842,6 +848,21 @@ component TrackLibrary inherits Rectangle {
         if tab == 2 : Text {
             text: "Crates: select on the left; + / + Sub / + Smart create groups. Add / Remove manage the selected track.";
             color: #bbbbbb; font-size: 11px; wrap: word-wrap;
+        }
+        if tab == 4 : VerticalLayout {
+            spacing: 2px;
+            Text { text: root.analysis-title; font-size: 11px; color: #eeeeee; overflow: elide; }
+            Text { text: root.analysis-summary; accessible-role: text; accessible-label: "Prepare analysis results"; font-size: 11px; color: #cccccc; wrap: word-wrap; }
+            Rectangle {
+                height: 30px; background: #0a0a0a;
+                for peak[index] in root.analysis-waveform : Rectangle {
+                    x: index * parent.width / root.analysis-waveform.length;
+                    width: max(1px, parent.width / root.analysis-waveform.length);
+                    height: peak * parent.height;
+                    y: (parent.height - self.height) / 2;
+                    background: #209ac4;
+                }
+            }
         }
         if can-relocate : HorizontalLayout {
             height: 26px;
@@ -1203,6 +1224,10 @@ export component AppWindow inherits Window {
 
     in property <[LibraryRow]> library-rows;
     in-out property <int> library-tab;
+    callback analyze-library();
+    in property <string> analysis-title;
+    in property <string> analysis-summary;
+    in property <[float]> analysis-waveform;
     callback library-tab-selected(int);
     in property <string> library-count: "0 tracks";
     in property <string> library-page-text: "0 / 0";
@@ -1496,6 +1521,9 @@ export component AppWindow inherits Window {
                     add-track => { root.add-to-crate(); } remove-track => { root.remove-from-crate(); }
                 }
         track-library := TrackLibrary {
+            analysis-title: root.analysis-title; analysis-summary: root.analysis-summary; analysis-waveform: root.analysis-waveform;
+            can-analyze: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.library-can-relocate-selected;
+            analyze => { root.analyze-library(); }
             tab <=> root.library-tab;
             tab-selected(index) => { root.library-tab-selected(index); }
             horizontal-stretch: 1; min-width: 0px;

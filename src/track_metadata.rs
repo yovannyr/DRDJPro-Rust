@@ -1,8 +1,9 @@
 //! Header/tag inspection on library/load workers; no PCM decode or tag writes.
 use std::path::Path;
 use symphonia::core::meta::{Limit, MetadataOptions, MetadataRevision, StandardTagKey};
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackMetadata {
+    pub analysis: Option<crate::audio_analyzer::TrackAnalysisResult>,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -29,9 +30,10 @@ impl TrackMetadata {
                 ))
     }
     pub fn validate(&self) -> bool {
-        [&self.title, &self.artist, &self.album]
-            .iter()
-            .all(|s| s.chars().count() <= MAX_TEXT)
+        self.analysis.as_ref().is_none_or(|a| a.validate())
+            && [&self.title, &self.artist, &self.album]
+                .iter()
+                .all(|s| s.chars().count() <= MAX_TEXT)
             && self
                 .error
                 .as_ref()

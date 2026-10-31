@@ -951,9 +951,16 @@ impl Library {
         self.set_query(self.query.clone());
         Ok(removed)
     }
-    pub fn set_metadata(&mut self, path: &Path, metadata: crate::track_metadata::TrackMetadata) {
+    pub fn set_metadata(
+        &mut self,
+        path: &Path,
+        mut metadata: crate::track_metadata::TrackMetadata,
+    ) {
         if let Some(index) = self.keys.get(&identity(path)) {
             let index = *index;
+            if metadata.analysis.is_none() {
+                metadata.analysis = self.tracks[index].metadata.analysis.clone();
+            }
             if self.tracks[index].metadata != metadata {
                 self.tracks[index].metadata = metadata;
                 self.tracks[index].refresh_search();

@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 15;
+const SCHEMA_VERSION: i32 = 16;
 const DECK_SESSION_QUERY: &str = "SELECT CASE WHEN length(CAST(value AS BLOB))<=256 THEN value ELSE '' END FROM library_meta WHERE key='deck_session_v1'";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -211,6 +211,7 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
             id: row.get(0)?,
             path,
             metadata: crate::track_metadata::TrackMetadata {
+                analysis: None,
                 title: row.get(3)?,
                 artist: row.get(4)?,
                 album: row.get(5)?,
@@ -224,6 +225,28 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
                 duration_exact: row.get(9)?,
             },
         });
+    }
+    if version >= 16 {
+        let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
+        let mut statement = connection.prepare("SELECT track_id,CASE WHEN length(CAST(result AS BLOB))<=65536 THEN result ELSE '' END FROM track_analysis LIMIT ?1")?;
+        let mut rows = statement.query([library::MAX_TRACKS as i64 + 1])?;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            count += 1;
+            if count > library::MAX_TRACKS {
+                return Err(InspectError::Damaged("Too many track analyses".into()));
+            }
+            let index = *indices
+                .get(&row.get::<_, i32>(0)?)
+                .ok_or_else(|| InspectError::Damaged("Orphaned analysis".into()))?;
+            let raw: String = row.get(1)?;
+            let value: crate::audio_analyzer::TrackAnalysisResult =
+                serde_json::from_str(&raw).map_err(|e| InspectError::Damaged(e.to_string()))?;
+            if !value.validate() || value.file_path != tracks[index].path.to_string_lossy() {
+                return Err(InspectError::Damaged("Invalid track analysis".into()));
+            }
+            tracks[index].metadata.analysis = Some(value);
+        }
     }
     if version >= 4 {
         let indices: HashMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
@@ -873,6 +896,7 @@ fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String
             m.duration_exact
         ])
         .map_err(|e| e.to_string())?;
+        write_analysis(connection, track)?;
     }
     write_crates(connection, &catalog.crates)?;
     write_grids(connection, catalog)?;
@@ -886,6 +910,26 @@ fn create_metadata_schema(connection: &Connection) -> Result<(), String> {
         duration_ms INTEGER CHECK(duration_ms>=0 AND duration_ms<=604800000), scanned INTEGER NOT NULL CHECK(scanned IN (0,1)), error TEXT CHECK(length(error)<=512), duration_exact INTEGER NOT NULL CHECK(duration_exact IN (0,1)) CHECK(duration_exact=0 OR duration_ms IS NOT NULL)) STRICT;")
         .map_err(|e| e.to_string())
 }
+fn create_analysis_schema(connection: &Connection) -> Result<(), String> {
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS track_analysis(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,result TEXT NOT NULL CHECK(length(CAST(result AS BLOB))<=65536)) STRICT;").map_err(|e| e.to_string())
+}
+fn write_analysis(connection: &Connection, track: &SavedTrack) -> Result<(), String> {
+    if let Some(value) = &track.metadata.analysis {
+        if !value.validate() || value.file_path != track.path.to_string_lossy() {
+            return Err("Invalid track analysis".into());
+        }
+        let json = serde_json::to_string(value).map_err(|e| e.to_string())?;
+        if json.len() > 65536 {
+            return Err("Track analysis exceeds size limit".into());
+        }
+        connection.execute("INSERT INTO track_analysis(track_id,result) VALUES(?1,?2) ON CONFLICT(track_id) DO UPDATE SET result=excluded.result WHERE result IS NOT excluded.result",rusqlite::params![track.id,json]).map_err(|e| e.to_string())?;
+    } else {
+        connection
+            .execute("DELETE FROM track_analysis WHERE track_id=?1", [track.id])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> Result<(), String> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -893,6 +937,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     transaction.execute_batch("CREATE TABLE tracks(id INTEGER PRIMARY KEY CHECK(id>0 AND id<2147483647), path TEXT NOT NULL, path_key TEXT NOT NULL UNIQUE) STRICT;
         CREATE TABLE library_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;").map_err(|e| e.to_string())?;
     create_metadata_schema(&transaction)?;
+    create_analysis_schema(&transaction)?;
     create_crate_schema(&transaction)?;
     create_grid_schema(&transaction)?;
     add_grid_meter(&transaction)?;
@@ -1112,6 +1157,9 @@ impl Store {
             }
             if version < 15 {
                 create_history_schema(&tx)?;
+            }
+            if version < 16 {
+                create_analysis_schema(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
@@ -1413,6 +1461,7 @@ impl Store {
                 ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact
                 WHERE track_metadata.title IS NOT excluded.title OR track_metadata.artist IS NOT excluded.artist OR track_metadata.album IS NOT excluded.album OR track_metadata.duration_ms IS NOT excluded.duration_ms OR track_metadata.scanned IS NOT excluded.scanned OR track_metadata.error IS NOT excluded.error OR track_metadata.duration_exact IS NOT excluded.duration_exact",
                 rusqlite::params![track.id,m.title,m.artist,m.album,m.duration_ms.map(|v|v as i64),m.scanned,m.error,m.duration_exact]).map_err(|e|e.to_string())?;
+            write_analysis(&tx, track)?;
             // Fixed-size cue/loop sets keep per-track writes bounded, independent of catalog size.
             for sql in [
                 "DELETE FROM track_grids WHERE track_id=?1",
@@ -2954,6 +3003,92 @@ mod tests {
                 .unwrap(),
             SCHEMA_VERSION
         );
+    }
+    #[test]
+    fn track_analysis_upgrade_delta_restart_clear_and_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut data = catalog(dir.path().join("track.wav"), 7);
+        store.save(&data).unwrap();
+        store
+            .connection
+            .execute_batch("DROP TABLE track_analysis; PRAGMA user_version=15;")
+            .unwrap();
+        drop(store);
+        let (mut store, restored, _) = Store::open(db.clone()).unwrap();
+        assert!(restored.catalog().tracks[0].metadata.analysis.is_none());
+        let analysis = crate::audio_analyzer::TrackAnalysisResult {
+            file_path: data.tracks[0].path.to_string_lossy().into_owned(),
+            bpm: 123.4,
+            musical_key: "8A".into(),
+            gain: 0.75,
+            waveform_overview: vec![0, 127, 255],
+            is_corrupt: false,
+        };
+        data.tracks[0].metadata.analysis = Some(analysis.clone());
+        let delta = crate::library::CatalogDelta {
+            tracks: data.tracks.clone(),
+            revision: 1,
+            crates: None,
+            memberships: vec![],
+            history: vec![],
+        };
+        store.save_delta(&delta).unwrap();
+        drop(store);
+        let (mut store, restored, _) = Store::open(db).unwrap();
+        assert_eq!(
+            restored.catalog().tracks[0].metadata.analysis,
+            Some(analysis)
+        );
+        let mut bad = crate::library::CatalogDelta {
+            tracks: delta.tracks.clone(),
+            revision: 2,
+            crates: None,
+            memberships: vec![],
+            history: vec![],
+        };
+        bad.tracks[0].metadata.title = "must roll back".into();
+        bad.tracks[0].metadata.analysis.as_mut().unwrap().file_path = "wrong.wav".into();
+        assert!(store.save_delta(&bad).is_err());
+        assert_ne!(
+            inspect(&store.connection).unwrap().unwrap().tracks[0]
+                .metadata
+                .title,
+            "must roll back"
+        );
+        let mut clear = delta;
+        clear.tracks[0].metadata.analysis = None;
+        store.save_delta(&clear).unwrap();
+        assert!(inspect(&store.connection).unwrap().unwrap().tracks[0]
+            .metadata
+            .analysis
+            .is_none());
+    }
+    #[test]
+    fn malformed_or_oversized_track_analysis_is_not_silently_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let data = catalog(dir.path().join("track.wav"), 7);
+        store.save(&data).unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO track_analysis(track_id,result) VALUES(7,'{}')",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            inspect(&store.connection),
+            Err(InspectError::Damaged(_))
+        ));
+        assert!(store
+            .connection
+            .execute(
+                "UPDATE track_analysis SET result=?1",
+                [String::from_utf8(vec![b' '; 65537]).unwrap()]
+            )
+            .is_err());
     }
 
     #[test]
