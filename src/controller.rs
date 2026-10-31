@@ -928,16 +928,72 @@ impl AudioController {
         }
     }
     fn wire_crates(self: &Rc<Self>, ui: &AppWindow) {
+        let previous_scope = Rc::new(Cell::new(0));
+        let saved_scope = Rc::clone(&previous_scope);
+        let weak = Rc::downgrade(self);
+        ui.on_library_tab_selected(move |tab| {
+            if let Some(c) = weak.upgrade() {
+                let Some(ui) = c.ui.upgrade() else { return };
+                if !(0..=3).contains(&tab) {
+                    ui.set_status("Invalid library tab".into());
+                    return;
+                }
+                if !c.storage_ready.get()
+                    || c.pending.borrow().is_some()
+                    || c.pending_import.borrow().is_some()
+                {
+                    ui.set_status("Wait for the library operation before changing tabs".into());
+                    return;
+                }
+                let current = c.library.borrow().active_crate();
+                let target = if tab == 3 {
+                    if current != -1 {
+                        saved_scope.set(current);
+                    }
+                    -1
+                } else if current == -1 {
+                    saved_scope.get()
+                } else {
+                    current
+                };
+                let result = c.library.borrow_mut().select_crate(target);
+                if let Err(error) = result {
+                    ui.set_status(error.into());
+                    return;
+                }
+                ui.set_library_tab(tab);
+                c.cancel_crate_dialog();
+                c.publish_library();
+            }
+        });
         let weak = Rc::downgrade(self);
         ui.on_select_crate(move |id| {
             if let Some(c) = weak.upgrade() {
                 if !c.storage_ready.get() {
                     return;
                 }
+                let current = c.library.borrow().active_crate();
+                if id == -1 && current != -1 {
+                    previous_scope.set(current);
+                }
                 let result = c.library.borrow_mut().select_crate(id);
                 c.cancel_crate_dialog();
                 if result.is_ok() {
+                    if let Some(ui) = c.ui.upgrade() {
+                        if id == -1 {
+                            ui.set_library_tab(3);
+                        } else {
+                            previous_scope.set(id);
+                            if ui.get_library_tab() == 3 {
+                                ui.set_library_tab(0);
+                            }
+                        }
+                    }
                     c.publish_library();
+                } else if let Err(error) = result {
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
                 }
             }
         });
@@ -12308,6 +12364,7 @@ mod tests {
         finish_storage(&c);
         ui.show().unwrap();
 
+        control(&ui, "Crates library tab").invoke_accessible_default_action();
         control(&ui, "New smart crate").invoke_accessible_default_action();
         control(&ui, "Crate name").set_accessible_value("Artists from North");
         control(&ui, "Smart crate query").set_accessible_value("ARTIST Ñ");
@@ -12366,11 +12423,156 @@ mod tests {
             "Artist Ñ"
         );
     }
+    #[test]
+    fn compact_library_tabs_preserve_scope_and_fit_supported_window_sizes() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let track = wav_file(4096, 48_000);
+        c.import_paths(vec![track.path().to_owned()]);
+        finish_import(&c);
+        let id = c.library.borrow_mut().create_crate("My crate").unwrap();
+        c.library.borrow_mut().select(1);
+        c.library.borrow_mut().add_selected_to_crate(id).unwrap();
+        c.publish_library();
+        ui.show().unwrap();
+        ui.invoke_select_crate(id);
+        finish_search(&c);
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for (index, name) in ["Library", "Files", "Crates", "History"]
+                .into_iter()
+                .enumerate()
+            {
+                control(&ui, &format!("{name} library tab")).invoke_accessible_default_action();
+                finish_search(&c);
+                assert_eq!(ui.get_library_tab(), index as i32);
+                assert_eq!(ui.get_selected_crate(), if index == 3 { -1 } else { id });
+                let mut labels = vec![
+                    "Library library tab",
+                    "Files library tab",
+                    "Crates library tab",
+                    "History library tab",
+                    "Load selected into deck A",
+                    "Load selected into deck B",
+                    "Clear library search",
+                    "Sort library by name",
+                    "Sort library by artist",
+                    "Sort library by album",
+                    "Sort library by duration",
+                    "Sort library by type",
+                    "Sort library by path",
+                    "Previous library page",
+                    "Next library page",
+                ];
+                if index == 1 {
+                    labels.extend(["Import library files", "Import library folder"]);
+                }
+                if index == 2 {
+                    labels.extend([
+                        "New crate",
+                        "New subcrate",
+                        "New smart crate",
+                        "Rename crate",
+                        "Delete crate",
+                        "Add selected track to crate",
+                        "Remove selected track from crate",
+                    ]);
+                }
+                for label in labels {
+                    let element = control(&ui, label);
+                    let position = element.absolute_position();
+                    let size = element.size();
+                    assert!(
+                        size.width > 0. && (size.height - 22.).abs() < 0.1,
+                        "{label}: {size:?}"
+                    );
+                    assert!(
+                        position.x >= 0. && position.x + size.width <= width + 1.,
+                        "{label} exceeds width"
+                    );
+                    assert!(
+                        position.y >= 0. && position.y + size.height <= height + 1.,
+                        "{label} exceeds height"
+                    );
+                }
+            }
+            control(&ui, "Library library tab").invoke_accessible_default_action();
+            finish_search(&c);
+            assert_eq!(ui.get_selected_crate(), id);
+            assert_eq!(ui.get_library_rows().row_count(), 1);
+            let row = control(&ui, "Library track 1");
+            assert!((row.size().height - 22.).abs() < 0.1);
+        }
+        ui.invoke_select_crate(-1);
+        finish_search(&c);
+        control(&ui, "Files library tab").invoke_accessible_default_action();
+        finish_search(&c);
+        assert_eq!(ui.get_selected_crate(), id);
+        assert_eq!(ui.get_library_tab(), 1);
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn compact_library_buttons_activate_on_first_click_and_keyboard() {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        fn click(ui: &AppWindow, label: &str) {
+            let element = control(ui, label);
+            let position = element.absolute_position();
+            let size = element.size();
+            let position = slint::LogicalPosition::new(
+                position.x + size.width / 2.,
+                position.y + size.height / 2.,
+            );
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+        }
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.show().unwrap();
+        for (index, name) in [(1, "Files"), (2, "Crates"), (3, "History"), (0, "Library")] {
+            click(&ui, "Library search");
+            click(&ui, &format!("{name} library tab"));
+            finish_search(&c);
+            assert_eq!(ui.get_library_tab(), index, "first click on {name}");
+        }
+        click(&ui, "Files library tab");
+        ui.set_library_tab(0);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "\n".into() });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: "\n".into() });
+        assert_eq!(ui.get_library_tab(), 1, "focused tab activates with Return");
+        ui.set_library_query("query".into());
+        click(&ui, "Clear library search");
+        assert_eq!(ui.get_library_query(), "");
+        c.close_library().unwrap();
+    }
 
     #[test]
     fn crate_gui_import_assignment_confirmation_restart_and_playing_deck_are_isolated() {
         use slint::Model;
         fn create(ui: &AppWindow, name: &str) {
+            control(ui, "Crates library tab").invoke_accessible_default_action();
             control(ui, "New crate").invoke_accessible_default_action();
             control(ui, "Crate name").set_accessible_value(name);
             control(ui, "Save crate name").invoke_accessible_default_action();
@@ -12553,6 +12755,7 @@ mod tests {
         c.import_paths(vec![audio.path().to_owned()]);
         finish_import(&c);
 
+        control(&ui, "Crates library tab").invoke_accessible_default_action();
         control(&ui, "New crate").invoke_accessible_default_action();
         control(&ui, "Crate name").set_accessible_value("Parent");
         control(&ui, "Save crate name").invoke_accessible_default_action();
@@ -13349,6 +13552,7 @@ mod tests {
         );
         ui.show().unwrap();
         assert_eq!(ui.get_library_rows().row_count(), 0);
+        control(&ui, "Files library tab").invoke_accessible_default_action();
         control(&ui, "Import library files").invoke_accessible_default_action();
         assert!(ui.get_library_busy());
         finish_import(&c);
@@ -13763,6 +13967,7 @@ mod tests {
         c.set_library_folder_picker(Arc::new(move || Some(selected.clone())));
 
         ui.show().unwrap();
+        control(&ui, "Files library tab").invoke_accessible_default_action();
         control(&ui, "Import library folder").invoke_accessible_default_action();
         assert!(ui.get_library_busy());
         finish_import(&c);

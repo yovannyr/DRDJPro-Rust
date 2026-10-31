@@ -686,7 +686,41 @@ component DetailWaveform inherits Rectangle {
     }
 }
 
+component LibraryButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> active;
+    callback clicked();
+    min-width: label.preferred-width + 14px;
+    preferred-width: label.preferred-width + 14px;
+    horizontal-stretch: 0;
+    height: 22px;
+    background: active ? #07577e : (touch.has-hover && enabled ? #343434 : #242424);
+    border-color: focus.has-focus ? #eeeeee : (active ? #258db5 : #414141);
+    border-width: 1px;
+    border-radius: 2px;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-enabled: enabled;
+    accessible-action-default => { if enabled { root.clicked(); } }
+    label := Text {
+        text: root.text; font-size: 11px;
+        color: root.enabled ? #eeeeee : #777777;
+        horizontal-alignment: center; vertical-alignment: center;
+    }
+    touch := TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.clicked(); } }
+    focus := FocusScope {
+        focus-on-click: false;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+}
+
 component CratePanel inherits Rectangle {
+    in property <bool> managing;
     in property <[CrateRow]> rows;
     in property <[string]> names;
     in property <int> selection;
@@ -705,56 +739,58 @@ component CratePanel inherits Rectangle {
     callback new-crate(); callback new-smart-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
     callback save-name(); callback cancel-dialog(); callback confirm-delete();
     callback add-track(); callback remove-track();
-    background: #121821; border-color: #303b4b; border-width: 1px;
+    background: #111111; border-color: #333333; border-width: 1px;
     VerticalLayout {
-        padding: 5px; spacing: 3px;
-        Button { text: "ALL TRACKS"; accessible-label: "All library tracks"; enabled: !busy; clicked => { root.select-crate(0); } }
-        Button { text: root.history-selected ? "HISTORY *" : "HISTORY"; accessible-label: "Playback history"; enabled: !busy; clicked => { root.select-crate(-1); } }
+        padding: 3px; spacing: 2px;
+        LibraryButton { text: "All tracks"; active: selection == 0; accessible-label: "All library tracks"; enabled: !busy; clicked => { root.select-crate(0); } }
+        LibraryButton { text: "History"; active: history-selected; accessible-label: "Playback history"; enabled: !busy; clicked => { root.select-crate(-1); } }
         ListView {
             for entry in root.rows : Rectangle {
-                height: 28px; background: root.selection == entry.id ? #194b70 : #1a222e;
+                height: 22px; background: root.selection == entry.id ? #07577e : #181818;
                 accessible-role: button; accessible-label: "Crate " + entry.id;
                 accessible-description: entry.smart ? "Smart crate " + entry.name : entry.name + " (" + entry.count + " tracks)";
                 accessible-action-default => { if !root.busy { root.select-crate(entry.id); } }
                 HorizontalLayout { padding: 4px;
                     Rectangle { width: entry.depth * 10px; }
-                    Text { text: entry.name; color: #e4ebf6; overflow: elide; }
-                    Text { text: entry.smart ? "SMART" : "" + entry.count; color: #9faec2; horizontal-alignment: right; }
+                    Text { text: entry.name; font-size: 11px; color: #eeeeee; overflow: elide; vertical-alignment: center; }
+                    Text { text: entry.smart ? "SMART" : "" + entry.count; font-size: 10px; color: #aaaaaa; horizontal-alignment: right; vertical-alignment: center; }
                 }
                 TouchArea { enabled: !root.busy; clicked => { root.select-crate(entry.id); } }
             }
         }
-        HorizontalLayout {
-            Button { text: "NEW"; accessible-label: "New crate"; enabled: !busy; clicked => { root.new-crate(); } }
-            Button { text: "NEW SUB"; accessible-label: "New subcrate"; enabled: !busy && selection > 0; clicked => { root.new-subcrate(); } }
-            Button { text: "SMART"; accessible-label: "New smart crate"; enabled: !busy; clicked => { root.new-smart-crate(); } }
+        if root.managing : HorizontalLayout {
+            LibraryButton { text: "+"; accessible-label: "New crate"; enabled: !busy; clicked => { root.new-crate(); } }
+            LibraryButton { text: "+ Sub"; accessible-label: "New subcrate"; enabled: !busy && selection > 0; clicked => { root.new-subcrate(); } }
+            LibraryButton { text: "+ Smart"; accessible-label: "New smart crate"; enabled: !busy; clicked => { root.new-smart-crate(); } }
         }
-        HorizontalLayout {
-            Button { text: "RENAME"; accessible-label: "Rename crate"; enabled: !busy && selection > 0; clicked => { root.rename-crate(); } }
-            Button { text: "DELETE"; accessible-label: "Delete crate"; enabled: !busy && selection > 0; clicked => { root.delete-crate(); } }
+        if root.managing : HorizontalLayout {
+            LibraryButton { text: "Rename"; accessible-label: "Rename crate"; enabled: !busy && selection > 0; clicked => { root.rename-crate(); } }
+            LibraryButton { text: "Delete"; accessible-label: "Delete crate"; enabled: !busy && selection > 0; clicked => { root.delete-crate(); } }
         }
-        ComboBox { model: root.names; current-index <=> root.target-index; accessible-label: "Target crate"; enabled: !busy && root.names.length > 0; selected(value) => { root.target-changed(self.current-index); } }
-        HorizontalLayout {
-            Button { text: "ADD"; accessible-label: "Add selected track to crate"; enabled: !busy && has-track && names.length > 0; clicked => { root.add-track(); } }
-            Button { text: "REMOVE"; accessible-label: "Remove selected track from crate"; enabled: !busy && has-track && selection > 0 && !selected-smart; clicked => { root.remove-track(); } }
+        ComboBox { height: 24px; model: root.names; current-index <=> root.target-index; accessible-label: "Target crate"; enabled: !busy && root.names.length > 0; selected(value) => { root.target-changed(self.current-index); } }
+        if root.managing : HorizontalLayout {
+            LibraryButton { text: "Add"; accessible-label: "Add selected track to crate"; enabled: !busy && has-track && names.length > 0; clicked => { root.add-track(); } }
+            LibraryButton { text: "Remove"; accessible-label: "Remove selected track from crate"; enabled: !busy && has-track && selection > 0 && !selected-smart; clicked => { root.remove-track(); } }
         }
     }
     if editor-open || delete-pending : Rectangle {
-        background: #182331;
+        background: #202020;
         VerticalLayout { padding: 8px; spacing: 6px;
-            Text { text: root.dialog-title; color: #e4ebf6; wrap: word-wrap; }
-            if root.editor-open : LineEdit { text <=> root.edit-name; accessible-label: "Crate name"; enabled: !root.busy; accepted => { root.save-name(); } }
-            if root.editor-open && root.editor-smart : LineEdit { text <=> root.edit-smart-query; accessible-label: "Smart crate query"; placeholder-text: "Match title, artist, album or path"; enabled: !root.busy; accepted => { root.save-name(); } }
-            if root.delete-pending : Text { text: "This crate's memberships are removed. Direct subcrates move up one level; tracks stay in the library."; color: #a5b5ca; wrap: word-wrap; }
-            if root.editor-open : Button { text: "SAVE"; accessible-label: "Save crate name"; enabled: !root.busy; clicked => { root.save-name(); } }
-            if root.delete-pending : Button { text: "CONFIRM DELETE"; accessible-label: "Confirm crate deletion"; enabled: !root.busy; clicked => { root.confirm-delete(); } }
-            Button { text: "CANCEL"; accessible-label: "Cancel crate dialog"; clicked => { root.cancel-dialog(); } }
+            Text { text: root.dialog-title; font-size: 11px; color: #eeeeee; wrap: word-wrap; }
+            if root.editor-open : LineEdit { height: 24px; text <=> root.edit-name; accessible-label: "Crate name"; enabled: !root.busy; accepted => { root.save-name(); } }
+            if root.editor-open && root.editor-smart : LineEdit { height: 24px; text <=> root.edit-smart-query; accessible-label: "Smart crate query"; placeholder-text: "Match title, artist, album or path"; enabled: !root.busy; accepted => { root.save-name(); } }
+            if root.delete-pending : Text { text: "This crate's memberships are removed. Direct subcrates move up one level; tracks stay in the library."; font-size: 11px; color: #bbbbbb; wrap: word-wrap; }
+            if root.editor-open : LibraryButton { text: "Save"; accessible-label: "Save crate name"; enabled: !root.busy; clicked => { root.save-name(); } }
+            if root.delete-pending : LibraryButton { text: "Confirm delete"; accessible-label: "Confirm crate deletion"; enabled: !root.busy; clicked => { root.confirm-delete(); } }
+            LibraryButton { text: "Cancel"; accessible-label: "Cancel crate dialog"; clicked => { root.cancel-dialog(); } }
             Rectangle { vertical-stretch: 1; }
         }
     }
 }
 
 component TrackLibrary inherits Rectangle {
+    in-out property <int> tab;
+    callback tab-selected(int);
     pure callback track-transfer(string) -> data-transfer;
     in property <bool> job-active;
     callback cancel-job();
@@ -766,7 +802,7 @@ component TrackLibrary inherits Rectangle {
     out property <length> scroll-y: library-list.content-y;
     callback scroll-page(bool);
     scroll-page(end) => {
-        library-list.content-y = end ? min(0px, library-list.height - root.rows.length * 30px) : 0px;
+        library-list.content-y = end ? min(0px, library-list.height - root.rows.length * 22px) : 0px;
     }
     callback change-page(int);
     in property <string> empty-text;
@@ -781,29 +817,44 @@ component TrackLibrary inherits Rectangle {
     callback import-files(); callback import-folder(); callback search(); callback select-track(int); callback move-selection(int); callback relocate-track();
     callback sort-column(int); callback load-left(); callback load-right();
     callback retry-save();
-    background: #121821; border-color: #303b4b; border-width: 1px;
+    background: #111111; border-color: #333333; border-width: 1px;
     VerticalLayout {
-        padding: 6px; spacing: 4px;
+        padding: 3px; spacing: 2px;
         HorizontalLayout {
-            Text { text: "LOCAL LIBRARY"; color: #e4ebf6; font-weight: 700; vertical-alignment: center; }
-            Button { text: busy ? "WORKING…" : "ADD FILES"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
-            Button { text: "ADD FOLDER"; enabled: !busy; accessible-label: "Import library folder"; clicked => { root.import-folder(); } }
-            LineEdit { text <=> query; placeholder-text: "Search title, artist, album or path"; accessible-label: "Library search"; edited => { root.search(); } }
-            Button { text: "X"; width: 30px; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
-            Button { text: "LOAD A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
-            Button { text: "LOAD B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
+            spacing: 2px;
+            for title[index] in ["Library", "Files", "Crates", "History"] : LibraryButton {
+                text: title; active: root.tab == index;
+                enabled: !root.busy;
+                accessible-label: title + " library tab";
+                clicked => { root.tab-selected(index); }
+            }
+            LineEdit { height: 24px; min-width: 80px; text <=> query; placeholder-text: "Search library"; accessible-label: "Library search"; edited => { root.search(); } }
+            LibraryButton { text: "X"; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
+            LibraryButton { text: "Load A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
+            LibraryButton { text: "Load B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
+        }
+        if tab == 1 : HorizontalLayout {
+            spacing: 3px;
+            LibraryButton { text: busy ? "Working..." : "Add files"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
+            LibraryButton { text: "Add folder"; enabled: !busy; accessible-label: "Import library folder"; clicked => { root.import-folder(); } }
+            Text { text: "Import into the target crate on the left. Files stay in their original location."; color: #bbbbbb; font-size: 11px; wrap: word-wrap; }
+        }
+        if tab == 2 : Text {
+            text: "Crates: select on the left; + / + Sub / + Smart create groups. Add / Remove manage the selected track.";
+            color: #bbbbbb; font-size: 11px; wrap: word-wrap;
         }
         if can-relocate : HorizontalLayout {
             height: 26px;
-            Button { text: "RELOCATE"; enabled: !busy; accessible-label: "Relocate selected missing library track"; clicked => { root.relocate-track(); } }
+            LibraryButton { text: "Relocate"; enabled: !busy; accessible-label: "Relocate selected missing library track"; clicked => { root.relocate-track(); } }
         }
         HorizontalLayout {
-            Button { text: "TITLE ↕"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
-            Button { text: "ARTIST ↕"; horizontal-stretch: 1; accessible-label: "Sort library by artist"; clicked => { root.sort-column(3); } }
-            Button { text: "ALBUM ↕"; horizontal-stretch: 1; accessible-label: "Sort library by album"; clicked => { root.sort-column(4); } }
-            Button { text: "TIME ↕"; width: 70px; accessible-label: "Sort library by duration"; clicked => { root.sort-column(5); } }
-            Button { text: "TYPE ↕"; width: 70px; accessible-label: "Sort library by type"; clicked => { root.sort-column(1); } }
-            Button { text: "LOCATION ↕"; horizontal-stretch: 2; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
+            spacing: 0px;
+            LibraryButton { text: "Title"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
+            LibraryButton { text: "Artist"; horizontal-stretch: 1; accessible-label: "Sort library by artist"; clicked => { root.sort-column(3); } }
+            LibraryButton { text: "Album"; horizontal-stretch: 1; accessible-label: "Sort library by album"; clicked => { root.sort-column(4); } }
+            LibraryButton { text: "Time"; width: 60px; accessible-label: "Sort library by duration"; clicked => { root.sort-column(5); } }
+            LibraryButton { text: "Type"; width: 60px; accessible-label: "Sort library by type"; clicked => { root.sort-column(1); } }
+            LibraryButton { text: "Location"; horizontal-stretch: 2; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
         }
         nav := FocusScope {
             key-pressed(event) => {
@@ -812,20 +863,20 @@ component TrackLibrary inherits Rectangle {
                 return reject;
             }
             library-list := ListView {
-                content-height: root.rows.length * 30px;
-                for row in root.rows : Rectangle {
-                    height: 30px; background: root.selection == row.id ? #194b70 : #1a222e;
+                content-height: root.rows.length * 22px;
+                for row[index] in root.rows : Rectangle {
+                    height: 22px; background: root.selection == row.id ? #07577e : (mod(index, 2) == 0 ? #202020 : #111111);
                     accessible-role: button; accessible-label: "Library track " + row.id;
                     accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.artist + " " + row.album + " " + row.duration + " " + row.path + (row.metadata-error == "" ? "" : " Metadata unavailable: " + row.metadata-error);
                     accessible-action-default => { root.select-track(row.id); nav.focus(); }
                     HorizontalLayout {
-                        padding-left: 6px;
-                        Text { text: row.name; color: #e4ebf6; overflow: elide; horizontal-stretch: 2; }
-                        Text { text: row.artist == "" ? "—" : row.artist; color: #9faec2; overflow: elide; horizontal-stretch: 1; }
-                        Text { text: row.album == "" ? "—" : row.album; color: #9faec2; overflow: elide; horizontal-stretch: 1; }
-                        Text { text: row.duration; color: #9faec2; width: 70px; }
-                        Text { text: row.available ? (row.metadata-error == "" ? row.format : row.format + " ?") : "MISSING"; color: row.available ? #9faec2 : #ffae58; width: 70px; }
-                        Text { text: row.path; color: #9faec2; overflow: elide; horizontal-stretch: 2; }
+                        padding-left: 4px; spacing: 0px;
+                        Text { text: row.name; font-size: 11px; vertical-alignment: center; color: #eeeeee; overflow: elide; horizontal-stretch: 2; }
+                        Text { text: row.artist == "" ? "—" : row.artist; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: row.album == "" ? "—" : row.album; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: row.duration; font-size: 11px; vertical-alignment: center; color: #cccccc; width: 60px; }
+                        Text { text: row.available ? (row.metadata-error == "" ? row.format : row.format + " ?") : "MISSING"; font-size: 11px; vertical-alignment: center; color: row.available ? #cccccc : #ffae58; width: 60px; }
+                        Text { text: row.path; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 2; }
                     }
                     DragArea {
                         width: 100%; height: 100%; allow-copy: true;
@@ -839,12 +890,12 @@ component TrackLibrary inherits Rectangle {
         }
         HorizontalLayout {
             Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
-            Button { text: "‹"; width: 32px; accessible-label: "Previous library page"; enabled: root.can-previous-page; clicked => { root.change-page(-1); } }
+            LibraryButton { text: "‹"; accessible-label: "Previous library page"; enabled: root.can-previous-page; clicked => { root.change-page(-1); } }
             Text { text: page-text; accessible-role: text; accessible-label: "Library page"; color: #9faec2; font-size: 11px; vertical-alignment: center; }
-            Button { text: "›"; width: 32px; accessible-label: "Next library page"; enabled: root.can-next-page; clicked => { root.change-page(1); } }
-            Text { text: storage-text; accessible-role: text; accessible-label: "Library storage status"; color: save-failed ? #ffae58 : #9faec2; font-size: 11px; overflow: elide; vertical-alignment: center; }
-            if root.job-active : Button { text: "CANCEL"; accessible-label: "Cancel background load or import"; clicked => { root.cancel-job(); } }
-            if save-failed : Button { text: "RETRY SAVE"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
+            LibraryButton { text: "›"; accessible-label: "Next library page"; enabled: root.can-next-page; clicked => { root.change-page(1); } }
+            Text { text: storage-text; accessible-role: text; accessible-label: "Library storage status"; color: save-failed ? #ffae58 : #9faec2; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+            if root.job-active : LibraryButton { text: "Cancel"; accessible-label: "Cancel background load or import"; clicked => { root.cancel-job(); } }
+            if save-failed : LibraryButton { text: "Retry save"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
         }
     }
 }
@@ -1151,6 +1202,8 @@ export component AppWindow inherits Window {
     callback clear-grid-right();
 
     in property <[LibraryRow]> library-rows;
+    in-out property <int> library-tab;
+    callback library-tab-selected(int);
     in property <string> library-count: "0 tracks";
     in property <string> library-page-text: "0 / 0";
     in property <bool> library-can-previous-page;
@@ -1426,6 +1479,7 @@ export component AppWindow inherits Window {
             accessible-role: groupbox; accessible-label: "Track library area"; vertical-stretch: 1; min-height: 160px;
             HorizontalLayout { spacing: 6px;
                 CratePanel {
+                    managing: root.library-tab == 2;
                     accessible-role: groupbox; accessible-label: "Crate navigation"; width: 190px;
                     rows: root.crate-rows; names: root.crate-names; selection: root.selected-crate;
                     history-selected: root.selected-crate == -1;
@@ -1442,6 +1496,8 @@ export component AppWindow inherits Window {
                     add-track => { root.add-to-crate(); } remove-track => { root.remove-from-crate(); }
                 }
         track-library := TrackLibrary {
+            tab <=> root.library-tab;
+            tab-selected(index) => { root.library-tab-selected(index); }
             horizontal-stretch: 1; min-width: 0px;
             rows: root.library-rows; count-text: root.library-count; empty-text: root.library-empty;
             page-text: root.library-page-text; can-previous-page: root.library-can-previous-page; can-next-page: root.library-can-next-page;

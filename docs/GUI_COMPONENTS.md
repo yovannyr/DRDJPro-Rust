@@ -3,6 +3,14 @@
 
 ## User-provided UI references
 
+### Compact library tabs (2026-10-31)
+
+The library layout now follows the user-provided compact dark table screenshot and the Files/History panel organization on manual page 15. Library, Files, Crates and History form a compact tab strip above the table. Files exposes the existing native file/folder import actions and explains the target crate and reference-only storage. Crates exposes create/subcrate/smart/rename/delete and membership actions in the left navigation. History selects the real persisted history scope; leaving it restores the previously selected library/crate scope. Search, deck loading, page navigation, missing-track relocation, cancellation and Retry Save stay available.
+
+Library buttons use 11px text with intrinsic label width plus 14px padding and 22px height, visible keyboard focus, Return/Space activation and accessible enabled state. Track/crate rows are 22px; alternating dark table rows and a blue selection follow the screenshot. Metadata can still elide when its column is too narrow; complete values remain in the accessible row description. No missing BPM/key metadata is fabricated to imitate the screenshot. Geometry tests cover all tabs and compact action bounds at 850x740 and 1280x860, plus scope restoration and existing import/crate/load flows.
+
+This is a bounded layout slice, not full Serato parity or native readability acceptance. Files still uses the existing pickers, not the manual's multi-column disk browser. Folder dragging to create crates, Prepare, metadata Browse filters, external-drive-local catalogs and alternate artwork views remain separate work. Deck/mixer controls and audio processing are unchanged.
+
 Use `Softwareübersicht.md` and its numbered `Softwareübersicht.png` as the main screen inventory/layout reference, and `DRDJ-UserManual-DRDJ.pdf` for interaction semantics. The screenshot currently selects **Extended** mode. These are user-provided design/behavior references, not evidence that a feature exists in Rust or that the Slint spike has passed visual acceptance.
 
 The PDF has 110 image-only pages. Focused visual reading for this checkpoint covered the contents, page 21, pages 25–30, pages 39–41 and pages 53–58. Page numbers below are the printed/manual page numbers, matching PDF page numbers. This is a focused UI review, not a complete audit of all 110 pages. Input PDF/Markdown/PNG sources were left unchanged.
