@@ -51,6 +51,14 @@ struct CueSession {
     slot: usize,
     original: crate::hot_cues::HotCue,
 }
+struct HotCueHoldSession {
+    source: Arc<crate::waveform::DetailPeaks>,
+    slot: usize,
+    position: std::time::Duration,
+    inputs: u16,
+    preview: bool,
+    promoted: bool,
+}
 struct GridSession {
     path: Arc<std::path::Path>,
     source: Arc<crate::waveform::DetailPeaks>,
@@ -264,6 +272,7 @@ pub struct AudioController {
     sync_session: RefCell<Option<SyncSession>>,
     pending_sync: RefCell<Option<PendingSync>>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
+    hot_cue_holds: RefCell<[Option<HotCueHoldSession>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending_cancel: RefCell<Option<crate::cancellation::Cancellation>>,
@@ -275,6 +284,22 @@ pub struct AudioController {
 }
 impl Drop for AudioController {
     fn drop(&mut self) {
+        for id in [DeckId::A, DeckId::B] {
+            if let Some(session) = self.hot_cue_holds.get_mut()[Self::grid_index(id)].take() {
+                let engine = self.engine.borrow();
+                if session.preview
+                    && !session.promoted
+                    && engine
+                        .snapshot(id)
+                        .detail
+                        .as_ref()
+                        .is_some_and(|source| Arc::ptr_eq(source, &session.source))
+                {
+                    engine.pause(id);
+                    let _ = engine.seek_position(id, session.position);
+                }
+            }
+        }
         if let Some(session) = self.sync_session.get_mut().take() {
             let _ = self.engine.borrow().apply_sync_factor(session.target, 1.);
         }
@@ -381,6 +406,7 @@ impl AudioController {
             sync_session: RefCell::new(None),
             pending_sync: RefCell::new(None),
             cue_editors: RefCell::new([None, None]),
+            hot_cue_holds: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
             pending_cancel: RefCell::new(None),
@@ -502,6 +528,10 @@ impl AudioController {
                                     .into(),
                             );
                         }
+                        return;
+                    }
+                    if c.promote_hot_cue_hold(id) {
+                        c.refresh();
                         return;
                     }
                     if c.engine.borrow().snapshot(id).playing {
@@ -2328,6 +2358,188 @@ impl AudioController {
         }
         Ok(())
     }
+    fn hold_hot_cue(&self, id: DeckId, slot: i32, held: bool, input: i32) -> Result<(), String> {
+        let slot = usize::try_from(slot)
+            .ok()
+            .filter(|slot| *slot < crate::hot_cues::SLOT_COUNT)
+            .ok_or("Cue slot must be 1 through 8")?;
+        let input = u16::try_from(input)
+            .ok()
+            .filter(|input| (1..=16).contains(input))
+            .ok_or("Invalid cue input")?;
+        let input_mask = 1u16 << (input - 1);
+        let index = Self::grid_index(id);
+        if !held {
+            let session = {
+                let mut sessions = self.hot_cue_holds.borrow_mut();
+                let Some(session) = sessions[index].as_mut() else {
+                    return Ok(());
+                };
+                if session.slot != slot || session.inputs & input_mask == 0 {
+                    return Ok(());
+                }
+                session.inputs &= !input_mask;
+                (session.inputs == 0)
+                    .then(|| sessions[index].take())
+                    .flatten()
+            };
+            if let Some(session) = session {
+                self.finish_hot_cue_session(id, session)?;
+            }
+            return Ok(());
+        }
+        if !self.can_control_deck(id) {
+            return Err("Finish loading before using hot cues".into());
+        }
+        if let Some(session) = self.hot_cue_holds.borrow_mut()[index].as_mut() {
+            if session.slot != slot {
+                return Err("Release the current hot cue before triggering another".into());
+            }
+            session.inputs |= input_mask;
+            return Ok(());
+        }
+        let snapshot = self.engine.borrow().snapshot(id);
+        let path = snapshot.path.ok_or("Load a track first")?;
+        let cue = self.library.borrow().hot_cues(&path).slots()[slot].clone();
+        let Some(cue) = cue else {
+            self.change_hot_cue(id, slot as i32, false)?;
+            let position = self.library.borrow().hot_cues(&path).slots()[slot]
+                .as_ref()
+                .ok_or("Cue was not saved")?
+                .position();
+            self.hot_cue_holds.borrow_mut()[index] = Some(HotCueHoldSession {
+                source: snapshot.detail.ok_or("Track source unavailable")?,
+                slot,
+                position,
+                inputs: input_mask,
+                preview: false,
+                promoted: false,
+            });
+            return Ok(());
+        };
+        if snapshot.playing {
+            self.change_hot_cue(id, slot as i32, false)?;
+            self.hot_cue_holds.borrow_mut()[index] = Some(HotCueHoldSession {
+                source: snapshot.detail.ok_or("Track source unavailable")?,
+                slot,
+                position: cue.position(),
+                inputs: input_mask,
+                preview: false,
+                promoted: false,
+            });
+            return Ok(());
+        }
+        if cue.position() >= snapshot.duration {
+            return Err("Saved cue is outside the loaded track; delete and reset it".into());
+        }
+        let source = snapshot.detail.ok_or("Track source unavailable")?;
+        self.engine.borrow().seek_position(id, cue.position())?;
+        self.engine.borrow().play(id);
+        self.hot_cue_holds.borrow_mut()[index] = Some(HotCueHoldSession {
+            source,
+            slot,
+            position: cue.position(),
+            inputs: input_mask,
+            preview: true,
+            promoted: false,
+        });
+        Ok(())
+    }
+    fn finish_hot_cue_session(&self, id: DeckId, session: HotCueHoldSession) -> Result<(), String> {
+        if session.preview
+            && !session.promoted
+            && self
+                .engine
+                .borrow()
+                .snapshot(id)
+                .detail
+                .as_ref()
+                .is_some_and(|source| Arc::ptr_eq(source, &session.source))
+        {
+            let engine = self.engine.borrow();
+            engine.pause(id);
+            engine.seek_position(id, session.position)?;
+        }
+        Ok(())
+    }
+    fn cancel_hot_cue_holds(&self) -> Result<(), String> {
+        let mut first_error = None;
+        for id in [DeckId::A, DeckId::B] {
+            if let Some(session) = self.hot_cue_holds.borrow_mut()[Self::grid_index(id)].take() {
+                if let Err(error) = self.finish_hot_cue_session(id, session) {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+    pub(crate) fn handle_window_deactivated(&self) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_active_hot_cue_key(-1);
+        }
+        if let Err(error) = self.cancel_hot_cue_holds() {
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_status(error.into());
+            }
+        }
+    }
+    pub(crate) fn handle_global_hot_cue_key_released(&self, key: i32) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        if ui.get_active_hot_cue_key() != key {
+            return;
+        }
+        ui.set_active_hot_cue_key(-1);
+        let (id, slot) = if key < 5 {
+            (DeckId::A, key)
+        } else {
+            (DeckId::B, key - 5)
+        };
+        if let Err(error) = self.hold_hot_cue(id, slot, false, 5) {
+            ui.set_status(error.into());
+        }
+    }
+    fn promote_hot_cue_hold(&self, id: DeckId) -> bool {
+        let index = Self::grid_index(id);
+        let mut sessions = self.hot_cue_holds.borrow_mut();
+        let Some(session) = sessions[index].as_mut() else {
+            return false;
+        };
+        let snapshot = self.engine.borrow().snapshot(id);
+        if snapshot
+            .detail
+            .as_ref()
+            .is_none_or(|source| !Arc::ptr_eq(source, &session.source))
+        {
+            sessions[index] = None;
+            return false;
+        }
+        if !session.preview || session.promoted {
+            return false;
+        }
+        session.promoted = true;
+        if !snapshot.playing {
+            self.engine.borrow().play(id);
+        }
+        true
+    }
+    fn cancel_stale_hot_cue_holds(&self) {
+        let mut sessions = self.hot_cue_holds.borrow_mut();
+        for id in [DeckId::A, DeckId::B] {
+            let index = Self::grid_index(id);
+            if sessions[index].as_ref().is_some_and(|session| {
+                self.engine
+                    .borrow()
+                    .snapshot(id)
+                    .detail
+                    .as_ref()
+                    .is_none_or(|source| !Arc::ptr_eq(source, &session.source))
+            }) {
+                sessions[index] = None;
+            }
+        }
+    }
     fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
         let engine = Rc::clone(&self.engine);
         let weak_ui = ui.as_weak();
@@ -2347,6 +2559,24 @@ impl AudioController {
             match id {
                 DeckId::A => ui.on_cancel_trigger_left(cancel),
                 DeckId::B => ui.on_cancel_trigger_right(cancel),
+            }
+        }
+        for id in [DeckId::A, DeckId::B] {
+            let weak = Rc::downgrade(self);
+            let hold = move |slot, held, input| {
+                if let Some(c) = weak.upgrade() {
+                    let result = c.hold_hot_cue(id, slot, held, input);
+                    if let Err(error) = result {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(format!("Deck {id:?}: {error}").into());
+                        }
+                    }
+                    c.refresh();
+                }
+            };
+            match id {
+                DeckId::A => ui.on_hold_hot_cue_left(hold),
+                DeckId::B => ui.on_hold_hot_cue_right(hold),
             }
         }
         for id in [DeckId::A, DeckId::B] {
@@ -4010,6 +4240,7 @@ impl AudioController {
         self.poll_device_scan();
         self.engine.borrow().collect_retired();
         self.cancel_stale_nudges();
+        self.cancel_stale_hot_cue_holds();
         self.apply_pending_pitch();
         self.poll_keylock();
         self.poll_pending_sync();
@@ -4753,7 +4984,8 @@ impl AudioController {
                 let rows = cues
                     .slots()
                     .iter()
-                    .map(|cue| crate::HotCueRow {
+                    .enumerate()
+                    .map(|(slot, cue)| crate::HotCueRow {
                         name: cue.as_ref().map_or("", |c| c.name()).into(),
                         valid: cue.as_ref().is_some_and(|c| c.position() < s.duration),
                         position: cue.as_ref().map_or(0., |c| {
@@ -4775,6 +5007,8 @@ impl AudioController {
                             cue.as_ref().map_or(0, |c| (c.rgb() >> 8) as u8),
                             cue.as_ref().map_or(0, |c| c.rgb() as u8),
                         ),
+                        label_row: (slot % 4) as i32,
+                        label_column: (slot / 4) as i32,
                     })
                     .collect::<Vec<_>>();
                 let model = ModelRc::new(Rc::new(VecModel::from(rows)));
@@ -10796,6 +11030,314 @@ mod tests {
             assert!(
                 position >= Duration::from_secs(1) && position < Duration::from_millis(1100),
                 "{position:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hot_cue_number_keys_preview_until_release_and_play_promotes_on_both_decks() {
+        use slint::platform::WindowEvent;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let file = wav_file(8192, 48_000 * 8);
+        let other = wav_file(4096, 48_000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(other.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        for (id, position) in [
+            (DeckId::A, Duration::from_secs(1)),
+            (DeckId::B, Duration::from_secs(2)),
+        ] {
+            let path = engine.snapshot(id).path.unwrap();
+            c.library.borrow_mut().insert([path.to_path_buf()]);
+            c.library
+                .borrow_mut()
+                .set_hot_cue(
+                    &path,
+                    0,
+                    Some(
+                        crate::hot_cues::HotCue::new(position, "preview".into(), 0xffffff).unwrap(),
+                    ),
+                )
+                .unwrap();
+        }
+        let path_a = engine.snapshot(DeckId::A).path.unwrap();
+        c.library
+            .borrow_mut()
+            .set_hot_cue(
+                &path_a,
+                7,
+                Some(
+                    crate::hot_cues::HotCue::new(
+                        Duration::from_secs(3),
+                        "keyboard pad".into(),
+                        0xffffff,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+        c.refresh();
+        ui.show().unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(4))
+            .unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::B).playing);
+        for _ in 0..2400 {
+            output.next();
+        }
+        let preview_position = engine.snapshot(DeckId::A).position;
+        assert!(preview_position > Duration::from_millis(1040));
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressRepeated { text: "1".into() });
+        assert_eq!(engine.snapshot(DeckId::A).position, preview_position);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: "1".into() });
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+
+        c.hold_hot_cue(DeckId::A, 0, true, 1).unwrap();
+        c.hold_hot_cue(DeckId::A, 0, true, 5).unwrap();
+        c.hold_hot_cue(DeckId::A, 0, false, 5).unwrap();
+        assert!(engine.snapshot(DeckId::A).playing);
+        c.hold_hot_cue(DeckId::A, 0, false, 1).unwrap();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });
+        for _ in 0..2400 {
+            output.next();
+        }
+        ui.invoke_toggle_left();
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.invoke_toggle_left();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        ui.invoke_toggle_left();
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: "1".into() });
+        assert!(engine.snapshot(DeckId::A).playing);
+        for _ in 0..4800 {
+            output.next();
+        }
+        assert!(engine.snapshot(DeckId::A).position > Duration::from_millis(1100));
+
+        engine
+            .seek_position(DeckId::B, Duration::from_secs(5))
+            .unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "6".into() });
+        assert!(engine.snapshot(DeckId::B).playing);
+        for _ in 0..2400 {
+            output.next();
+        }
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: "6".into() });
+        assert!(!engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::from_secs(2));
+
+        let waveform = control(&ui, "DECK B detailed waveform");
+        let p = waveform.absolute_position();
+        let size = waveform.size();
+        let waveform_position =
+            slint::LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: waveform_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: waveform_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "6".into() });
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(false));
+        c.handle_window_deactivated();
+        c.tick();
+        assert!(!engine.snapshot(DeckId::B).playing);
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::from_secs(2));
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: "6".into() });
+        assert_eq!(ui.get_active_hot_cue_key(), -1);
+
+        engine.pause(DeckId::A);
+        let pad = control(&ui, "DECK A hot cue 1");
+        let p = pad.absolute_position();
+        let size = pad.size();
+        let position = slint::LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Right,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Right,
+        });
+        assert!(engine.snapshot(DeckId::A).playing);
+        for _ in 0..2400 {
+            output.next();
+        }
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(4))
+            .unwrap();
+        let search = control(&ui, "Library search");
+        let p = search.absolute_position();
+        let size = search.size();
+        let search_position =
+            slint::LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+        let detail = control(&ui, "DECK A detailed waveform");
+        let detail_position = detail.absolute_position();
+        let detail_size = detail.size();
+        let detail_center = slint::LogicalPosition::new(
+            detail_position.x + detail_size.width / 2.,
+            detail_position.y + detail_size.height / 2.,
+        );
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: detail_center,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: detail_center,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: search_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: search_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        c.handle_global_hot_cue_key_released(0);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+        assert_eq!(ui.get_active_hot_cue_key(), -1);
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(4))
+            .unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: "1".into() });
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(4));
+        assert_eq!(ui.get_library_query().as_str(), "1");
+
+        let slot_eight = control(&ui, "DECK A hot cue 8");
+        let p = slot_eight.absolute_position();
+        let size = slot_eight.size();
+        let slot_position =
+            slint::LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position: slot_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position: slot_position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: slint::platform::Key::Space.into(),
+        });
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: slint::platform::Key::Space.into(),
+        });
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn overlapping_hot_cues_keep_distinct_waveform_label_lanes() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let file = wav_file(8192, 48_000 * 8);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let path = engine.snapshot(DeckId::A).path.unwrap();
+        c.library.borrow_mut().insert([path.to_path_buf()]);
+        for slot in 0..crate::hot_cues::SLOT_COUNT {
+            c.library
+                .borrow_mut()
+                .set_hot_cue(
+                    &path,
+                    slot,
+                    Some(
+                        crate::hot_cues::HotCue::new(
+                            Duration::from_millis(7600),
+                            format!("Cue {}", slot + 1),
+                            0xffffff,
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .unwrap();
+        }
+        ui.show().unwrap();
+        c.refresh();
+        let model = ui.get_left_hot_cues();
+        let rows = (0..crate::hot_cues::SLOT_COUNT)
+            .map(|slot| model.row_data(slot).unwrap())
+            .collect::<Vec<_>>();
+        assert!(rows.iter().all(|row| row.valid && row.position == 95.));
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.label_row, row.label_column))
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            crate::hot_cues::SLOT_COUNT
+        );
+        let waveform = control(&ui, "DECK A waveform overview");
+        let waveform_position = waveform.absolute_position();
+        let waveform_size = waveform.size();
+        for slot in 1..=crate::hot_cues::SLOT_COUNT {
+            let label = control(&ui, &format!("DECK A overview cue label {slot}"));
+            let position = label.absolute_position();
+            let size = label.size();
+            assert!(position.x >= waveform_position.x, "cue {slot} left edge");
+            assert!(
+                position.x + size.width <= waveform_position.x + waveform_size.width,
+                "cue {slot} right edge"
+            );
+            assert!(position.y >= waveform_position.y, "cue {slot} top edge");
+            assert!(
+                position.y + size.height <= waveform_position.y + waveform_size.height,
+                "cue {slot} bottom edge"
             );
         }
     }

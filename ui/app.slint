@@ -1,7 +1,7 @@
 import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox } from "std-widgets.slint";
 export struct LoopRange { valid: bool, active: bool, visible: bool, in-visible: bool, out-visible: bool, start: float, end: float, description: string }
 export struct SavedLoopRow { occupied: bool, description: string }
-export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string }
+export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string, label-row: int, label-column: int }
 export struct CrateRow { id: int, name: string, count: int, depth: int }
 export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
@@ -113,6 +113,13 @@ component WaveformStrip inherits Rectangle {
     in property <float> range-start: 0;
     in property <float> range-end: 100;
     callback seek(float);
+    function cue-label-x(position: float, column: int) -> length {
+        let marker-x = clamp((position - root.range-start) / max(0.000001, root.range-end - root.range-start), 0, 1) * max(0px, root.width - 2px);
+        let preferred-x = marker-x + 3px + column * 56px;
+        let flipped-x = marker-x - 3px - (column + 1) * 56px;
+        let label-x = marker-x > root.width - 115px ? flipped-x : preferred-x;
+        return clamp(label-x, 0px, max(0px, root.width - 54px));
+    }
     in property <bool> keyboard-zoom: false;
     callback zoom-step(int);
     forward-focus: zoom-keys;
@@ -165,7 +172,15 @@ component WaveformStrip inherits Rectangle {
         accessible-description: cue.description; accessible-value: cue.position;
         x: clamp((cue.position - range-start) / max(0.000001, range-end - range-start), 0, 1) * max(0px, parent.width - self.width);
         width: 2px; height: parent.height; background: cue.tint;
-        Text { x: 3px; y: max(0px, parent.height - 14px); width: 110px; text: "" + (i + 1) + " " + cue.name; color: cue.tint; font-size: 10px; overflow: elide; }
+    }
+    for cue[i] in hot-cues : Text {
+        visible: cue.valid && range-end > range-start && cue.position >= range-start && cue.position <= range-end;
+        x: root.cue-label-x(cue.position, cue.label-column); y: cue.label-row * 10px;
+        width: 54px; height: 10px; text: "" + (i + 1) + " " + cue.name;
+        color: cue.tint; font-size: 10px; overflow: elide;
+        accessible-role: text;
+        accessible-label: deck-label + (overview ? " overview cue label " : " detail cue label ") + (i + 1);
+        accessible-description: cue.description;
     }
     Rectangle {
         accessible-role: image;
@@ -205,6 +220,97 @@ component WaveformStrip inherits Rectangle {
         accessible-value-minimum: range-start; accessible-value-maximum: range-end;
         accessible-action-set-value(v) => { if self.enabled && v.is-float() { root.seek(clamp(v.to-float(), range-start, range-end)); } }
         clicked => { if self.width > 0px { root.seek(range-start + clamp(self.mouse-x / self.width, 0, 1) * (range-end - range-start)); } }
+    }
+}
+
+component HotCuePad inherits Rectangle {
+    in property <int> slot;
+    in property <string> label;
+    in property <string> text;
+    in property <string> description;
+    in property <bool> occupied;
+    in property <bool> cue-enabled;
+    in property <color> tint;
+    callback held(int, bool, int);
+    property <int> active-input: 0;
+    function begin-input(input: int) {
+        if root.active-input == 0 {
+            root.active-input = input;
+            root.held(root.slot, true, input);
+        }
+    }
+    function end-input(input: int) {
+        if root.active-input == input {
+            root.active-input = 0;
+            root.held(root.slot, false, input);
+        }
+    }
+    function cancel-input() {
+        let input = root.active-input;
+        root.active-input = 0;
+        if input != 0 {
+            root.held(root.slot, false, input);
+        }
+    }
+    height: 27px;
+    background: root.active-input != 0 ? #365472 : #243448;
+    border-radius: 3px;
+    opacity: root.cue-enabled ? 1 : 0.4;
+    forward-focus: keys;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.description + ". Hold to preview from a paused deck.";
+    accessible-enabled: root.cue-enabled;
+    accessible-action-default => {
+        if root.cue-enabled && root.active-input == 0 {
+            root.begin-input(4);
+            root.end-input(4);
+        }
+    }
+    changed cue-enabled => {
+        if !root.cue-enabled {
+            root.cancel-input();
+        }
+    }
+    Text {
+        text: root.text;
+        color: root.occupied ? root.tint : #dfe8f5;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        enabled: root.cue-enabled;
+        pointer-event(event) => {
+            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                keys.focus();
+                root.begin-input(1);
+            } else if event.button == PointerEventButton.left && event.kind == PointerEventKind.up {
+                root.end-input(1);
+            } else if event.kind == PointerEventKind.cancel {
+                root.end-input(1);
+            }
+        }
+    }
+    keys := FocusScope {
+        width: 0; height: 0;
+        enabled: root.cue-enabled;
+        focus-lost(reason) => { root.cancel-input(); }
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                if !event.repeat {
+                    root.begin-input(event.text == Key.Space ? 2 : 3);
+                }
+                return accept;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.end-input(event.text == Key.Space ? 2 : 3);
+                return accept;
+            }
+            return reject;
+        }
     }
 }
 
@@ -319,7 +425,7 @@ component CompactDeck inherits Rectangle {
     in-out property <string> cue-name;
     in-out property <string> cue-rgb;
     callback edit-hot-cue(int); callback save-hot-cue(); callback cancel-hot-cue();
-    callback hot-cue(int); callback delete-hot-cue(int);
+    callback hot-cue(int, bool, int); callback delete-hot-cue(int);
     callback load(); callback toggle(); callback cue(); callback seek(float);
     pure callback accepts-drop(data-transfer) -> bool;
     callback drop-track(data-transfer) -> bool;
@@ -361,12 +467,15 @@ component CompactDeck inherits Rectangle {
             spacing: 2px; height: 30px;
             for pad[i] in hot-cues : VerticalLayout {
                 spacing: 0px;
-                Button {
+                HotCuePad {
+                    slot: i;
                     text: "" + (i + 1) + (pad.occupied ? " ●" : " +");
-                    accessible-label: deck-label + " hot cue " + (i + 1);
-                    accessible-description: pad.description;
-                    enabled: loaded && !loading;
-                    clicked => { root.hot-cue(i); }
+                    label: deck-label + " hot cue " + (i + 1);
+                    description: pad.description;
+                    occupied: pad.occupied;
+                    cue-enabled: loaded && !loading;
+                    tint: pad.tint;
+                    held(slot, value, input) => { root.hot-cue(slot, value, input); }
                 }
                 Rectangle { height: 3px; background: pad.occupied ? pad.tint : #394251; }
             }
@@ -751,6 +860,33 @@ export component AppWindow inherits Window {
     }
     title: "DrDJ Pro"; preferred-width: 1280px; preferred-height: 860px;
     min-width: 850px; min-height: 740px; background: #090d13;
+    in-out property <int> active-hot-cue-key: -1;
+    function hot-cue-key-index(key: string) -> int {
+        return key == "1" || key == "!" ? 0
+            : key == "2" || key == "@" ? 1
+            : key == "3" || key == "#" ? 2
+            : key == "4" || key == "$" ? 3
+            : key == "5" || key == "%" ? 4
+            : key == "6" || key == "^" ? 5
+            : key == "7" || key == "&" ? 6
+            : key == "8" || key == "*" ? 7
+            : key == "9" || key == "(" ? 8
+            : key == "0" || key == ")" ? 9
+            : -1;
+    }
+    function release-active-hot-cue-key() {
+        let index = root.active-hot-cue-key;
+        if index < 0 {
+            return;
+        }
+        root.active-hot-cue-key = -1;
+        if index < 5 {
+            root.hold-hot-cue-left(index, false, 5);
+        } else {
+            root.hold-hot-cue-right(index - 5, false, 5);
+        }
+    }
+    forward-focus: keyboard-scope;
     in property <[float]> left-waveform;
     in property <[float]> right-waveform;
     in property <[float]> left-detail;
@@ -946,6 +1082,7 @@ export component AppWindow inherits Window {
     in-out property <string> right-cue-rgb;
     callback edit-hot-cue-right(int); callback save-hot-cue-right(); callback cancel-hot-cue-right();
     callback hot-cue-left(int); callback hot-cue-right(int);
+    callback hold-hot-cue-left(int, bool, int); callback hold-hot-cue-right(int, bool, int);
     callback delete-hot-cue-left(int); callback delete-hot-cue-right(int);
     callback toggle-left();
     callback toggle-right();
@@ -1032,6 +1169,39 @@ export component AppWindow inherits Window {
     callback new-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
     callback save-crate-name(); callback confirm-delete-crate(); callback cancel-crate-dialog();
     callback add-to-crate(); callback remove-from-crate();
+    keyboard-scope := FocusScope {
+        width: 100%; height: 100%;
+        focus-lost(reason) => { root.release-active-hot-cue-key(); }
+        key-pressed(event) => {
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
+                return reject;
+            }
+            let index = root.hot-cue-key-index(event.text);
+            if index < 0 {
+                return reject;
+            }
+            if event.repeat || root.active-hot-cue-key == index {
+                return accept;
+            }
+            if root.active-hot-cue-key >= 0 {
+                return reject;
+            }
+            root.active-hot-cue-key = index;
+            if index < 5 {
+                root.hold-hot-cue-left(index, true, 5);
+            } else {
+                root.hold-hot-cue-right(index - 5, true, 5);
+            }
+            return accept;
+        }
+        key-released(event) => {
+            let index = root.hot-cue-key-index(event.text);
+            if index != root.active-hot-cue-key {
+                return reject;
+            }
+            root.release-active-hot-cue-key();
+            return accept;
+        }
     VerticalLayout {
         padding: 8px; spacing: 6px;
         HorizontalLayout {
@@ -1082,7 +1252,7 @@ export component AppWindow inherits Window {
                 cue-editing: root.left-cue-editing; cue-name <=> root.left-cue-name; cue-rgb <=> root.left-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-left(slot); }
                 save-hot-cue => { root.save-hot-cue-left(); } cancel-hot-cue => { root.cancel-hot-cue-left(); }
-                hot-cue(slot) => { root.hot-cue-left(slot); }
+                hot-cue(slot, held, input) => { root.hold-hot-cue-left(slot, held, input); }
                 delete-hot-cue(slot) => { root.delete-hot-cue-left(slot); }
                 playing: root.left-playing; position <=> root.left-position;
                 audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.left-busy; load-busy: root.loading || root.library-busy;
@@ -1121,7 +1291,7 @@ export component AppWindow inherits Window {
                 cue-editing: root.right-cue-editing; cue-name <=> root.right-cue-name; cue-rgb <=> root.right-cue-rgb;
                 edit-hot-cue(slot) => { root.edit-hot-cue-right(slot); }
                 save-hot-cue => { root.save-hot-cue-right(); } cancel-hot-cue => { root.cancel-hot-cue-right(); }
-                hot-cue(slot) => { root.hot-cue-right(slot); }
+                hot-cue(slot, held, input) => { root.hold-hot-cue-right(slot, held, input); }
                 delete-hot-cue(slot) => { root.delete-hot-cue-right(slot); }
                 playing: root.right-playing; position <=> root.right-position;
                 audio-enabled: root.audio-enabled; loaded: root.right-loaded; loading: root.right-busy; load-busy: root.loading || root.library-busy;
@@ -1329,6 +1499,7 @@ export component AppWindow inherits Window {
                 FxStrip {deck:"A";ready:root.quantize-preferences-ready;active <=> root.fx-active-a;time <=> root.fx-time-a;feedback <=> root.fx-feedback-a;wet <=> root.fx-wet-a;slot <=> root.fx-slot-a;changed=>{root.fx-changed(0);}preset(slot,save)=>{root.fx-preset(0,slot,save);}}
                 FxStrip {deck:"B";ready:root.quantize-preferences-ready;active <=> root.fx-active-b;time <=> root.fx-time-b;feedback <=> root.fx-feedback-b;wet <=> root.fx-wet-b;slot <=> root.fx-slot-b;changed=>{root.fx-changed(1);}preset(slot,save)=>{root.fx-preset(1,slot,save);}}
             }
+        }
         }
     }
 }

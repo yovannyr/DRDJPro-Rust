@@ -84,6 +84,14 @@ Each deck has a session-local 1/8, 1/4, 1/2, 1, 2 or 4 beat step, defaulting to 
 
 Both operations use bounded exact binary-rational BPM arithmetic and integer source-frame rounding. Strict-next selection excludes a grid point which rounds onto the current source frame. The source-rate-one edge is covered with a bounded search; ordinary audio rates need the first candidate or its immediate successor. Invalid step indices and steps outside the playable track reject before mutation. The selection is per deck, retained across track replacement during the session and not persisted. The Slint step-property change handler cancels pending cue triggers. Existing trigger guards against loop/nudge/Sync/pending pitch and grid edits remain; this does not introduce loop quantization or a global Quantize mode.
 
+## Hot-cue keyboard and held preview
+
+The manual's two-deck number mapping is available as `1`–`5` for Deck A slots 1–5 and `6`–`0` for Deck B slots 1–5. Shortcuts do not consume input handled by a focused text field and reject Control/Alt/Meta combinations; shifted number symbols map to the same slots. Repeated key-down events do not retrigger a cue. Physical controller feedback and additional four-deck mappings are not implemented.
+
+Pressing an empty pad still sets its cue. Pressing an occupied cue on a paused deck seeks to the exact saved source position and starts temporary playback; releasing the pointer/key pauses and returns to that cue. Activating PLAY/PAUSE while the preview is held promotes it to normal playback, which then continues after cue release. A cue pressed on an already-playing deck keeps the existing immediate or Next-grid recall behavior. Preview state is source-bound, and lost keyboard focus releases it. These actions run on the control plane; they do not add work to the real-time render callback.
+
+Waveform cue labels use four rows and two columns, derived from the fixed slot identity, so all eight labels remain independently visible at coincident positions. Marker lines and accessible values retain their exact source positions. Native visual/keyboard usability and physical hardware acceptance remain open.
+
 ## Global Quantize master (2026-10-29)
 
 The toolbar QUANTIZE switch is the session-local master for the existing per-deck Snap cues, Next grid and Auto Loop BEAT SNAP preferences. It defaults on to preserve the previous opt-in behavior; all three deck preferences still default off. Global Off bypasses those preferences without clearing them or changing the selected cue step. New cues then retain the current source position, occupied cues recall immediately, and new auto-loops start at the playhead. Beat-based auto-loop length still requires a confirmed manual grid. The master does not add quantization to manual loop boundaries or resnap stored cue targets.

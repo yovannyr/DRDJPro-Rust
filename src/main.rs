@@ -243,7 +243,23 @@ fn main() -> Result<(), slint::PlatformError> {
     };
 
     #[cfg(target_os = "windows")]
-    let external_drop_timer = controller.as_ref().map(|_| external_drop::install(&ui));
+    let external_drop_timer = controller.as_ref().map(|controller| {
+        let controller = Rc::downgrade(controller);
+        let deactivated = controller.clone();
+        external_drop::install(
+            &ui,
+            move || {
+                if let Some(controller) = deactivated.upgrade() {
+                    controller.handle_window_deactivated();
+                }
+            },
+            move |key| {
+                if let Some(controller) = controller.upgrade() {
+                    controller.handle_global_hot_cue_key_released(key);
+                }
+            },
+        )
+    });
 
     let audio_owner = controller
         .as_ref()

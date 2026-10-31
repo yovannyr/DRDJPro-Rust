@@ -125,11 +125,21 @@ fn client_position(
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn install(ui: &AppWindow) -> slint::Timer {
+pub(crate) fn install(
+    ui: &AppWindow,
+    mut on_deactivated: impl FnMut() + 'static,
+    mut on_hot_cue_key_released: impl FnMut(i32) + 'static,
+) -> slint::Timer {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     use slint::{
-        winit_030::{winit::event::WindowEvent, EventResult, WinitWindowAccessor},
+        winit_030::{
+            winit::{
+                event::{ElementState, WindowEvent},
+                keyboard::{KeyCode, PhysicalKey},
+            },
+            EventResult, WinitWindowAccessor,
+        },
         ComponentHandle, Timer, TimerMode,
     };
 
@@ -151,6 +161,29 @@ pub(crate) fn install(ui: &AppWindow) -> slint::Timer {
             }
             WindowEvent::DroppedFile(path) => {
                 drop_file(&ui, &mut events.borrow_mut(), path, cursor_position(window));
+            }
+            WindowEvent::Focused(false) => {
+                on_deactivated();
+                return EventResult::Propagate;
+            }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Released => {
+                let key = match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Digit1 | KeyCode::Numpad1) => Some(0),
+                    PhysicalKey::Code(KeyCode::Digit2 | KeyCode::Numpad2) => Some(1),
+                    PhysicalKey::Code(KeyCode::Digit3 | KeyCode::Numpad3) => Some(2),
+                    PhysicalKey::Code(KeyCode::Digit4 | KeyCode::Numpad4) => Some(3),
+                    PhysicalKey::Code(KeyCode::Digit5 | KeyCode::Numpad5) => Some(4),
+                    PhysicalKey::Code(KeyCode::Digit6 | KeyCode::Numpad6) => Some(5),
+                    PhysicalKey::Code(KeyCode::Digit7 | KeyCode::Numpad7) => Some(6),
+                    PhysicalKey::Code(KeyCode::Digit8 | KeyCode::Numpad8) => Some(7),
+                    PhysicalKey::Code(KeyCode::Digit9 | KeyCode::Numpad9) => Some(8),
+                    PhysicalKey::Code(KeyCode::Digit0 | KeyCode::Numpad0) => Some(9),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    on_hot_cue_key_released(key);
+                }
+                return EventResult::Propagate;
             }
             WindowEvent::Destroyed | WindowEvent::CloseRequested | WindowEvent::Occluded(true) => {
                 events.borrow_mut().clear();
