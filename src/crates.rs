@@ -13,6 +13,7 @@ pub struct Crate {
     pub id: i32,
     pub name: String,
     pub parent_id: Option<i32>,
+    pub smart_query: Option<String>,
     pub tracks: HashSet<i32>,
 }
 pub fn name_key(name: &str) -> String {
@@ -27,6 +28,13 @@ fn name(value: &str) -> Result<String, String> {
         return Err("All tracks is a reserved name".into());
     }
     Ok(value.to_owned())
+}
+fn smart_query(value: &str) -> Result<String, String> {
+    let value = value.trim().to_lowercase();
+    if value.is_empty() || value.chars().count() > 512 || value.chars().any(char::is_control) {
+        return Err("Smart crate query must contain 1–512 printable characters".into());
+    }
+    Ok(value)
 }
 impl CrateCatalog {
     pub fn validate(&self, track_ids: &HashSet<i32>) -> Result<(), String> {
@@ -43,6 +51,9 @@ impl CrateCatalog {
                 || name(&entry.name)? != entry.name
                 || !names.insert(name_key(&entry.name))
                 || entry.tracks.iter().any(|id| !track_ids.contains(id))
+                || entry.smart_query.as_ref().is_some_and(|query| {
+                    smart_query(query).as_ref() != Ok(query) || !entry.tracks.is_empty()
+                })
             {
                 return Err("Invalid crate identity, name or membership".into());
             }
@@ -125,6 +136,25 @@ impl CrateCatalog {
         self.create_under(None, value)
     }
     pub fn create_under(&mut self, parent_id: Option<i32>, value: &str) -> Result<i32, String> {
+        self.create_entry(parent_id, value, None)
+    }
+    pub fn create_smart(&mut self, value: &str, query: &str) -> Result<i32, String> {
+        self.create_smart_under(None, value, query)
+    }
+    pub fn create_smart_under(
+        &mut self,
+        parent_id: Option<i32>,
+        value: &str,
+        query: &str,
+    ) -> Result<i32, String> {
+        self.create_entry(parent_id, value, Some(smart_query(query)?))
+    }
+    fn create_entry(
+        &mut self,
+        parent_id: Option<i32>,
+        value: &str,
+        smart_query: Option<String>,
+    ) -> Result<i32, String> {
         let value = name(value)?;
         if self.entries.len() == MAX_CRATES {
             return Err("Crate limit reached".into());
@@ -160,6 +190,7 @@ impl CrateCatalog {
             id,
             name: value,
             parent_id,
+            smart_query,
             tracks: HashSet::new(),
         });
         Ok(id)
@@ -176,7 +207,18 @@ impl CrateCatalog {
         depth
     }
     pub fn rename(&mut self, id: i32, value: &str) -> Result<(), String> {
+        let query = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("Crate no longer exists")?
+            .smart_query
+            .clone();
+        self.edit(id, value, query.as_deref())
+    }
+    pub fn edit(&mut self, id: i32, value: &str, query: Option<&str>) -> Result<(), String> {
         let value = name(value)?;
+        let query = query.map(smart_query).transpose()?;
         if self
             .entries
             .iter()
@@ -184,11 +226,16 @@ impl CrateCatalog {
         {
             return Err("A crate with this name already exists".into());
         }
-        self.entries
+        let entry = self
+            .entries
             .iter_mut()
-            .find(|c| c.id == id)
-            .ok_or("Crate no longer exists")?
-            .name = value;
+            .find(|entry| entry.id == id)
+            .ok_or("Crate no longer exists")?;
+        if query.is_some() && !entry.tracks.is_empty() {
+            return Err("A smart crate cannot contain manual track memberships".into());
+        }
+        entry.name = value;
+        entry.smart_query = query;
         Ok(())
     }
     pub fn delete(&mut self, id: i32) -> Result<(), String> {
@@ -218,6 +265,9 @@ impl CrateCatalog {
             .iter_mut()
             .find(|c| c.id == crate_id)
             .ok_or("Crate no longer exists")?;
+        if entry.smart_query.is_some() {
+            return Err("Smart crates use a saved query, not manual memberships".into());
+        }
         let added = tracks.difference(&entry.tracks).count();
         if count + added > MAX_MEMBERSHIPS {
             return Err("Crate membership limit reached".into());
@@ -226,13 +276,15 @@ impl CrateCatalog {
         Ok(added)
     }
     pub fn remove(&mut self, crate_id: i32, track_id: i32) -> Result<bool, String> {
-        Ok(self
+        let entry = self
             .entries
             .iter_mut()
             .find(|c| c.id == crate_id)
-            .ok_or("Crate no longer exists")?
-            .tracks
-            .remove(&track_id))
+            .ok_or("Crate no longer exists")?;
+        if entry.smart_query.is_some() {
+            return Err("Smart crates use a saved query, not manual memberships".into());
+        }
+        Ok(entry.tracks.remove(&track_id))
     }
 }
 
@@ -358,5 +410,46 @@ mod tests {
         }
         assert!(catalog.create_under(Some(parent), "Too deep").is_err());
         assert!(catalog.validate(&HashSet::new()).is_ok());
+    }
+
+    #[test]
+    fn smart_crates_validate_queries_and_reject_manual_memberships() {
+        let mut catalog = CrateCatalog::default();
+        let id = catalog.create_smart("  Artists  ", "  MÉTAL ").unwrap();
+        assert_eq!(catalog.entries[0].smart_query.as_deref(), Some("métal"));
+        assert!(catalog.add(id, 7).is_err());
+        assert!(catalog.remove(id, 7).is_err());
+        for query in ["", "  ", "bad\nquery"] {
+            assert!(catalog.create_smart("Invalid", query).is_err());
+        }
+        assert!(catalog.create_smart("Invalid", &"x".repeat(513)).is_err());
+        let rejected = format!("\u{0130}{}", "x".repeat(511));
+        assert!(catalog.create_smart("Invalid", &rejected).is_err());
+        let accepted = format!("\u{0130}{}", "x".repeat(510));
+        let boundary = catalog.create_smart("Boundary", &accepted).unwrap();
+        assert_eq!(
+            catalog
+                .entries
+                .iter()
+                .find(|entry| entry.id == boundary)
+                .unwrap()
+                .smart_query
+                .as_ref()
+                .unwrap()
+                .chars()
+                .count(),
+            512
+        );
+        assert!(catalog.validate(&HashSet::new()).is_ok());
+        assert!(catalog.validate(&HashSet::new()).is_ok());
+        assert!(catalog.edit(id, "Renamed", Some("")).is_err());
+        assert_eq!(catalog.entries[0].name, "Artists");
+        assert_eq!(catalog.entries[0].smart_query.as_deref(), Some("métal"));
+        catalog.edit(id, "Renamed", Some("live")).unwrap();
+        assert_eq!(catalog.entries[0].smart_query.as_deref(), Some("live"));
+        catalog.edit(id, "Manual", None).unwrap();
+        catalog.add(id, 7).unwrap();
+        assert!(catalog.edit(id, "Smart", Some("new query")).is_err());
+        assert!(catalog.validate(&HashSet::from([7])).is_ok());
     }
 }

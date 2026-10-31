@@ -2,7 +2,7 @@ import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox } from 
 export struct LoopRange { valid: bool, active: bool, visible: bool, in-visible: bool, out-visible: bool, start: float, end: float, description: string }
 export struct SavedLoopRow { occupied: bool, description: string }
 export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string, label-row: int, label-column: int }
-export struct CrateRow { id: int, name: string, count: int, depth: int }
+export struct CrateRow { id: int, name: string, count: int, depth: int, smart: bool }
 export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, metadata-error: string, format: string, path: string, available: bool }
 
@@ -692,13 +692,16 @@ component CratePanel inherits Rectangle {
     in property <int> selection;
     in property <bool> busy;
     in property <bool> has-track;
+    in property <bool> selected-smart;
     in property <bool> editor-open;
     in property <bool> delete-pending;
     in property <string> dialog-title;
+    in property <bool> editor-smart;
     in-out property <string> edit-name;
+    in-out property <string> edit-smart-query;
     in-out property <int> target-index;
     callback select-crate(int); callback target-changed(int);
-    callback new-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
+    callback new-crate(); callback new-smart-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
     callback save-name(); callback cancel-dialog(); callback confirm-delete();
     callback add-track(); callback remove-track();
     background: #121821; border-color: #303b4b; border-width: 1px;
@@ -709,12 +712,12 @@ component CratePanel inherits Rectangle {
             for entry in root.rows : Rectangle {
                 height: 28px; background: root.selection == entry.id ? #194b70 : #1a222e;
                 accessible-role: button; accessible-label: "Crate " + entry.id;
-                accessible-description: entry.name + " (" + entry.count + " tracks)";
+                accessible-description: entry.smart ? "Smart crate " + entry.name : entry.name + " (" + entry.count + " tracks)";
                 accessible-action-default => { if !root.busy { root.select-crate(entry.id); } }
                 HorizontalLayout { padding: 4px;
                     Rectangle { width: entry.depth * 10px; }
                     Text { text: entry.name; color: #e4ebf6; overflow: elide; }
-                    Text { text: "" + entry.count; color: #9faec2; horizontal-alignment: right; }
+                    Text { text: entry.smart ? "SMART" : "" + entry.count; color: #9faec2; horizontal-alignment: right; }
                 }
                 TouchArea { enabled: !root.busy; clicked => { root.select-crate(entry.id); } }
             }
@@ -722,6 +725,7 @@ component CratePanel inherits Rectangle {
         HorizontalLayout {
             Button { text: "NEW"; accessible-label: "New crate"; enabled: !busy; clicked => { root.new-crate(); } }
             Button { text: "NEW SUB"; accessible-label: "New subcrate"; enabled: !busy && selection > 0; clicked => { root.new-subcrate(); } }
+            Button { text: "SMART"; accessible-label: "New smart crate"; enabled: !busy; clicked => { root.new-smart-crate(); } }
         }
         HorizontalLayout {
             Button { text: "RENAME"; accessible-label: "Rename crate"; enabled: !busy && selection > 0; clicked => { root.rename-crate(); } }
@@ -730,7 +734,7 @@ component CratePanel inherits Rectangle {
         ComboBox { model: root.names; current-index <=> root.target-index; accessible-label: "Target crate"; enabled: !busy && root.names.length > 0; selected(value) => { root.target-changed(self.current-index); } }
         HorizontalLayout {
             Button { text: "ADD"; accessible-label: "Add selected track to crate"; enabled: !busy && has-track && names.length > 0; clicked => { root.add-track(); } }
-            Button { text: "REMOVE"; accessible-label: "Remove selected track from crate"; enabled: !busy && has-track && selection > 0; clicked => { root.remove-track(); } }
+            Button { text: "REMOVE"; accessible-label: "Remove selected track from crate"; enabled: !busy && has-track && selection > 0 && !selected-smart; clicked => { root.remove-track(); } }
         }
     }
     if editor-open || delete-pending : Rectangle {
@@ -738,6 +742,7 @@ component CratePanel inherits Rectangle {
         VerticalLayout { padding: 8px; spacing: 6px;
             Text { text: root.dialog-title; color: #e4ebf6; wrap: word-wrap; }
             if root.editor-open : LineEdit { text <=> root.edit-name; accessible-label: "Crate name"; enabled: !root.busy; accepted => { root.save-name(); } }
+            if root.editor-open && root.editor-smart : LineEdit { text <=> root.edit-smart-query; accessible-label: "Smart crate query"; placeholder-text: "Match title, artist, album or path"; enabled: !root.busy; accepted => { root.save-name(); } }
             if root.delete-pending : Text { text: "This crate's memberships are removed. Direct subcrates move up one level; tracks stay in the library."; color: #a5b5ca; wrap: word-wrap; }
             if root.editor-open : Button { text: "SAVE"; accessible-label: "Save crate name"; enabled: !root.busy; clicked => { root.save-name(); } }
             if root.delete-pending : Button { text: "CONFIRM DELETE"; accessible-label: "Confirm crate deletion"; enabled: !root.busy; clicked => { root.confirm-delete(); } }
@@ -1160,13 +1165,16 @@ export component AppWindow inherits Window {
     in property <[CrateRow]> crate-rows;
     in property <[string]> crate-names;
     in property <int> selected-crate;
+    in property <bool> selected-crate-smart;
     in-out property <int> target-crate-index;
     in property <bool> crate-editor-open;
     in property <bool> crate-delete-pending;
     in property <string> crate-dialog-title;
     in-out property <string> crate-edit-name;
+    in property <bool> crate-editor-smart;
+    in-out property <string> crate-edit-smart-query;
     callback select-crate(int); callback target-crate(int);
-    callback new-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
+    callback new-crate(); callback new-smart-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
     callback save-crate-name(); callback confirm-delete-crate(); callback cancel-crate-dialog();
     callback add-to-crate(); callback remove-from-crate();
     keyboard-scope := FocusScope {
@@ -1413,11 +1421,14 @@ export component AppWindow inherits Window {
                     accessible-role: groupbox; accessible-label: "Crate navigation"; width: 190px;
                     rows: root.crate-rows; names: root.crate-names; selection: root.selected-crate;
                     busy: root.loading || root.library-busy || !root.audio-enabled;
-                    has-track: root.selected-track >= 0; target-index <=> root.target-crate-index;
+                    has-track: root.selected-track >= 0;
+                    selected-smart: root.selected-crate-smart;
+                    target-index <=> root.target-crate-index;
                     editor-open: root.crate-editor-open; delete-pending: root.crate-delete-pending;
-                    dialog-title: root.crate-dialog-title; edit-name <=> root.crate-edit-name;
+                    dialog-title: root.crate-dialog-title; editor-smart: root.crate-editor-smart;
+                    edit-name <=> root.crate-edit-name; edit-smart-query <=> root.crate-edit-smart-query;
                     select-crate(id) => { root.select-crate(id); } target-changed(index) => { root.target-crate(index); }
-                    new-crate => { root.new-crate(); } new-subcrate => { root.new-subcrate(); } rename-crate => { root.rename-crate(); } delete-crate => { root.delete-crate(); }
+                    new-crate => { root.new-crate(); } new-smart-crate => { root.new-smart-crate(); } new-subcrate => { root.new-subcrate(); } rename-crate => { root.rename-crate(); } delete-crate => { root.delete-crate(); }
                     save-name => { root.save-crate-name(); } cancel-dialog => { root.cancel-crate-dialog(); } confirm-delete => { root.confirm-delete-crate(); }
                     add-track => { root.add-to-crate(); } remove-track => { root.remove-from-crate(); }
                 }

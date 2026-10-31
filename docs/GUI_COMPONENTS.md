@@ -33,7 +33,7 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Flip/loop panels | 31, 33, 56 | Overview numbered sections | Open: flip sequences, auto-loop UI and saved loops; require separate engine and persistence slices. |
 | Library actions/search | 36, 37, 38, 39, 40 | Manual p. 30 | Open: Search, History, Prepare, Browse, Files. Native file picker is not a library browser. |
 | Library table/view | 45, 49 | Manual pp. 39–40; overview screenshot | Partial: track table, indexed background search/sort, selection and 200-row page navigation exist. Worker filtering/sorting still processes all matching records; native large-list performance and alternate list/art view remain open. |
-| Crate navigation | 51, 52, 53, 54 | Overview numbered sections | Partial: persistent hierarchical subcrates, indented navigation, create/rename/delete, direct set membership and active-crate import are implemented. Smart crates and iTunes/Serato-format compatibility remain open. Parent crates show only their own direct memberships; child tracks are not implicitly aggregated. |
+| Crate navigation | 51, 52, 53, 54 | Overview numbered sections | Partial: persistent hierarchical static crates and saved-query smart crates, indented navigation, create/rename/delete, direct set membership and active-crate import are implemented. Smart filters search title, artist, album, filename and path, combined with the normal search. iTunes/Serato-format compatibility remains open. Parent crates show only their own direct memberships; child tracks are not implicitly aggregated. |
 
 ### Concrete behavior to preserve from the manual
 

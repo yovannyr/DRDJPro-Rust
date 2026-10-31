@@ -259,7 +259,7 @@ pub struct AudioController {
     fx_writable: Cell<bool>,
     save_failed: Cell<bool>,
     initial_paths: RefCell<Vec<PathBuf>>,
-    crate_editor: Cell<Option<(i32, Option<i32>)>>,
+    crate_editor: Cell<Option<(i32, Option<i32>, bool)>>,
     crate_delete: Cell<Option<i32>>,
     crate_target: Cell<i32>,
     import_crate: Cell<i32>,
@@ -923,7 +923,9 @@ impl AudioController {
                     .borrow()
                     .crates()
                     .ordered()
-                    .get(index.max(0) as usize)
+                    .into_iter()
+                    .filter(|entry| entry.smart_query.is_none())
+                    .nth(index.max(0) as usize)
                 {
                     c.crate_target.set(entry.id);
                 }
@@ -939,20 +941,32 @@ impl AudioController {
                     c.cancel_crate_dialog();
                     let library = c.library.borrow();
                     let id = if rename { library.active_crate() } else { 0 };
-                    let name = if rename {
+                    let (name, smart_query) = if rename {
                         let Some(entry) = library.crates().entries.iter().find(|e| e.id == id)
                         else {
                             return;
                         };
-                        entry.name.clone()
+                        (entry.name.clone(), entry.smart_query.clone())
                     } else {
-                        String::new()
+                        (String::new(), None)
                     };
-                    c.crate_editor.set(Some((id, None)));
+                    let smart = smart_query.is_some();
+                    c.crate_editor.set(Some((id, None, smart)));
                     if let Some(ui) = c.ui.upgrade() {
                         ui.set_crate_edit_name(name.into());
+                        ui.set_crate_edit_smart_query(smart_query.unwrap_or_default().into());
+                        ui.set_crate_editor_smart(smart);
                         ui.set_crate_dialog_title(
-                            if rename { "Rename crate" } else { "New crate" }.into(),
+                            if rename {
+                                if smart {
+                                    "Edit smart crate"
+                                } else {
+                                    "Rename crate"
+                                }
+                            } else {
+                                "New crate"
+                            }
+                            .into(),
                         );
                         ui.set_crate_editor_open(true);
                     }
@@ -964,6 +978,23 @@ impl AudioController {
                 ui.on_new_crate(callback);
             }
         }
+        let weak = Rc::downgrade(self);
+        ui.on_new_smart_crate(move || {
+            if let Some(c) = weak.upgrade() {
+                if !c.can_change_crates() {
+                    return;
+                }
+                c.cancel_crate_dialog();
+                c.crate_editor.set(Some((0, None, true)));
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_crate_edit_name("".into());
+                    ui.set_crate_edit_smart_query("".into());
+                    ui.set_crate_editor_smart(true);
+                    ui.set_crate_dialog_title("New smart crate".into());
+                    ui.set_crate_editor_open(true);
+                }
+            }
+        });
         let weak = Rc::downgrade(self);
         ui.on_new_subcrate(move || {
             if let Some(c) = weak.upgrade() {
@@ -978,9 +1009,11 @@ impl AudioController {
                 let Ok(parent_name) = library.crates().hierarchy_name(parent_id) else {
                     return;
                 };
-                c.crate_editor.set(Some((0, Some(parent_id))));
+                c.crate_editor.set(Some((0, Some(parent_id), false)));
                 if let Some(ui) = c.ui.upgrade() {
                     ui.set_crate_edit_name("".into());
+                    ui.set_crate_edit_smart_query("".into());
+                    ui.set_crate_editor_smart(false);
                     ui.set_crate_dialog_title(format!("New subcrate in {parent_name}").into());
                     ui.set_crate_editor_open(true);
                 }
@@ -992,25 +1025,35 @@ impl AudioController {
                 if !c.can_change_crates() {
                     return;
                 }
-                let Some((id, parent_id)) = c.crate_editor.get() else {
+                let Some((id, parent_id, smart)) = c.crate_editor.get() else {
                     return;
                 };
                 let Some(ui) = c.ui.upgrade() else {
                     return;
                 };
                 let name = ui.get_crate_edit_name().to_string();
+                let smart_query = smart.then(|| ui.get_crate_edit_smart_query().to_string());
                 let result = if id == 0 {
                     let mut library = c.library.borrow_mut();
-                    let created = match parent_id {
-                        Some(parent_id) => library.create_crate_under(Some(parent_id), &name),
-                        None => library.create_crate(&name),
+                    let created = if let Some(query) = smart_query.as_deref() {
+                        library.create_smart_crate(&name, query)
+                    } else {
+                        match parent_id {
+                            Some(parent_id) => library.create_crate_under(Some(parent_id), &name),
+                            None => library.create_crate(&name),
+                        }
                     };
                     created.and_then(|id| {
                         c.crate_target.set(id);
                         library.select_crate(id)
                     })
                 } else {
-                    c.library.borrow_mut().rename_crate(id, &name)
+                    let mut library = c.library.borrow_mut();
+                    if smart {
+                        library.edit_crate(id, &name, smart_query.as_deref())
+                    } else {
+                        library.rename_crate(id, &name)
+                    }
                 };
                 c.crate_changed(result.map(|()| "Crate saved".into()));
             }
@@ -4428,7 +4471,19 @@ impl AudioController {
             return;
         };
         ui.set_library_busy(true);
-        self.import_crate.set(self.library.borrow().active_crate());
+        let library = self.library.borrow();
+        let active_crate = library.active_crate();
+        let target_crate = if library
+            .crates()
+            .entries
+            .iter()
+            .any(|entry| entry.id == active_crate && entry.smart_query.is_none())
+        {
+            active_crate
+        } else {
+            0
+        };
+        self.import_crate.set(target_crate);
         ui.set_status("Importing local audio files…".into());
         let (tx, rx) = mpsc::sync_channel(1);
         let cancel = crate::cancellation::Cancellation::default();
@@ -4457,7 +4512,11 @@ impl AudioController {
         let library = self.library.borrow();
         ui.set_selected_track(library.selected_id());
         let crates = library.crates().ordered_with_depth();
-        let crate_names = match crates
+        let target_crates: Vec<_> = crates
+            .iter()
+            .filter(|(entry, _)| entry.smart_query.is_none())
+            .collect();
+        let crate_names = match target_crates
             .iter()
             .map(|(entry, _)| library.crates().hierarchy_name(entry.id))
             .collect::<Result<Vec<_>, _>>()
@@ -4468,12 +4527,12 @@ impl AudioController {
                 return;
             }
         };
-        let target = crates
+        let target = target_crates
             .iter()
             .position(|(entry, _)| entry.id == self.crate_target.get())
-            .or_else(|| (!crates.is_empty()).then_some(0));
+            .or_else(|| (!target_crates.is_empty()).then_some(0));
         self.crate_target
-            .set(target.map_or(0, |index| crates[index].0.id));
+            .set(target.map_or(0, |index| target_crates[index].0.id));
         ui.set_target_crate_index(target.map_or(-1, |index| index as i32));
         ui.set_crate_names(ModelRc::new(Rc::new(VecModel::from(
             crate_names
@@ -4489,10 +4548,19 @@ impl AudioController {
                     name: entry.name.clone().into(),
                     count: entry.tracks.len() as i32,
                     depth: *depth as i32,
+                    smart: entry.smart_query.is_some(),
                 })
                 .collect::<Vec<_>>(),
         ))));
         ui.set_selected_crate(library.active_crate());
+        ui.set_selected_crate_smart(
+            library
+                .crates()
+                .entries
+                .iter()
+                .find(|entry| entry.id == library.active_crate())
+                .is_some_and(|entry| entry.smart_query.is_some()),
+        );
 
         let mut spec = library.search_spec(self.library_generation.get());
         let mut worker_slot = self.search_worker.borrow_mut();
@@ -4519,6 +4587,7 @@ impl AudioController {
             if previous.generation != spec.generation
                 || previous.scope != spec.scope
                 || previous.query != spec.query
+                || previous.smart_query != spec.smart_query
                 || previous.field != spec.field
                 || previous.descending != spec.descending
             {
@@ -11770,6 +11839,88 @@ mod tests {
         assert!(!ui.get_right_playing());
         c.close_library().unwrap();
     }
+
+    #[test]
+    fn smart_crate_ui_filters_and_restores_saved_metadata_query() {
+        use crate::test_support::tagged_wav;
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let first = tagged_wav("Morning Mix", "Artist Ñ", "First Album");
+        let second = tagged_wav("Evening Mix", "Other Artist", "Second Album");
+        let imported_match = tagged_wav("Late Set", "Artist Ñ", "Third Album");
+        let imported_nonmatch = tagged_wav("Quiet Set", "Other", "Fourth Album");
+        let paths = vec![first.path().to_owned(), second.path().to_owned()];
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), paths.clone());
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        ui.show().unwrap();
+
+        control(&ui, "New smart crate").invoke_accessible_default_action();
+        control(&ui, "Crate name").set_accessible_value("Artists from North");
+        control(&ui, "Smart crate query").set_accessible_value("ARTIST Ñ");
+        control(&ui, "Save crate name").invoke_accessible_default_action();
+        finish_storage(&c);
+        finish_search(&c);
+        assert!(ui.get_selected_crate_smart());
+        assert!(ui.get_crate_rows().row_data(0).unwrap().smart);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert_eq!(
+            ui.get_library_rows().row_data(0).unwrap().artist,
+            "Artist Ñ"
+        );
+        c.import_paths(vec![
+            imported_match.path().to_owned(),
+            imported_nonmatch.path().to_owned(),
+        ]);
+        finish_import(&c);
+        finish_storage(&c);
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 2);
+        assert!(ui
+            .get_library_rows()
+            .iter()
+            .all(|row| row.artist == "Artist Ñ"));
+        assert!(
+            c.library.borrow().crates().entries[0].tracks.is_empty(),
+            "smart crates do not gain static memberships on import"
+        );
+        assert!(!ui.get_status().contains("assignment failed"));
+        control(&ui, "Library search").set_accessible_value("First Album");
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        control(&ui, "Library search").set_accessible_value("Second Album");
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_count(), 0);
+
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        ui.invoke_select_crate(1);
+        finish_search(&c);
+        assert!(ui.get_selected_crate_smart());
+        assert_eq!(ui.get_library_rows().row_count(), 2);
+        assert_eq!(
+            ui.get_library_rows().row_data(0).unwrap().artist,
+            "Artist Ñ"
+        );
+    }
+
     #[test]
     fn crate_gui_import_assignment_confirmation_restart_and_playing_deck_are_isolated() {
         use slint::Model;

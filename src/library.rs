@@ -36,9 +36,10 @@ pub struct CatalogDelta {
     pub crates: Option<CrateDelta>,
     pub memberships: Vec<(i32, i32, bool)>,
 }
+pub type CrateDeltaEntry = (i32, Option<String>, Option<i32>, Option<String>);
 pub struct CrateDelta {
     pub last_id: i32,
-    pub entries: Vec<(i32, Option<String>, Option<i32>)>,
+    pub entries: Vec<CrateDeltaEntry>,
 }
 impl Catalog {
     pub fn validate(&self) -> Result<(), String> {
@@ -356,6 +357,7 @@ pub(crate) struct SearchSpec {
     pub revision: u64,
     pub scope: i32,
     pub query: String,
+    pub smart_query: String,
     pub field: i32,
     pub descending: bool,
     pub page_index: usize,
@@ -404,7 +406,7 @@ impl SearchProjection {
                 .into_iter()
                 .filter(|&i| self.in_scope(i))
                 .map(|i| &self.tracks[i / SEARCH_RECORD_CHUNK][i % SEARCH_RECORD_CHUNK])
-                .filter(|t| t.matches(&spec.query))
+                .filter(|t| t.matches(&spec.query) && t.matches(&spec.smart_query))
                 .collect(),
             None => self
                 .tracks
@@ -413,7 +415,7 @@ impl SearchProjection {
                 .enumerate()
                 .filter(|(i, _)| self.in_scope(*i))
                 .map(|(_, track)| track)
-                .filter(|t| t.matches(&spec.query))
+                .filter(|t| t.matches(&spec.query) && t.matches(&spec.smart_query))
                 .collect(),
         };
         matches.sort_by(|a, b| a.sort_key(spec.field).cmp(&b.sort_key(spec.field)));
@@ -577,10 +579,12 @@ impl Library {
         self.changed_tracks.insert(index, self.revision);
     }
     fn mark_crate(&mut self, id: i32) {
+        self.missing_cache.set(None);
         self.revision = self
             .revision
             .checked_add(1)
             .expect("Library revision overflow");
+        *self.view_cache.get_mut() = None;
         self.changed_crates.insert(id, self.revision);
     }
     fn mark_memberships(
@@ -650,6 +654,7 @@ impl Library {
                             id,
                             entry.map(|c| c.name.clone()),
                             entry.and_then(|c| c.parent_id),
+                            entry.and_then(|c| c.smart_query.clone()),
                         )
                     })
                     .collect(),
@@ -757,8 +762,23 @@ impl Library {
         self.mark_crate(id);
         Ok(id)
     }
+    pub fn create_smart_crate(&mut self, name: &str, query: &str) -> Result<i32, String> {
+        let id = self.crates.create_smart(name, query)?;
+        self.mark_crate(id);
+        Ok(id)
+    }
     pub fn rename_crate(&mut self, id: i32, name: &str) -> Result<(), String> {
         self.crates.rename(id, name)?;
+        self.mark_crate(id);
+        Ok(())
+    }
+    pub fn edit_crate(
+        &mut self,
+        id: i32,
+        name: &str,
+        smart_query: Option<&str>,
+    ) -> Result<(), String> {
+        self.crates.edit(id, name, smart_query)?;
         self.mark_crate(id);
         Ok(())
     }
@@ -905,14 +925,10 @@ impl Library {
         if let Some(count) = self.missing_cache.get() {
             return count;
         }
-        let members = self.scope_members();
         let result = self
             .tracks
             .iter()
-            .filter(|t| {
-                !t.available
-                    && (self.active_crate == 0 || members.is_some_and(|m| m.contains(&t.id)))
-            })
+            .filter(|track| !track.available && self.in_active_scope(track))
             .count();
         self.missing_cache.set(Some(result));
         result
@@ -927,8 +943,23 @@ impl Library {
     pub fn scope_len(&self) -> usize {
         if self.active_crate == 0 {
             self.len()
+        } else if let Some(query) = self.active_smart_query() {
+            self.tracks
+                .iter()
+                .filter(|track| track.matches_query(query))
+                .count()
         } else {
             self.scope_members().map_or(0, HashSet::len)
+        }
+    }
+    fn in_active_scope(&self, track: &Track) -> bool {
+        if self.active_crate == 0 {
+            true
+        } else if let Some(query) = self.active_smart_query() {
+            track.matches_query(query)
+        } else {
+            self.scope_members()
+                .is_some_and(|members| members.contains(&track.id))
         }
     }
     /// Paths must already be inspected/canonicalized by the worker.
@@ -1007,11 +1038,15 @@ impl Library {
         }
     }
     pub(crate) fn search_spec(&self, generation: u64) -> SearchSpec {
+        let smart_query = self
+            .active_smart_query()
+            .map_or_else(String::new, str::to_owned);
         SearchSpec {
             generation,
             revision: self.search_revision,
             scope: self.active_crate,
             query: self.query.clone(),
+            smart_query,
             field: self.sort_field,
             descending: self.descending,
             page_index: 0,
@@ -1022,7 +1057,7 @@ impl Library {
         SearchProjection {
             tracks: Arc::clone(&self.search_records),
             count: self.tracks.len(),
-            members: (self.active_crate != 0).then(|| {
+            members: (self.active_crate != 0 && self.active_smart_query().is_none()).then(|| {
                 self.scope_bits
                     .get(&self.active_crate)
                     .cloned()
@@ -1100,8 +1135,20 @@ impl Library {
         tracks
     }
     fn matches_visible(&self, track: &Track, members: Option<&HashSet<i32>>) -> bool {
-        (self.active_crate == 0 || members.is_some_and(|set| set.contains(&track.id)))
+        (self.active_crate == 0
+            || self
+                .active_smart_query()
+                .is_some_and(|query| track.matches_query(query))
+            || members.is_some_and(|set| set.contains(&track.id)))
             && (self.query.is_empty() || track.matches_query(&self.query))
+    }
+
+    fn active_smart_query(&self) -> Option<&str> {
+        self.crates
+            .entries
+            .iter()
+            .find(|entry| entry.id == self.active_crate)
+            .and_then(|entry| entry.smart_query.as_deref())
     }
 
     fn is_visible_id(&self, id: i32) -> bool {
@@ -1125,6 +1172,71 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn smart_crate_search_combines_saved_rule_and_user_query_and_tracks_metadata_changes() {
+        let paths = [
+            PathBuf::from("Blue Sunrise.wav"),
+            PathBuf::from("Sunset.mp3"),
+            PathBuf::from("Blue compilation.flac"),
+        ];
+        let mut library = Library::default();
+        library.insert(paths.clone());
+        library.set_metadata(
+            &paths[0],
+            crate::track_metadata::TrackMetadata {
+                title: "Blue Sunrise".into(),
+                artist: "Artist One".into(),
+                album: "Warmup".into(),
+                ..Default::default()
+            },
+        );
+        library.set_metadata(
+            &paths[1],
+            crate::track_metadata::TrackMetadata {
+                title: "Sunset".into(),
+                artist: "Blue Artist".into(),
+                album: "Live Set".into(),
+                ..Default::default()
+            },
+        );
+        library.set_metadata(
+            &paths[2],
+            crate::track_metadata::TrackMetadata {
+                title: "Sunset".into(),
+                artist: "Other".into(),
+                album: "Blue compilation".into(),
+                ..Default::default()
+            },
+        );
+        let smart = library.create_smart_crate("Blue tracks", "blue").unwrap();
+        library.select_crate(smart).unwrap();
+        let projection = library.search_projection();
+        assert_eq!(projection.search(&library.search_spec(1)), vec![1, 2, 3]);
+        assert_eq!(library.scope_len(), 3);
+
+        library.set_query("blue artist".into());
+        let projection = library.search_projection();
+        assert_eq!(projection.search(&library.search_spec(2)), vec![2]);
+
+        library
+            .edit_crate(smart, "Sunset tracks", Some("sunset"))
+            .unwrap();
+        library.set_query(String::new());
+        let projection = library.search_projection();
+        assert_eq!(projection.search(&library.search_spec(3)), vec![2, 3]);
+        library.set_metadata(
+            &paths[2],
+            crate::track_metadata::TrackMetadata {
+                title: "Noon".into(),
+                artist: "Other".into(),
+                album: "Quiet".into(),
+                ..Default::default()
+            },
+        );
+        let projection = library.search_projection();
+        assert_eq!(projection.search(&library.search_spec(4)), vec![2]);
+    }
+
     #[test]
     fn projection_index_builds_on_search_thread_and_preserves_snapshot() {
         let mut library = Library::default();
