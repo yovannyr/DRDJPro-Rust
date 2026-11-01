@@ -94,6 +94,8 @@ The inspected **working-tree** composition is not identical to the reference HEA
 
 This follow-up completes only the inspected composition/legacy **source trace**. Open gates: resolve the dirty desktop composition in an isolated reference build; execute reference tests (installed `dotnet` is not execution evidence); establish the intended active input/transport surface; then add shared-input assertions or approve documented divergences. No native listening, controller timing or whole-application parity is claimed.
 
+Isolated execution attempt: exported the committed HEAD's Core/Audio.Engine sources, Audio.Engine.Tests and build/package manifests into session-local scratch, without copying local modifications. The local working-tree `Audio.Engine.csproj` was modified and empty; its HEAD version was nonempty, another reason not to build the original checkout. `dotnet test --no-restore --filter FullyQualifiedName~CommandDrivenAudioEngineTests` returned zero without any discovered/executed test output; **not a passing test**. A normal test/restore then stalled at project restore discovery and was stopped after four minutes; a bounded retry using explicit `https://api.nuget.org/v3/index.json` also stalled and was stopped after two minutes. No diagnostic established the cause. No .NET test count or parity evidence was obtained; scratch was removed and its absence verified. Isolated restore/build remains blocked pending diagnosis, not an application regression finding.
+
 ## Extended workspace and session library acceptance (2026-10-24)
 
 | ID | Implemented behavior | Automated evidence / remaining boundary |
