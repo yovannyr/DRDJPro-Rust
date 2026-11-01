@@ -7755,6 +7755,141 @@ mod tests {
             "ELAPSED 00:02.000   LEFT 00:00.000\nTOTAL 00:02.000"
         );
     }
+    #[test]
+    fn shift_arrows_load_selected_library_track_on_either_deck_with_focus_and_busy_guards() {
+        use slint::platform::{Key, PointerEventButton, WindowEvent};
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("shortcut-load.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), vec![fixture()]);
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        ui.show().unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+
+        let press_shortcut = |key: Key| {
+            ui.window().dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Shift.into(),
+            });
+            ui.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+        };
+        let release_shortcut = |key: Key| {
+            ui.window()
+                .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+            ui.window().dispatch_event(WindowEvent::KeyReleased {
+                text: Key::Shift.into(),
+            });
+        };
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        press_shortcut(Key::LeftArrow);
+        assert!(c.pending.borrow().is_some(), "Shift+Left starts one A load");
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::RightArrow.into(),
+        });
+        ui.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::RightArrow.into(),
+        });
+        assert_eq!(
+            c.pending.borrow().as_ref().map(|(deck, _)| *deck),
+            Some(DeckId::A),
+            "a second deck load cannot replace the active worker"
+        );
+        assert!(!engine.snapshot(DeckId::B).loaded);
+        finish(&c);
+        ui.window().dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::LeftArrow.into(),
+        });
+        assert!(
+            c.pending.borrow().is_none(),
+            "key repeat starts no second load"
+        );
+        release_shortcut(Key::LeftArrow);
+        assert!(engine.snapshot(DeckId::A).loaded);
+        assert!(!engine.snapshot(DeckId::B).loaded);
+
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        press_shortcut(Key::RightArrow);
+        assert!(
+            c.pending.borrow().is_some(),
+            "Shift+Right starts one B load"
+        );
+        finish(&c);
+        ui.window().dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::RightArrow.into(),
+        });
+        assert!(c.pending.borrow().is_none());
+        release_shortcut(Key::RightArrow);
+        assert!(engine.snapshot(DeckId::A).loaded);
+        assert!(engine.snapshot(DeckId::B).loaded);
+
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let (continue_tx, continue_rx) = std::sync::mpsc::sync_channel(1);
+        c.start_import_work(move |_| {
+            started_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+            None
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("import worker starts");
+        assert!(c.pending_import.borrow().is_some());
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        press_shortcut(Key::LeftArrow);
+        release_shortcut(Key::LeftArrow);
+        assert!(
+            c.pending.borrow().is_none(),
+            "a library import blocks shortcut loading"
+        );
+        continue_tx.send(()).unwrap();
+        finish_import(&c);
+
+        let search = control(&ui, "Library search");
+        let origin = search.absolute_position();
+        let size = search.size();
+        let position =
+            slint::LogicalPosition::new(origin.x + size.width / 2., origin.y + size.height / 2.);
+        ui.window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        press_shortcut(Key::LeftArrow);
+        release_shortcut(Key::LeftArrow);
+        assert!(
+            c.pending.borrow().is_none(),
+            "focused search keeps Shift+Left for text editing"
+        );
+        assert!(engine.snapshot(DeckId::A).loaded);
+
+        engine.play(DeckId::A);
+        control(&ui, "Library track 1").invoke_accessible_default_action();
+        press_shortcut(Key::LeftArrow);
+        release_shortcut(Key::LeftArrow);
+        assert!(
+            c.pending.borrow().is_none(),
+            "playing target deck cannot be replaced by shortcut"
+        );
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(ui.get_status().contains("Pause deck A"));
+        c.close_library().unwrap();
+    }
 
     #[test]
     fn source_time_display_tracks_both_decks_seek_pitch_pause_and_eof() {

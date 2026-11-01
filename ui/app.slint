@@ -1286,6 +1286,16 @@ export component AppWindow inherits Window {
         width: 100%; height: 100%;
         focus-lost(reason) => { root.release-active-hot-cue-key(); }
         key-pressed(event) => {
+            if !event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && event.modifiers.shift {
+                if event.text == Key.LeftArrow {
+                    if !event.repeat { root.load-library-left(); }
+                    return accept;
+                }
+                if event.text == Key.RightArrow {
+                    if !event.repeat { root.load-library-right(); }
+                    return accept;
+                }
+            }
             if event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
                 return reject;
             }

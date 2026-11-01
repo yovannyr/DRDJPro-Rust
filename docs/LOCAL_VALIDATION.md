@@ -2,6 +2,12 @@
 
 Host: Windows x64, rustc 1.99.1. Starting revision: c8e0b70, branch main. Initial tracked working tree was clean. The referenced chat exposed message references only, so its claimed build results could not be recovered; the checkout was verified directly.
 
+## Library Shift-arrow loading — local verification (2026-11-01)
+
+- `cargo test --workspace --locked shift_arrows_load_selected_library_track -- --nocapture`: passed. Actual Slint WindowEvents verify selection loading on A/B, repeated-key suppression, load/import-worker exclusion, focused-search protection and playing-target protection.
+- `cargo fmt --all -- --check`, `cargo test --workspace --locked --quiet` (405 passed, 6 ignored), `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build --workspace --release --locked` and `git diff --check`: passed.
+- Independent GPT-6.1 Sol medium review found no significant issues. Native keyboard/focus usability acceptance remains open.
+
 ## External Windows drops — implementation verification (2026-10-30)
 
 - Baseline `cargo test track_drop -- --nocapture`: 1 passed.
