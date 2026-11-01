@@ -56,6 +56,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
 - [x] ✅ Externe Explorer-Dateidrops: Windows-Winit-Brücke implementiert; Nutzer bestätigt am 2026-10-30 den angeleiteten nativen Testablauf ohne Fehler. Interne Headless-Tests sind ein separater Nachweis.
   - [x] ✅ Windows-Winit-Brücke für einzelne Dateipfade, DPI-korrekte Deck-Zuordnung und bestehenden Hintergrund-Loader implementiert; Mehrfachdrops, ungültige Ziele, offene AUDIO/MON/FX-Panels und belegte/spielende Ziele geschützt. Automatisierte Gesten-/Geometrie-/Controller-Regressionen vorhanden.
   - [x] ✅ Native Explorer-Bedienabnahme: Nutzer bestätigt nach dem Testprotokoll für A/B, Wiedergabe-/Mehrfachdrop-Schutz, Folgegesten, Abbruch, offene Panels und Fenstergrößen-/Skalierungsprüfung: „Es funktioniert alles, keine Fehlermeldung“. Konkrete Fenstermaße und DPI-Werte wurden nicht separat mitgeteilt; kein umfassender Multi-Monitor-/Windows-Konfigurationsnachweis.
+- [x] ✅ Die Decks kennzeichnen die Trainings- bzw. MC4000-Präsentation anhand des tatsächlichen MIDI-Input-Handles; beide Varianten verwenden dieselben Deck-Komponenten und Callbacks. Native visuelle/HW-Abnahme bleibt offen.
+- [ ] ☐ Vollständiges alternatives Controller-Layout, Lesbarkeitsabgleich mit der Referenz sowie physische Jog-/Platter-Synchronisierung. Der MC4000-Decoder liefert derzeit keine Platter-Positionsdaten.
 
 - [x] ✅ Manuelle Loop-Engine mit framegenauem In/Out, Aktivieren/Verlassen und deterministischen Offline-Tests.
 - [x] ✅ Loop-In/Out, Aktivieren/Verlassen und echte Loop-Zustandsanzeige in beiden Decks.

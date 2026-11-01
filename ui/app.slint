@@ -368,6 +368,7 @@ component NudgeHold inherits Rectangle {
 
 component CompactDeck inherits Rectangle {
     in property <string> deck-label;
+    in property <bool> controller-mode: false;
     in property <brush> accent;
     in property <string> track-title;
     in property <string> time-text;
@@ -439,7 +440,15 @@ component CompactDeck inherits Rectangle {
     VerticalLayout {
         padding: 8px; spacing: 4px;
         HorizontalLayout {
-            Text { text: deck-label + " / INT"; color: accent; font-weight: 700; font-size: 15px; }
+            Text {
+                text: root.deck-label + (root.controller-mode ? " / MC4000" : " / TRAINING");
+                color: root.accent;
+                font-weight: 700;
+                font-size: 15px;
+                accessible-role: text;
+                accessible-label: root.deck-label + " presentation mode";
+                accessible-description: root.controller-mode ? "Controller mode active" : "Training mode active";
+            }
             Button { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !load-busy && !playing; clicked => { root.load(); } }
             Button { text: playing ? "PAUSE" : "PLAY"; accessible-label: deck-label + " play/pause"; enabled: !audio-enabled || loaded; clicked => { root.toggle(); } }
             Button { text: "CUE"; accessible-label: deck-label + " cue"; enabled: !audio-enabled || loaded; clicked => { root.cue(); } }
@@ -1034,6 +1043,7 @@ export component AppWindow inherits Window {
     in property <string> right-time: "SIMULATION";
     in property <string> status;
     in property <string> controller-status;
+    in property <bool> mc4000-connected: false;
     in-out property <bool> controller-reconnect-requested: false;
     in property<string> output-peak-caption:"BUS PEAK —";
     in property<float> output-peak-level:0;
@@ -1343,7 +1353,7 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             height: 260px; spacing: 8px;
             left-deck := CompactDeck {
-                deck-label: "DECK A"; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
+                deck-label: "DECK A"; controller-mode: root.mc4000-connected; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 external-hover: root.external-drop-deck == 0;
                 accepts-drop(data) => { return root.accepts-track-drop(0,data); }
                 drop-track(data) => { return root.drop-track(0,data); }
@@ -1382,7 +1392,7 @@ export component AppWindow inherits Window {
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } eject => { root.eject-left(); } seek(value) => { root.seek-left(value); }
             }
             right-deck := CompactDeck {
-                deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
+                deck-label: "DECK B"; controller-mode: root.mc4000-connected; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 external-hover: root.external-drop-deck == 1;
                 accepts-drop(data) => { return root.accepts-track-drop(1,data); }
                 drop-track(data) => { return root.drop-track(1,data); }

@@ -269,12 +269,14 @@ fn main() -> Result<(), slint::PlatformError> {
     let mut midi = if controller.is_some() {
         match mc4000::Input::connect() {
             Ok(input) => {
+                ui.set_mc4000_connected(input.is_some());
                 if input.is_some() {
                     ui.set_status("MC4000 connected: transport and mixer enabled".into());
                 }
                 input
             }
             Err(error) => {
+                ui.set_mc4000_connected(false);
                 ui.set_status(format!("MC4000 input unavailable: {error}").into());
                 None
             }
@@ -298,23 +300,30 @@ fn main() -> Result<(), slint::PlatformError> {
                     match mc4000::present() {
                         Ok(false) => {
                             midi = None;
+                            ui.set_mc4000_connected(false);
                             ui.set_controller_status("MC4000 disconnected".into());
                         }
                         Ok(true) if midi.is_none() => match mc4000::Input::connect() {
                             Ok(input) => {
                                 midi = input;
                                 if midi.is_some() {
+                                    ui.set_mc4000_connected(true);
                                     ui.set_status("MC4000 connected".into());
                                 } else {
+                                    ui.set_mc4000_connected(false);
                                     ui.set_controller_status("MC4000 disconnected".into());
                                 }
                             }
-                            Err(error) => ui.set_controller_status(
-                                format!("MC4000 connection failed: {error}").into(),
-                            ),
+                            Err(error) => {
+                                ui.set_mc4000_connected(false);
+                                ui.set_controller_status(
+                                    format!("MC4000 connection failed: {error}").into(),
+                                );
+                            }
                         },
                         Err(error) => {
                             midi = None;
+                            ui.set_mc4000_connected(false);
                             ui.set_controller_status(
                                 format!("MC4000 discovery failed: {error}").into(),
                             );

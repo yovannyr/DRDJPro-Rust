@@ -399,6 +399,12 @@ Only changed three-byte messages are sent (at most 20 per feedback frame); all o
 
 RECONNECT MIDI provides explicit recovery if a same-name device disappears and returns between polling ticks: before further MIDI dispatch the application drops both old connections and queued inputs, forces discovery and opens fresh handles. The accessible footer action remains available even if no controller is detected. It does not rebuild the audio stream or resume tracks. Automatic detection of sub-two-second USB cycles remains open.
 
+## Training and MC4000 deck presentation (2026-11-01)
+
+The existing A/B deck components now identify their presentation as TRAINING or MC4000. Controller mode is driven by the presence of the connected MC4000 MIDI input handle; startup failure, disconnect, discovery error and failed reconnect return the label to training mode. Both labels still describe the same existing deck state and callbacks.
+
+This is a mode indicator on the shared deck layout, not a finished alternate controller layout. Jog/platter position is not provided by the current MIDI decoder, so physical platter synchronization is not represented. Reference-sized typography, native visual review, full controller-specific layout and hardware acceptance remain open.
+
 ## Audio stream fault handling and safe manual reopening (2026-10-30)
 
 The Rodio error callback now only publishes a sticky atomic fault flag. On the following controller tick both decks pause; active Sync, nudge and scheduled cues are cancelled. The existing persistent audio warning directs the user to AUDIO / REOPEN CURRENT. Engine PLAY refuses a failed stream, including hardware/GUI paths. No stream enumeration, logging, allocation or lock is added to this error callback.

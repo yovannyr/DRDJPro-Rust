@@ -15887,4 +15887,38 @@ mod tests {
         assert_ne!(ui.get_right_detail(), right_detail);
         assert_eq!(ui.get_left_detail(), left_detail);
     }
+
+    #[test]
+    fn deck_presentation_mode_tracks_controller_connection() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.show().unwrap();
+
+        for label in ["DECK A presentation mode", "DECK B presentation mode"] {
+            let header = control(&ui, label);
+            assert_eq!(
+                header.accessible_description().unwrap().as_str(),
+                "Training mode active"
+            );
+        }
+
+        ui.set_mc4000_connected(true);
+        for label in ["DECK A presentation mode", "DECK B presentation mode"] {
+            let header = control(&ui, label);
+            assert_eq!(
+                header.accessible_description().unwrap().as_str(),
+                "Controller mode active"
+            );
+        }
+
+        ui.set_mc4000_connected(false);
+        for label in ["DECK A presentation mode", "DECK B presentation mode"] {
+            let header = control(&ui, label);
+            assert_eq!(
+                header.accessible_description().unwrap().as_str(),
+                "Training mode active"
+            );
+        }
+        ui.hide().unwrap();
+    }
 }
