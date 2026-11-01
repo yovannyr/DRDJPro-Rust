@@ -455,13 +455,87 @@ component CompactDeck inherits Rectangle {
             Button { text: "EJECT"; accessible-label: deck-label + " eject"; accessible-description: "Stop and unload this deck; keep the track in the library"; enabled: loaded && !loading && !load-busy; clicked => { root.eject(); } }
         }
         Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
-        WaveformStrip {
+        if !root.controller-mode : WaveformStrip {
             height: 42px; overview: true; deck-label: root.deck-label; accent: root.accent;
             values: root.waveform; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; position: root.position; marker: root.position;
             enabled: !audio-enabled || loaded;
             seek(value) => { if audio-enabled { root.seek(value); } else { root.position = value; } }
         }
-        HorizontalLayout {
+        if root.controller-mode : VerticalLayout {
+            height: 59px;
+            spacing: 1px;
+            Rectangle {
+                height: 6px;
+                background: #0b1119;
+                accessible-role: image;
+                accessible-label: root.deck-label + " software playhead";
+                accessible-description: root.track-title + ", " + round(root.position) + "%, " + root.time-text + ", " + root.bpm-caption + ", " + root.pitch-caption + ", " + (root.playing ? "playing" : "paused") + ". Software playback position; not physical platter position.";
+                Rectangle {
+                    width: parent.width * clamp(root.position / 100, 0, 1);
+                    height: parent.height;
+                    background: root.accent;
+                }
+            }
+            Text {
+                height: 24px;
+                text: root.time-text;
+                color: #d3dce8;
+                font-size: 10px;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                accessible-role: text;
+                accessible-label: root.deck-label + " virtual deck source time";
+                accessible-description: root.time-text;
+            }
+            HorizontalLayout {
+                height: 13px;
+                spacing: 3px;
+                Text {
+                    text: "POSITION " + round(root.position) + "%";
+                    color: #d3dce8;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck time and position";
+                    accessible-description: round(root.position) + "%";
+                }
+                Text {
+                    text: root.playing ? "PLAYING" : "PAUSED";
+                    color: root.playing ? #4ee79b : #a8b3c3;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck transport state";
+                    accessible-description: root.playing ? "Playing" : "Paused";
+                }
+            }
+            HorizontalLayout {
+                height: 13px;
+                spacing: 3px;
+                Text {
+                    height: 13px;
+                    text: root.bpm-caption;
+                    color: #d3dce8;
+                    font-size: 10px;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck BPM";
+                    accessible-description: root.bpm-caption;
+                }
+                Text {
+                    height: 13px;
+                    text: "PITCH " + round(root.pitch-percent * 100) / 100 + "%";
+                    color: #a8b3c3;
+                    font-size: 10px;
+                    overflow: elide;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck pitch";
+                    accessible-description: root.pitch-caption;
+                }
+            }
+        }
+        if !root.controller-mode : HorizontalLayout {
             Text {
                 text: root.time-text;
                 color: #a8b3c3;

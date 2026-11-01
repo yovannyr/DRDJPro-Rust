@@ -15921,4 +15921,103 @@ mod tests {
         }
         ui.hide().unwrap();
     }
+
+    #[test]
+    fn controller_playhead_readout_uses_deck_state_and_fits_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.set_left_title("Readout track".into());
+        ui.set_left_position(42.6);
+        ui.set_left_time("ELAPSED 00:42.600   LEFT 02:27.400\nTOTAL 03:10.000".into());
+        ui.set_left_bpm_caption("120 BPM".into());
+        ui.set_left_pitch_caption("Base 120.00 BPM · Current 122.40 BPM".into());
+        ui.set_left_playing(true);
+        ui.show().unwrap();
+
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A software playhead").count(),
+            0
+        );
+        ui.set_mc4000_connected(true);
+        for (width, height) in [(850.0, 740.0), (1250.0, 768.0), (1280.0, 860.0)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            let playhead = control(&ui, "DECK A software playhead");
+            let right_playhead = control(&ui, "DECK B software playhead");
+            let description = playhead.accessible_description().unwrap();
+            for value in [
+                "Readout track",
+                "43%",
+                "ELAPSED 00:42.600",
+                "TOTAL 03:10.000",
+                "120 BPM",
+                "Current 122.40 BPM",
+                "playing",
+            ] {
+                assert!(
+                    description.contains(value),
+                    "missing {value} at {width}x{height}"
+                );
+            }
+            assert_eq!(
+                control(&ui, "DECK A virtual deck source time")
+                    .accessible_description()
+                    .unwrap()
+                    .to_string(),
+                ui.get_left_time().to_string()
+            );
+            assert_eq!(
+                control(&ui, "DECK A virtual deck BPM")
+                    .accessible_description()
+                    .unwrap()
+                    .to_string(),
+                ui.get_left_bpm_caption().to_string()
+            );
+            assert_eq!(
+                control(&ui, "DECK A virtual deck pitch")
+                    .accessible_description()
+                    .unwrap()
+                    .to_string(),
+                ui.get_left_pitch_caption().to_string()
+            );
+            assert_eq!(
+                control(&ui, "DECK A virtual deck transport state")
+                    .accessible_description()
+                    .unwrap()
+                    .as_str(),
+                "Playing"
+            );
+            assert!(playhead.size().width > 0.0);
+            assert!(playhead.size().height > 0.0);
+            assert!(right_playhead.size().width > 0.0);
+            assert!(right_playhead.size().height > 0.0);
+            assert!(playhead.absolute_position().y >= 0.0);
+            assert!(
+                playhead.absolute_position().y + playhead.size().height <= height,
+                "playhead readout exceeds window at {width}x{height}"
+            );
+            let header = control(&ui, "DECK A presentation mode");
+            let deck_bottom = header.absolute_position().y + 252.0;
+            for label in [
+                "DECK A load track",
+                "DECK A play/pause",
+                "DECK A loop in",
+                "DECK A delete hot cue",
+            ] {
+                let action = control(&ui, label);
+                assert!(action.size().width > 0.0, "{label} has no width");
+                assert!(action.size().height > 0.0, "{label} has no height");
+                assert!(
+                    action.absolute_position().y + action.size().height <= deck_bottom,
+                    "{label} falls below the deck at {width}x{height}"
+                );
+            }
+        }
+
+        ui.set_mc4000_connected(false);
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A software playhead").count(),
+            0
+        );
+        ui.hide().unwrap();
+    }
 }

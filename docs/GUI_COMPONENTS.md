@@ -438,3 +438,9 @@ Two-deck time and action eligibility use observed playing state, at least 3,000 
 ## Recursive library folder import (2026-10-30)
 
 The library toolbar keeps **ADD FILES** and adds **ADD FOLDER**. Folder selection recursively discovers supported audio in nested directories and hands it to the existing cancellable library worker for canonicalization, metadata inspection, duplicate handling, and active-crate assignment. Unsupported/unreadable entries are reported as skipped; symlink directories are not followed. A scan is bounded to 100,000 directory entries and 5,000 supported audio files, with explicit failure rather than a partial import on either limit. The directory picker itself is native; headless tests exercise nested discovery, filtering, limits, and the controller callback at 850x740 and 1280x740.
+
+## Controller-mode software playhead readout
+
+When the connected MC4000 input enables controller mode, each existing CompactDeck replaces its small overview waveform and time row with a compact playhead strip. The strip uses the deck's real software position, multiline source-time text, BPM and pitch captions, and playing state; the existing interactive deck controls and their shared callbacks remain in place. Its progress bar is a static representation of software playback position, not a rotating platter or jog input. The mode-off training layout retains its original overview and time row.
+
+Headless layout/data-binding checks cover 850x740, 1250x768 and 1280x860. Labels use compact 10–11px text; native visual/readability acceptance, full alternate controller layout and physical platter/jog synchronization remain open.
