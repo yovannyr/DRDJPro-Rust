@@ -190,7 +190,8 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Rust-Seite des Library-/Analyse-Referenzinventars: R-LIB-16–18 und R-ANALYSIS-01–02 mit Funktions-/GUI-Zuordnung, benannten Regressionen und expliziten Lücken in FEATURE_CATALOG.md; aktueller CI-/Prüfstand nachgezogen. Bestehende Runtime unverändert.
   - [x] ✅ Tatsächliches .NET-Checkout `C:\repo\DrDJPro` read-only identifiziert und modularen Library-/Analyse-Quellcode mit vorhandenen Testassertionen verglichen; Commit/Dirty-Provenienz und konkrete Vertragsunterschiede in FEATURE_CATALOG.md dokumentiert. Kein .NET-Runtime-Testnachweis.
   - [ ] ☐ Library-/Analyse-Desktopverdrahtung und ältere Engine-Analyser verfolgen; .NET-Tests isoliert ausführen und gleiche Verträge mit Referenzfällen prüfen. Offene Vertragsunterschiede nicht als Parität markieren.
-  - [ ] ☐ Transport-/Load-/Cue-Abgleich als nächstes begrenztes Referenzpaket; anschließend weitere Katalogbereiche und alle 59 UI-Punkte systematisch zuordnen.
+  - [x] ✅ Transport-/Load-/Cue-Quellvergleich als begrenztes Referenzpaket: R-REF-LOAD/TRANSPORT/SEEK/CUE/UI-TRANSPORT in FEATURE_CATALOG.md ordnen .NET-Ports, zustandsbasierten Command-Engine-Code und modulare UI-Testassertionen den Rust-PCM-/Controller-Regressionen zu. Stop≠Pause, Demo-UI≠Audioverdrahtung und fehlende Hold-Operationen im untersuchten Port ausdrücklich abgegrenzt; Runtime unverändert.
+  - [ ] ☐ Legacy-DeckViewModel und Desktop-/Backendverdrahtung für Transport/Cue verfolgen; .NET-Tests isoliert ausführen, gemeinsame Referenzfälle prüfen. Anschließend weitere Katalogbereiche und alle 59 UI-Punkte zuordnen.
 - [ ] ☐ Unterstützten Umfang optionaler Streaming-/Video-Integrationen festlegen und umsetzen.
 - [ ] ☐ Slint-/Audio-Backend-Auswahl durch Rendering- und Echtzeitmessungen abschließen.
 - [ ] ☐ Native visuelle/Usability-Abnahme, Musik-Korpusprüfung und reale Audio-/Latenz-/Langzeittests.
