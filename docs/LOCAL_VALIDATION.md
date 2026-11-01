@@ -7,6 +7,11 @@ Host: Windows x64, rustc 1.99.1. Starting revision: c8e0b70, branch main. Initia
 - `cargo test --workspace --locked shift_arrows_load_selected_library_track -- --nocapture`: passed. Actual Slint WindowEvents verify selection loading on A/B, repeated-key suppression, load/import-worker exclusion, focused-search protection and playing-target protection.
 - `cargo fmt --all -- --check`, `cargo test --workspace --locked --quiet` (405 passed, 6 ignored), `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build --workspace --release --locked` and `git diff --check`: passed.
 - Independent GPT-6.1 Sol medium review found no significant issues. Native keyboard/focus usability acceptance remains open.
+- CI run 41324058421 for commit `19defaf`: all 3 jobs succeeded.
+
+## User performance report — coverage status (2026-10-31)
+
+The supplied `drdj-library-perf-20261031-142130.json` records a 3,484-track scope and 129.94 seconds of sampled dual-deck load, but its outcome is `insufficient_coverage`. All 33 search/sort/page samples (`search`: 13, `sort`: 6, `page`: 14) have `under_load: false`, so none meet the required ten samples per operation under load. It reports no measurement errors, unfinished actions, discarded samples or observed render stalls; this does not establish operation performance under load, physical input/display latency or audible dropout behavior. Repeat the native run with at least ten qualifying actions of each operation during active dual-deck load.
 
 ## External Windows drops — implementation verification (2026-10-30)
 
