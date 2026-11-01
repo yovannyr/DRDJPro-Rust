@@ -8,7 +8,14 @@ Release requires a traceable disposition and acceptance evidence for every FEATU
 
 Deliver in reviewed, bounded slices with working behavior and regression evidence. Keep the existing executable name during development for CI/command compatibility; its historical name does not define the product scope.
 
-## Fortschritt auf einen Blick (2026-10-30)
+## Aktueller verifizierter Stand (2026-11-01)
+
+- Letzter Runtime-Commit: `28888ff` (Library-Hintergrundanalyse aller verfügbaren Tracks und vollständige Prepare-Spalten).
+- Lokaler Prüfnachweis dieses Referenz-Audits: `cargo test --workspace --locked --quiet`; 402 Tests bestanden, sechs ignorierte Qualifikationstests. Runtime-Baseline mit Formatierung, strengem Clippy, Release und akzeptiertem unabhängigen Review.
+- [CI-Lauf 41226613248](https://github.com/yovannyr/DRDJPro-Rust/actions/runs/41226613248) für `28888ff`: Linux, Windows und macOS erfolgreich, einschließlich Tests, Lint und Release. Ältere rote Läufe sind kein aktueller CI-Blocker.
+- Referenzabgleich begonnen: Library/Analyse in [FEATURE_CATALOG.md](FEATURE_CATALOG.md) mit konkreten Rust-Funktionen, Testnamen und fokussiertem .NET-Quellvergleich. Tatsächliche read-only Referenz: vom Nutzer bereitgestelltes `C:\repo\DrDJPro`, HEAD `da1fb2792b56f42a64916d162e1f30a86db1744f` mit lokalen Änderungen. Unterschiede bei Gain/BPM/Grid und separater Prepare-Liste dokumentiert; .NET-Tests hier noch nicht ausgeführt. Kein vollständiger Paritätsnachweis und keine Produktionsabnahme.
+
+## Historischer Fortschrittsüberblick (2026-10-30)
 
 ✅ = im beschriebenen Umfang implementiert und lokal geprüft. ☐ = noch offen. Die Häkchen kennzeichnen einzelne Arbeitspakete; keine der sechs Gesamtphasen ist bereits vollständig abgenommen. Historische Checkpoints weiter unten dokumentieren den damaligen Stand.
 
@@ -180,6 +187,10 @@ Veröffentlichungsstand: Die sieben bewerteten Opus-Befunde wurden in separat ge
   - [x] ✅ Warp-Marker binden einen positiven Beat an eine Quellposition; monotone affine Remaps erhalten die lokale Tempo-Kurvenform und wirken auf Grid/Quantisierung, nicht auf Audiotempo. Schema 13, begrenzte A/B-Drafts mit Waveform-Vorschau sowie Save/Cancel/Replace/Remove; native musikalische Abnahme und Time-Stretching bleiben offen.
 - [x] ✅ Cue-Tastatur-/Hold-Verhalten gemäß Handbuch pp. 45–46: `1`–`5` für Deck A, `6`–`0` für Deck B; pausierte Decks spielen einen gehaltenen Cue vorübergehend und kehren beim Loslassen pausiert zum Cue zurück, PLAY übernimmt die Wiedergabe. Textfeldfokus/Key-Repeat und Fokusverlust sind geschützt; acht zusammenfallende Waveform-Marker behalten getrennte Beschriftungslanes. Headless-Regressionen; native visuelle/Keyboard- und Hardware-Abnahme bleibt offen.
 - [ ] ☐ Vollständiger .NET-Code-/Referenztest-Abgleich und Feature-Paritätsnachweis.
+  - [x] ✅ Rust-Seite des Library-/Analyse-Referenzinventars: R-LIB-16–18 und R-ANALYSIS-01–02 mit Funktions-/GUI-Zuordnung, benannten Regressionen und expliziten Lücken in FEATURE_CATALOG.md; aktueller CI-/Prüfstand nachgezogen. Bestehende Runtime unverändert.
+  - [x] ✅ Tatsächliches .NET-Checkout `C:\repo\DrDJPro` read-only identifiziert und modularen Library-/Analyse-Quellcode mit vorhandenen Testassertionen verglichen; Commit/Dirty-Provenienz und konkrete Vertragsunterschiede in FEATURE_CATALOG.md dokumentiert. Kein .NET-Runtime-Testnachweis.
+  - [ ] ☐ Library-/Analyse-Desktopverdrahtung und ältere Engine-Analyser verfolgen; .NET-Tests isoliert ausführen und gleiche Verträge mit Referenzfällen prüfen. Offene Vertragsunterschiede nicht als Parität markieren.
+  - [ ] ☐ Transport-/Load-/Cue-Abgleich als nächstes begrenztes Referenzpaket; anschließend weitere Katalogbereiche und alle 59 UI-Punkte systematisch zuordnen.
 - [ ] ☐ Unterstützten Umfang optionaler Streaming-/Video-Integrationen festlegen und umsetzen.
 - [ ] ☐ Slint-/Audio-Backend-Auswahl durch Rendering- und Echtzeitmessungen abschließen.
 - [ ] ☐ Native visuelle/Usability-Abnahme, Musik-Korpusprüfung und reale Audio-/Latenz-/Langzeittests.
