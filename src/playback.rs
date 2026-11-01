@@ -214,6 +214,27 @@ struct Deck {
     sync_factor: f64,
     grid: Option<crate::beatgrid::BeatGrid>,
 }
+impl Deck {
+    fn empty() -> Self {
+        let (sink, _unused_output) = Sink::new();
+        sink.pause();
+        Self {
+            meter: None,
+            sink,
+            source_retired: None,
+            render: None,
+            track: None,
+            loop_in: None,
+            loop_region: None,
+            loop_active: false,
+            speed: None,
+            base_factor: 1.,
+            nudge: 0,
+            sync_factor: 1.,
+            grid: None,
+        }
+    }
+}
 struct SourceRetirement(Arc<AtomicBool>);
 impl Drop for SourceRetirement {
     fn drop(&mut self) {
@@ -513,27 +534,9 @@ impl DualDeckEngine {
             input
         });
         mixer.add(bus);
-        let decks = std::array::from_fn(|_| {
-            // Ungeladene Decks benötigen keine leere Rodio-Queue im Audio-Mixer.
-            // Beim Laden installiert replace_source die echte, dauerhaft stille EOF-Quelle.
-            let (sink, _unused_output) = Sink::new();
-            sink.pause();
-            RefCell::new(Deck {
-                meter: None,
-                sink,
-                source_retired: None,
-                render: None,
-                track: None,
-                loop_in: None,
-                loop_region: None,
-                loop_active: false,
-                speed: None,
-                base_factor: 1.,
-                nudge: 0,
-                sync_factor: 1.,
-                grid: None,
-            })
-        });
+        // Ungeladene Decks benötigen keine leere Rodio-Queue im Audio-Mixer.
+        // Beim Laden installiert replace_source die echte, dauerhaft stille EOF-Quelle.
+        let decks = std::array::from_fn(|_| RefCell::new(Deck::empty()));
         let engine = Self {
             decks,
             levels: Cell::new(MixerLevels::default()),
@@ -657,6 +660,28 @@ impl DualDeckEngine {
         let source = track.samples.clone();
         self.replace_source(id, track, source, Duration::ZERO, false, None);
         Ok(())
+    }
+    pub fn eject(&self, id: DeckId) -> bool {
+        let mut old = {
+            let mut deck = self.decks[id.index()].borrow_mut();
+            if deck.track.is_none() {
+                return false;
+            }
+            if let Some(render) = &deck.render {
+                render.cancel_trigger();
+                render.stopped.store(true, Ordering::Release);
+            }
+            deck.sink.stop();
+            std::mem::replace(&mut *deck, Deck::empty())
+        };
+        if let (Some(track), Some(released)) = (old.track.take(), old.source_retired.take()) {
+            self.retired.borrow_mut().push(RetiredTrack {
+                _track: track,
+                _meter: old.meter.take(),
+                released,
+            });
+        }
+        true
     }
     fn replace_source(
         &self,
@@ -4036,6 +4061,37 @@ mod tests {
         assert_eq!(engine.snapshot(DeckId::A).percent(), 0.0);
         engine.cue(DeckId::A);
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+    }
+    #[test]
+    fn eject_stops_and_clears_only_the_selected_deck() {
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48_000);
+        let wav = wav_file(8192, 48_000 * 8);
+        engine.load_a(wav.path()).unwrap();
+        engine.load_b(wav.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            channel_a: 0.3,
+            channel_b: 0.7,
+            crossfader: 0.4,
+        });
+        let volumes = engine.output_volumes();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).playing);
+
+        assert!(engine.eject(DeckId::A));
+        let a = engine.snapshot(DeckId::A);
+        let b = engine.snapshot(DeckId::B);
+        assert!(!a.loaded);
+        assert!(!a.playing);
+        assert!(a.path.is_none());
+        assert_eq!(a.title, "No track loaded");
+        assert!(a.duration.is_zero());
+        assert!(b.loaded);
+        assert!(b.playing);
+        assert_eq!(engine.output_volumes(), volumes);
+        assert!(!engine.eject(DeckId::A));
     }
     #[test]
     fn explicit_grid_commit_preserves_source_transport_and_mixer_levels() {

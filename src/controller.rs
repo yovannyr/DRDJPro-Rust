@@ -625,6 +625,20 @@ impl AudioController {
                 DeckId::B => ui.on_reset_right(cue),
             }
             let weak = Rc::downgrade(&controller);
+            let eject = move || {
+                if let Some(c) = weak.upgrade() {
+                    if let Err(error) = c.eject_deck(id) {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(format!("Deck {id:?}: {error}").into());
+                        }
+                    }
+                }
+            };
+            match id {
+                DeckId::A => ui.on_eject_left(eject),
+                DeckId::B => ui.on_eject_right(eject),
+            }
+            let weak = Rc::downgrade(&controller);
             let load = move || {
                 if let Some(c) = weak.upgrade() {
                     c.request_load(id);
@@ -4209,17 +4223,61 @@ impl AudioController {
         }
     }
 
-    fn set_session_track(&self, id: DeckId, track_id: i32) {
+    fn set_session_track(&self, id: DeckId, track_id: Option<i32>) {
         let mut session = self.deck_session.borrow_mut();
         let slot = match id {
             DeckId::A => 0,
             DeckId::B => 1,
         };
-        if session.decks[slot] != Some(track_id) {
-            session.decks[slot] = Some(track_id);
+        if session.decks[slot] != track_id {
+            session.decks[slot] = track_id;
             self.deck_session_writable.set(true);
             self.dirty.set(true);
         }
+    }
+
+    fn eject_deck(&self, id: DeckId) -> Result<(), String> {
+        if self
+            .pending
+            .borrow()
+            .as_ref()
+            .is_some_and(|(target, _)| *target == id)
+            || self.restoring_deck.get() == Some(id)
+            || self.pending_device_switch.borrow().is_some()
+        {
+            return Err("Finish loading or changing audio devices first".into());
+        }
+        if !self.engine.borrow().snapshot(id).loaded {
+            return Err("No track is loaded".into());
+        }
+
+        self.stop_sync();
+        self.cancel_nudge(id);
+        self.pending_pitch.borrow_mut()[Self::grid_index(id)].take();
+        self.keylock_jobs.borrow_mut()[Self::grid_index(id)].take();
+        let mut keylock_next = self.keylock_next.get();
+        keylock_next[Self::grid_index(id)] = None;
+        self.keylock_next.set(keylock_next);
+        self.cancel_grid_editor(id);
+        self.cancel_cue_editor(id);
+        self.hot_cue_holds.borrow_mut()[Self::grid_index(id)].take();
+        if let Some(ui) = self.ui.upgrade() {
+            let active_key = ui.get_active_hot_cue_key();
+            if (id == DeckId::A && (0..5).contains(&active_key))
+                || (id == DeckId::B && (5..10).contains(&active_key))
+            {
+                ui.set_active_hot_cue_key(-1);
+            }
+        }
+        if !self.engine.borrow().eject(id) {
+            return Err("No track is loaded".into());
+        }
+        self.set_session_track(id, None);
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_status(format!("Deck {id:?} ejected; library track retained").into());
+        }
+        self.refresh();
+        Ok(())
     }
 
     fn sync_session_from_engine(&self) {
@@ -4268,7 +4326,7 @@ impl AudioController {
                     ui.set_status(format!("Deck {id:?}: {error}").into());
                 } else {
                     if let Some(track_id) = self.library.borrow().track_id_for_path(&path) {
-                        self.set_session_track(id, track_id);
+                        self.set_session_track(id, Some(track_id));
                     }
                     ui.set_status(if restoring {
                         format!("Deck {id:?} restored paused at start").into()
@@ -12377,6 +12435,87 @@ mod tests {
         c.close_library().unwrap();
     }
     #[test]
+    fn eject_button_clears_one_saved_deck_and_keeps_library_and_other_deck() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("eject.sqlite3");
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let ui = AppWindow::new().unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(path.clone()), vec![fixture()]);
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        ui.invoke_select_library(1);
+        ui.invoke_load_library_left();
+        finish(&c);
+        ui.invoke_load_library_right();
+        finish(&c);
+        assert_eq!(
+            *c.deck_session.borrow(),
+            crate::library_store::DeckSession {
+                decks: [Some(1), Some(1)],
+            }
+        );
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        c.refresh();
+        assert!(ui.get_left_playing());
+        assert!(ui.get_right_playing());
+
+        control(&ui, "DECK A eject").invoke_accessible_default_action();
+
+        assert!(!engine.snapshot(DeckId::A).loaded);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!ui.get_left_loaded());
+        assert!(!ui.get_left_playing());
+        assert!(engine.snapshot(DeckId::B).loaded);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(ui.get_right_playing());
+        assert_eq!(
+            *c.deck_session.borrow(),
+            crate::library_store::DeckSession {
+                decks: [None, Some(1)],
+            }
+        );
+        assert_eq!(c.library.borrow().len(), 1);
+        assert!(ui.get_status().contains("library track retained"));
+        finish_storage(&c);
+        c.close_library().unwrap();
+        drop(c);
+
+        let (mixer, _restarted_output) = rodio::mixer::mixer(1, 48_000);
+        let restarted_engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let ui = AppWindow::new().unwrap();
+        let c = AudioController::wire(
+            &ui,
+            restarted_engine.clone(),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(path), Vec::new());
+        finish_storage(&c);
+        assert!(!restarted_engine.snapshot(DeckId::A).loaded);
+        assert!(!ui.get_left_loaded());
+        assert!(restarted_engine.snapshot(DeckId::B).loaded);
+        assert!(!restarted_engine.snapshot(DeckId::B).playing);
+        assert!(ui.get_right_loaded());
+        assert_eq!(
+            *c.deck_session.borrow(),
+            crate::library_store::DeckSession {
+                decks: [None, Some(1)],
+            }
+        );
+        assert_eq!(c.library.borrow().len(), 1);
+        c.close_library().unwrap();
+    }
+    #[test]
     fn durable_library_migrates_json_into_sqlite_and_loads_same_id_after_restart() {
         use slint::Model;
         i_slint_backend_testing::init_no_event_loop();
@@ -14970,7 +15109,7 @@ mod tests {
              BEGIN SELECT RAISE(ABORT, 'session test failure'); END;",
             )
             .unwrap();
-        c.set_session_track(DeckId::A, 1);
+        c.set_session_track(DeckId::A, Some(1));
         c.save_library();
         assert!(c.saving.get());
         // Leave the controller's in-flight state unacknowledged, as at GUI shutdown.

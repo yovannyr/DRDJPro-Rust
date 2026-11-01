@@ -426,7 +426,7 @@ component CompactDeck inherits Rectangle {
     in-out property <string> cue-rgb;
     callback edit-hot-cue(int); callback save-hot-cue(); callback cancel-hot-cue();
     callback hot-cue(int, bool, int); callback delete-hot-cue(int);
-    callback load(); callback toggle(); callback cue(); callback seek(float);
+    callback load(); callback toggle(); callback cue(); callback eject(); callback seek(float);
     pure callback accepts-drop(data-transfer) -> bool;
     callback drop-track(data-transfer) -> bool;
     in property <bool> external-hover: false;
@@ -443,6 +443,7 @@ component CompactDeck inherits Rectangle {
             Button { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !load-busy && !playing; clicked => { root.load(); } }
             Button { text: playing ? "PAUSE" : "PLAY"; accessible-label: deck-label + " play/pause"; enabled: !audio-enabled || loaded; clicked => { root.toggle(); } }
             Button { text: "CUE"; accessible-label: deck-label + " cue"; enabled: !audio-enabled || loaded; clicked => { root.cue(); } }
+            Button { text: "EJECT"; accessible-label: deck-label + " eject"; accessible-description: "Stop and unload this deck; keep the track in the library"; enabled: loaded && !loading && !load-busy; clicked => { root.eject(); } }
         }
         Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
         WaveformStrip {
@@ -1185,6 +1186,8 @@ export component AppWindow inherits Window {
     callback toggle-right();
     callback reset-left();
     callback reset-right();
+    callback eject-left();
+    callback eject-right();
     callback load-left();
     callback load-right();
     callback mixer-changed();
@@ -1366,7 +1369,7 @@ export component AppWindow inherits Window {
                 delete-hot-cue(slot) => { root.delete-hot-cue-left(slot); }
                 playing: root.left-playing; position <=> root.left-position;
                 audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.left-busy; load-busy: root.loading || root.library-busy;
-                load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } seek(value) => { root.seek-left(value); }
+                load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } eject => { root.eject-left(); } seek(value) => { root.seek-left(value); }
             }
             right-deck := CompactDeck {
                 deck-label: "DECK B"; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
@@ -1405,7 +1408,7 @@ export component AppWindow inherits Window {
                 delete-hot-cue(slot) => { root.delete-hot-cue-right(slot); }
                 playing: root.right-playing; position <=> root.right-position;
                 audio-enabled: root.audio-enabled; loaded: root.right-loaded; loading: root.right-busy; load-busy: root.loading || root.library-busy;
-                load => { root.load-right(); } toggle => { root.toggle-right(); } cue => { root.reset-right(); } seek(value) => { root.seek-right(value); }
+                load => { root.load-right(); } toggle => { root.toggle-right(); } cue => { root.reset-right(); } eject => { root.eject-right(); } seek(value) => { root.seek-right(value); }
             }
         }
         Rectangle {
