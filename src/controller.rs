@@ -8402,6 +8402,60 @@ mod tests {
     }
 
     #[test]
+    fn mc4000_eq_knobs_reach_engine_without_changing_transport_or_other_deck() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let wav = crate::test_support::wav_file(16384, 48000);
+        engine.load_a(wav.path()).unwrap();
+        engine.load_b(wav.path()).unwrap();
+        let _c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.set_crossfader(0.);
+        ui.invoke_mixer_changed();
+        engine.play(DeckId::A);
+        let before = engine.snapshot(DeckId::A);
+        let volumes = engine.output_volumes();
+        let dispatch = |channel: u8, cc: u8, value: u8| {
+            crate::mc4000::apply(
+                &ui,
+                crate::mc4000::decode(&[0xb0 | channel, cc, value]).unwrap(),
+            )
+        };
+        dispatch(0, 22, 0);
+        assert_eq!(engine.eq_settings(DeckId::A).trim, -12.);
+        assert_eq!(
+            engine.eq_settings(DeckId::B),
+            crate::mixer_dsp::EqSettings::default()
+        );
+        assert_eq!(engine.snapshot(DeckId::A).position, before.position);
+        assert_eq!(engine.snapshot(DeckId::A).playing, before.playing);
+        assert_eq!(engine.output_volumes(), volumes);
+        output.by_ref().take(2000).for_each(drop);
+        assert!((output.next().unwrap() - 0.5 * 10_f32.powf(-12. / 20.)).abs() < 1e-4);
+        for (cc, value) in [(23, 127), (24, 0), (25, 127), (26, 0)] {
+            dispatch(1, cc, value);
+        }
+        let b = engine.eq_settings(DeckId::B);
+        assert_eq!((b.high, b.mid, b.low, b.filter), (12., -24., 12., -1.));
+        assert_eq!(engine.eq_settings(DeckId::A).trim, -12.);
+        assert!(!engine.snapshot(DeckId::B).playing);
+        for channel in 0..2 {
+            for cc in 22..=26 {
+                dispatch(channel, cc, 64);
+            }
+        }
+        assert_eq!(
+            engine.eq_settings(DeckId::A),
+            crate::mixer_dsp::EqSettings::default()
+        );
+        assert_eq!(
+            engine.eq_settings(DeckId::B),
+            crate::mixer_dsp::EqSettings::default()
+        );
+    }
+
+    #[test]
     fn eq_gui_routes_both_decks_resets_and_preserves_transport_and_faders() {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();

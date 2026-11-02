@@ -19,6 +19,7 @@ pub enum Command {
     Jog(usize, i8),
     PlatterTouch(usize, bool),
     Vinyl(usize),
+    EqKnob(usize, usize, u8),
 }
 pub fn decode(bytes: &[u8]) -> Option<Command> {
     if bytes.len() != 3 || bytes[1] > 127 || bytes[2] > 127 {
@@ -26,6 +27,11 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
     }
     let channel = bytes[0] & 15;
     match (bytes[0] & 0xf0, channel, bytes[1], bytes[2]) {
+        (0xb0, 0..=1, 22..=26, value) => Some(Command::EqKnob(
+            usize::from(channel),
+            usize::from(bytes[1] - 22),
+            value,
+        )),
         (0xb0, 0..=1, 6, 1..=127) => Some(Command::Jog(
             channel as usize,
             if bytes[2] < 64 {
@@ -252,6 +258,7 @@ pub struct Input {
     accept_buttons_after: std::time::Instant,
     levels: Arc<[AtomicU8; 5]>,
     fx_levels: Arc<[AtomicU8; 6]>,
+    eq_levels: Arc<[AtomicU8; 10]>,
     overflow: Arc<AtomicBool>,
     trace: Option<InputTrace>,
 }
@@ -273,6 +280,8 @@ impl Input {
         let values = levels.clone();
         let fx_levels = Arc::new(std::array::from_fn(|_| AtomicU8::new(128)));
         let fx_values = Arc::clone(&fx_levels);
+        let eq_levels = Arc::new(std::array::from_fn(|_| AtomicU8::new(128)));
+        let eq_values = Arc::clone(&eq_levels);
         let overflow = Arc::new(AtomicBool::new(false));
         let failed = overflow.clone();
         let trace_enabled = std::env::var_os("DRDJ_MIDI_TRACE").is_some_and(|v| v == "1");
@@ -297,6 +306,9 @@ impl Input {
                     }
                     if let Some(command) = decode(data) {
                         match command {
+                            Command::EqKnob(deck, knob, value) => {
+                                eq_values[deck * 5 + knob].store(value, Ordering::Release)
+                            }
                             Command::FxKnob(deck, knob, value) => {
                                 fx_values[deck * 3 + knob].store(value, Ordering::Release)
                             }
@@ -341,6 +353,7 @@ impl Input {
             accept_buttons_after: std::time::Instant::now(),
             levels,
             fx_levels,
+            eq_levels,
             overflow,
             trace: trace_enabled.then_some(InputTrace {
                 receiver: trace_receiver,
@@ -431,12 +444,31 @@ impl Input {
                 apply(Command::FxKnob(index / 3, index % 3, value));
             }
         }
+        poll_eq_knobs(&self.eq_levels, &mut apply);
         dispatch_buttons(
             &self.buttons,
             &mut self.accept_buttons_after,
             &self.overflow,
             &mut apply,
         )
+    }
+}
+fn poll_eq_knobs(values: &[AtomicU8; 10], mut apply: impl FnMut(Command)) {
+    for (index, value) in values.iter().enumerate() {
+        let value = value.swap(128, Ordering::AcqRel);
+        if value < 128 {
+            apply(Command::EqKnob(index / 5, index % 5, value));
+        }
+    }
+}
+fn centered_knob(value: u8, minimum: f32, maximum: f32) -> f32 {
+    // Both central MIDI values are neutral; physical detents vary between 63 and 64.
+    if value < 63 {
+        minimum * f32::from(63 - value) / 63.
+    } else if value > 64 {
+        maximum * f32::from(value - 64) / 63.
+    } else {
+        0.
     }
 }
 fn reconcile_output<T>(
@@ -510,6 +542,31 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         return;
     }
     match command {
+        Command::EqKnob(deck, knob, value) => {
+            if deck > 1 || knob > 4 || value > 127 {
+                ui.set_status("Invalid MC4000 EQ control".into());
+                return;
+            }
+            let parameter = match knob {
+                0 => centered_knob(value, -12., 12.),
+                4 => centered_knob(value, -1., 1.),
+                _ => centered_knob(value, -24., 12.),
+            };
+            match (deck, knob) {
+                (0, 0) => ui.set_eq_trim_a(parameter),
+                (0, 1) => ui.set_eq_high_a(parameter),
+                (0, 2) => ui.set_eq_mid_a(parameter),
+                (0, 3) => ui.set_eq_low_a(parameter),
+                (0, 4) => ui.set_eq_filter_a(parameter),
+                (1, 0) => ui.set_eq_trim_b(parameter),
+                (1, 1) => ui.set_eq_high_b(parameter),
+                (1, 2) => ui.set_eq_mid_b(parameter),
+                (1, 3) => ui.set_eq_low_b(parameter),
+                (1, 4) => ui.set_eq_filter_b(parameter),
+                _ => unreachable!(),
+            }
+            ui.invoke_eq_changed(deck as i32);
+        }
         Command::Jog(deck, steps) => ui.invoke_controller_jog(deck as i32, i32::from(steps)),
         Command::PlatterTouch(deck, held) => ui.invoke_controller_platter_touch(deck as i32, held),
         Command::Vinyl(deck) => ui.invoke_controller_vinyl(deck as i32),
@@ -588,6 +645,83 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn eq_knobs_decode_coalesce_and_map_neutral_and_endpoints() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        for deck in 0..=1 {
+            for knob in 0..5 {
+                assert_eq!(
+                    decode(&[0xb0 | deck, 22 + knob, 64]),
+                    Some(Command::EqKnob(deck as usize, knob as usize, 64))
+                );
+            }
+        }
+        assert_eq!(decode(&[0xb2, 22, 64]), None);
+        assert_eq!(decode(&[0xbf, 26, 64]), None);
+        assert_eq!(decode(&[0x90, 22, 64]), None);
+        let values = std::array::from_fn(|_| AtomicU8::new(128));
+        values[0].store(0, Ordering::Release);
+        values[0].store(127, Ordering::Release);
+        values[9].store(0, Ordering::Release);
+        let mut emitted = Vec::new();
+        poll_eq_knobs(&values, |command| {
+            if let Command::EqKnob(deck, knob, value) = command {
+                apply(&ui, Command::EqKnob(deck, knob, value));
+                emitted.push(Command::EqKnob(deck, knob, value));
+            } else {
+                panic!("Expected EQ command");
+            }
+        });
+        assert_eq!(
+            emitted,
+            vec![Command::EqKnob(0, 0, 127), Command::EqKnob(1, 4, 0)]
+        );
+        poll_eq_knobs(&values, |_| panic!("No repeated control without new MIDI"));
+        assert_eq!(ui.get_eq_trim_a(), 12.);
+        assert_eq!(ui.get_eq_filter_b(), -1.);
+        for value in [0, 63, 64, 127] {
+            for deck in 0..2 {
+                for knob in 0..5 {
+                    apply(&ui, Command::EqKnob(deck, knob, value));
+                }
+            }
+            let band = if value == 0 {
+                -24.
+            } else if value == 127 {
+                12.
+            } else {
+                0.
+            };
+            let trim = if value == 0 {
+                -12.
+            } else if value == 127 {
+                12.
+            } else {
+                0.
+            };
+            let filter = if value == 0 {
+                -1.
+            } else if value == 127 {
+                1.
+            } else {
+                0.
+            };
+            assert_eq!(
+                [
+                    ui.get_eq_high_a(),
+                    ui.get_eq_mid_a(),
+                    ui.get_eq_low_a(),
+                    ui.get_eq_high_b(),
+                    ui.get_eq_mid_b(),
+                    ui.get_eq_low_b()
+                ],
+                [band; 6]
+            );
+            assert_eq!([ui.get_eq_trim_a(), ui.get_eq_trim_b()], [trim; 2]);
+            assert_eq!([ui.get_eq_filter_a(), ui.get_eq_filter_b()], [filter; 2]);
+        }
+    }
     #[test]
     fn explicit_reconnect_releases_old_handles_without_observed_absence() {
         let old = std::rc::Rc::new(());

@@ -2,6 +2,10 @@
 
 Stand: 2026-11-02, gepruefter Rust-Quellstand `3b8b7e5`.
 
+Fortschreibung: S1 ist implementiert und automatisiert geprueft; native
+Regler-/Hoerabnahme bleibt offen. Die Belegstellen unten beschreiben den
+urspruenglichen Auditstand, sofern nicht als Fortschreibung gekennzeichnet.
+
 Quelle: [Denon DJ MC4000 Benutzerhandbuch](MC4000-User-Guide-v1.2_00.pdf),
 deutsche Seiten 24-27. Die MIDI-Tabelle auf Seiten 30-31 liefert die
 technische Zuordnung. Es geht um DrDJ Pro Rust, nicht um eine Integration
@@ -23,7 +27,7 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 
 | Seite / Element | Funktion | Status und konkrete Luecke |
 | --- | --- | --- |
-| 24 / 1-3 | Kanalpegel, Drei-Band-EQ, bipolarer Filter | **MIDI fehlt.** Trim/EQ/Filter sind in der App vorhanden; CC22-26 werden noch nicht dekodiert. |
+| 24 / 1-3 | Kanalpegel, Drei-Band-EQ, bipolarer Filter | **S1 implementiert.** CC22-26 steuern vorhandenes Trim/EQ/Filter fuer A/B. Neutral63/64, Endpunkte und coalescierte Regler getestet; native Regler-/Hoerabnahme offen. |
 | 24 / 7 | SHIFT | **MIDI fehlt.** Globale SHIFT-Halte-/Freigabesteuerung fehlt. Viele Tasten senden bereits eigene Shift-Noten; Jog braucht den Modifierzustand. |
 | 24 / 8 | SYNC / SHIFT: Sync aus | **MIDI fehlt.** Tempo-/Phasen-Sync ist in Engine und GUI vorhanden; Note2/3 fehlen. Sync aus muss explizit deaktivieren, nicht erneut toggeln. |
 | 24 / 9 | Temporaerer Transport-CUE | **Teilweise.** Aktuell Cue-to-zero. Temporaeren Punkt bei Pause setzen, gedrueckt vorhoeren, beim Loslassen zurueckkehren/pausieren und mit PLAY uebernehmen fehlen. Gespeicherte Hot-Cues sind davon getrennt. |
@@ -114,7 +118,7 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 
 | Slice | Umfang / Abhaengigkeit | Abnahme und Tests |
 | --- | --- | --- |
-| S1 Mixer-Anbindung | CC22-26; bestehende Trim/EQ/Filter-APIs. Unabhaengig von neuen DSP-Funktionen. | A/B-Isolation, korrekte Mitte/Endpunkte, neutrale Stellung, sichere Parameter-Rampen; native jeden Regler mit MASTER/Cue gegenpruefen. |
+| S1 Mixer-Anbindung | **Implementiert:** CC22-26; bestehende Trim/EQ/Filter-APIs, kein neues DSP. | A/B-Isolation, Mitte/Endpunkte, Neutral63/64, Coalescing und Audio-/GUI-Rampen automatisiert geprueft; native jeden Regler mit MASTER/Cue noch gegenpruefen. |
 | S2 Modifier und Pitch | Globaler SHIFT-Zustand, explizite Shift-Noten, 14-Bit-Pitch, Bereich und Bend. | MSB/LSB-Reihenfolge und unvollstaendige Paare, Bereichswechsel, Pickup statt Temposprung, Druck/Release/Disconnect/Overflow; MIDI-Aufzeichnung fuer Fader erforderlich. |
 | S3 Sync und Loop-Tasten | Vorhandenes Sync, Auto/halb/doppelt/In/Out/Reloop; neue vier-Takte-Auswahl. Modifier-Grundlage aus S2. | Sync-Aus idempotent, Loopgrenzen/Quantize/EOF, vier Takte statt vier Beats, nicht4/4 und Taktwechsel; Wiedergabe- und A/B-Regression. |
 | S4 Hot-Cue-Pads | Physische Pads1-4, Set/Recall/Preview, SHIFT Delete, passende LED-Farben. | Leeres/belegtes Pad, Hold/Release/PLAY-Uebernahme, Busy-/Quantize-Schutz, Persistenz und Neustart. Acht App-Slots erhalten. |

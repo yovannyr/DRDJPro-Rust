@@ -1,5 +1,25 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S1: channel trim, EQ and filter
+
+Deck MIDI channels 1/2, CC22-26 now control Trim, High, Mid, Low and Filter
+through the existing `eq-changed` callback and validated engine settings.
+Trim maps to -12..+12 dB, EQ bands to -24..+12 dB and Filter to -1..+1
+(low-pass/off/high-pass). Both central values 63/64 are exactly neutral;
+each side is linearly mapped to its endpoint. This is an application mapping,
+not a measured hardware potentiometer calibration.
+
+Ten atomic latest-value slots coalesce the absolute knobs before GUI dispatch;
+they do not consume the bounded gesture queue. No synthetic knob state is
+applied on connection. Existing GUI reset remains functional; the next physical
+knob movement takes control directly (no pickup in this slice).
+The existing five-millisecond DSP ramps, frame-coherent settings and pre-fader
+cue signal path are unchanged. No new audio-thread allocation, lock or DSP
+algorithm is introduced. Tests cover decode/channel isolation, coalescing,
+neutral/endpoints, actual rendered trim level and unchanged transport/faders.
+Native A/B regulator direction, detents and MASTER/headphone listening remain
+to be qualified; automated tests do not assert physical latency or sound quality.
+
 
 ## User-provided UI references
 
