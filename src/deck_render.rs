@@ -39,6 +39,9 @@ struct Settings {
     trigger_serial: u64,
     trigger_at: u64,
     trigger_units: u64,
+    scratch: bool,
+    scratch_serial: u64,
+    scratch_target: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RenderStamp {
@@ -46,6 +49,9 @@ pub(crate) struct RenderStamp {
     pub output_frame: u64,
 }
 pub(crate) struct RenderControl {
+    scratch: AtomicBool,
+    scratch_serial: AtomicU64,
+    scratch_target: AtomicU64,
     format: RenderFormat,
     sequence: AtomicU64,
     rate: AtomicU32,
@@ -92,6 +98,9 @@ impl RenderControl {
         assert!(format.source_rate > 0 && format.output_rate > 0);
         assert!(format.frames as u128 * u128::from(format.output_rate) <= u128::from(u64::MAX));
         Arc::new(Self {
+            scratch: AtomicBool::new(false),
+            scratch_serial: AtomicU64::new(0),
+            scratch_target: AtomicU64::new(0),
             format,
             sequence: AtomicU64::new(0),
             rate: AtomicU32::new(rate),
@@ -147,6 +156,45 @@ impl RenderControl {
         self.trigger_at.store(0, Ordering::SeqCst);
         self.sequence.fetch_add(1, Ordering::SeqCst);
     }
+    /// Single control-plane writer; signed source-time motion, no audio-thread allocation.
+    pub fn scratch_touch(&self, held: bool) {
+        let target = if !held && self.scratching() {
+            self.scratch_target.load(Ordering::SeqCst)
+        } else {
+            self.current_units() as u64
+        };
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.scratch.store(held, Ordering::SeqCst);
+        self.scratch_target.store(target, Ordering::SeqCst);
+        self.scratch_serial.fetch_add(1, Ordering::SeqCst);
+        self.trigger_at.store(0, Ordering::SeqCst);
+        if !held {
+            self.seek_units.store(target, Ordering::SeqCst);
+            self.seek_ns.store(
+                self.time_at(u128::from(target)).as_nanos() as u64,
+                Ordering::SeqCst,
+            );
+            self.seek_serial.fetch_add(1, Ordering::SeqCst);
+        }
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
+    /// Accumulate relative source time; clamp to the loaded PCM, not loop bounds.
+    pub fn scratch_move(&self, source_seconds: f64) {
+        let target = self.scratch_target.load(Ordering::SeqCst) as f64
+            + source_seconds
+                * f64::from(self.format.source_rate)
+                * f64::from(self.format.output_rate);
+        let end = self.format.frames as u64 * u64::from(self.format.output_rate);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.scratch_target
+            .store(target.clamp(0., end as f64) as u64, Ordering::SeqCst);
+        self.scratch_serial.fetch_add(1, Ordering::SeqCst);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
+    /// Control-plane touch state, independent of the transport pause flag.
+    pub fn scratching(&self) -> bool {
+        self.scratch.load(Ordering::SeqCst)
+    }
     pub fn schedule_trigger(&self, at_frame: usize, target_frame: usize) {
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.trigger_at.store(
@@ -185,6 +233,7 @@ impl RenderControl {
                 (mapped != phase).then(|| (self.time_at(mapped), mapped))
             });
         self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.scratch.store(false, Ordering::SeqCst);
         self.trigger_at.store(0, Ordering::SeqCst);
         self.rate.store(rate, Ordering::SeqCst);
         self.neutral_rate
@@ -225,6 +274,9 @@ impl RenderControl {
             trigger_serial: self.trigger_serial.load(Ordering::SeqCst),
             trigger_at: self.trigger_at.load(Ordering::SeqCst),
             trigger_units: self.trigger_units.load(Ordering::SeqCst),
+            scratch: self.scratch.load(Ordering::SeqCst),
+            scratch_serial: self.scratch_serial.load(Ordering::SeqCst),
+            scratch_target: self.scratch_target.load(Ordering::SeqCst),
         };
         // Do not spin on the real-time path: an overlapping command is retried next frame.
         (self.sequence.load(Ordering::SeqCst) == first).then_some(settings)
@@ -254,7 +306,9 @@ impl RenderControl {
         } else {
             u128::from(self.phase_units.load(Ordering::Relaxed))
         };
-        let region = self.read(None).and_then(|s| s.region);
+        let region = self
+            .read(None)
+            .and_then(|s| if s.scratch { None } else { s.region });
         wrap_units(phase, region, self.format)
     }
     pub fn sync_expired(&self) -> bool {
@@ -306,6 +360,8 @@ struct Handoff {
     seek_serial: u64,
 }
 pub(crate) struct DeckRenderer {
+    scratch_serial: u64,
+    scratch_remaining: u32,
     handoff: Option<Handoff>,
     keylock: Option<Arc<drdj_keylock::PreparedKeylock>>,
     keylock_rate: u32,
@@ -333,6 +389,8 @@ impl DeckRenderer {
         assert_eq!(control.format.output_rate, rate);
         assert_eq!(control.format.frames, samples.frames());
         Self {
+            scratch_serial: 0,
+            scratch_remaining: 0,
             handoff: None,
             keylock: None,
             keylock_rate: rate,
@@ -406,6 +464,10 @@ impl DeckRenderer {
             self.settings = settings;
         }
         let settings = self.settings;
+        if settings.scratch_serial != self.scratch_serial {
+            self.scratch_serial = settings.scratch_serial;
+            self.scratch_remaining = (self.output_rate / 30).max(1);
+        }
         if self.applied_seek != settings.seek_serial {
             if let Some(handoff) = &mut self.handoff {
                 if settings.seek_serial != handoff.seek_serial {
@@ -416,6 +478,7 @@ impl DeckRenderer {
             self.applied_seek = settings.seek_serial;
         }
         if !settings.paused
+            && !settings.scratch
             && settings.trigger_at != 0
             && self.applied_trigger != settings.trigger_serial
             && self.phase >= u128::from(settings.trigger_at)
@@ -424,7 +487,9 @@ impl DeckRenderer {
             self.applied_trigger = settings.trigger_serial;
             self.publish_position();
         }
-        self.phase = self.wrap(self.phase);
+        if !settings.scratch {
+            self.phase = self.wrap(self.phase);
+        }
         if self.phase != prior_phase || self.applied_seek != prior_seek {
             self.micro.reset();
             self.publish_position();
@@ -450,8 +515,17 @@ impl Iterator for DeckRenderer {
             self.settings.rate
         };
         let end = self.samples.frames() as u128 * u128::from(self.output_rate);
-        let finished = self.settings.region.is_none() && self.phase >= end;
-        if self.channel == 0 && !self.settings.paused && !finished {
+        let scratch = self.settings.scratch;
+        let scratch_moving = scratch
+            && self.scratch_remaining > 0
+            && self.phase != u128::from(self.settings.scratch_target);
+        let paused = if scratch {
+            !scratch_moving
+        } else {
+            self.settings.paused
+        };
+        let finished = (scratch || self.settings.region.is_none()) && self.phase >= end;
+        if self.channel == 0 && !paused && !finished && !scratch {
             if let Some(clip) = &self.keylock {
                 let region = self.settings.region;
                 self.keylock_frame = self.micro.frame(
@@ -469,7 +543,7 @@ impl Iterator for DeckRenderer {
                 );
             }
         }
-        let value = if self.settings.paused || finished {
+        let value = if paused || finished {
             0.
         } else {
             // Match Rodio's channel mapping: discard surplus inputs, duplicate mono to stereo,
@@ -482,20 +556,20 @@ impl Iterator for DeckRenderer {
                 None
             };
             input_channel.map_or(0., |channel| {
-                if self.keylock.is_some() {
+                if self.keylock.is_some() && !scratch {
                     return self.keylock_frame[usize::from(channel)];
                 }
                 let frame = (self.phase / u128::from(self.output_rate)) as usize;
-                let next =
-                    self.settings
-                        .region
-                        .map_or((frame + 1).min(self.samples.frames() - 1), |r| {
-                            if frame + 1 >= r.end {
-                                r.start
-                            } else {
-                                frame + 1
-                            }
-                        });
+                let next = self.settings.region.filter(|_| !scratch).map_or(
+                    (frame + 1).min(self.samples.frames() - 1),
+                    |r| {
+                        if frame + 1 >= r.end {
+                            r.start
+                        } else {
+                            frame + 1
+                        }
+                    },
+                );
                 let fraction = (self.phase % u128::from(self.output_rate)) as f64
                     / f64::from(self.output_rate);
                 let a = f64::from(self.samples.sample_at(frame, channel));
@@ -505,7 +579,7 @@ impl Iterator for DeckRenderer {
         };
         let mut value = value;
         if let Some(handoff) = &mut self.handoff {
-            if handoff.elapsed < handoff.frames && !self.settings.paused && !finished {
+            if handoff.elapsed < handoff.frames && !paused && !finished && !scratch {
                 if let Some(offset) = handoff.offsets.get_mut(usize::from(self.channel)) {
                     if handoff.elapsed == 0 {
                         let previous = f32::from_bits(
@@ -517,7 +591,7 @@ impl Iterator for DeckRenderer {
                     let weight = 1. - handoff.elapsed as f32 / (handoff.frames - 1) as f32;
                     value += *offset * weight;
                 }
-            } else if self.settings.paused || finished {
+            } else if paused || finished || scratch {
                 // Silence is authoritative; never inject an old signal into a paused/EOF deck.
                 handoff.elapsed = handoff.frames;
             }
@@ -531,7 +605,19 @@ impl Iterator for DeckRenderer {
                 handoff.elapsed = handoff.elapsed.saturating_add(1).min(handoff.frames);
             }
             self.channel = 0;
-            if !self.settings.paused && !finished {
+            if scratch {
+                if self.scratch_remaining > 0 {
+                    let target = u128::from(self.settings.scratch_target);
+                    let remaining = u128::from(self.scratch_remaining);
+                    if target >= self.phase {
+                        self.phase += (target - self.phase).div_ceil(remaining);
+                    } else {
+                        self.phase -= (self.phase - target).div_ceil(remaining);
+                    }
+                    self.scratch_remaining -= 1;
+                    self.publish_position();
+                }
+            } else if !self.settings.paused && !finished {
                 self.phase = self.wrap(self.phase + u128::from(applied_rate));
                 self.publish_position();
             }
@@ -559,6 +645,197 @@ impl Source for DeckRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn platter_reverse_forward_boundaries_and_idle_are_allocation_free() {
+        let rate = 3000;
+        let pcm = PcmSource::new(
+            2,
+            rate,
+            (0..6000)
+                .flat_map(|i| {
+                    let value = i as f32 / 6000.;
+                    [value, -value]
+                })
+                .collect(),
+        );
+        let control = RenderControl::new(
+            rate,
+            false,
+            Some(FrameLoop {
+                start: 2000,
+                end: 4000,
+            }),
+            SeekFrame {
+                time: Duration::from_secs(1),
+                frame: 3000,
+            },
+            RenderFormat {
+                source_rate: rate,
+                output_rate: rate,
+                frames: 6000,
+            },
+        );
+        let mut renderer = DeckRenderer::new(pcm, control.clone(), 2, rate);
+        control.scratch_touch(true);
+        assert!(renderer.by_ref().take(10).all(|v| v == 0.));
+        let mut maximum = Duration::ZERO;
+        let allocations = crate::looping::counted_allocations(|| {
+            for (seconds, expected, ascending) in [(0.05, 3150, true), (-0.1, 2850, false)] {
+                control.scratch_move(seconds);
+                let mut previous = if ascending { 0. } else { 1. };
+                let start = std::time::Instant::now();
+                for _ in 0..100 {
+                    let a = renderer.next().unwrap();
+                    let b = renderer.next().unwrap();
+                    assert!((a + b).abs() < 1e-6);
+                    assert!(if ascending {
+                        a >= previous
+                    } else {
+                        a <= previous
+                    });
+                    previous = a;
+                }
+                maximum = maximum.max(start.elapsed());
+                assert_eq!(control.frame(), expected);
+                assert!(renderer.by_ref().take(200).all(|v| v == 0.));
+            }
+            control.scratch_move(-100.);
+            for _ in 0..200 {
+                renderer.next();
+            }
+            assert_eq!(control.frame(), 0);
+            control.scratch_move(100.);
+            for _ in 0..200 {
+                renderer.next();
+            }
+            assert_eq!(control.frame(), 6000);
+            control.scratch_move(-0.05);
+            for _ in 0..200 {
+                renderer.next();
+            }
+            assert_eq!(control.frame(), 5850);
+        });
+        assert_eq!(allocations, 0);
+        assert!(
+            maximum < Duration::from_millis(33),
+            "scratch block missed its audio deadline: {maximum:?}"
+        );
+        eprintln!(
+            "scratch 100 stereo frames at 3kHz: maximum {maximum:?}, allocations {allocations}"
+        );
+        control.scratch_touch(false);
+        assert!(control.is_paused());
+        assert!(renderer.by_ref().take(200).all(|v| v == 0.));
+    }
+    #[test]
+    fn platter_same_tick_release_commits_motion_and_transport_cancels_touch() {
+        let pcm = PcmSource::new(1, 3000, vec![0.25; 6000]);
+        let control = RenderControl::new(
+            3000,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::from_secs(1),
+                frame: 3000,
+            },
+            RenderFormat {
+                source_rate: 3000,
+                output_rate: 3000,
+                frames: 6000,
+            },
+        );
+        let mut renderer = DeckRenderer::new(pcm, control.clone(), 1, 3000);
+        control.scratch_touch(true);
+        control.scratch_move(0.05);
+        control.scratch_move(-0.02);
+        control.scratch_touch(false);
+        assert_eq!(control.frame(), 3090);
+        assert!(!control.is_paused());
+        assert_eq!(renderer.next(), Some(0.25));
+        assert_eq!(control.frame(), 3091);
+        control.scratch_touch(true);
+        control.publish(3000, false, None, None);
+        assert!(!control.scratching());
+        assert_eq!(renderer.next(), Some(0.));
+    }
+    #[test]
+    fn platter_never_executes_scheduled_cues_during_motion() {
+        let pcm = PcmSource::new(1, 3000, vec![0.25; 6000]);
+        let control = RenderControl::new(
+            3000,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::from_secs(1),
+                frame: 3000,
+            },
+            RenderFormat {
+                source_rate: 3000,
+                output_rate: 3000,
+                frames: 6000,
+            },
+        );
+        let mut renderer = DeckRenderer::new(pcm, control.clone(), 1, 3000);
+        control.scratch_touch(true);
+        control.scratch_move(0.05);
+        control.schedule_trigger(3030, 4500);
+        for _ in 0..100 {
+            renderer.next();
+        }
+        assert_eq!(control.frame(), 3150);
+        control.scratch_touch(false);
+        renderer.next();
+        assert_eq!(control.frame(), 3151);
+    }
+    #[test]
+    fn platter_keylock_bypass_cross_rate_preserves_pitch_and_pause_settings() {
+        for (rate, output_rate) in [(44100, 48000), (48000, 44100)] {
+            let data: Vec<_> = (0..rate * 2)
+                .flat_map(|i| {
+                    let value = i as f32 / (rate * 2) as f32;
+                    [value, -value]
+                })
+                .collect();
+            let clip =
+                Arc::new(drdj_keylock::PreparedKeylock::prepare(&data, 2, rate, 1.).unwrap());
+            let pcm = PcmSource::new(2, rate, data);
+            let control = RenderControl::new(
+                (rate as f64 * 1.1) as u32,
+                true,
+                None,
+                SeekFrame {
+                    time: Duration::from_secs(1),
+                    frame: rate as usize,
+                },
+                RenderFormat {
+                    source_rate: rate,
+                    output_rate,
+                    frames: (rate * 2) as usize,
+                },
+            );
+            let mut renderer = DeckRenderer::new(pcm, control.clone(), 2, output_rate)
+                .with_keylock(Some((clip, rate)));
+            control.scratch_touch(true);
+            control.scratch_move(-0.05);
+            let count = output_rate / 30;
+            let allocations = crate::looping::counted_allocations(|| {
+                let mut previous = 0.5;
+                for _ in 0..count {
+                    let left = renderer.next().unwrap();
+                    let right = renderer.next().unwrap();
+                    assert!((left + right).abs() < 1e-6 && left <= previous);
+                    previous = left;
+                }
+                assert!(renderer.by_ref().take(200).all(|v| v == 0.));
+                control.scratch_touch(false);
+                assert!(renderer.by_ref().take(200).all(f32::is_finite));
+            });
+            assert_eq!(allocations, 0);
+            assert!(renderer.keylock.is_some());
+            assert!(!control.is_paused());
+            assert_eq!(control.read(None).unwrap().rate, (rate as f64 * 1.1) as u32);
+        }
+    }
     #[test]
     fn keylock_micro_render_is_stereo_coherent_and_allocation_free() {
         for (rate, output_rate) in [(48000, 48000), (44100, 48000)] {

@@ -295,6 +295,10 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(controller) = &controller {
                 let reconnect = ui.get_controller_reconnect_requested();
                 ui.set_controller_reconnect_requested(false);
+                if reconnect {
+                    ui.invoke_controller_platter_touch(0, false);
+                    ui.invoke_controller_platter_touch(1, false);
+                }
                 mc4000::release_for_reconnect(&mut midi, reconnect);
                 if reconnect || midi_discovery.elapsed() >= Duration::from_secs(2) {
                     midi_discovery = std::time::Instant::now();
@@ -358,8 +362,10 @@ fn main() -> Result<(), slint::PlatformError> {
                             );
                         }
                     }) {
+                        ui.invoke_controller_platter_touch(0, false);
+                        ui.invoke_controller_platter_touch(1, false);
                         ui.set_status(
-                            "MC4000 input queue overflow; a button action was dropped".into(),
+                            "MC4000 input queue overflow; platter controls released safely".into(),
                         );
                     }
                 }

@@ -13,6 +13,7 @@ use std::{
         mpsc::{self, Receiver, TryRecvError},
         Arc,
     },
+    time::Duration,
 };
 
 type LoadResult =
@@ -320,6 +321,10 @@ pub struct AudioController {
     keylock_next: Cell<[Option<f64>; 2]>,
     keylock_jobs: RefCell<[Option<KeylockJob>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
+    platter_holds: Cell<[bool; 2]>,
+    platter_cancelled: Cell<[bool; 2]>,
+    vinyl_modes: Cell<[bool; 2]>,
+    jog_bends: Cell<[Option<std::time::Instant>; 2]>,
     sync_session: RefCell<Option<SyncSession>>,
     pending_sync: RefCell<Option<PendingSync>>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
@@ -469,6 +474,10 @@ impl AudioController {
             keylock_jobs: RefCell::new([None, None]),
             keylock_next: Cell::new([None, None]),
             nudges: RefCell::new([None, None]),
+            platter_holds: Cell::new([false; 2]),
+            platter_cancelled: Cell::new([false; 2]),
+            vinyl_modes: Cell::new([true; 2]),
+            jog_bends: Cell::new([None; 2]),
             sync_session: RefCell::new(None),
             pending_sync: RefCell::new(None),
             cue_editors: RefCell::new([None, None]),
@@ -983,6 +992,7 @@ impl AudioController {
             }
         }
         controller.wire_nudge(ui);
+        controller.wire_platters(ui);
         controller.wire_saved_loops(ui);
         controller.refresh();
         controller
@@ -1850,6 +1860,162 @@ impl AudioController {
         self.nudges.borrow_mut()[Self::grid_index(id)] = None;
         // Release bypasses all busy guards and never starts a deck.
         let _ = self.engine.borrow().set_nudge(id, 0);
+    }
+    fn release_platter(&self, id: DeckId) {
+        let index = Self::grid_index(id);
+        let mut holds = self.platter_holds.get();
+        if holds[index] {
+            if self.engine.borrow().platter_touched(id) {
+                if let Err(error) = self.engine.borrow().platter_touch(id, false) {
+                    eprintln!("Could not release platter: {error}");
+                }
+            }
+            holds[index] = false;
+            self.platter_holds.set(holds);
+        }
+        let mut bends = self.jog_bends.get();
+        if bends[index].take().is_some() {
+            self.cancel_nudge(id);
+        }
+        self.jog_bends.set(bends);
+    }
+    fn wire_platters(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_controller_platter_touch(move |deck, held| {
+            let Some(c) = weak.upgrade() else {
+                return;
+            };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if !held {
+                c.release_platter(id);
+                let mut cancelled = c.platter_cancelled.get();
+                cancelled[Self::grid_index(id)] = false;
+                c.platter_cancelled.set(cancelled);
+                c.refresh();
+                return;
+            }
+            let result = (|| {
+                if !c.can_control_deck(id) {
+                    return Err("Platter unavailable during loading".into());
+                }
+                if !c.vinyl_modes.get()[Self::grid_index(id)] {
+                    return Ok(());
+                }
+                if c.platter_holds.get()[Self::grid_index(id)]
+                    && c.engine.borrow().platter_touched(id)
+                {
+                    return Ok(());
+                }
+                c.stop_sync();
+                c.cancel_nudge(id);
+                let mut bends = c.jog_bends.get();
+                bends[Self::grid_index(id)] = None;
+                c.jog_bends.set(bends);
+                c.engine.borrow().exit_loop(id)?;
+                c.engine.borrow().platter_touch(id, true)?;
+                let mut cancelled = c.platter_cancelled.get();
+                cancelled[Self::grid_index(id)] = false;
+                c.platter_cancelled.set(cancelled);
+                let mut holds = c.platter_holds.get();
+                holds[Self::grid_index(id)] = true;
+                c.platter_holds.set(holds);
+                Ok::<_, String>(())
+            })();
+            if let Err(error) = result {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_jog(move |deck, steps| {
+            let Some(c) = weak.upgrade() else {
+                return;
+            };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            let result = (|| {
+                if !c.can_control_deck(id) {
+                    return Err("Jog unavailable during loading".into());
+                }
+                if !(-64..=63).contains(&steps) || steps == 0 {
+                    return Err("Invalid jog movement".into());
+                }
+                if c.platter_cancelled.get()[Self::grid_index(id)] {
+                    return Err("Platter transport changed; release and touch again".into());
+                }
+                if c.platter_holds.get()[Self::grid_index(id)] {
+                    if !c.engine.borrow().platter_touched(id) {
+                        c.release_platter(id);
+                        let mut cancelled = c.platter_cancelled.get();
+                        cancelled[Self::grid_index(id)] = true;
+                        c.platter_cancelled.set(cancelled);
+                        return Err("Platter transport changed; release and touch again".into());
+                    }
+                    c.engine.borrow().platter_move(id, steps)?;
+                } else {
+                    c.stop_sync();
+                    let snapshot = c.engine.borrow().snapshot(id);
+                    if snapshot.playing {
+                        c.engine.borrow().set_nudge(id, steps.signum())?;
+                        let mut bends = c.jog_bends.get();
+                        bends[Self::grid_index(id)] = Some(std::time::Instant::now());
+                        c.jog_bends.set(bends);
+                    } else {
+                        let seconds = (snapshot.position.as_secs_f64() + f64::from(steps) * 0.005)
+                            .clamp(0., snapshot.duration.as_secs_f64());
+                        c.engine
+                            .borrow()
+                            .seek_position(id, Duration::from_secs_f64(seconds))?;
+                    }
+                }
+                Ok::<_, String>(())
+            })();
+            if let Err(error) = result {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_vinyl(move |deck| {
+            if let Some(c) = weak.upgrade() {
+                let id = match deck {
+                    0 => DeckId::A,
+                    1 => DeckId::B,
+                    _ => return,
+                };
+                c.release_platter(id);
+                let mut modes = c.vinyl_modes.get();
+                modes[Self::grid_index(id)] = !modes[Self::grid_index(id)];
+                c.vinyl_modes.set(modes);
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_left_vinyl(modes[0]);
+                    ui.set_right_vinyl(modes[1]);
+                    ui.set_status(
+                        format!(
+                            "Deck {} Vinyl {}",
+                            deck + 1,
+                            if modes[Self::grid_index(id)] {
+                                "on"
+                            } else {
+                                "off (pitch bend)"
+                            }
+                        )
+                        .into(),
+                    );
+                }
+            }
+        });
     }
     fn cancel_stale_nudges(&self) {
         for id in [DeckId::A, DeckId::B] {
@@ -4837,6 +5003,29 @@ impl AudioController {
         self.handle_output_failure();
         self.poll_device_scan();
         self.engine.borrow().collect_retired();
+        for id in [DeckId::A, DeckId::B] {
+            let index = Self::grid_index(id);
+            let disconnected = self
+                .ui
+                .upgrade()
+                .is_none_or(|ui| !ui.get_mc4000_connected());
+            let expired = self.jog_bends.get()[index]
+                .is_some_and(|time| time.elapsed() >= Duration::from_millis(120));
+            if self.platter_holds.get()[index]
+                && (!self.engine.borrow().platter_touched(id) || !self.can_control_deck(id))
+            {
+                let mut cancelled = self.platter_cancelled.get();
+                cancelled[index] = true;
+                self.platter_cancelled.set(cancelled);
+            }
+            if disconnected
+                || expired
+                || !self.can_control_deck(id)
+                || (self.platter_holds.get()[index] && !self.engine.borrow().platter_touched(id))
+            {
+                self.release_platter(id);
+            }
+        }
         self.cancel_stale_nudges();
         self.cancel_stale_hot_cue_holds();
         self.apply_pending_pitch();
@@ -5897,12 +6086,20 @@ impl AudioController {
             match id {
                 DeckId::A => {
                     ui.set_left_platter_bpm(platter_bpm.into());
+                    ui.set_left_platter_angle(
+                        (s.position.as_secs_f64() * 200.).rem_euclid(360.) as f32
+                    );
+                    ui.set_left_platter_touched(self.engine.borrow().platter_touched(id));
                     ui.set_left_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_left_pitch_caption(pitch.into());
                     ui.set_left_bpm_caption(bpm.into());
                 }
                 DeckId::B => {
                     ui.set_right_platter_bpm(platter_bpm.into());
+                    ui.set_right_platter_angle(
+                        (s.position.as_secs_f64() * 200.).rem_euclid(360.) as f32
+                    );
+                    ui.set_right_platter_touched(self.engine.borrow().platter_touched(id));
                     ui.set_right_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_right_pitch_caption(pitch.into());
                     ui.set_right_bpm_caption(bpm.into());
@@ -9170,6 +9367,114 @@ mod tests {
             c.close_library().unwrap();
         }
     }
+    #[test]
+    fn controller_platter_midi_moves_audio_and_marker_and_releases_safely() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.set_mc4000_connected(true);
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(1))
+            .unwrap();
+        engine
+            .seek_position(DeckId::B, Duration::from_secs(2))
+            .unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let dispatch = |message: [u8; 3]| {
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&message).unwrap());
+        };
+        dispatch([0x90, 6, 127]);
+        assert!(engine.platter_touched(DeckId::A));
+        assert!(engine
+            .schedule_cue(
+                DeckId::A,
+                Duration::ZERO,
+                crate::beatgrid::QuantizeStep::Beat
+            )
+            .unwrap_err()
+            .contains("Release the platter"));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0xb0, 6, 10]);
+        assert!(output
+            .by_ref()
+            .take(1600)
+            .any(|sample| sample.abs() > 0.001));
+        // Consume the remainder of the target interpolation, independent of mixer start alignment.
+        output.by_ref().take(1600).for_each(drop);
+        c.refresh();
+        assert!((engine.snapshot(DeckId::A).position.as_secs_f64() - 1.05).abs() < 0.001);
+        assert!((ui.get_left_platter_angle() - 210.).abs() < 0.2);
+        assert!(ui.get_left_platter_touched());
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::from_secs(2));
+        assert!((ui.get_right_platter_angle() - 40.).abs() < 0.2);
+        dispatch([0xb0, 6, 118]);
+        output.by_ref().take(3200).for_each(drop);
+        c.refresh();
+        assert!((engine.snapshot(DeckId::A).position.as_secs_f64() - 1.).abs() < 0.001);
+        assert!((ui.get_left_platter_angle() - 200.).abs() < 0.2);
+        assert!(output.by_ref().take(3200).all(|sample| sample == 0.));
+        dispatch([0x80, 6, 0]);
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!engine.snapshot(DeckId::A).playing);
+
+        engine.play(DeckId::B);
+        engine.set_speed(DeckId::B, 1.1).unwrap();
+        dispatch([0x91, 6, 127]);
+        dispatch([0xb1, 6, 127]);
+        dispatch([0x81, 6, 0]);
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!((engine.snapshot(DeckId::B).position.as_secs_f64() - 1.995).abs() < 0.001);
+        assert!((engine.snapshot(DeckId::B).effective_speed - 1.1).abs() < 0.0001);
+        dispatch([0xb1, 6, 1]);
+        assert_eq!(engine.snapshot(DeckId::B).nudge_direction, 1);
+        c.jog_bends.set([
+            None,
+            Some(std::time::Instant::now() - Duration::from_millis(121)),
+        ]);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::B).nudge_direction, 0);
+        dispatch([0xb1, 6, 1]);
+        dispatch([0x91, 6, 127]);
+        assert!(c.jog_bends.get()[1].is_none());
+        c.tick();
+        assert!(engine.platter_touched(DeckId::B));
+        engine.pause(DeckId::B);
+        c.tick();
+        let before = engine.snapshot(DeckId::B).position;
+        dispatch([0xb1, 6, 10]);
+        assert_eq!(engine.snapshot(DeckId::B).position, before);
+        assert!(ui.get_status().contains("release and touch again"));
+        dispatch([0x81, 6, 0]);
+        dispatch([0xb1, 6, 1]);
+        assert!(engine.snapshot(DeckId::B).position > before);
+        engine.play(DeckId::B);
+        dispatch([0x91, 7, 127]);
+        dispatch([0x91, 6, 127]);
+        assert!(!engine.platter_touched(DeckId::B));
+        dispatch([0xb1, 6, 127]);
+        assert_eq!(engine.snapshot(DeckId::B).nudge_direction, -1);
+        ui.set_mc4000_connected(false);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::B).nudge_direction, 0);
+        ui.set_mc4000_connected(true);
+        dispatch([0x90, 6, 127]);
+        dispatch([0xb0, 6, 1]);
+        // The overflow fail-safe uses the very same explicit release callbacks.
+        ui.invoke_controller_platter_touch(0, false);
+        ui.invoke_controller_platter_touch(1, false);
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x90, 6, 127]);
+        ui.set_mc4000_connected(false);
+        c.tick();
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!ui.get_left_platter_touched());
+    }
+
     #[test]
     fn momentary_nudge_pointer_keys_focus_panel_and_busy_cancellation() {
         use slint::platform::{Key, PointerEventButton, WindowEvent};

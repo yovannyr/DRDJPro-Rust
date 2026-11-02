@@ -851,7 +851,52 @@ impl DualDeckEngine {
             });
         }
     }
-    /// Seek the shared PCM source on the control plane, without Sink::try_seek's audio feedback wait.
+    /// Touch overrides forward transport without changing its play/pause intent.
+    pub fn platter_touch(&self, id: DeckId, held: bool) -> Result<(), String> {
+        if held && self.output_failed() {
+            return Err("Audio output unavailable".into());
+        }
+        let deck = self.decks[id.index()].borrow();
+        let render = deck
+            .render
+            .as_ref()
+            .ok_or("Load a track before using the platter")?;
+        if render.scratching() == held {
+            return Ok(());
+        }
+        render.scratch_touch(held);
+        if held || !render.is_paused() {
+            deck.sink.play();
+        } else {
+            deck.sink.pause();
+        }
+        Ok(())
+    }
+    /// Relative jog sensitivity: five milliseconds of source time per MIDI unit.
+    pub fn platter_move(&self, id: DeckId, steps: i32) -> Result<(), String> {
+        if !(-64..=63).contains(&steps) || steps == 0 {
+            return Err("Invalid relative jog movement".into());
+        }
+        let deck = self.decks[id.index()].borrow();
+        let render = deck
+            .render
+            .as_ref()
+            .ok_or("Load a track before using the platter")?;
+        if !render.scratching() {
+            return Err("Touch the platter before scratching".into());
+        }
+        render.scratch_move(f64::from(steps) * 0.005);
+        Ok(())
+    }
+    /// Whether touch currently overrides this deck's forward renderer.
+    pub fn platter_touched(&self, id: DeckId) -> bool {
+        self.decks[id.index()]
+            .borrow()
+            .render
+            .as_ref()
+            .is_some_and(|render| render.scratching())
+    }
+    /// Seek shared PCM on the control plane without waiting for audio feedback.
     pub fn seek_percent(&self, id: DeckId, percent: f32) -> Result<(), String> {
         if !percent.is_finite() {
             return Err("Invalid seek position".into());
@@ -903,6 +948,13 @@ impl DualDeckEngine {
     ) -> Result<(), String> {
         let deck = self.decks[id.index()].borrow();
         let track = deck.track.as_ref().ok_or("No track loaded")?;
+        if deck
+            .render
+            .as_ref()
+            .is_some_and(|render| render.scratching())
+        {
+            return Err("Release the platter before scheduling a quantized cue".into());
+        }
         if !deck.playing() || deck.loop_active || deck.nudge != 0 || deck.sync_factor != 1.0 {
             return Err("Quantized triggers require playing without loop, nudge or Sync".into());
         }

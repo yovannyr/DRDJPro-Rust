@@ -16,6 +16,9 @@ pub enum Command {
     FxToggle(usize),
     FxKnob(usize, usize, u8),
     FxTimeStep(usize, i8),
+    Jog(usize, i8),
+    PlatterTouch(usize, bool),
+    Vinyl(usize),
 }
 pub fn decode(bytes: &[u8]) -> Option<Command> {
     if bytes.len() != 3 || bytes[1] > 127 || bytes[2] > 127 {
@@ -23,6 +26,17 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
     }
     let channel = bytes[0] & 15;
     match (bytes[0] & 0xf0, channel, bytes[1], bytes[2]) {
+        (0xb0, 0..=1, 6, 1..=127) => Some(Command::Jog(
+            channel as usize,
+            if bytes[2] < 64 {
+                bytes[2] as i8
+            } else {
+                (i16::from(bytes[2]) - 128) as i8
+            },
+        )),
+        (0x90, 0..=1, 6, value) => Some(Command::PlatterTouch(channel as usize, value != 0)),
+        (0x80, 0..=1, 6, _) => Some(Command::PlatterTouch(channel as usize, false)),
+        (0x90, 0..=1, 7, 1..=127) => Some(Command::Vinyl(channel as usize)),
         (0x90, 8..=9, 0, 1..=127) => Some(Command::FxToggle((channel - 8) as usize)),
         (0xb0, 8..=9, 0..=2, value) => Some(Command::FxKnob(
             (channel - 8) as usize,
@@ -99,7 +113,7 @@ impl Greeting {
         ])
     }
 }
-const FEEDBACK_MESSAGES: usize = 20;
+const FEEDBACK_MESSAGES: usize = 22;
 #[derive(Default)]
 struct Feedback {
     last: Option<[[u8; 3]; FEEDBACK_MESSAGES]>,
@@ -193,6 +207,8 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             ui.get_channel_b_peak_warning(),
         ),
     ];
+    messages[20] = [0x90, 7, if ui.get_left_vinyl() { 127 } else { 0 }];
+    messages[21] = [0x91, 7, if ui.get_right_vinyl() { 127 } else { 0 }];
     messages
 }
 pub fn present() -> Result<bool, String> {
@@ -415,8 +431,12 @@ impl Input {
                 apply(Command::FxKnob(index / 3, index % 3, value));
             }
         }
-        dispatch_buttons(&self.buttons, self.accept_buttons_after, &mut apply);
-        self.overflow.swap(false, Ordering::AcqRel)
+        dispatch_buttons(
+            &self.buttons,
+            &mut self.accept_buttons_after,
+            &self.overflow,
+            &mut apply,
+        )
     }
 }
 fn reconcile_output<T>(
@@ -456,16 +476,23 @@ fn open_output() -> Result<Option<midir::MidiOutputConnection>, String> {
 }
 fn dispatch_buttons(
     buttons: &Receiver<(std::time::Instant, Command)>,
-    accept_after: std::time::Instant,
+    accept_after: &mut std::time::Instant,
+    overflow: &AtomicBool,
     mut apply: impl FnMut(Command),
-) {
+) -> bool {
     for _ in 0..128 {
         match buttons.try_recv() {
-            Ok((received, command)) if received >= accept_after => apply(command),
+            Ok((received, command)) if received >= *accept_after => apply(command),
             Ok(_) => (),
             Err(_) => break,
         }
     }
+    let lost = overflow.swap(false, Ordering::AcqRel);
+    if lost {
+        // The matching release may be lost: never replay a queued old touch after recovery.
+        *accept_after = (*accept_after).max(std::time::Instant::now());
+    }
+    lost
 }
 impl Drop for Input {
     fn drop(&mut self) {
@@ -483,6 +510,9 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         return;
     }
     match command {
+        Command::Jog(deck, steps) => ui.invoke_controller_jog(deck as i32, i32::from(steps)),
+        Command::PlatterTouch(deck, held) => ui.invoke_controller_platter_touch(deck as i32, held),
+        Command::Vinyl(deck) => ui.invoke_controller_vinyl(deck as i32),
         Command::Monitor(index, value) => {
             match index {
                 0 => ui.set_monitor_gain(f32::from(value) * 100. / 127.),
@@ -610,7 +640,7 @@ mod tests {
     #[test]
     fn commands_received_during_output_change_do_not_replay_after_commit() {
         let (tx, rx) = mpsc::sync_channel(128);
-        let end = std::time::Instant::now();
+        let mut end = std::time::Instant::now();
         tx.send((
             end - std::time::Duration::from_millis(1),
             Command::Toggle(0),
@@ -618,8 +648,41 @@ mod tests {
         .unwrap();
         tx.send((end, Command::Toggle(1))).unwrap();
         let mut applied = Vec::new();
-        dispatch_buttons(&rx, end, |command| applied.push(command));
+        dispatch_buttons(&rx, &mut end, &AtomicBool::new(false), |command| {
+            applied.push(command)
+        });
         assert_eq!(applied, vec![Command::Toggle(1)]);
+    }
+    #[test]
+    fn overflow_invalidates_queued_touch_beyond_dispatch_limit() {
+        let (tx, rx) = mpsc::sync_channel(256);
+        let received = std::time::Instant::now();
+        let mut cutoff = received;
+        for _ in 0..128 {
+            tx.send((received, Command::Jog(0, 1))).unwrap();
+        }
+        tx.send((received, Command::PlatterTouch(0, true))).unwrap();
+        let overflow = AtomicBool::new(true);
+        assert!(dispatch_buttons(&rx, &mut cutoff, &overflow, |_| {}));
+        assert!(cutoff > received);
+        let mut held = false; // main's forced-release state
+        assert!(!dispatch_buttons(&rx, &mut cutoff, &overflow, |command| {
+            if let Command::PlatterTouch(_, value) = command {
+                held = value;
+            }
+        }));
+        assert!(
+            !held,
+            "old touch must not rearm a deck after its release was lost"
+        );
+        tx.send((std::time::Instant::now(), Command::PlatterTouch(0, true)))
+            .unwrap();
+        dispatch_buttons(&rx, &mut cutoff, &overflow, |command| {
+            if let Command::PlatterTouch(_, value) = command {
+                held = value;
+            }
+        });
+        assert!(held, "a fresh press remains usable after recovery");
     }
     #[test]
     fn headphone_cue_notes_are_deck_scoped_and_releases_do_not_toggle() {
@@ -667,6 +730,42 @@ mod tests {
             }
         }
         assert_eq!([counts[0].get(), counts[1].get()], [1, 1]);
+    }
+    #[test]
+    fn platter_manufacturer_relative_mapping_and_release_messages() {
+        for deck in 0..=1 {
+            for (value, steps) in [(1, 1), (63, 63), (127, -1), (64, -64)] {
+                assert_eq!(
+                    decode(&[0xb0 | deck, 6, value]),
+                    Some(Command::Jog(deck as usize, steps))
+                );
+            }
+            assert_eq!(decode(&[0xb0 | deck, 6, 0]), None);
+            assert_eq!(
+                decode(&[0x90 | deck, 6, 127]),
+                Some(Command::PlatterTouch(deck as usize, true))
+            );
+            for message in [
+                [0x90 | deck, 6, 0],
+                [0x80 | deck, 6, 0],
+                [0x80 | deck, 6, 64],
+            ] {
+                assert_eq!(
+                    decode(&message),
+                    Some(Command::PlatterTouch(deck as usize, false))
+                );
+            }
+            assert_eq!(
+                decode(&[0x90 | deck, 7, 127]),
+                Some(Command::Vinyl(deck as usize))
+            );
+            assert_eq!(decode(&[0x90 | deck, 7, 0]), None);
+            assert_eq!(decode(&[0x80 | deck, 7, 0]), None);
+        }
+        for channel in 2..=15 {
+            assert_eq!(decode(&[0xb0 | channel, 6, 1]), None);
+            assert_eq!(decode(&[0x90 | channel, 6, 127]), None);
+        }
     }
     #[test]
     fn fx_banks_decode_and_reach_separate_gui_parameters() {
@@ -820,6 +919,8 @@ mod tests {
         );
         assert_eq!(messages[18], [0xbf, 0x44, 55]);
         assert_eq!(messages[19], [0xbf, 0x45, 1]);
+        assert_eq!(messages[20], [0x90, 7, 127]);
+        assert_eq!(messages[21], [0x91, 7, 127]);
         let mut feedback = Feedback::default();
         let mut sent = Vec::new();
         feedback
@@ -995,7 +1096,7 @@ mod tests {
             &[0x81, 0, 127],
             &[0x92, 0, 127],
             &[0x91, 4, 127],
-            &[0xb1, 6, 1],
+            &[0xb2, 6, 1],
             &[0x91, 0],
             &[0xbf, 8, 128],
         ] {

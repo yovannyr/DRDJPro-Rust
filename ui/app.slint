@@ -15,6 +15,8 @@ component VirtualPlatter inherits Rectangle {
     in property <float> pitch;
     in property <float> position;
     in property <bool> playing;
+    in property <float> angle;
+    in property <bool> touched;
     in property <brush> accent;
     width: 120px; height: 120px;
     border-radius: 60px;
@@ -23,7 +25,11 @@ component VirtualPlatter inherits Rectangle {
     border-color: root.accent;
     accessible-role: image;
     accessible-label: root.deck-label + " round virtual platter";
-    accessible-description: root.bpm + " BPM, pitch " + round(root.pitch * 100) / 100 + "%, " + root.time + ", " + round(root.position) + "%, " + (root.playing ? "Playing" : "Paused") + ". Software deck; not physical jog position.";
+    accessible-description: root.bpm + " BPM, pitch " + round(root.pitch * 100) / 100 + "%, " + root.time + ", " + round(root.position) + "%, " + (root.touched ? "Jog touched" : root.playing ? "Playing" : "Paused") + ", rotation " + round(root.angle) + " degrees. Relative software playhead.";
+    Rectangle {
+        x: 58px + 54px * sin(root.angle * 1deg); y: 58px - 54px * cos(root.angle * 1deg);
+        width: 4px; height: 4px; border-radius: 2px; background: root.touched ? #ffffff : #ffce77;
+    }
     Rectangle {
         x: 9px; y: 9px; width: 102px; height: 102px;
         border-radius: 51px; background: #f4f4f2;
@@ -399,6 +405,8 @@ component NudgeHold inherits Rectangle {
 }
 
 component CompactDeck inherits Rectangle {
+    in property <float> platter-angle;
+    in property <bool> platter-touched;
     in property <string> deck-label;
     in property <bool> controller-mode: false;
     in property <brush> accent;
@@ -499,6 +507,7 @@ component CompactDeck inherits Rectangle {
             height: 120px;
             spacing: 8px;
             VirtualPlatter {
+                angle: root.platter-angle; touched: root.platter-touched;
                 deck-label: root.deck-label; bpm: root.platter-bpm; time: root.platter-time;
                 pitch: root.pitch-percent; position: root.position; playing: root.playing; accent: root.accent;
             }
@@ -1096,6 +1105,15 @@ component TrackLibrary inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
+    callback controller-jog(int, int);
+    callback controller-platter-touch(int, bool);
+    callback controller-vinyl(int);
+    in property <float> left-platter-angle;
+    in property <float> right-platter-angle;
+    in property <bool> left-platter-touched;
+    in property <bool> right-platter-touched;
+    in property <bool> left-vinyl: true;
+    in property <bool> right-vinyl: true;
     in property <[TableColumn]> table-columns;
     in property <[TableColumn]> all-table-columns;
     in property <float> table-width;
@@ -1530,6 +1548,7 @@ export component AppWindow inherits Window {
             left-deck := CompactDeck {
                 deck-label: "DECK A"; controller-mode: root.virtual-decks-visible; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 platter-bpm: root.left-platter-bpm; platter-time: root.left-platter-time;
+                platter-angle: root.left-platter-angle; platter-touched: root.left-platter-touched;
                 external-hover: root.external-drop-deck == 0;
                 accepts-drop(data) => { return root.accepts-track-drop(0,data); }
                 drop-track(data) => { return root.drop-track(0,data); }
@@ -1570,6 +1589,7 @@ export component AppWindow inherits Window {
             right-deck := CompactDeck {
                 deck-label: "DECK B"; controller-mode: root.virtual-decks-visible; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 platter-bpm: root.right-platter-bpm; platter-time: root.right-platter-time;
+                platter-angle: root.right-platter-angle; platter-touched: root.right-platter-touched;
                 external-hover: root.external-drop-deck == 1;
                 accepts-drop(data) => { return root.accepts-track-drop(1,data); }
                 drop-track(data) => { return root.drop-track(1,data); }
