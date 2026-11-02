@@ -5,6 +5,7 @@ export struct HotCueRow { occupied: bool, description: string, tint: color, posi
 export struct CrateRow { id: int, name: string, count: int, depth: int, smart: bool }
 export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, prepare-duration: string, bpm: string, key: string, gain: string, analysis-status: string, metadata-error: string, format: string, path: string, available: bool }
+export struct TableColumn { id: int, title: string, sort-label: string, visible: bool, width: float }
 export enum DeckView { training, virtual }
 
 component VirtualPlatter inherits Rectangle {
@@ -914,6 +915,15 @@ component CratePanel inherits Rectangle {
 }
 
 component TrackLibrary inherits Rectangle {
+    in property <[TableColumn]> columns;
+    in property <[TableColumn]> all-columns;
+    in property <float> table-width;
+    in property <int> sort-field;
+    in property <bool> sort-descending;
+    in property <bool> columns-enabled;
+    in-out property <length> table-scroll-x;
+    property <bool> columns-open;
+    callback change-column(int, int);
     callback analyze();
     in property <string> analysis-title;
     in property <string> analysis-summary;
@@ -996,21 +1006,26 @@ component TrackLibrary inherits Rectangle {
             height: 26px;
             LibraryButton { text: "Relocate"; enabled: !busy; accessible-label: "Relocate selected missing library track"; clicked => { root.relocate-track(); } }
         }
-        HorizontalLayout {
-            spacing: 0px;
-            if root.tab == 4 : Text { text: "#"; width: 28px; color: #cccccc; font-size: 11px; }
-            LibraryButton { text: root.tab == 4 ? "Song" : "Title"; horizontal-stretch: 2; accessible-label: "Sort library by name"; clicked => { root.sort-column(0); } }
-            LibraryButton { text: "Artist"; horizontal-stretch: 1; accessible-label: "Sort library by artist"; clicked => { root.sort-column(3); } }
-            if root.tab == 4 : Text { text: "BPM"; width: 42px; color: #cccccc; font-size: 11px; }
-            if root.tab == 4 : Text { text: "Key"; width: 34px; color: #cccccc; font-size: 11px; }
-            LibraryButton { text: "Album"; horizontal-stretch: 1; accessible-label: "Sort library by album"; clicked => { root.sort-column(4); } }
-            LibraryButton { text: root.tab == 4 ? "Length" : "Time"; width: root.tab == 4 ? 72px : 60px; accessible-label: "Sort library by duration"; clicked => { root.sort-column(5); } }
-            if root.tab == 4 : Text { text: "Gain dB"; width: 48px; color: #cccccc; font-size: 11px; }
-            if root.tab == 4 : Text { text: "Analysis"; width: 65px; color: #cccccc; font-size: 11px; }
-            if root.tab != 4 : LibraryButton { text: "Type"; width: 60px; accessible-label: "Sort library by type"; clicked => { root.sort-column(1); } }
-            if root.tab != 4 : LibraryButton { text: "Location"; horizontal-stretch: 2; accessible-label: "Sort library by path"; clicked => { root.sort-column(2); } }
-        }
+        table-scroll := Flickable {
+          interactive: false;
+          content-x <=> root.table-scroll-x;
+          min-width: 0px; min-height: 22px; vertical-stretch: 1;
+          content-width: max(self.width, root.table-width * 1px);
+          content-height: self.height;
+          VerticalLayout {
+          width: table-scroll.content-width; height: table-scroll.height; spacing: 0px; padding: 0px;
+          HorizontalLayout {
+            spacing: 0px; horizontal-stretch: 0;
+            for column in root.columns : LibraryButton {
+                width: column.width * 1px;
+                text: (column.id == 0 && root.tab != 4 ? "Title" : column.title) + (root.sort-field == column.id ? (root.sort-descending ? " ▼" : " ▲") : "");
+                accessible-label: "Sort library by " + column.sort-label;
+                clicked => { root.sort-column(column.id); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+          }
         nav := FocusScope {
+            min-height: 22px; vertical-stretch: 1;
             key-pressed(event) => {
                 if event.text == Key.DownArrow { root.move-selection(1); return accept; }
                 if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
@@ -1024,18 +1039,15 @@ component TrackLibrary inherits Rectangle {
                     accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.artist + " BPM " + row.bpm + " Key " + row.key + " " + row.album + " " + row.prepare-duration + " Gain dB " + row.gain + " " + row.analysis-status + " " + row.path + (row.metadata-error == "" ? "" : " Metadata unavailable: " + row.metadata-error);
                     accessible-action-default => { root.select-track(row.id); nav.focus(); }
                     HorizontalLayout {
-                        padding-left: 4px; spacing: 0px;
-                        if root.tab == 4 : Text { text: row.id; width: 24px; font-size: 11px; color: #cccccc; vertical-alignment: center; }
-                        Text { text: row.name; font-size: 11px; vertical-alignment: center; color: #eeeeee; overflow: elide; horizontal-stretch: 2; }
-                        Text { text: row.artist == "" ? "—" : row.artist; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 1; }
-                        if root.tab == 4 : Text { text: row.bpm; width: 42px; font-size: 11px; vertical-alignment: center; color: #4fc2ed; accessible-role: text; accessible-label: "Track " + row.id + " BPM"; }
-                        if root.tab == 4 : Text { text: row.key; width: 34px; font-size: 11px; vertical-alignment: center; color: #d597ed; accessible-role: text; accessible-label: "Track " + row.id + " key"; }
-                        Text { text: row.album == "" ? "—" : row.album; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 1; }
-                        Text { text: root.tab == 4 ? row.prepare-duration : row.duration; font-size: 11px; vertical-alignment: center; color: #cccccc; width: root.tab == 4 ? 72px : 60px; }
-                        if root.tab == 4 : Text { text: row.gain; width: 48px; font-size: 11px; vertical-alignment: center; color: #cccccc; }
-                        if root.tab == 4 : Text { text: row.available ? row.analysis-status : "Missing"; width: 65px; font-size: 11px; vertical-alignment: center; color: #cccccc; }
-                        if root.tab != 4 : Text { text: row.available ? (row.metadata-error == "" ? row.format : row.format + " ?") : "MISSING"; font-size: 11px; vertical-alignment: center; color: row.available ? #cccccc : #ffae58; width: 60px; }
-                        if root.tab != 4 : Text { text: row.path; font-size: 11px; vertical-alignment: center; color: #cccccc; overflow: elide; horizontal-stretch: 2; }
+                        spacing: 0px;
+                        for column in root.columns : Text {
+                            width: column.width * 1px;
+                            text: column.id == 6 ? "" + row.id : column.id == 0 ? row.name : column.id == 3 ? (row.artist == "" ? "—" : row.artist) : column.id == 4 ? (row.album == "" ? "—" : row.album) : column.id == 7 ? row.bpm : column.id == 8 ? row.key : column.id == 9 ? row.gain : column.id == 10 ? (row.available ? row.analysis-status : "Missing") : column.id == 5 ? row.prepare-duration : column.id == 2 ? row.path : (row.available ? row.format : "MISSING");
+                            font-size: 11px; vertical-alignment: center; color: column.id == 7 ? #4fc2ed : column.id == 8 ? #d597ed : #cccccc; overflow: elide;
+                            accessible-role: text; accessible-label: "Track " + row.id + " " + column.sort-label;
+                            accessible-description: self.text;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                     DragArea {
                         width: 100%; height: 100%; allow-copy: true;
@@ -1047,7 +1059,12 @@ component TrackLibrary inherits Rectangle {
             }
             Text { text: empty-text; visible: rows.length == 0; color: #9faec2; horizontal-alignment: center; vertical-alignment: center; }
         }
+          }
+        }
         HorizontalLayout {
+            LibraryButton { text: "Columns"; accessible-label: "Configure track columns"; clicked => { root.columns-open = !root.columns-open; } }
+            LibraryButton { text: "◀"; accessible-label: "Scroll track columns left"; enabled: root.table-scroll-x < 0px; clicked => { root.table-scroll-x = min(0px, root.table-scroll-x + 240px); } }
+            LibraryButton { text: "▶"; accessible-label: "Scroll track columns right"; enabled: root.table-scroll-x > min(0px, table-scroll.width - root.table-width * 1px); clicked => { root.table-scroll-x = max(min(0px, table-scroll.width - root.table-width * 1px), root.table-scroll-x - 240px); } }
             Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
             LibraryButton { text: "‹"; accessible-label: "Previous library page"; enabled: root.can-previous-page; clicked => { root.change-page(-1); } }
             Text { text: page-text; accessible-role: text; accessible-label: "Library page"; color: #9faec2; font-size: 11px; vertical-alignment: center; }
@@ -1057,9 +1074,36 @@ component TrackLibrary inherits Rectangle {
             if save-failed : LibraryButton { text: "Retry save"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
         }
     }
+        if root.columns-open : Rectangle {
+            x: 8px; y: 30px; width: min(420px, parent.width - 16px); height: min(280px, parent.height - 36px);
+            background: #222222; border-width: 1px; border-color: #aaaaaa;
+            VerticalLayout {
+                padding: 6px; spacing: 3px;
+                HorizontalLayout {
+                    Text { text: "Columns · visibility and order"; color: #eeeeee; font-size: 11px; }
+                    LibraryButton { text: "Close"; accessible-label: "Close track columns"; clicked => { root.columns-open = false; } }
+                }
+                ListView {
+                    for column[index] in root.all-columns : HorizontalLayout {
+                        height: 24px;
+                        CheckBox { text: column.title; checked: column.visible; enabled: root.columns-enabled; accessible-label: "Show column " + column.sort-label; toggled => { root.change-column(column.id, 0); } }
+                        LibraryButton { text: "←"; accessible-label: "Move column " + column.sort-label + " left"; enabled: root.columns-enabled && index > 0; clicked => { root.change-column(column.id, -1); } }
+                        LibraryButton { text: "→"; accessible-label: "Move column " + column.sort-label + " right"; enabled: root.columns-enabled && index < root.all-columns.length - 1; clicked => { root.change-column(column.id, 1); } }
+                }
+            }
+        }
+    }
 }
 
 export component AppWindow inherits Window {
+    in property <[TableColumn]> table-columns;
+    in property <[TableColumn]> all-table-columns;
+    in property <float> table-width;
+    in property <int> table-sort-field;
+    in property <bool> table-sort-descending;
+    in property <bool> table-columns-enabled: true;
+    in-out property <length> table-scroll-x;
+    callback change-table-column(int, int);
     pure callback track-transfer(string) -> data-transfer;
     pure callback accepts-track-drop(int, data-transfer) -> bool;
     callback drop-track(int, data-transfer) -> bool;
@@ -1693,6 +1737,10 @@ export component AppWindow inherits Window {
                     add-track => { root.add-to-crate(); } remove-track => { root.remove-from-crate(); }
                 }
         track-library := TrackLibrary {
+            columns: root.table-columns; all-columns: root.all-table-columns; table-width: root.table-width;
+            table-scroll-x <=> root.table-scroll-x;
+            sort-field: root.table-sort-field; sort-descending: root.table-sort-descending; columns-enabled: root.table-columns-enabled;
+            change-column(id, action) => { root.change-table-column(id, action); }
             analysis-title: root.analysis-title; analysis-summary: root.analysis-summary; analysis-waveform: root.analysis-waveform;
             analysis-progress: root.analysis-progress;
             analysis-running: root.analysis-running;

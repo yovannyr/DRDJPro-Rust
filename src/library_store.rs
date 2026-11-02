@@ -1311,6 +1311,7 @@ impl Store {
     ) -> Result<(), String> {
         self.save_session_state_with_decks(delta, preferences, output, fx, None)
     }
+    #[cfg(test)]
     fn save_session_state_with_decks(
         &mut self,
         delta: &crate::library::CatalogDelta,
@@ -1319,6 +1320,36 @@ impl Store {
         fx: Option<crate::delay_fx::FxPreferences>,
         deck_session: Option<DeckSession>,
     ) -> Result<(), String> {
+        self.save_session_state_with_columns(delta, preferences, output, fx, deck_session, None)
+    }
+    fn read_table_columns(&self) -> Result<crate::table_columns::TableColumns, String> {
+        let raw: Option<String> = self.connection.query_row(
+            "SELECT CASE WHEN length(CAST(value AS BLOB))<=1024 THEN value ELSE '' END FROM library_meta WHERE key='track_columns_v1'",
+            [], |row| row.get(0),
+        ).optional().map_err(|e| e.to_string())?;
+        let Some(raw) = raw else {
+            return Ok(Default::default());
+        };
+        let columns: crate::table_columns::TableColumns =
+            serde_json::from_str(&raw).map_err(|e| format!("Invalid saved table columns: {e}"))?;
+        columns.validate()?;
+        Ok(columns)
+    }
+    fn save_session_state_with_columns(
+        &mut self,
+        delta: &crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+        deck_session: Option<DeckSession>,
+        columns: Option<crate::table_columns::TableColumns>,
+    ) -> Result<(), String> {
+        let columns_json = columns
+            .map(|columns| {
+                columns.validate()?;
+                serde_json::to_string(&columns).map_err(|e| e.to_string())
+            })
+            .transpose()?;
         let fx_json = fx
             .map(|value| -> Result<String, String> {
                 value.validate()?;
@@ -1364,6 +1395,7 @@ impl Store {
             && output_json.is_none()
             && fx_json.is_none()
             && deck_session_json.is_none()
+            && columns_json.is_none()
         {
             return self.checkpoint(true);
         }
@@ -1654,6 +1686,12 @@ impl Store {
             )
             .map_err(|error| error.to_string())?;
         }
+        if let Some(json) = columns_json {
+            tx.execute(
+                "INSERT INTO library_meta(key,value) VALUES('track_columns_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [json],
+            ).map_err(|e| e.to_string())?;
+        }
         tx.commit().map_err(|e| e.to_string())?;
         self.has_tracks = self.has_tracks || added > 0;
         self.backup_pending = true;
@@ -1683,6 +1721,7 @@ impl Store {
 }
 
 pub struct LoadedLibrary {
+    pub table_columns: Result<crate::table_columns::TableColumns, String>,
     pub startup_audio: Result<crate::audio_devices::StartupSelection, String>,
     pub fx_preferences: Result<crate::delay_fx::FxPreferences, String>,
     pub deck_session: Result<DeckSession, String>,
@@ -1711,6 +1750,7 @@ enum Command {
         Option<OutputRoute>,
         Option<crate::delay_fx::FxPreferences>,
         Option<DeckSession>,
+        Option<crate::table_columns::TableColumns>,
     ),
     CloseDelta(
         Option<crate::library::CatalogDelta>,
@@ -1718,6 +1758,7 @@ enum Command {
         Option<OutputRoute>,
         Option<crate::delay_fx::FxPreferences>,
         Option<DeckSession>,
+        Option<crate::table_columns::TableColumns>,
     ),
 }
 pub struct Worker {
@@ -1758,6 +1799,7 @@ impl Worker {
                     };
                 let deck_session = store.read_deck_session(&library);
                 let loaded = LoadedLibrary {
+                    table_columns: store.read_table_columns(),
                     startup_audio: startup_selection(&store.connection),
                     fx_preferences: store.read_fx_preferences(),
                     deck_session,
@@ -1811,23 +1853,25 @@ impl Worker {
                             })();
                             let _=events_tx.send(Event::StartupAudioSaved(result));
                         }
-                        Command::SaveDelta(delta, preferences, output, fx, deck_session) => {
-                            let result = store.save_session_state_with_decks(
+                        Command::SaveDelta(delta, preferences, output, fx, deck_session, columns) => {
+                            let result = store.save_session_state_with_columns(
                                 &delta,
                                 preferences,
                                 output,
                                 fx,
                                 deck_session,
+                                columns,
                             );
                             retry_wait = result.is_err();
                             let _ = events_tx.send(Event::Saved(result));
                         }
-                        Command::CloseDelta(delta, preferences, output, fx, deck_session) => {
+                        Command::CloseDelta(delta, preferences, output, fx, deck_session, columns) => {
                             if delta.is_some()
                                 || preferences.is_some()
                                 || output.is_some()
                                 || fx.is_some()
                                 || deck_session.is_some()
+                                || columns.is_some()
                             {
                                 let delta = delta.unwrap_or(crate::library::CatalogDelta {
                                     revision: 0,
@@ -1836,12 +1880,13 @@ impl Worker {
                                     memberships: vec![],
                                     history: vec![],
                                 });
-                                store.save_session_state_with_decks(
+                                store.save_session_state_with_columns(
                                     &delta,
                                     preferences,
                                     output,
                                     fx,
                                     deck_session,
+                                    columns,
                                 )?;
                             }
                             return store.checkpoint(true);
@@ -1892,9 +1937,17 @@ impl Worker {
         fx: Option<crate::delay_fx::FxPreferences>,
     ) -> Result<(), String> {
         self.tx
-            .try_send(Command::SaveDelta(delta, preferences, output, fx, None))
+            .try_send(Command::SaveDelta(
+                delta,
+                preferences,
+                output,
+                fx,
+                None,
+                None,
+            ))
             .map_err(|e| e.to_string())
     }
+    #[cfg(test)]
     pub fn save_session_state_with_decks(
         &self,
         delta: crate::library::CatalogDelta,
@@ -1903,6 +1956,17 @@ impl Worker {
         fx: Option<crate::delay_fx::FxPreferences>,
         deck_session: Option<DeckSession>,
     ) -> Result<(), String> {
+        self.save_session_state_with_columns(delta, preferences, output, fx, deck_session, None)
+    }
+    pub fn save_session_state_with_columns(
+        &self,
+        delta: crate::library::CatalogDelta,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+        deck_session: Option<DeckSession>,
+        columns: Option<crate::table_columns::TableColumns>,
+    ) -> Result<(), String> {
         self.tx
             .try_send(Command::SaveDelta(
                 delta,
@@ -1910,6 +1974,7 @@ impl Worker {
                 output,
                 fx,
                 deck_session,
+                columns,
             ))
             .map_err(|e| e.to_string())
     }
@@ -1944,6 +2009,7 @@ impl Worker {
     ) -> Result<(), String> {
         self.close_session_state_with_decks(delta, preferences, output, fx, None)
     }
+    #[cfg(test)]
     pub fn close_session_state_with_decks(
         self,
         delta: Option<crate::library::CatalogDelta>,
@@ -1952,12 +2018,24 @@ impl Worker {
         fx: Option<crate::delay_fx::FxPreferences>,
         deck_session: Option<DeckSession>,
     ) -> Result<(), String> {
+        self.close_session_state_with_columns(delta, preferences, output, fx, deck_session, None)
+    }
+    pub fn close_session_state_with_columns(
+        self,
+        delta: Option<crate::library::CatalogDelta>,
+        preferences: Option<QuantizePreferences>,
+        output: Option<OutputRoute>,
+        fx: Option<crate::delay_fx::FxPreferences>,
+        deck_session: Option<DeckSession>,
+        columns: Option<crate::table_columns::TableColumns>,
+    ) -> Result<(), String> {
         let _ = self.tx.send(Command::CloseDelta(
             delta,
             preferences,
             output,
             fx,
             deck_session,
+            columns,
         ));
         self.join
             .join()
@@ -1981,6 +2059,32 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn table_columns_roundtrip_atomic_failure_and_malformed_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = super::Store::open(db.clone()).unwrap();
+        let mut columns = crate::table_columns::TableColumns::default();
+        columns.change(7, 0).unwrap();
+        columns.change(2, -1).unwrap();
+        let delta = crate::library::Library::default().changes();
+        store
+            .save_session_state_with_columns(&delta, None, None, None, None, Some(columns.clone()))
+            .unwrap();
+        drop(store);
+        let (mut store, _, _) = super::Store::open(db).unwrap();
+        assert_eq!(store.read_table_columns().unwrap(), columns);
+        store.connection.execute_batch("CREATE TRIGGER reject_columns BEFORE UPDATE ON library_meta WHEN NEW.key='track_columns_v1' BEGIN SELECT RAISE(ABORT,'injected column failure'); END;").unwrap();
+        let mut changed = columns.clone();
+        changed.change(9, 0).unwrap();
+        assert!(store
+            .save_session_state_with_columns(&delta, None, None, None, None, Some(changed))
+            .is_err());
+        assert_eq!(store.read_table_columns().unwrap(), columns);
+        store.connection.execute_batch("DROP TRIGGER reject_columns; UPDATE library_meta SET value='{}' WHERE key='track_columns_v1';").unwrap();
+        assert!(store.read_table_columns().is_err());
+    }
+
     #[test]
     fn fx_preferences_roundtrip_and_combined_transaction_rollback() {
         let dir = tempfile::tempdir().unwrap();

@@ -301,6 +301,9 @@ pub struct AudioController {
     output_profiles_writable: Cell<bool>,
     fx_state: RefCell<crate::delay_fx::FxPreferences>,
     saved_fx: RefCell<crate::delay_fx::FxPreferences>,
+    table_columns: RefCell<crate::table_columns::TableColumns>,
+    saved_table_columns: RefCell<Option<crate::table_columns::TableColumns>>,
+    inflight_table_columns: RefCell<Option<crate::table_columns::TableColumns>>,
     observed_fx: RefCell<crate::delay_fx::FxPreferences>,
     inflight_fx: RefCell<Option<crate::delay_fx::FxPreferences>>,
     fx_writable: Cell<bool>,
@@ -447,6 +450,9 @@ impl AudioController {
             output_profiles_writable: Cell::new(false),
             fx_state: RefCell::new(Default::default()),
             saved_fx: RefCell::new(Default::default()),
+            table_columns: RefCell::new(Default::default()),
+            saved_table_columns: RefCell::new(Some(Default::default())),
+            inflight_table_columns: RefCell::new(None),
             observed_fx: RefCell::new(Default::default()),
             inflight_fx: RefCell::new(None),
             fx_writable: Cell::new(false),
@@ -888,6 +894,36 @@ impl AudioController {
                 });
             }
         });
+        let weak = Rc::downgrade(&controller);
+        ui.on_change_table_column(move |id, action| {
+            if let Some(c) = weak.upgrade() {
+                if !c.storage_ready.get() {
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(
+                            "Wait for library restoration before changing columns".into(),
+                        );
+                    }
+                    return;
+                }
+                let result = c.table_columns.borrow_mut().change(id, action);
+                match result {
+                    Ok(()) => {
+                        if c.saved_table_columns.borrow().is_none() {
+                            *c.saved_table_columns.borrow_mut() = Some(Default::default());
+                        }
+                        c.publish_table_columns();
+                        c.library_changed();
+                    }
+                    Err(error) => {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                        c.publish_table_columns();
+                    }
+                }
+            }
+        });
+        controller.publish_table_columns();
         let weak = Rc::downgrade(&controller);
         ui.on_library_change_page(move |delta| {
             if let Some(c) = weak.upgrade() {
@@ -3542,6 +3578,49 @@ impl AudioController {
         *self.observed_output.borrow_mut() = current;
         warning
     }
+    fn pending_table_columns(
+        &self,
+        include_inflight: bool,
+    ) -> Option<crate::table_columns::TableColumns> {
+        let current = self.table_columns.borrow();
+        let saved = self.saved_table_columns.borrow();
+        let changed = saved.as_ref().is_some_and(|saved| saved != &*current);
+        let inflight_changed = include_inflight
+            && self
+                .inflight_table_columns
+                .borrow()
+                .as_ref()
+                .is_some_and(|columns| columns != &*current);
+        (changed || inflight_changed).then(|| current.clone())
+    }
+    fn publish_table_columns(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let preferences = self.table_columns.borrow();
+        let mut columns = Vec::new();
+        let mut all = Vec::new();
+        let mut width = 0.;
+        for &id in &preferences.order {
+            let column = crate::TableColumn {
+                id,
+                title: crate::table_columns::label(id).into(),
+                sort_label: crate::table_columns::sort_label(id).into(),
+                visible: !preferences.hidden.contains(&id),
+                width: crate::table_columns::width(id),
+            };
+            if column.visible {
+                width += column.width;
+                columns.push(column.clone());
+            }
+            all.push(column);
+        }
+        ui.set_table_columns(ModelRc::new(Rc::new(VecModel::from(columns))));
+        ui.set_all_table_columns(ModelRc::new(Rc::new(VecModel::from(all))));
+        ui.set_table_width(width);
+        ui.set_table_scroll_x(0.);
+        ui.set_table_columns_enabled(self.storage_ready.get());
+    }
     fn poll_storage(&self) {
         let event = self
             .persistence
@@ -3577,6 +3656,7 @@ impl AudioController {
                 match result {
                     Ok(loaded) => {
                         let crate::library_store::LoadedLibrary {
+                            table_columns,
                             startup_audio,
                             deck_session,
                             library,
@@ -3587,6 +3667,18 @@ impl AudioController {
                             output_routes,
                             fx_preferences,
                         } = *loaded;
+                        let column_warning = match table_columns {
+                            Ok(columns) => {
+                                *self.saved_table_columns.borrow_mut() = Some(columns.clone());
+                                *self.table_columns.borrow_mut() = columns;
+                                None
+                            }
+                            Err(error) => {
+                                *self.saved_table_columns.borrow_mut() = None;
+                                Some(format!("{error}; defaults active, saved columns preserved until explicit change"))
+                            }
+                        };
+                        self.publish_table_columns();
                         let (session_to_restore, session_warning) = match deck_session {
                             Ok(session) => {
                                 *self.deck_session.borrow_mut() = session;
@@ -3647,6 +3739,7 @@ impl AudioController {
                                 output_warning,
                                 fx_warning,
                                 session_warning.clone(),
+                                column_warning,
                             ]
                             .into_iter()
                             .flatten()
@@ -3693,9 +3786,13 @@ impl AudioController {
                 let quantize = self.inflight_quantize.take();
                 let output = self.inflight_output.borrow_mut().take();
                 let fx = self.inflight_fx.borrow_mut().take();
+                let columns = self.inflight_table_columns.borrow_mut().take();
                 let deck_session = self.inflight_deck_session.borrow_mut().take();
                 match result {
                     Ok(()) => {
+                        if let Some(columns) = columns {
+                            *self.saved_table_columns.borrow_mut() = Some(columns);
+                        }
                         if let Some(session) = deck_session {
                             *self.saved_deck_session.borrow_mut() = Some(session);
                         }
@@ -3740,6 +3837,7 @@ impl AudioController {
                             self.library.borrow().has_changes()
                                 || self.pending_output(false).is_some()
                                 || self.pending_fx(false).is_some()
+                                || self.pending_table_columns(false).is_some()
                                 || self
                                     .quantize_preferences()
                                     .is_ok_and(|p| p != self.saved_quantize.get())
@@ -3821,17 +3919,20 @@ impl AudioController {
         let output = self.pending_output(false);
         let fx = self.pending_fx(false);
         let deck_session = self.deck_session_to_save(false);
-        match worker.save_session_state_with_decks(
+        let columns = self.pending_table_columns(false);
+        match worker.save_session_state_with_columns(
             delta,
             preferences,
             output.clone(),
             fx.clone(),
             deck_session,
+            columns.clone(),
         ) {
             Ok(()) => {
                 self.inflight_revision.set(Some(revision));
                 self.inflight_quantize.set(preferences);
                 *self.inflight_fx.borrow_mut() = fx;
+                *self.inflight_table_columns.borrow_mut() = columns;
                 *self.inflight_deck_session.borrow_mut() = deck_session;
                 if output.is_some() {
                     if let Some(ui) = self.ui.upgrade() {
@@ -3919,12 +4020,17 @@ impl AudioController {
                     || self.library.borrow().has_changes()))
             .then(|| self.library.borrow().changes());
             let revision = final_delta.as_ref().map(|d| d.revision);
-            worker.close_session_state_with_decks(
+            worker.close_session_state_with_columns(
                 final_delta,
                 preferences,
                 output,
                 fx,
                 deck_session,
+                if self.storage_ready.get() {
+                    self.pending_table_columns(true)
+                } else {
+                    None
+                },
             )?;
             if let Some(revision) = revision {
                 self.library.borrow_mut().acknowledge(revision);
@@ -3932,6 +4038,7 @@ impl AudioController {
             self.inflight_revision.set(None);
             self.inflight_quantize.set(None);
             self.inflight_fx.borrow_mut().take();
+            self.inflight_table_columns.borrow_mut().take();
             self.inflight_deck_session.borrow_mut().take();
             self.inflight_output.borrow_mut().take();
             self.saving.set(false);
@@ -5329,6 +5436,8 @@ impl AudioController {
         );
 
         let mut spec = library.search_spec(self.library_generation.get());
+        ui.set_table_sort_field(spec.field);
+        ui.set_table_sort_descending(spec.descending);
         let mut worker_slot = self.search_worker.borrow_mut();
         if worker_slot.is_none() {
             match SearchWorker::start() {
@@ -5388,8 +5497,8 @@ impl AudioController {
             .is_some_and(|(g, r, c, _)| (*g, *r, *c) == key)
         {
             let mut projection = library.search_projection();
-            if let Some((generation, revision, _, previous)) = worker.projection.as_ref() {
-                if (*generation, *revision) == (key.0, key.1) {
+            if let Some((generation, _, _, previous)) = worker.projection.as_ref() {
+                if *generation == key.0 {
                     projection.share_index_from(previous);
                 }
             }
@@ -12885,6 +12994,7 @@ mod tests {
         ui.invoke_select_library(1);
         control(&ui, "Clear library search").invoke_accessible_default_action();
         finish_search(&c);
+        scroll_table_field(&ui, 5);
         control(&ui, "Sort library by duration").invoke_accessible_default_action();
         finish_search(&c);
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 2);
@@ -12924,6 +13034,111 @@ mod tests {
         c.close_library().unwrap();
     }
 
+    fn scroll_table_field(ui: &AppWindow, field: i32) {
+        let mut x = 0.;
+        for column in ui.get_table_columns().iter() {
+            if column.id == field {
+                break;
+            }
+            x += column.width;
+        }
+        ui.set_table_scroll_x(-x);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+    }
+
+    #[test]
+    fn prepare_headers_sort_and_column_controls_preserve_settings_after_restart() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let file = wav_file(0, 48_000);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), vec![file.path().into()]);
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        ui.show().unwrap();
+        ui.invoke_library_tab_selected(4);
+        finish_search(&c);
+        for field in 0..11 {
+            scroll_table_field(&ui, field);
+            let label = format!(
+                "Sort library by {}",
+                crate::table_columns::sort_label(field)
+            );
+            let header = control(&ui, &label);
+            let position = header.absolute_position();
+            let size = header.size();
+            let cell = control(
+                &ui,
+                &format!("Track 1 {}", crate::table_columns::sort_label(field)),
+            );
+            assert!(
+                (cell.absolute_position().x - position.x).abs() < 0.1,
+                "header/cell x {field}"
+            );
+            assert!(
+                (cell.size().width - size.width).abs() < 0.1,
+                "header/cell width {field}"
+            );
+            use slint::platform::{PointerEventButton, WindowEvent};
+            let position = slint::LogicalPosition::new(
+                position.x + size.width / 2.,
+                position.y + size.height / 2.,
+            );
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: PointerEventButton::Left,
+            });
+            ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: PointerEventButton::Left,
+            });
+            finish_search(&c);
+            assert_eq!(ui.get_table_sort_field(), field);
+            let descending = ui.get_table_sort_descending();
+            control(&ui, &label).invoke_accessible_default_action();
+            finish_search(&c);
+            assert_ne!(ui.get_table_sort_descending(), descending);
+        }
+        ui.set_table_scroll_x(0.);
+        ui.invoke_select_library(1);
+        control(&ui, "Configure track columns").invoke_accessible_default_action();
+        control(&ui, "Show column BPM").invoke_accessible_default_action();
+        assert!(!ui.get_table_columns().iter().any(|column| column.id == 7));
+        control(&ui, "Move column name left").invoke_accessible_default_action();
+        assert_eq!(ui.get_table_columns().row_data(0).unwrap().id, 0);
+        assert_eq!(ui.get_selected_track(), 1);
+        control(&ui, "Show column BPM").invoke_accessible_default_action();
+        assert!(ui.get_table_columns().iter().any(|column| column.id == 7));
+        control(&ui, "Show column BPM").invoke_accessible_default_action();
+        assert!(!ui.get_table_columns().iter().any(|column| column.id == 7));
+        let expected = c.table_columns.borrow().clone();
+        control(&ui, "Close track columns").invoke_accessible_default_action();
+        c.close_library().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), vec![]);
+        finish_storage(&c);
+        assert_eq!(*c.table_columns.borrow(), expected);
+        assert_eq!(ui.get_table_columns().row_data(0).unwrap().id, 0);
+        assert!(!ui.get_table_columns().iter().any(|column| column.id == 7));
+        c.close_library().unwrap();
+    }
     #[test]
     fn smart_crate_ui_filters_and_restores_saved_metadata_query() {
         use crate::test_support::tagged_wav;
@@ -13072,6 +13287,12 @@ mod tests {
                     ]);
                 }
                 for label in labels {
+                    if let Some(sort_label) = label.strip_prefix("Sort library by ") {
+                        let field = (0..11)
+                            .find(|&field| crate::table_columns::sort_label(field) == sort_label)
+                            .unwrap();
+                        scroll_table_field(&ui, field);
+                    }
                     let element = control(&ui, label);
                     let position = element.absolute_position();
                     let size = element.size();
@@ -13365,6 +13586,12 @@ mod tests {
                 "Previous library page",
                 "Next library page",
             ] {
+                if label == "Track 1 BPM" {
+                    scroll_table_field(&ui, 7);
+                }
+                if label == "Track 1 key" {
+                    scroll_table_field(&ui, 8);
+                }
                 let element = control(&ui, label);
                 let position = element.absolute_position();
                 let size = element.size();

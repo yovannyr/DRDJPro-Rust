@@ -36,6 +36,7 @@ mod preferences;
 mod render_bus;
 mod saved_loops;
 mod sync_control;
+mod table_columns;
 mod tempo;
 #[cfg(test)]
 mod test_support;

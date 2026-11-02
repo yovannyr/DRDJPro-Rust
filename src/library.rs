@@ -330,30 +330,6 @@ impl Track {
             || self.search.name.contains(query)
             || self.search.path.contains(query)
     }
-
-    #[cfg(test)]
-    fn view_sort_key(&self, field: i32) -> (&str, Option<u64>, i32) {
-        let key: &str = match field {
-            1 => self.format.as_str(),
-            2 => self.search.path.as_str(),
-            3 => self.search.artist.as_str(),
-            4 => self.search.album.as_str(),
-            5 => "",
-            _ => {
-                if self.metadata.title.is_empty() {
-                    self.search.name.as_str()
-                } else {
-                    self.search.title.as_str()
-                }
-            }
-        };
-        let duration = if field == 5 {
-            self.metadata.duration_ms
-        } else {
-            None
-        };
-        (key, duration, self.id)
-    }
 }
 
 // Immutable projection used by the background view worker. Text is shared
@@ -365,6 +341,10 @@ struct SearchRecord {
     has_title: bool,
     format: String,
     duration: Option<u64>,
+    bpm: Option<f32>,
+    key: Option<(u8, bool)>,
+    gain: Option<f32>,
+    analysis_status: u8,
 }
 
 const SEARCH_RECORD_CHUNK: usize = 256;
@@ -376,6 +356,7 @@ pub(crate) struct SearchProjection {
     members: Option<Arc<Vec<u64>>>,
     history_order: Option<Arc<HashMap<i32, usize>>>,
     index: Arc<OnceLock<SearchIndex>>,
+    text_revision: u64,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -397,7 +378,9 @@ impl SearchProjection {
     }
 
     pub(crate) fn share_index_from(&mut self, previous: &Self) {
-        self.index = Arc::clone(&previous.index);
+        if self.text_revision == previous.text_revision {
+            self.index = Arc::clone(&previous.index);
+        }
     }
 
     fn in_scope(&self, index: usize) -> bool {
@@ -445,19 +428,76 @@ impl SearchProjection {
                 .filter(|t| t.matches(&spec.query) && t.matches(&spec.smart_query))
                 .collect(),
         };
-        if let Some(history_order) = &self.history_order {
+        if let Some(history_order) = self.history_order.as_ref().filter(|_| spec.field == -1) {
             matches.sort_by_key(|track| history_order[&track.id]);
         } else {
-            matches.sort_by(|a, b| a.sort_key(spec.field).cmp(&b.sort_key(spec.field)));
-            if spec.descending {
-                matches.reverse();
-            }
+            matches.sort_by(|a, b| a.compare(b, spec.field, spec.descending));
         }
         matches.into_iter().map(|track| track.id).collect()
     }
 }
 
 impl SearchRecord {
+    fn compare(&self, other: &Self, field: i32, descending: bool) -> std::cmp::Ordering {
+        fn optional<T>(
+            a: Option<T>,
+            b: Option<T>,
+            descending: bool,
+            compare: impl FnOnce(T, T) -> std::cmp::Ordering,
+        ) -> std::cmp::Ordering {
+            match (a, b) {
+                (Some(a), Some(b)) => {
+                    let order = compare(a, b);
+                    if descending {
+                        order.reverse()
+                    } else {
+                        order
+                    }
+                }
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, _) => std::cmp::Ordering::Greater,
+                (_, None) => std::cmp::Ordering::Less,
+            }
+        }
+        let order = match field {
+            5 => optional(self.duration, other.duration, descending, |a, b| a.cmp(&b)),
+            7 => optional(self.bpm, other.bpm, descending, |a, b| a.total_cmp(&b)),
+            8 => optional(self.key.as_ref(), other.key.as_ref(), descending, |a, b| {
+                a.cmp(b)
+            }),
+            9 => optional(self.gain, other.gain, descending, |a, b| a.total_cmp(&b)),
+            6 => {
+                if descending {
+                    other.id.cmp(&self.id)
+                } else {
+                    self.id.cmp(&other.id)
+                }
+            }
+            10 => {
+                let order = self.analysis_status.cmp(&other.analysis_status);
+                if descending {
+                    order.reverse()
+                } else {
+                    order
+                }
+            }
+            _ => {
+                let order = self.sort_key(field).0.cmp(other.sort_key(field).0);
+                if descending {
+                    order.reverse()
+                } else {
+                    order
+                }
+            }
+        };
+        order.then_with(|| {
+            if descending {
+                other.id.cmp(&self.id)
+            } else {
+                self.id.cmp(&other.id)
+            }
+        })
+    }
     fn matches(&self, query: &str) -> bool {
         query.is_empty()
             || self.search.title.contains(query)
@@ -557,6 +597,8 @@ pub struct Library {
     query: String,
     selected: Option<i32>,
     sort_field: i32,
+    sort_requested: bool,
+    analysis_revision: u64,
     descending: bool,
     crates: crate::crates::CrateCatalog,
     active_crate: i32,
@@ -581,6 +623,32 @@ impl Library {
             has_title: !track.metadata.title.is_empty(),
             format: track.format.clone(),
             duration: track.metadata.duration_ms,
+            bpm: track
+                .metadata
+                .analysis
+                .as_ref()
+                .and_then(|a| (a.bpm > 0.).then_some(a.bpm)),
+            key: track.metadata.analysis.as_ref().and_then(|a| {
+                (1..=12).find_map(|n| {
+                    if a.musical_key == format!("{n}A") {
+                        Some((n, false))
+                    } else if a.musical_key == format!("{n}B") {
+                        Some((n, true))
+                    } else {
+                        None
+                    }
+                })
+            }),
+            gain: track.metadata.analysis.as_ref().map(|a| a.gain),
+            analysis_status: if !track.available {
+                2
+            } else {
+                track
+                    .metadata
+                    .analysis
+                    .as_ref()
+                    .map_or(3, |a| if a.is_corrupt { 1 } else { 0 })
+            },
         };
         let chunks = Arc::make_mut(&mut self.search_records);
         let chunk_index = index / SEARCH_RECORD_CHUNK;
@@ -994,6 +1062,11 @@ impl Library {
             return Ok(false);
         }
         self.tracks[index].metadata.analysis = Some(analysis);
+        self.update_search_record(index);
+        self.analysis_revision += 1;
+        if (7..=10).contains(&self.sort_field) {
+            *self.view_cache.get_mut() = None;
+        }
         self.mark_track_dirty(index);
         Ok(true)
     }
@@ -1168,8 +1241,15 @@ impl Library {
     pub fn insert(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> usize {
         let before = self.tracks.len();
         for path in paths {
-            if let Some(index) = self.keys.get(&identity(&path)) {
-                self.tracks[*index].available = true;
+            if let Some(&index) = self.keys.get(&identity(&path)) {
+                if !self.tracks[index].available {
+                    self.tracks[index].available = true;
+                    self.update_search_record(index);
+                    self.analysis_revision += 1;
+                    if (7..=10).contains(&self.sort_field) {
+                        *self.view_cache.get_mut() = None;
+                    }
+                }
                 self.missing_cache.set(None);
                 continue;
             }
@@ -1248,8 +1328,9 @@ impl Library {
         }
     }
     pub fn sort(&mut self, field: i32) {
+        self.sort_requested = true;
         *self.view_cache.get_mut() = None;
-        let field = field.clamp(0, 5);
+        let field = field.clamp(0, 10);
         if field == self.sort_field {
             self.descending = !self.descending;
         } else {
@@ -1263,11 +1344,20 @@ impl Library {
             .map_or_else(String::new, str::to_owned);
         SearchSpec {
             generation,
-            revision: self.search_revision,
+            revision: self.search_revision
+                + if (7..=10).contains(&self.sort_field) {
+                    self.analysis_revision
+                } else {
+                    0
+                },
             scope: self.active_crate,
             query: self.query.clone(),
             smart_query,
-            field: self.sort_field,
+            field: if self.active_crate == HISTORY_SCOPE && !self.sort_requested {
+                -1
+            } else {
+                self.sort_field
+            },
             descending: self.descending,
             page_index: 0,
         }
@@ -1302,6 +1392,7 @@ impl Library {
             )
         };
         SearchProjection {
+            text_revision: self.search_revision,
             tracks: Arc::clone(&self.search_records),
             count: self.tracks.len(),
             members,
@@ -1371,17 +1462,20 @@ impl Library {
                 .collect(),
         };
 
-        if self.active_crate == HISTORY_SCOPE {
+        if self.active_crate == HISTORY_SCOPE && !self.sort_requested {
             tracks.sort_by_key(|track| std::cmp::Reverse(self.history[&track.id].last_played_ms));
         } else {
             tracks.sort_by(|a, b| {
-                a.view_sort_key(self.sort_field)
-                    .cmp(&b.view_sort_key(self.sort_field))
+                let a_index = self.id_indices[&a.id];
+                let b_index = self.id_indices[&b.id];
+                self.search_records[a_index / SEARCH_RECORD_CHUNK][a_index % SEARCH_RECORD_CHUNK]
+                    .compare(
+                        &self.search_records[b_index / SEARCH_RECORD_CHUNK]
+                            [b_index % SEARCH_RECORD_CHUNK],
+                        self.sort_field,
+                        self.descending,
+                    )
             });
-
-            if self.descending {
-                tracks.reverse();
-            }
         }
 
         tracks
@@ -1526,6 +1620,152 @@ mod tests {
         library.set_query("original".into());
         assert!(current.search(&library.search_spec(7)).is_empty());
         assert!(library.has_changes());
+    }
+
+    #[test]
+    fn all_table_columns_sort_numeric_values_unknowns_and_analysis_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [
+            dir.path().join("a.mp3"),
+            dir.path().join("b.wav"),
+            dir.path().join("c.flac"),
+        ];
+        for path in &paths {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+
+        let mut library = Library::default();
+        library.insert(paths.clone());
+        for (index, path) in paths.iter().enumerate() {
+            let rank = [2, 1, 3][index];
+            library.set_metadata(
+                path,
+                crate::track_metadata::TrackMetadata {
+                    title: format!("Song {rank}"),
+                    artist: format!("Artist {rank}"),
+                    album: format!("Album {rank}"),
+                    duration_ms: (index != 2).then_some(if index == 0 { 100_000 } else { 9_000 }),
+                    ..Default::default()
+                },
+            );
+        }
+        for (index, path) in paths[..2].iter().enumerate() {
+            library
+                .set_analysis(
+                    index as i32 + 1,
+                    path,
+                    crate::audio_analyzer::TrackAnalysisResult {
+                        file_path: path.to_string_lossy().into_owned(),
+                        bpm: if index == 0 { 100. } else { 90. },
+                        musical_key: if index == 0 { "10A" } else { "2A" }.into(),
+                        gain: if index == 0 { 2. } else { 0.5 },
+                        waveform_overview: vec![1],
+                        is_corrupt: index == 1,
+                    },
+                )
+                .unwrap();
+        }
+        for (field, ascending, descending) in [
+            (0, vec![2, 1, 3], vec![3, 1, 2]),
+            (1, vec![3, 1, 2], vec![2, 1, 3]),
+            (2, vec![1, 2, 3], vec![3, 2, 1]),
+            (3, vec![2, 1, 3], vec![3, 1, 2]),
+            (4, vec![2, 1, 3], vec![3, 1, 2]),
+            (5, vec![2, 1, 3], vec![1, 2, 3]),
+            (6, vec![1, 2, 3], vec![3, 2, 1]),
+            (7, vec![2, 1, 3], vec![1, 2, 3]),
+            (8, vec![2, 1, 3], vec![1, 2, 3]),
+            (9, vec![2, 1, 3], vec![1, 2, 3]),
+            (10, vec![1, 2, 3], vec![3, 2, 1]),
+        ] {
+            library.sort(field);
+            if library.descending {
+                library.sort(field);
+            }
+            assert_eq!(
+                library.search_projection().search(&library.search_spec(1)),
+                ascending,
+                "ascending {field}"
+            );
+            library.sort(field);
+            assert_eq!(
+                library.search_projection().search(&library.search_spec(1)),
+                descending,
+                "descending {field}"
+            );
+        }
+        library.set_query("song".into());
+        library.sort(7);
+        if library.descending {
+            library.sort(7);
+        }
+        let previous = library.search_projection();
+        let spec = library.search_spec(1);
+        assert_eq!(previous.search(&spec), vec![2, 1, 3]);
+        let mut analysis = library
+            .track_by_id(1)
+            .unwrap()
+            .metadata
+            .analysis
+            .clone()
+            .unwrap();
+        analysis.bpm = 80.;
+        library.set_analysis(1, &paths[0], analysis).unwrap();
+        let mut current = library.search_projection();
+        current.share_index_from(&previous);
+        assert!(current.shares_index_with(&previous));
+        assert_ne!(library.search_spec(1).revision, spec.revision);
+        assert_eq!(
+            previous.search(&spec),
+            vec![2, 1, 3],
+            "in-flight snapshot remains immutable"
+        );
+        assert_eq!(current.search(&library.search_spec(1)), vec![1, 2, 3]);
+        library.record_play_for_path(&paths[0], 1, 0).unwrap();
+        library.record_play_for_path(&paths[1], 2, 0).unwrap();
+        library.select_crate(HISTORY_SCOPE).unwrap();
+        library.sort(6);
+        if library.descending {
+            library.sort(6);
+        }
+        assert_eq!(
+            library.search_projection().search(&library.search_spec(1)),
+            vec![1, 2],
+            "explicit sort applies in History"
+        );
+    }
+
+    #[test]
+    fn reimporting_unchanged_missing_track_refreshes_analysis_sort_without_text_reindex() {
+        let dir = tempfile::tempdir().unwrap();
+        let healthy = dir.path().join("healthy.wav");
+        let missing = dir.path().join("missing.wav");
+        std::fs::write(&healthy, b"fixture").unwrap();
+        let mut library = Library::default();
+        library.insert([healthy.clone(), missing.clone()]);
+        let mut restored = Library::restore(library.catalog()).unwrap();
+        restored.sort(10);
+        let previous = restored.search_projection();
+        let spec = restored.search_spec(1);
+        assert_eq!(
+            previous.search(&spec),
+            vec![2, 1],
+            "Missing sorts before Pending"
+        );
+        std::fs::write(&missing, b"fixture").unwrap();
+        let metadata = restored.track_by_id(2).unwrap().metadata.clone();
+        assert_eq!(restored.insert([missing.clone()]), 0);
+        restored.set_metadata(&missing, metadata);
+        let mut current = restored.search_projection();
+        current.share_index_from(&previous);
+        assert!(current.shares_index_with(&previous));
+        assert_ne!(restored.search_spec(1).revision, spec.revision);
+        assert_eq!(
+            current.search(&restored.search_spec(1)),
+            vec![1, 2],
+            "Both tracks now Pending"
+        );
+        assert_eq!(previous.search(&spec), vec![2, 1]);
     }
 
     #[test]
@@ -2297,6 +2537,10 @@ mod tests {
             });
             if library.descending {
                 tracks.reverse();
+            }
+            if library.sort_field == 5 {
+                // Unknown durations remain last in both directions.
+                tracks.sort_by_key(|track| track.metadata.duration_ms.is_none());
             }
             tracks.into_iter().map(|track| track.id).collect()
         }
