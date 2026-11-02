@@ -18,6 +18,7 @@ component VirtualPlatter inherits Rectangle {
     in property <float> angle;
     in property <bool> touched;
     in property <bool> scratch-enabled;
+    in property <bool> mouse-owned;
     callback scratch-pointer(int, float, float);
     property <bool> dragging;
     function release-pointer() {
@@ -51,7 +52,7 @@ component VirtualPlatter inherits Rectangle {
     }
     touch := TouchArea {
         enabled: root.scratch-enabled;
-        mouse-cursor: grab;
+        mouse-cursor: root.dragging && root.mouse-owned && root.touched ? none : grab;
         pointer-event(event) => {
             if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
                 if !root.dragging {
@@ -73,6 +74,18 @@ component VirtualPlatter inherits Rectangle {
     keys := FocusScope {
         width: 0; height: 0;
         focus-lost(reason) => { root.release-pointer(); }
+    }
+    if root.dragging && root.mouse-owned && root.touched : Rectangle {
+        x: touch.mouse-x - 14px; y: touch.mouse-y - 14px;
+        width: 28px; height: 28px;
+        border-radius: 14px; background: #f4f4f2;
+        accessible-role: image;
+        accessible-label: root.deck-label + " scratch drag hand";
+        Image {
+            x: 2px; y: 2px; width: 24px; height: 24px;
+            source: @image-url("../assets/drag-hand-gesture.svg");
+            image-fit: contain;
+        }
     }
 }
 
@@ -438,6 +451,7 @@ component NudgeHold inherits Rectangle {
 
 component CompactDeck inherits Rectangle {
     callback scratch-pointer(int, float, float);
+    in property <bool> platter-mouse-owned;
     in property <float> platter-angle;
     in property <bool> platter-touched;
     in property <string> deck-label;
@@ -542,6 +556,7 @@ component CompactDeck inherits Rectangle {
             VirtualPlatter {
                 angle: root.platter-angle; touched: root.platter-touched;
                 scratch-enabled: root.controller-mode && root.loaded && !root.loading;
+                mouse-owned: root.platter-mouse-owned;
                 scratch-pointer(action, x, y) => { root.scratch-pointer(action, x, y); }
                 deck-label: root.deck-label; bpm: root.platter-bpm; time: root.platter-time;
                 pitch: root.pitch-percent; position: root.position; playing: root.playing; accent: root.accent;
@@ -1140,6 +1155,8 @@ component TrackLibrary inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
+    in property <bool> left-platter-mouse-owned;
+    in property <bool> right-platter-mouse-owned;
     callback virtual-platter-pointer(int, int, float, float);
     callback controller-jog(int, int);
     callback controller-platter-touch(int, bool);
@@ -1582,6 +1599,7 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             height: root.virtual-decks-visible ? 322px : 260px; spacing: 8px;
             left-deck := CompactDeck {
+                platter-mouse-owned: root.left-platter-mouse-owned;
                 scratch-pointer(action, x, y) => { root.virtual-platter-pointer(0, action, x, y); }
                 deck-label: "DECK A"; controller-mode: root.virtual-decks-visible; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 platter-bpm: root.left-platter-bpm; platter-time: root.left-platter-time;
@@ -1624,6 +1642,7 @@ export component AppWindow inherits Window {
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } eject => { root.eject-left(); } seek(value) => { root.seek-left(value); }
             }
             right-deck := CompactDeck {
+                platter-mouse-owned: root.right-platter-mouse-owned;
                 scratch-pointer(action, x, y) => { root.virtual-platter-pointer(1, action, x, y); }
                 deck-label: "DECK B"; controller-mode: root.virtual-decks-visible; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 platter-bpm: root.right-platter-bpm; platter-time: root.right-platter-time;

@@ -6186,6 +6186,7 @@ impl AudioController {
                         (s.position.as_secs_f64() * 200.).rem_euclid(360.) as f32
                     );
                     ui.set_left_platter_touched(self.engine.borrow().platter_touched(id));
+                    ui.set_left_platter_mouse_owned(self.pointer_platters.get()[0].is_some());
                     ui.set_left_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_left_pitch_caption(pitch.into());
                     ui.set_left_bpm_caption(bpm.into());
@@ -6196,6 +6197,7 @@ impl AudioController {
                         (s.position.as_secs_f64() * 200.).rem_euclid(360.) as f32
                     );
                     ui.set_right_platter_touched(self.engine.borrow().platter_touched(id));
+                    ui.set_right_platter_mouse_owned(self.pointer_platters.get()[1].is_some());
                     ui.set_right_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_right_pitch_caption(pitch.into());
                     ui.set_right_bpm_caption(bpm.into());
@@ -9510,12 +9512,33 @@ mod tests {
                 button,
             })
         };
+        let hand_count = |deck: &str| {
+            ElementHandle::find_by_accessible_label(&ui, &format!("{deck} scratch drag hand"))
+                .count()
+        };
+        assert_eq!(hand_count("DECK A"), 0);
+        ui.invoke_controller_platter_touch(0, true);
+        assert!(engine.platter_touched(DeckId::A));
+        assert_eq!(hand_count("DECK A"), 0);
+        press("DECK A", 0., -45., PointerEventButton::Left);
+        assert!(ui.get_status().contains("Release the controller"));
+        assert_eq!(hand_count("DECK A"), 0);
+        assert!(!ui.get_left_platter_mouse_owned());
+        release("DECK A", 0., -45., PointerEventButton::Left);
+        assert!(engine.platter_touched(DeckId::A));
+        ui.invoke_controller_platter_touch(0, false);
         press("DECK A", 0., -45., PointerEventButton::Right);
         assert!(!engine.platter_touched(DeckId::A));
         release("DECK A", 0., -45., PointerEventButton::Right);
         press("DECK A", 0., -45., PointerEventButton::Left);
         assert!(engine.platter_touched(DeckId::A));
+        assert_eq!(hand_count("DECK A"), 1);
+        assert_eq!(hand_count("DECK B"), 0);
+        let before_hand = control(&ui, "DECK A scratch drag hand").absolute_position();
         move_to("DECK A", 45., 0.);
+        let after_hand = control(&ui, "DECK A scratch drag hand").absolute_position();
+        assert!((after_hand.x - before_hand.x - 45.).abs() < 0.1);
+        assert!((after_hand.y - before_hand.y - 45.).abs() < 0.1);
         assert!(output
             .by_ref()
             .take(3200)
@@ -9532,6 +9555,7 @@ mod tests {
         assert!(output.by_ref().take(3200).all(|value| value == 0.));
         release("DECK A", 200., -45., PointerEventButton::Left);
         assert!(!engine.platter_touched(DeckId::A));
+        assert_eq!(hand_count("DECK A"), 0);
         assert!(!engine.snapshot(DeckId::A).playing);
 
         engine.play(DeckId::B);
@@ -9540,12 +9564,14 @@ mod tests {
         ui.invoke_controller_vinyl(1);
         press("DECK B", 45., 0., PointerEventButton::Left);
         assert!(engine.platter_touched(DeckId::B));
+        assert_eq!(hand_count("DECK B"), 1);
         move_to("DECK B", 0., -45.);
         press("DECK B", 0., -45., PointerEventButton::Right);
         release("DECK B", 0., -45., PointerEventButton::Right);
         move_to("DECK B", 200., -45.);
         release("DECK B", 200., -45., PointerEventButton::Left);
         assert!(!engine.platter_touched(DeckId::B));
+        assert_eq!(hand_count("DECK B"), 0);
         assert!(engine.snapshot(DeckId::B).playing);
         assert!((engine.snapshot(DeckId::B).position.as_secs_f64() - 2.55).abs() < 0.001);
         press("DECK B", 0., -45., PointerEventButton::Left);
@@ -9553,6 +9579,7 @@ mod tests {
         ui.window()
             .dispatch_event(WindowEvent::WindowActiveChanged(false));
         assert!(!engine.platter_touched(DeckId::B));
+        assert_eq!(hand_count("DECK B"), 0);
         assert!(engine.snapshot(DeckId::B).playing);
         assert!((engine.snapshot(DeckId::B).position.as_secs_f64() - 2.55).abs() < 0.001);
         assert!((engine.snapshot(DeckId::B).effective_speed - 1.1).abs() < 0.0001);
