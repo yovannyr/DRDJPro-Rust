@@ -877,6 +877,13 @@ impl DualDeckEngine {
         if !(-64..=63).contains(&steps) || steps == 0 {
             return Err("Invalid relative jog movement".into());
         }
+        self.platter_move_seconds(id, f64::from(steps) * 0.005)
+    }
+    /// Move a held platter by bounded relative source time (mouse or MIDI).
+    pub fn platter_move_seconds(&self, id: DeckId, seconds: f64) -> Result<(), String> {
+        if !seconds.is_finite() || seconds.abs() > 1.8 {
+            return Err("Invalid relative platter movement".into());
+        }
         let deck = self.decks[id.index()].borrow();
         let render = deck
             .render
@@ -885,7 +892,7 @@ impl DualDeckEngine {
         if !render.scratching() {
             return Err("Touch the platter before scratching".into());
         }
-        render.scratch_move(f64::from(steps) * 0.005);
+        render.scratch_move(seconds);
         Ok(())
     }
     /// Whether touch currently overrides this deck's forward renderer.

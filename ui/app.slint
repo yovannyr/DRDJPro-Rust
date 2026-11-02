@@ -17,6 +17,13 @@ component VirtualPlatter inherits Rectangle {
     in property <bool> playing;
     in property <float> angle;
     in property <bool> touched;
+    in property <bool> scratch-enabled;
+    callback scratch-pointer(int, float, float);
+    property <bool> dragging;
+    function release-pointer() {
+        if root.dragging { root.dragging = false; root.scratch-pointer(2, 0, 0); }
+    }
+    changed scratch-enabled => { if !root.scratch-enabled { root.release-pointer(); } }
     in property <brush> accent;
     width: 120px; height: 120px;
     border-radius: 60px;
@@ -25,7 +32,7 @@ component VirtualPlatter inherits Rectangle {
     border-color: root.accent;
     accessible-role: image;
     accessible-label: root.deck-label + " round virtual platter";
-    accessible-description: root.bpm + " BPM, pitch " + round(root.pitch * 100) / 100 + "%, " + root.time + ", " + round(root.position) + "%, " + (root.touched ? "Jog touched" : root.playing ? "Playing" : "Paused") + ", rotation " + round(root.angle) + " degrees. Relative software playhead.";
+    accessible-description: root.bpm + " BPM, pitch " + round(root.pitch * 100) / 100 + "%, " + root.time + ", " + round(root.position) + "%, " + (root.touched ? "Jog touched" : root.playing ? "Playing" : "Paused") + ", rotation " + round(root.angle) + " degrees. Hold left mouse button and drag around the platter to scratch.";
     Rectangle {
         x: 58px + 54px * sin(root.angle * 1deg); y: 58px - 54px * cos(root.angle * 1deg);
         width: 4px; height: 4px; border-radius: 2px; background: root.touched ? #ffffff : #ffce77;
@@ -41,6 +48,31 @@ component VirtualPlatter inherits Rectangle {
             Text { text: root.time; font-size: 12px; font-weight: 700; color: #141414; horizontal-alignment: center; }
             Text { text: round(root.position) + "%"; font-size: 9px; color: #343434; horizontal-alignment: center; }
         }
+    }
+    touch := TouchArea {
+        enabled: root.scratch-enabled;
+        mouse-cursor: grab;
+        pointer-event(event) => {
+            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                if !root.dragging {
+                    keys.focus();
+                    root.dragging = true;
+                    root.scratch-pointer(0, (self.mouse-x - root.width / 2) / 1px, (self.mouse-y - root.height / 2) / 1px);
+                }
+            } else if event.kind == PointerEventKind.cancel || event.kind == PointerEventKind.up {
+                // Slint releases pointer capture on any button-up, including a secondary button.
+                root.release-pointer();
+            }
+        }
+        moved => {
+            if root.dragging {
+                root.scratch-pointer(1, (self.mouse-x - root.width / 2) / 1px, (self.mouse-y - root.height / 2) / 1px);
+            }
+        }
+    }
+    keys := FocusScope {
+        width: 0; height: 0;
+        focus-lost(reason) => { root.release-pointer(); }
     }
 }
 
@@ -405,6 +437,7 @@ component NudgeHold inherits Rectangle {
 }
 
 component CompactDeck inherits Rectangle {
+    callback scratch-pointer(int, float, float);
     in property <float> platter-angle;
     in property <bool> platter-touched;
     in property <string> deck-label;
@@ -508,6 +541,8 @@ component CompactDeck inherits Rectangle {
             spacing: 8px;
             VirtualPlatter {
                 angle: root.platter-angle; touched: root.platter-touched;
+                scratch-enabled: root.controller-mode && root.loaded && !root.loading;
+                scratch-pointer(action, x, y) => { root.scratch-pointer(action, x, y); }
                 deck-label: root.deck-label; bpm: root.platter-bpm; time: root.platter-time;
                 pitch: root.pitch-percent; position: root.position; playing: root.playing; accent: root.accent;
             }
@@ -1105,6 +1140,7 @@ component TrackLibrary inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
+    callback virtual-platter-pointer(int, int, float, float);
     callback controller-jog(int, int);
     callback controller-platter-touch(int, bool);
     callback controller-vinyl(int);
@@ -1546,6 +1582,7 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             height: root.virtual-decks-visible ? 322px : 260px; spacing: 8px;
             left-deck := CompactDeck {
+                scratch-pointer(action, x, y) => { root.virtual-platter-pointer(0, action, x, y); }
                 deck-label: "DECK A"; controller-mode: root.virtual-decks-visible; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 platter-bpm: root.left-platter-bpm; platter-time: root.left-platter-time;
                 platter-angle: root.left-platter-angle; platter-touched: root.left-platter-touched;
@@ -1587,6 +1624,7 @@ export component AppWindow inherits Window {
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } eject => { root.eject-left(); } seek(value) => { root.seek-left(value); }
             }
             right-deck := CompactDeck {
+                scratch-pointer(action, x, y) => { root.virtual-platter-pointer(1, action, x, y); }
                 deck-label: "DECK B"; controller-mode: root.virtual-decks-visible; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 platter-bpm: root.right-platter-bpm; platter-time: root.right-platter-time;
                 platter-angle: root.right-platter-angle; platter-touched: root.right-platter-touched;

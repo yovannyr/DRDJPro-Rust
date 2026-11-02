@@ -19,6 +19,10 @@ use std::{
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<Result<crate::library::ImportBatch, String>>;
+#[derive(Clone, Copy)]
+struct PointerPlatter {
+    angle: Option<f64>,
+}
 #[derive(Default)]
 struct AnalysisBatch {
     queue: VecDeque<(i32, PathBuf)>,
@@ -322,6 +326,7 @@ pub struct AudioController {
     keylock_jobs: RefCell<[Option<KeylockJob>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
     platter_holds: Cell<[bool; 2]>,
+    pointer_platters: Cell<[Option<PointerPlatter>; 2]>,
     platter_cancelled: Cell<[bool; 2]>,
     vinyl_modes: Cell<[bool; 2]>,
     jog_bends: Cell<[Option<std::time::Instant>; 2]>,
@@ -475,6 +480,7 @@ impl AudioController {
             keylock_next: Cell::new([None, None]),
             nudges: RefCell::new([None, None]),
             platter_holds: Cell::new([false; 2]),
+            pointer_platters: Cell::new([None; 2]),
             platter_cancelled: Cell::new([false; 2]),
             vinyl_modes: Cell::new([true; 2]),
             jog_bends: Cell::new([None; 2]),
@@ -1863,6 +1869,9 @@ impl AudioController {
     }
     fn release_platter(&self, id: DeckId) {
         let index = Self::grid_index(id);
+        let mut pointers = self.pointer_platters.get();
+        pointers[index] = None;
+        self.pointer_platters.set(pointers);
         let mut holds = self.platter_holds.get();
         if holds[index] {
             if self.engine.borrow().platter_touched(id) {
@@ -1879,7 +1888,95 @@ impl AudioController {
         }
         self.jog_bends.set(bends);
     }
+    fn begin_platter(&self, id: DeckId) -> Result<(), String> {
+        if !self.can_control_deck(id) {
+            return Err("Platter unavailable during loading".into());
+        }
+        self.stop_sync();
+        self.cancel_nudge(id);
+        let index = Self::grid_index(id);
+        let mut bends = self.jog_bends.get();
+        bends[index] = None;
+        self.jog_bends.set(bends);
+        self.engine.borrow().exit_loop(id)?;
+        self.engine.borrow().platter_touch(id, true)?;
+        let mut cancelled = self.platter_cancelled.get();
+        cancelled[index] = false;
+        self.platter_cancelled.set(cancelled);
+        let mut holds = self.platter_holds.get();
+        holds[index] = true;
+        self.platter_holds.set(holds);
+        Ok(())
+    }
+    fn pointer_platter(&self, id: DeckId, action: i32, x: f32, y: f32) -> Result<(), String> {
+        let index = Self::grid_index(id);
+        if action == 2 {
+            if self.pointer_platters.get()[index].is_some() {
+                self.release_platter(id);
+            }
+            return Ok(());
+        }
+        if !x.is_finite() || !y.is_finite() {
+            self.release_platter(id);
+            return Err("Invalid platter pointer position".into());
+        }
+        let angle = (x.hypot(y) >= 12.).then(|| f64::from(y).atan2(f64::from(x)));
+        let mut pointers = self.pointer_platters.get();
+        match action {
+            0 => {
+                if pointers[index].is_some() {
+                    return Ok(());
+                }
+                if self.platter_holds.get()[index] {
+                    return Err("Release the controller platter before using the mouse".into());
+                }
+                if x.hypot(y) > 60. {
+                    return Ok(());
+                }
+                self.begin_platter(id)?;
+                pointers[index] = Some(PointerPlatter { angle });
+            }
+            1 => {
+                let Some(session) = pointers[index] else {
+                    return Ok(());
+                };
+                if !self.can_control_deck(id) || !self.engine.borrow().platter_touched(id) {
+                    self.release_platter(id);
+                    return Err("Platter transport changed; release and press again".into());
+                }
+                if let (Some(previous), Some(current)) = (session.angle, angle) {
+                    let delta = (current - previous + std::f64::consts::PI)
+                        .rem_euclid(std::f64::consts::TAU)
+                        - std::f64::consts::PI;
+                    self.engine
+                        .borrow()
+                        .platter_move_seconds(id, delta.to_degrees() / 200.)?;
+                }
+                pointers[index] = Some(PointerPlatter { angle });
+            }
+            _ => return Err("Invalid platter pointer action".into()),
+        }
+        self.pointer_platters.set(pointers);
+        Ok(())
+    }
     fn wire_platters(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_virtual_platter_pointer(move |deck, action, x, y| {
+            let Some(c) = weak.upgrade() else {
+                return;
+            };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if let Err(error) = c.pointer_platter(id, action, x, y) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
         let weak = Rc::downgrade(self);
         ui.on_controller_platter_touch(move |deck, held| {
             let Some(c) = weak.upgrade() else {
@@ -1890,6 +1987,9 @@ impl AudioController {
                 1 => DeckId::B,
                 _ => return,
             };
+            if c.pointer_platters.get()[Self::grid_index(id)].is_some() {
+                return;
+            }
             if !held {
                 c.release_platter(id);
                 let mut cancelled = c.platter_cancelled.get();
@@ -1910,20 +2010,7 @@ impl AudioController {
                 {
                     return Ok(());
                 }
-                c.stop_sync();
-                c.cancel_nudge(id);
-                let mut bends = c.jog_bends.get();
-                bends[Self::grid_index(id)] = None;
-                c.jog_bends.set(bends);
-                c.engine.borrow().exit_loop(id)?;
-                c.engine.borrow().platter_touch(id, true)?;
-                let mut cancelled = c.platter_cancelled.get();
-                cancelled[Self::grid_index(id)] = false;
-                c.platter_cancelled.set(cancelled);
-                let mut holds = c.platter_holds.get();
-                holds[Self::grid_index(id)] = true;
-                c.platter_holds.set(holds);
-                Ok::<_, String>(())
+                c.begin_platter(id)
             })();
             if let Err(error) = result {
                 if let Some(ui) = c.ui.upgrade() {
@@ -1942,6 +2029,9 @@ impl AudioController {
                 1 => DeckId::B,
                 _ => return,
             };
+            if c.pointer_platters.get()[Self::grid_index(id)].is_some() {
+                return;
+            }
             let result = (|| {
                 if !c.can_control_deck(id) {
                     return Err("Jog unavailable during loading".into());
@@ -5011,6 +5101,11 @@ impl AudioController {
                 .is_none_or(|ui| !ui.get_mc4000_connected());
             let expired = self.jog_bends.get()[index]
                 .is_some_and(|time| time.elapsed() >= Duration::from_millis(120));
+            let pointer_hidden = self.pointer_platters.get()[index].is_some()
+                && self
+                    .ui
+                    .upgrade()
+                    .is_none_or(|ui| !ui.get_virtual_decks_visible());
             if self.platter_holds.get()[index]
                 && (!self.engine.borrow().platter_touched(id) || !self.can_control_deck(id))
             {
@@ -5019,6 +5114,7 @@ impl AudioController {
                 self.platter_cancelled.set(cancelled);
             }
             if disconnected
+                || pointer_hidden
                 || expired
                 || !self.can_control_deck(id)
                 || (self.platter_holds.get()[index] && !self.engine.borrow().platter_touched(id))
@@ -9367,6 +9463,160 @@ mod tests {
             c.close_library().unwrap();
         }
     }
+    #[test]
+    fn virtual_platter_pointer_scratches_both_directions_and_releases_on_focus_and_view_changes() {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(2))
+            .unwrap();
+        engine
+            .seek_position(DeckId::B, Duration::from_secs(3))
+            .unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.set_mc4000_connected(true);
+        ui.show().unwrap();
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        let point = |deck: &str, x: f32, y: f32| {
+            let platter = control(&ui, &format!("{deck} round virtual platter"));
+            let origin = platter.absolute_position();
+            let size = platter.size();
+            slint::LogicalPosition::new(
+                origin.x + size.width / 2. + x,
+                origin.y + size.height / 2. + y,
+            )
+        };
+        let press = |deck: &str, x, y, button| {
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position: point(deck, x, y),
+                button,
+            })
+        };
+        let move_to = |deck: &str, x, y| {
+            ui.window().dispatch_event(WindowEvent::PointerMoved {
+                position: point(deck, x, y),
+            })
+        };
+        let release = |deck: &str, x, y, button| {
+            ui.window().dispatch_event(WindowEvent::PointerReleased {
+                position: point(deck, x, y),
+                button,
+            })
+        };
+        press("DECK A", 0., -45., PointerEventButton::Right);
+        assert!(!engine.platter_touched(DeckId::A));
+        release("DECK A", 0., -45., PointerEventButton::Right);
+        press("DECK A", 0., -45., PointerEventButton::Left);
+        assert!(engine.platter_touched(DeckId::A));
+        move_to("DECK A", 45., 0.);
+        assert!(output
+            .by_ref()
+            .take(3200)
+            .any(|sample| sample.abs() > 0.001));
+        output.by_ref().take(3200).for_each(drop);
+        c.refresh();
+        assert!((engine.snapshot(DeckId::A).position.as_secs_f64() - 2.45).abs() < 0.001);
+        assert!((ui.get_left_platter_angle() - 130.).abs() < 0.2);
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::from_secs(3));
+        move_to("DECK A", 0., -45.);
+        output.by_ref().take(3200).for_each(drop);
+        c.refresh();
+        assert!((engine.snapshot(DeckId::A).position.as_secs_f64() - 2.).abs() < 0.001);
+        assert!(output.by_ref().take(3200).all(|value| value == 0.));
+        release("DECK A", 200., -45., PointerEventButton::Left);
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!engine.snapshot(DeckId::A).playing);
+
+        engine.play(DeckId::B);
+        engine.set_speed(DeckId::B, 1.1).unwrap();
+        // Virtual scratch works even when hardware Vinyl is off.
+        ui.invoke_controller_vinyl(1);
+        press("DECK B", 45., 0., PointerEventButton::Left);
+        assert!(engine.platter_touched(DeckId::B));
+        move_to("DECK B", 0., -45.);
+        press("DECK B", 0., -45., PointerEventButton::Right);
+        release("DECK B", 0., -45., PointerEventButton::Right);
+        move_to("DECK B", 200., -45.);
+        release("DECK B", 200., -45., PointerEventButton::Left);
+        assert!(!engine.platter_touched(DeckId::B));
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!((engine.snapshot(DeckId::B).position.as_secs_f64() - 2.55).abs() < 0.001);
+        press("DECK B", 0., -45., PointerEventButton::Left);
+        assert!(engine.platter_touched(DeckId::B));
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(false));
+        assert!(!engine.platter_touched(DeckId::B));
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!((engine.snapshot(DeckId::B).position.as_secs_f64() - 2.55).abs() < 0.001);
+        assert!((engine.snapshot(DeckId::B).effective_speed - 1.1).abs() < 0.0001);
+        release("DECK B", 0., -45., PointerEventButton::Left);
+        ui.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        press("DECK A", 45., 0., PointerEventButton::Left);
+        assert!(engine.platter_touched(DeckId::A));
+        ui.set_deck_view_index(0);
+        c.tick();
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        ui.hide().unwrap();
+    }
+
+    #[test]
+    fn virtual_platter_wrap_center_input_ownership_and_transport_cancellation() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(2))
+            .unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.set_mc4000_connected(true);
+        ui.invoke_virtual_platter_pointer(0, 0, -45., 1.);
+        ui.invoke_controller_platter_touch(0, false);
+        ui.invoke_controller_jog(0, 63);
+        assert!(engine.platter_touched(DeckId::A));
+        ui.invoke_virtual_platter_pointer(0, 1, -45., -1.);
+        ui.invoke_virtual_platter_pointer(0, 2, 0., 0.);
+        let wrapped = engine.snapshot(DeckId::A).position.as_secs_f64();
+        assert!((wrapped - (2. + (2_f64 / 45.).atan().to_degrees() / 200.)).abs() < 0.001);
+        ui.invoke_virtual_platter_pointer(0, 0, 45., 0.);
+        ui.invoke_virtual_platter_pointer(0, 1, 0., 0.);
+        ui.invoke_virtual_platter_pointer(0, 1, -45., 0.);
+        ui.invoke_virtual_platter_pointer(0, 2, 0., 0.);
+        assert!((engine.snapshot(DeckId::A).position.as_secs_f64() - wrapped).abs() < 0.001);
+        ui.invoke_controller_platter_touch(0, true);
+        ui.invoke_virtual_platter_pointer(0, 0, 45., 0.);
+        assert!(ui.get_status().contains("Release the controller"));
+        ui.invoke_virtual_platter_pointer(0, 2, 0., 0.);
+        assert!(engine.platter_touched(DeckId::A));
+        ui.invoke_controller_platter_touch(0, false);
+        ui.invoke_virtual_platter_pointer(0, 0, 45., 0.);
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(4))
+            .unwrap();
+        ui.invoke_virtual_platter_pointer(0, 1, 0., 45.);
+        assert!(!engine.platter_touched(DeckId::A));
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(4));
+        ui.invoke_virtual_platter_pointer(0, 1, -45., 0.);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(4));
+        assert!(engine.platter_move_seconds(DeckId::A, f64::NAN).is_err());
+        assert!(engine.platter_move_seconds(DeckId::A, 10.).is_err());
+        ui.invoke_virtual_platter_pointer(0, 0, 45., 0.);
+        ui.set_mc4000_connected(false);
+        c.tick();
+        assert!(!engine.platter_touched(DeckId::A));
+    }
+
     #[test]
     fn controller_platter_midi_moves_audio_and_marker_and_releases_safely() {
         i_slint_backend_testing::init_no_event_loop();
