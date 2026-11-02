@@ -4,7 +4,7 @@ use std::fmt;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
-use symphonia::core::audio::{SampleBuffer, SignalSpec};
+use symphonia::core::audio::{Channels, SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatReader;
@@ -428,17 +428,24 @@ impl AudioAnalyzer {
         }
         let path_str = path_ref.to_string_lossy().to_string();
 
-        let (probed, warning) = crate::media_input::probe(
-            path_ref,
-            &MetadataOptions {
-                limit_metadata_bytes: Limit::Maximum(512 * 1024),
-                limit_visual_bytes: Limit::Maximum(0),
-            },
-        )
-        .map_err(|e| AnalyzerError::UnsupportedFormat(e.to_string()))?;
-
-        let mut format = probed.format;
-        let (mut track_id, mut decoder, mut frames_per_peak) = open_decoder(format.as_ref())?;
+        let opus = crate::opus_audio::is_opus(path_ref).map_err(AnalyzerError::IoError)?;
+        let mut warning = false;
+        let mut source = if opus {
+            None
+        } else {
+            let (probed, input_warning) = crate::media_input::probe(
+                path_ref,
+                &MetadataOptions {
+                    limit_metadata_bytes: Limit::Maximum(512 * 1024),
+                    limit_visual_bytes: Limit::Maximum(0),
+                },
+            )
+            .map_err(|e| AnalyzerError::UnsupportedFormat(e.to_string()))?;
+            warning = input_warning.is_some();
+            let (track, decoder, frames_per_peak) = open_decoder(probed.format.as_ref())?;
+            Some((probed.format, track, decoder, frames_per_peak))
+        };
+        let mut frames_per_peak = source.as_ref().map_or(48_000 / 20, |s| s.3);
 
         let mut peaks: Vec<u8> = Vec::with_capacity(WAVEFORM_BINS as usize + 1);
         let mut block_max: f32 = 0.0;
@@ -460,129 +467,143 @@ impl AudioAnalyzer {
         let mut sample_buf: Option<SampleBuffer<f32>> = None;
         let mut current_spec: Option<SignalSpec> = None;
 
-        loop {
+        let mut consume = |spec: SignalSpec, samples: &[f32]| -> Result<(), AnalyzerError> {
+            let channels = spec.channels.count();
+            if channels == 0 || spec.rate == 0 || !samples.len().is_multiple_of(channels) {
+                return Err(AnalyzerError::DecoderError("Invalid audio format".into()));
+            }
+            if first_spec.is_none() {
+                first_spec = Some(spec);
+                meter = Some(
+                    EbuR128::new(channels as u32, spec.rate, Mode::I | Mode::TRUE_PEAK)
+                        .map_err(|e| AnalyzerError::DecoderError(e.to_string()))?,
+                );
+                envelope = Some(EnvelopeBuilder::new(spec.rate));
+                chroma = Some(ChromaBuilder::new(spec.rate));
+            }
+            if first_spec != Some(spec) {
+                return Err(AnalyzerError::DecoderError(
+                    "Audio format changed during analysis".into(),
+                ));
+            }
+            if let Some(m) = meter.as_mut() {
+                m.add_frames_f32(samples)
+                    .map_err(|e| AnalyzerError::DecoderError(e.to_string()))?;
+            }
+            for frame in samples.chunks_exact(channels) {
+                let mut frame_peak: f32 = 0.0;
+                let mut frame_sum: f32 = 0.0;
+                for &s in frame {
+                    if !s.is_finite() {
+                        return Err(AnalyzerError::DecoderError(
+                            "Non-finite audio sample".into(),
+                        ));
+                    }
+                    frame_peak = frame_peak.max(s.abs());
+                    frame_sum += s;
+                }
+                sample_count += channels as u64;
+                if sample_count > spec.rate as u64 * channels as u64 * 60 * 60 {
+                    return Err(AnalyzerError::DecoderError(
+                        "Analysis limited to one hour per track".into(),
+                    ));
+                }
+                let mono = frame_sum / channels as f32;
+                if let Some(env) = envelope.as_mut() {
+                    env.push_frame(mono);
+                }
+                if let Some(ch) = chroma.as_mut() {
+                    ch.push_frame(mono);
+                }
+                block_max = block_max.max(frame_peak);
+                frames_in_block += 1;
+                if frames_in_block >= frames_per_peak {
+                    append_peak(
+                        &mut peaks,
+                        &mut frames_per_peak,
+                        (block_max.clamp(0.0, 1.0) * 255.0) as u8,
+                    );
+                    block_max = 0.0;
+                    frames_in_block = 0;
+                }
+            }
+            Ok(())
+        };
+
+        if opus {
+            let result =
+                crate::opus_audio::decode_stream(path_ref, cancel, |channels, rate, samples| {
+                    let layout = if channels == 1 {
+                        Channels::FRONT_LEFT
+                    } else {
+                        Channels::FRONT_LEFT | Channels::FRONT_RIGHT
+                    };
+                    consume(SignalSpec::new(rate, layout), samples).map_err(|e| e.to_string())
+                });
             if cancel.is_cancelled() {
                 return Err(AnalyzerError::Cancelled);
             }
-            let packet = match format.next_packet() {
-                Ok(packet) => packet,
-                // Reguläres Dateiende wird von Symphonia als UnexpectedEof gemeldet.
-                Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => break,
-                // Track-Liste hat sich geändert: Decoder komplett neu aufbauen.
-                Err(Error::ResetRequired) => {
-                    resets += 1;
-                    if resets > MAX_RESETS {
-                        return Err(AnalyzerError::DecoderError(
-                            "Zu viele Stream-Resets, Datei vermutlich defekt".into(),
-                        ));
-                    }
-                    let (id, dec, _) = open_decoder(format.as_ref())?;
-                    track_id = id;
-                    decoder = dec;
-                    sample_buf = None;
-                    current_spec = None;
-                    continue;
+            result.map_err(AnalyzerError::DecoderError)?;
+        } else if let Some((format, track_id, decoder, _)) = source.as_mut() {
+            loop {
+                if cancel.is_cancelled() {
+                    return Err(AnalyzerError::Cancelled);
                 }
-                // Alle übrigen I/O-Fehler sind echte Fehler und kein Dateiende.
-                Err(Error::IoError(e)) => return Err(AnalyzerError::IoError(e.to_string())),
-                Err(e) => return Err(AnalyzerError::DecoderError(e.to_string())),
-            };
-
-            if packet.track_id() != track_id {
-                continue;
-            }
-            packet_count += 1;
-
-            match decoder.decode(&packet) {
-                Ok(decoded) => {
-                    let spec = *decoded.spec();
-                    let channels = spec.channels.count().max(1);
-                    let needed = decoded.capacity() * channels;
-
-                    // Puffer neu anlegen, wenn sich Spec ändert oder er zu klein ist.
-                    let must_realloc = current_spec != Some(spec)
-                        || sample_buf.as_ref().is_none_or(|b| b.capacity() < needed);
-                    if must_realloc {
-                        sample_buf =
-                            Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
-                        current_spec = Some(spec);
-                    }
-
-                    if let Some(buf) = sample_buf.as_mut() {
-                        buf.copy_interleaved_ref(decoded);
-
-                        if first_spec.is_none() {
-                            first_spec = Some(spec);
-                            meter = Some(
-                                EbuR128::new(channels as u32, spec.rate, Mode::I | Mode::TRUE_PEAK)
-                                    .map_err(|e| AnalyzerError::DecoderError(e.to_string()))?,
-                            );
-                            envelope = Some(EnvelopeBuilder::new(spec.rate));
-                            chroma = Some(ChromaBuilder::new(spec.rate));
-                        }
-                        let spec_matches = first_spec == Some(spec);
-                        if !spec_matches {
+                let packet = match format.next_packet() {
+                    Ok(packet) => packet,
+                    // Reguläres Dateiende wird von Symphonia als UnexpectedEof gemeldet.
+                    Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => break,
+                    // Track-Liste hat sich geändert: Decoder komplett neu aufbauen.
+                    Err(Error::ResetRequired) => {
+                        resets += 1;
+                        if resets > MAX_RESETS {
                             return Err(AnalyzerError::DecoderError(
-                                "Audio format changed during analysis".into(),
+                                "Zu viele Stream-Resets, Datei vermutlich defekt".into(),
                             ));
                         }
-
-                        if spec_matches {
-                            if let Some(m) = meter.as_mut() {
-                                m.add_frames_f32(buf.samples())
-                                    .map_err(|e| AnalyzerError::DecoderError(e.to_string()))?;
-                            }
-                        }
-
-                        // Frameweise verarbeiten: ein Frame = ein Sample pro Kanal.
-                        for frame in buf.samples().chunks_exact(channels) {
-                            let mut frame_peak: f32 = 0.0;
-                            let mut frame_sum: f32 = 0.0;
-                            for &s in frame {
-                                if !s.is_finite() {
-                                    return Err(AnalyzerError::DecoderError(
-                                        "Non-finite audio sample".into(),
-                                    ));
-                                }
-                                frame_peak = frame_peak.max(s.abs());
-                                frame_sum += s;
-                            }
-                            sample_count += channels as u64;
-                            if sample_count > spec.rate as u64 * channels as u64 * 60 * 60 {
-                                return Err(AnalyzerError::DecoderError(
-                                    "Analysis limited to one hour per track".into(),
-                                ));
-                            }
-
-                            if spec_matches {
-                                let mono = frame_sum / channels as f32;
-                                if let Some(env) = envelope.as_mut() {
-                                    env.push_frame(mono);
-                                }
-                                if let Some(ch) = chroma.as_mut() {
-                                    ch.push_frame(mono);
-                                }
-                            }
-
-                            block_max = block_max.max(frame_peak);
-                            frames_in_block += 1;
-                            if frames_in_block >= frames_per_peak {
-                                append_peak(
-                                    &mut peaks,
-                                    &mut frames_per_peak,
-                                    (block_max.clamp(0.0, 1.0) * 255.0) as u8,
-                                );
-                                block_max = 0.0;
-                                frames_in_block = 0;
-                            }
-                        }
+                        let (id, dec, _) = open_decoder(format.as_ref())?;
+                        *track_id = id;
+                        *decoder = dec;
+                        sample_buf = None;
+                        current_spec = None;
+                        continue;
                     }
-                }
-                Err(Error::DecodeError(_)) => {
-                    decode_errors += 1;
+                    // Alle übrigen I/O-Fehler sind echte Fehler und kein Dateiende.
+                    Err(Error::IoError(e)) => return Err(AnalyzerError::IoError(e.to_string())),
+                    Err(e) => return Err(AnalyzerError::DecoderError(e.to_string())),
+                };
+
+                if packet.track_id() != *track_id {
                     continue;
                 }
-                Err(e) => return Err(AnalyzerError::DecoderError(e.to_string())),
+                packet_count += 1;
+
+                match decoder.decode(&packet) {
+                    Ok(decoded) => {
+                        let spec = *decoded.spec();
+                        let channels = spec.channels.count().max(1);
+                        let needed = decoded.capacity() * channels;
+
+                        // Puffer neu anlegen, wenn sich Spec ändert oder er zu klein ist.
+                        let must_realloc = current_spec != Some(spec)
+                            || sample_buf.as_ref().is_none_or(|b| b.capacity() < needed);
+                        if must_realloc {
+                            sample_buf =
+                                Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
+                            current_spec = Some(spec);
+                        }
+
+                        if let Some(buf) = sample_buf.as_mut() {
+                            buf.copy_interleaved_ref(decoded);
+                            consume(spec, buf.samples())?;
+                        }
+                    }
+                    Err(Error::DecodeError(_)) => {
+                        decode_errors += 1;
+                        continue;
+                    }
+                    Err(e) => return Err(AnalyzerError::DecoderError(e.to_string())),
+                }
             }
         }
 
@@ -647,8 +668,7 @@ impl AudioAnalyzer {
         } else {
             0.0
         };
-        let is_corrupt =
-            sample_count == 0 || warning.is_some() || error_ratio > CORRUPT_ERROR_RATIO;
+        let is_corrupt = sample_count == 0 || warning || error_ratio > CORRUPT_ERROR_RATIO;
 
         Ok(TrackAnalysisResult {
             file_path: path_str,
@@ -664,6 +684,56 @@ impl AudioAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn analyzer_supports_library_formats_including_mono_and_stereo_opus() {
+        let mut paths: Vec<_> = [
+            "tone-9s.mp3",
+            "format-aac.m4a",
+            "format-alac.m4a",
+            "format-flac.flac",
+            "format-aiff.aiff",
+            "format-vorbis.ogg",
+            "format-opus.opus",
+            "format-opus-mono.opus",
+        ]
+        .into_iter()
+        .map(|name| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name)
+        })
+        .collect();
+        if let Some(path) = std::env::var_os("DRDJ_ANALYSIS_TEST_FILE") {
+            paths.push(path.into());
+        }
+        for path in paths {
+            let name = path.file_name().unwrap().to_string_lossy();
+            let result =
+                AudioAnalyzer::analyze_file(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(result.validate(), "{name}");
+            assert!(!result.is_corrupt, "{name}");
+            assert!(!result.waveform_overview.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn opus_analysis_has_peaks_and_rejects_cancellation_and_truncation() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/format-opus.opus");
+        let result = AudioAnalyzer::analyze_file(&path).unwrap();
+        assert!(result.waveform_overview.iter().any(|&p| p > 0));
+        let cancel = crate::cancellation::Cancellation::default();
+        cancel.request();
+        assert!(matches!(
+            AudioAnalyzer::analyze_cancellable(&path, &cancel),
+            Err(AnalyzerError::Cancelled)
+        ));
+        let truncated = tempfile::Builder::new().suffix(".opus").tempfile().unwrap();
+        let mut bytes = std::fs::read(path).unwrap();
+        bytes.truncate(bytes.len() / 2);
+        std::fs::write(truncated.path(), bytes).unwrap();
+        assert!(AudioAnalyzer::analyze_file(truncated.path()).is_err());
+    }
+
     #[test]
     fn adaptive_waveform_stays_bounded_and_retains_peaks() {
         let mut peaks = Vec::new();

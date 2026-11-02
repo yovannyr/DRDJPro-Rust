@@ -4773,6 +4773,7 @@ impl AudioController {
                             if current_path.as_ref() == Some(&path) {
                                 match metadata.analysis {
                                     Some(analysis) => {
+                                        let is_corrupt = analysis.is_corrupt;
                                         let changed = self
                                             .library
                                             .borrow_mut()
@@ -4783,7 +4784,11 @@ impl AudioController {
                                                     self.library_changed();
                                                 }
                                                 self.publish_library();
-                                                Ok(())
+                                                if is_corrupt {
+                                                    Err("Analysis flagged damaged audio or a container warning".into())
+                                                } else {
+                                                    Ok(())
+                                                }
                                             }
                                             Err(error) => Err(error),
                                         }
@@ -4974,7 +4979,7 @@ impl AudioController {
         }
         let queue = self.library.borrow().analysis_targets();
         if queue.is_empty() {
-            ui.set_status("No available library files to analyze".into());
+            ui.set_status("No new or failed available library files to analyze".into());
             return;
         }
         let total = queue.len();
@@ -13252,6 +13257,46 @@ mod tests {
             0,
             "next jobs must not force Prepare again"
         );
+        let cached = c
+            .library
+            .borrow()
+            .track_by_id(1)
+            .unwrap()
+            .metadata
+            .analysis
+            .clone();
+        let added = wav_file(0, 48_000);
+        c.import_paths(vec![added.path().into()]);
+        finish_import(&c);
+        ui.invoke_analyze_library();
+        assert_eq!(c.analysis_batch.borrow().as_ref().unwrap().total, 2);
+        finish_import(&c);
+        assert!(ui
+            .get_analysis_progress()
+            .contains("2/2 processed, 1 failed"));
+        assert_eq!(
+            c.library.borrow().track_by_id(1).unwrap().metadata.analysis,
+            cached
+        );
+        assert!(c
+            .library
+            .borrow()
+            .track_by_id(4)
+            .unwrap()
+            .metadata
+            .analysis
+            .is_some());
+        std::fs::copy(first.path(), bad.path()).unwrap();
+        ui.invoke_analyze_library();
+        assert_eq!(c.analysis_batch.borrow().as_ref().unwrap().total, 1);
+        finish_import(&c);
+        assert!(ui
+            .get_analysis_progress()
+            .contains("1/1 processed, 0 failed"));
+        assert!(!ui.get_library_has_analysis_targets());
+        ui.invoke_analyze_library();
+        assert!(c.pending_import.borrow().is_none());
+        assert!(ui.get_status().contains("No new or failed"));
         c.close_library().unwrap();
     }
     #[test]
@@ -13410,6 +13455,12 @@ mod tests {
             Some(&good)
         );
         ui.invoke_analyze_library();
+        assert!(c.pending_import.borrow().is_none());
+        assert!(ui.get_status().contains("No new or failed"));
+        let third = wav_file(0, 48_000);
+        c.import_paths(vec![third.path().into()]);
+        finish_import(&c);
+        ui.invoke_analyze_library();
         ui.invoke_cancel_background_job();
         finish_import(&c);
         assert!(
@@ -13427,7 +13478,7 @@ mod tests {
                 .as_ref(),
             Some(&good)
         );
-        std::fs::write(file.path(), b"not audio").unwrap();
+        std::fs::write(third.path(), b"not audio").unwrap();
         ui.invoke_analyze_library();
         finish_import(&c);
         assert!(ui.get_analysis_progress().contains("1 failed"));
@@ -13455,8 +13506,55 @@ mod tests {
             Some(good)
         );
         assert!(ui.get_analysis_summary().contains("Recommended gain"));
+        assert_eq!(
+            c.library.borrow().analysis_targets(),
+            VecDeque::from([(3, std::fs::canonicalize(third.path()).unwrap())]),
+            "SQLite restart must retain healthy results and retry only the unfinished file"
+        );
         c.close_library().unwrap();
     }
+    #[test]
+    fn corrupt_analysis_counts_as_failed_and_is_retried() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let file = wav_file(0, 48_000);
+        c.import_paths(vec![file.path().into()]);
+        finish_import(&c);
+        ui.invoke_analyze_library();
+        let receiver = c.pending_import.borrow_mut().take().unwrap();
+        let mut result = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+        result.as_mut().unwrap().as_mut().unwrap().metadata[0]
+            .1
+            .analysis
+            .as_mut()
+            .unwrap()
+            .is_corrupt = true;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(result).unwrap();
+        *c.pending_import.borrow_mut() = Some(receiver);
+        c.tick();
+        assert!(ui
+            .get_analysis_progress()
+            .contains("1/1 processed, 1 failed"));
+        assert!(ui.get_analysis_progress().contains("damaged audio"));
+        assert!(ui.get_library_has_analysis_targets());
+        ui.invoke_analyze_library();
+        assert_eq!(c.analysis_batch.borrow().as_ref().unwrap().total, 1);
+        finish_import(&c);
+        assert!(ui
+            .get_analysis_progress()
+            .contains("1/1 processed, 0 failed"));
+        assert!(!ui.get_library_has_analysis_targets());
+        c.close_library().unwrap();
+    }
+
     #[test]
     fn compact_library_buttons_activate_on_first_click_and_keyboard() {
         use slint::platform::{PointerEventButton, WindowEvent};

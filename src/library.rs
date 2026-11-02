@@ -1197,12 +1197,20 @@ impl Library {
     pub(crate) fn analysis_targets(&self) -> VecDeque<(i32, PathBuf)> {
         self.tracks
             .iter()
-            .filter(|track| track.available)
+            .filter(|track| Self::needs_analysis(track))
             .map(|track| (track.id, track.path.clone()))
             .collect()
     }
     pub(crate) fn has_analysis_targets(&self) -> bool {
-        self.tracks.iter().any(|track| track.available)
+        self.tracks.iter().any(Self::needs_analysis)
+    }
+    fn needs_analysis(track: &Track) -> bool {
+        track.available
+            && track
+                .metadata
+                .analysis
+                .as_ref()
+                .is_none_or(|analysis| analysis.is_corrupt)
     }
     pub fn set_query(&mut self, query: String) {
         let normalized = query.trim().to_lowercase();
@@ -1518,6 +1526,39 @@ mod tests {
         library.set_query("original".into());
         assert!(current.search(&library.search_spec(7)).is_empty());
         assert!(library.has_changes());
+    }
+
+    #[test]
+    fn analysis_targets_skip_healthy_results_and_retry_corrupt_after_restore() {
+        let first = crate::test_support::wav_file(0, 48_000);
+        let second = crate::test_support::wav_file(0, 48_000);
+        let third = crate::test_support::wav_file(0, 48_000);
+        let mut library = Library::default();
+        library.insert([
+            first.path().into(),
+            second.path().into(),
+            third.path().into(),
+        ]);
+        let mut healthy = crate::audio_analyzer::AudioAnalyzer::analyze_file(first.path()).unwrap();
+        assert_eq!(healthy.bpm, 0., "unknown BPM is not an analysis failure");
+        assert!(healthy.musical_key.is_empty());
+        library
+            .set_analysis(1, first.path(), healthy.clone())
+            .unwrap();
+        healthy.file_path = second.path().to_string_lossy().into_owned();
+        healthy.is_corrupt = true;
+        library.set_analysis(2, second.path(), healthy).unwrap();
+        assert_eq!(
+            library.analysis_targets(),
+            VecDeque::from([(2, second.path().into()), (3, third.path().into())])
+        );
+        assert!(library.has_analysis_targets());
+        let mut restored = Library::restore(library.catalog()).unwrap();
+        assert_eq!(restored.analysis_targets(), library.analysis_targets());
+        restored.tracks[1].available = false;
+        restored.tracks[2].available = false;
+        assert!(restored.analysis_targets().is_empty());
+        assert!(!restored.has_analysis_targets());
     }
 
     #[test]

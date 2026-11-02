@@ -153,6 +153,36 @@ pub(crate) fn decode(
     limit: usize,
     cancel: &Cancellation,
 ) -> Result<(u16, u32, Vec<f32>), String> {
+    let mut samples = Vec::new();
+    let mut spec = None;
+    decode_stream(path, cancel, |channels, rate, trimmed| {
+        spec = Some((channels, rate));
+        let new_len = samples
+            .len()
+            .checked_add(trimmed.len())
+            .ok_or("PCM sample count overflow")?;
+        if new_len > limit {
+            return Err("Track exceeds the 256 MiB decoded PCM limit".into());
+        }
+        if new_len > samples.capacity() {
+            let target = samples.capacity().saturating_mul(2).max(new_len).min(limit);
+            samples
+                .try_reserve_exact(target - samples.len())
+                .map_err(|e| format!("Cannot grow PCM memory: {e}"))?;
+        }
+        samples.extend_from_slice(trimmed);
+        Ok(())
+    })?;
+    let (channels, rate) = spec.ok_or("No complete audio frames decoded")?;
+    Ok((channels, rate, samples))
+}
+
+/// Stream trimmed mono/stereo PCM to a control-worker consumer without retaining a track.
+pub(crate) fn decode_stream(
+    path: &Path,
+    cancel: &Cancellation,
+    mut consume: impl FnMut(u16, u32, &[f32]) -> Result<(), String>,
+) -> Result<(), String> {
     cancel.check()?;
     let (final_granule, empty_eos, first_page_packets) = terminal_page(path, cancel)?;
     let file = File::open(path).map_err(|e| e.to_string())?;
@@ -173,7 +203,7 @@ pub(crate) fn decode(
     let mut block = vec![0.0_f32; MAX_PACKET_SAMPLES * channels];
     let mut packet = OggPacket::default();
     let mut next = OggPacket::default();
-    let mut samples = Vec::new();
+    let mut sample_count = 0_u64;
     if !reader
         .read_packet_into(&mut packet)
         .map_err(|e| e.to_string())?
@@ -203,33 +233,25 @@ pub(crate) fn decode(
             return Err("Invalid Opus packet length".into());
         }
         let trimmed = trim.keep(&packet, &block[..frames * channels]);
-        let new_len = samples
-            .len()
-            .checked_add(trimmed.len())
-            .ok_or("PCM sample count overflow")?;
-        if new_len > limit {
-            return Err("Track exceeds the 256 MiB decoded PCM limit".into());
-        }
         if trimmed.iter().any(|sample| !sample.is_finite()) {
             return Err("Non-finite audio sample".into());
         }
-        if new_len > samples.capacity() {
-            let target = samples.capacity().saturating_mul(2).max(new_len).min(limit);
-            samples
-                .try_reserve_exact(target - samples.len())
-                .map_err(|e| format!("Cannot grow PCM memory: {e}"))?;
+        if !trimmed.is_empty() {
+            consume(channels as u16, RATE as u32, trimmed)?;
+            sample_count = sample_count
+                .checked_add(trimmed.len() as u64)
+                .ok_or("PCM sample count overflow")?;
         }
-        samples.extend_from_slice(trimmed);
         if !has_next {
             break;
         }
         std::mem::swap(&mut packet, &mut next);
     }
     cancel.check()?;
-    if samples.is_empty() || samples.len() % channels != 0 {
+    if sample_count == 0 || !sample_count.is_multiple_of(channels as u64) {
         return Err("No complete audio frames decoded".into());
     }
-    Ok((channels as u16, RATE as u32, samples))
+    Ok(())
 }
 
 pub(crate) fn metadata(
@@ -268,6 +290,33 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
             .join(name)
+    }
+
+    #[test]
+    fn streaming_matches_collected_pcm_and_cancels_between_packets() {
+        for name in ["format-opus.opus", "format-opus-mono.opus"] {
+            let path = fixture(name);
+            let cancel = Cancellation::default();
+            let (channels, rate, samples) = decode(&path, 100_000, &cancel).unwrap();
+            let mut offset = 0;
+            decode_stream(&path, &cancel, |c, r, block| {
+                assert_eq!((c, r), (channels, rate));
+                assert_eq!(block, &samples[offset..offset + block.len()]);
+                offset += block.len();
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(offset, samples.len());
+            let mut calls = 0;
+            let error = decode_stream(&path, &cancel, |_, _, _| {
+                calls += 1;
+                cancel.request();
+                Ok(())
+            })
+            .unwrap_err();
+            assert_eq!(calls, 1);
+            assert!(error.contains("cancelled"));
+        }
     }
 
     #[test]
