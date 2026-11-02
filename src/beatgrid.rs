@@ -481,6 +481,33 @@ impl BeatGrid {
     pub fn bpm(self) -> f64 {
         self.bpm
     }
+    /// Source BPM at this position, including tempo segments and warp scaling.
+    /// At a segment boundary the following segment's tempo is returned.
+    pub fn bpm_at_position(self, position: Duration) -> f64 {
+        let seconds = position.as_secs_f64();
+        let beat = self.beat_at_time(seconds);
+        let bpm = self
+            .tempo_changes()
+            .iter()
+            .take_while(|change| change.beat as f64 <= beat)
+            .last()
+            .map_or(self.bpm, |change| change.bpm);
+        if seconds < self.anchor.as_secs_f64() {
+            return self.bpm;
+        }
+        let (mut previous_base, mut previous_position) =
+            (self.anchor.as_secs_f64(), self.anchor.as_secs_f64());
+        for marker in self.warp_markers() {
+            let next_base = self.base_time_at_beat(marker.beat as f64);
+            let next_position = marker.position_ns as f64 / 1_000_000_000.;
+            if seconds < next_position {
+                return bpm * (next_base - previous_base) / (next_position - previous_position);
+            }
+            previous_base = next_base;
+            previous_position = next_position;
+        }
+        bpm
+    }
     pub fn is_constant_tempo(self) -> bool {
         self.tempo_change_count == 0 && self.warp_marker_count == 0
     }
@@ -1080,6 +1107,24 @@ mod tests {
             .unwrap()
             .with_time_signature(0, 4)
             .is_err());
+    }
+
+    #[test]
+    fn local_bpm_follows_tempo_boundaries_and_warp_scaling() {
+        let grid = BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(4, 60.)
+            .unwrap();
+        assert_eq!(grid.bpm_at_position(Duration::ZERO), 120.);
+        assert_eq!(grid.bpm_at_position(Duration::from_millis(1999)), 120.);
+        assert_eq!(grid.bpm_at_position(Duration::from_secs(2)), 60.);
+        assert_eq!(grid.bpm_at_position(Duration::from_secs(3)), 60.);
+        let warped = grid.with_warp_marker(8, Duration::from_secs(12)).unwrap();
+        assert_eq!(warped.bpm_at_position(Duration::ZERO), 60.);
+        assert_eq!(warped.bpm_at_position(Duration::from_secs(3)), 60.);
+        assert_eq!(warped.bpm_at_position(Duration::from_secs(4)), 30.);
+        assert_eq!(warped.bpm_at_position(Duration::from_secs(11)), 30.);
+        assert_eq!(warped.bpm_at_position(Duration::from_secs(12)), 60.);
     }
 
     #[test]

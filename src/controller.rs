@@ -5770,13 +5770,25 @@ impl AudioController {
             } else {
                 "Source BPM unavailable".into()
             };
+            let platter_bpm = if let Some(grid) = s.grid {
+                format!(
+                    "{:.1}",
+                    grid.bpm_at_position(s.position) * s.effective_speed
+                )
+            } else if let Some(tempo) = s.tempo {
+                format!("~{:.1}", tempo.bpm * s.effective_speed)
+            } else {
+                "—".into()
+            };
             match id {
                 DeckId::A => {
+                    ui.set_left_platter_bpm(platter_bpm.into());
                     ui.set_left_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_left_pitch_caption(pitch.into());
                     ui.set_left_bpm_caption(bpm.into());
                 }
                 DeckId::B => {
+                    ui.set_right_platter_bpm(platter_bpm.into());
                     ui.set_right_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_right_pitch_caption(pitch.into());
                     ui.set_right_bpm_caption(bpm.into());
@@ -6131,6 +6143,14 @@ impl AudioController {
                     ui.set_left_loaded(s.loaded);
                     ui.set_left_playing(s.playing);
                     ui.set_left_position(percent);
+                    ui.set_left_platter_time(
+                        format!(
+                            "{}\n{}",
+                            precise_time(s.position),
+                            precise_time(s.duration.saturating_sub(s.position))
+                        )
+                        .into(),
+                    );
                     ui.set_left_time(time.into());
                     ui.set_left_grid_active(s.grid.is_some());
                     ui.set_left_grid_caption(caption.into());
@@ -6143,6 +6163,14 @@ impl AudioController {
                     ui.set_right_loaded(s.loaded);
                     ui.set_right_playing(s.playing);
                     ui.set_right_position(percent);
+                    ui.set_right_platter_time(
+                        format!(
+                            "{}\n{}",
+                            precise_time(s.position),
+                            precise_time(s.duration.saturating_sub(s.position))
+                        )
+                        .into(),
+                    );
                     ui.set_right_time(time.into());
                     ui.set_right_grid_active(s.grid.is_some());
                     ui.set_right_grid_caption(caption.into());
@@ -15903,6 +15931,7 @@ mod tests {
         }
 
         ui.set_mc4000_connected(true);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
         for label in ["DECK A presentation mode", "DECK B presentation mode"] {
             let header = control(&ui, label);
             assert_eq!(
@@ -15912,6 +15941,7 @@ mod tests {
         }
 
         ui.set_mc4000_connected(false);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
         for label in ["DECK A presentation mode", "DECK B presentation mode"] {
             let header = control(&ui, label);
             assert_eq!(
@@ -15939,6 +15969,7 @@ mod tests {
             0
         );
         ui.set_mc4000_connected(true);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
         for (width, height) in [(850.0, 740.0), (1250.0, 768.0), (1280.0, 860.0)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let playhead = control(&ui, "DECK A software playhead");
@@ -15996,7 +16027,7 @@ mod tests {
                 "playhead readout exceeds window at {width}x{height}"
             );
             let header = control(&ui, "DECK A presentation mode");
-            let deck_bottom = header.absolute_position().y + 252.0;
+            let deck_bottom = header.absolute_position().y + 314.0;
             for label in [
                 "DECK A load track",
                 "DECK A play/pause",
@@ -16012,12 +16043,179 @@ mod tests {
                 );
             }
         }
-
         ui.set_mc4000_connected(false);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
         assert_eq!(
             ElementHandle::find_by_accessible_label(&ui, "DECK A software playhead").count(),
             0
         );
+        ui.hide().unwrap();
+    }
+
+    #[test]
+    fn round_decks_default_on_connect_and_allow_training_override() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.show().unwrap();
+        assert!(!ui.get_virtual_decks_visible());
+        assert_eq!(control(&ui, "Deck view").accessible_enabled(), Some(false));
+        ui.set_mc4000_connected(true);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+        assert!(ui.get_virtual_decks_visible());
+        assert_eq!(
+            control(&ui, "Deck view")
+                .accessible_value()
+                .unwrap()
+                .as_str(),
+            "Virtuelle Decks"
+        );
+        for (width, height) in [(850., 740.), (1250., 768.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for deck in ["DECK A", "DECK B"] {
+                let disc = control(&ui, &format!("{deck} round virtual platter"));
+                assert_eq!(disc.size().width, 120.);
+                assert_eq!(disc.size().height, 120.);
+                assert!(disc.absolute_position().x >= 0.);
+                assert!(disc.absolute_position().x + disc.size().width <= width);
+                assert!(disc.absolute_position().y + disc.size().height <= height);
+            }
+            let library = control(&ui, "Track library area");
+            assert!(library.size().height >= 100.);
+            assert!(library.absolute_position().y + library.size().height <= height);
+            let status = control(&ui, "Application status");
+            assert!(status.absolute_position().y + status.size().height <= height + 1.);
+        }
+        control(&ui, "Deck view").mock_single_click(slint::platform::PointerEventButton::Left);
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::UpArrow.into(),
+            });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Return.into(),
+            });
+        assert!(!ui.get_virtual_decks_visible());
+        assert_eq!(
+            control(&ui, "Deck view")
+                .accessible_value()
+                .unwrap()
+                .as_str(),
+            "Training"
+        );
+        assert_eq!(
+            ElementHandle::find_by_accessible_label(&ui, "DECK A round virtual platter").count(),
+            0
+        );
+        control(&ui, "DECK A waveform overview");
+        control(&ui, "Deck view").mock_single_click(slint::platform::PointerEventButton::Left);
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::DownArrow.into(),
+            });
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::Return.into(),
+            });
+        assert!(ui.get_virtual_decks_visible());
+        ui.set_mc4000_connected(false);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+        assert!(!ui.get_virtual_decks_visible());
+        assert_eq!(
+            control(&ui, "Deck view")
+                .accessible_value()
+                .unwrap()
+                .as_str(),
+            "Training"
+        );
+        ui.set_mc4000_connected(true);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+        assert!(ui.get_virtual_decks_visible());
+        assert_eq!(
+            control(&ui, "Deck view")
+                .accessible_value()
+                .unwrap()
+                .as_str(),
+            "Virtuelle Decks"
+        );
+        ui.set_deck_view_index(0);
+        assert!(!ui.get_virtual_decks_visible());
+        ui.set_mc4000_connected(false);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+        ui.set_mc4000_connected(true);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+        assert!(ui.get_virtual_decks_visible());
+        assert_eq!(
+            control(&ui, "Deck view")
+                .accessible_value()
+                .unwrap()
+                .as_str(),
+            "Virtuelle Decks"
+        );
+        ui.hide().unwrap();
+    }
+
+    #[test]
+    fn round_decks_follow_engine_seek_pitch_transport_and_eject() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let file = wav_file(8192, 96_000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+            )
+            .unwrap();
+        ui.set_mc4000_connected(true);
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+        ui.show().unwrap();
+        c.tick();
+        for deck in ["DECK A", "DECK B"] {
+            let desc = control(&ui, &format!("{deck} round virtual platter"))
+                .accessible_description()
+                .unwrap();
+            assert!(desc.contains("Paused"));
+            assert!(desc.contains("00:00.000"));
+        }
+        engine.seek_percent(DeckId::A, 50.).unwrap();
+        engine.set_speed(DeckId::A, 1.08).unwrap();
+        engine.play(DeckId::A);
+        c.tick();
+        let desc = control(&ui, "DECK A round virtual platter")
+            .accessible_description()
+            .unwrap();
+        assert!(desc.contains("50%"));
+        assert!(desc.contains("00:01.000"));
+        assert!(desc.contains("8%"));
+        assert!(desc.contains("Playing"));
+        assert_eq!(ui.get_left_platter_bpm().as_str(), "129.6");
+        engine
+            .set_grid(
+                DeckId::B,
+                Some(
+                    crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+                        .unwrap()
+                        .with_tempo_change(2, 60.)
+                        .unwrap(),
+                ),
+            )
+            .unwrap();
+        engine.seek_percent(DeckId::B, 75.).unwrap();
+        c.tick();
+        assert_eq!(ui.get_right_platter_bpm().as_str(), "60.0");
+        assert!(control(&ui, "DECK B round virtual platter")
+            .accessible_description()
+            .unwrap()
+            .contains("Paused"));
+        ui.invoke_eject_left();
+        c.tick();
+        assert!(!ui.get_left_loaded());
+        assert_eq!(ui.get_left_platter_bpm().as_str(), "—");
+        assert!(ui.get_right_loaded());
         ui.hide().unwrap();
     }
 }

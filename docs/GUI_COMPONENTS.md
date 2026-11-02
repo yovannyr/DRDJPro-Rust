@@ -38,7 +38,7 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Master/system status | 19, 26, 27, 28 | Overview numbered sections | Open: master output, actual dropout warning, clock and CPU telemetry; never animate invented measurements. |
 | Playback mode | 1 | Overview section 1 | Only internal software playback exists. REL/ABS/THRU/changeover depend on actual DVS/input routing/hardware and must not appear as working modes yet. |
 | Track metadata/BPM/key | 11, 24, 25, 59 | Manual pp. 25–26 | Filename and experimental BPM candidate exist. Artist/key tags, distinct original/current BPM and pitch-derived display remain open; absent metadata stays absent. |
-| Virtual deck/platter | 12, 16 | Manual p. 25 | Open: platter position, outer track-progress ring, end warning; these are distinct values/indicators. |
+| Virtual deck/platter | 12, 16 | Manual p. 25 | Round light-faced software decks show current BPM, pitch, elapsed/remaining source time and progress when MC4000 is connected. Physical platter position, outer progress ring and end warning remain open; these are distinct indicators. |
 | Transport/eject | 17, 55 | Manual pp. 40–41 | Play/Pause and Cue-to-zero exist. Per-deck EJECT now stops/unloads that deck, clears its persisted startup assignment and retains its library track. Shift+Left/Right loads the selected Library track into A/B; headless focus, repeat, busy and playing-target tests do not establish native keyboard/visual/hardware acceptance. Previous/next library navigation remains open. |
 | Tempo/pitch/nudge | 30, 32, 57 | Manual pp. 25, 29, 41 | Coupled pitch/ranges/fine and momentary nudge implemented with offline/headless evidence; native usability, transition quality and physical latency remain open. Editing grid BPM is not playback speed control. |
 | Slip/keylock/sync/censor | 13, 15, 18, 44 | Overview numbered sections | Partial: software Keylock, one-shot matching/phase and bounded continuous Sync exist. A Keylock follower prepares its matched base asynchronously, shows a cancellable preparation state and becomes active only after fresh render frames. Nudge preserves pitch using bounded overlap/add. Musical/transient/hardware qualification remains open; Slip/Censor are open. |
@@ -401,9 +401,11 @@ RECONNECT MIDI provides explicit recovery if a same-name device disappears and r
 
 ## Training and MC4000 deck presentation (2026-11-01)
 
-The existing A/B deck components now identify their presentation as TRAINING or MC4000. Controller mode is driven by the presence of the connected MC4000 MIDI input handle; startup failure, disconnect, discovery error and failed reconnect return the label to training mode. Both labels still describe the same existing deck state and callbacks.
+The existing A/B deck components identify their presentation as TRAINING or MC4000. Connecting the supported MC4000 MIDI input automatically selects round virtual decks. The top toolbar's **Ansicht** selector switches between Training and Virtuelle Decks while connected. Disconnect always shows Training; reconnect defaults to virtual decks again. The selector is disabled without the controller. View choice is session-local and changes no engine state or playback callbacks.
 
-This is a mode indicator on the shared deck layout, not a finished alternate controller layout. Jog/platter position is not provided by the current MIDI decoder, so physical platter synchronization is not represented. Reference-sized typography, native visual review, full controller-specific layout and hardware acceptance remain open.
+Each virtual deck has a 120px round dark rim and light face, current BPM (prefixed with ~ for estimates), requested pitch and elapsed/remaining source times, following the provided reference's visual structure. Grid-based current BPM uses the local tempo/warp segment at the software playhead, multiplied by effective speed; unknown BPM stays unavailable. Beside it are the full source-time/BPM/pitch captions and software-progress strip. Both layouts retain the same transport, cue, loop, pitch, Sync, Keylock and drag/drop callbacks. The virtual layout uses taller deck cards and a smaller library minimum at constrained window sizes. No DSP or real-time audio callback changes are introduced; bounded local-BPM calculations run on the GUI control plane only.
+
+Headless tests cover automatic connection/disconnection defaults, manual view choice, round geometry at 850x740, 1250x768 and 1280x860, and engine-driven seek/pitch/play/eject state. Native visual/typography/hardware acceptance remains open. Jog/platter position is not provided by the current MIDI decoder; the graphic does not pretend to rotate with a physical jog wheel.
 
 ## Audio stream fault handling and safe manual reopening (2026-10-30)
 
@@ -441,6 +443,6 @@ The library toolbar keeps **ADD FILES** and adds **ADD FOLDER**. Folder selectio
 
 ## Controller-mode software playhead readout
 
-When the connected MC4000 input enables controller mode, each existing CompactDeck replaces its small overview waveform and time row with a compact playhead strip. The strip uses the deck's real software position, multiline source-time text, BPM and pitch captions, and playing state; the existing interactive deck controls and their shared callbacks remain in place. Its progress bar is a static representation of software playback position, not a rotating platter or jog input. The mode-off training layout retains its original overview and time row.
+The software-progress strip now sits beside the round virtual platter in the virtual view. It uses the deck's real software position, multiline source-time text, BPM and pitch captions, and playing state. Its progress bar is software playback position, not a rotating platter or jog input. Training retains its original overview and time row.
 
 Headless layout/data-binding checks cover 850x740, 1250x768 and 1280x860. Labels use compact 10–11px text; native visual/readability acceptance, full alternate controller layout and physical platter/jog synchronization remain open.
