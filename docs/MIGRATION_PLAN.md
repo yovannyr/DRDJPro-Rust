@@ -2,6 +2,11 @@
 
 ## Product goal and release gate
 
+Der konkrete MC4000-Funktionsabgleich fuer Handbuchseiten 24-27 und die
+Reihenfolge der fehlenden Controller-/App-Funktionen stehen im
+[MC4000-Implementierungsplan](MC4000_IMPLEMENTATION_PLAN.md) (Stand 2026-11-02).
+Ergaenzendes Backlog, noch keine Implementierung der dort offenen Slices.
+
 The target is a complete professional DJ application. Spikes in the historical checkpoints below describe evaluation work, not the intended finished product. Current builds are development checkpoints; production readiness is not established by compilation or headless tests alone.
 
 Release requires a traceable disposition and acceptance evidence for every FEATURE_CATALOG capability and all 59 numbered UI reference items. Core acceptance includes durable library/session data, reliable transport and cue/loop workflows, tempo/sync, mixer DSP, device/output/headphone routing, hardware integration, recovery and measured performance. Optional/provider-dependent features need explicit supported scope rather than hidden stubs. Windows/macOS builds, sustained physical audio/device tests, visual/usability review and representative music-corpus analysis remain release gates.
