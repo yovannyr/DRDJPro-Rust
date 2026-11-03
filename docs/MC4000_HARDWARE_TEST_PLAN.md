@@ -10,8 +10,8 @@ S1 und physisches/virtuelles Scratchen wurden vom Nutzer bereits bestaetigt.
 Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 
 S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
-implementiert; S8 ergaenzt die persistente Prep Queue. S9-S15 bleiben
-**NOT IMPLEMENTED**. Native Abnahmen fuer S2-S8
+implementiert; S8 ergaenzt die persistente Prep Queue, S9 Navigation/Loop-Jog.
+S10-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S9
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -64,8 +64,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S7-02 CloneState | Quelle mit Position/Pitch/Keylock abspielen oder pausieren; auf pausiertes Ziel klonen, auch nach fertiggestelltem ersten LOAD | Ziel uebernimmt Softwareposition/Basistempo/Grid/Keylock/Playzustand, Loop aus und TempCue zurueckgesetzt, Mixer/EQ/FX unveraendert. Quelle unveraendert; Scratch/Loop/Nudge/Sync/gehaltene oder geplante Cues sowie ausstehende Vorbereitung werden abgewiesen. Hoerprobe und Zeitversatz messen. |
 | S8-01 Prepare | Track mit LOAD PREP hinzufuegen, erneut hinzufuegen, SHIFT+LOAD PREP oeffnen; GUI Up/Down/Remove | Eigener Prep-Queue-Tab, keine Analyse starten; keine Duplikate; kuratierte Reihenfolge, Filter behaelt Ordnung. LOAD behaelt Eintrag, Remove loescht keine Datei. |
 | S8-02 Restart | Queue bearbeiten, Track fehlen lassen/relokalisieren, Neustart | Queue persistent; stabileIDs, fehlende Tracks erkennbar, kein automatisches Laden/Abspielen. |
-| S9-01 Search | SHIFT+Jog und SHIFT+Bend in beide Richtungen halten/loslassen | Schnelle Suche bis Trackgrenzen, Release stoppt Suche; nicht versehentlich Scratch/Pitch-Bend. |
-| S9-02 LoopEdit | In-/Out-Editmodus aktivieren und Jog bewegen | Nur gewaehlte Grenze veraendert; Mindestlaenge/Trackgrenze gesichert; Moduswechsel gibt gehaltene Eingabe frei. |
+| S9-01 Search | SHIFT+Jog; SHIFT+Bend32/33 halten/loslassen, beide Tasten, SHIFT loslassen, Fokus/USB wechseln; A/B pausiert/laufend | Jog50ms/Einheit, gehaltene Suche8s/s additiv zum Softwareplayhead, >100ms Tick-Gap beendet ohne Nachholen. Pause bleibt Pause, EOF stoppt; kein versehentliches Scratch/Bend. Native Hoer-/Latenzprobe noetig. |
+| S9-02 LoopEdit | AUTO JOG Off/In/Out; bei aktivem Loop Hardware IN/OUT druecken, beruehren/drehen; AUTO verlassen und Source/Transport wechseln | Edit hat Vorrang vor SHIFT, nur gewaehlte Grenze1ms/Einheit, Sample-Rundung und mindestens ein Frame. Aktiver ausgeschlossener Playhead geht zu In; sonst Transport erhalten. Modus im Caption, unmittelbare Freigabe bei Panelwechsel; Slot-Speichern explizit. |
 | S10-01 Split | CueB/MasterA, Split ein/aus, Mono-/Stereo-Tracks | Split: Cue mono links, Master mono rechts; aus: vorhandener Cue/Master-Mix; MASTER selbst unveraendert. |
 | S10-02 Meter | Fader unten/oben, Cue ein/aus, Deck pausiert/laufend | LEDs folgen dokumentierter Pre-/Post-Fader-Politik, nicht MASTER-Hardwarepegel; kein stale Clip/Stillstand. |
 | S10-03 Profile | Split speichern, Neustart und Geraetewechsel2/4Kanaele | Profil korrekt wiederhergestellt; Konflikte/fehlendes Cuepaar explizit statt falscher Ausgabe. |

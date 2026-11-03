@@ -35,12 +35,12 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 | 25 / 10 | SHIFT+PLAY: Stutter | **App fehlt.** Wiederholtes Starten am zuletzt gesetzten temporaeren Cue; Note4 wird ignoriert. |
 | 25 / 11 | Vier Hot-Cue-Pads / SHIFT: loeschen | **MIDI fehlt.** Acht persistente App-Slots und Preview sind vorhanden, physische vier Pads haben bislang nur LED-Feedback. Pad1-4 auf Slots1-4 abbilden; Slots5-8 nicht versteckt erfinden. |
 | 25 / 12 | Pad-Modus | **App/MIDI fehlt.** Kein Moduswechsel fuer die Controller-Pads. Das Handbuch nennt erweiterte Serato-DJ-Modi, aber keine abschliessende Modusliste: Roll/Slicer usw. sind hier keine bereits spezifizierten Anforderungen. |
-| 25 / 13 | Jog zur Loop-In/Out-Bearbeitung | **App/MIDI fehlt.** Loop-Grenzen existieren; ein expliziter In-/Out-Editmodus mit Jog-Steuerung fehlt. |
-| 25 / 13 | SHIFT+Jog: schnelle Tracknavigation | **MIDI/Verhalten fehlt.** Normales Jog/Scratch funktioniert; Modifier-basierte schnelle Suche fehlt. |
+| 25 / 13 | Jog zur Loop-In/Out-Bearbeitung | **S9 implementiert.** AUTO-Panel waehlt Off/In/Out; Hardware In/Out schaltet Edit bei aktivem Loop. 1ms/Einheit, Samplegrenzen und mindestens ein Frame; native Abnahme offen. |
+| 25 / 13 | SHIFT+Jog: schnelle Tracknavigation | **S9 implementiert.** 50ms Quellzeit/Einheit, Grenzen und Play/Pause erhalten; Scratch-Besitz und Modifier-Freigabe gesichert. Native Sensitivitaet offen. |
 | 25 / 14 | SHIFT+VINYL: Censor | **App fehlt.** Rueckwaertswiedergabe mit parallel weiterlaufender normaler Zeitlinie und Rueckkehr auf deren Position beim Loslassen. Manuelles Scratchen ist kein Censor. |
 | 25 / 15 | SHIFT+KEY LOCK: Pitch-Bereich | **MIDI fehlt.** App-Pitchbereiche vorhanden; Shift-Note14 fehlt. |
 | 25 / 16 | Pitch-Bend -/+ | **MIDI fehlt.** Vorhandenen momentanen Nudge an Note12/11 mit Release anbinden. |
-| 25 / 16 | SHIFT+Pitch-Bend: Rueck-/Vorspulen | **App/MIDI teilweise.** Seek ist vorhanden; gehaltene, begrenzte Schnellnavigation mit Note32/33 fehlt. Geschwindigkeit und Freigabeverhalten sind vor dem Slice festzulegen. |
+| 25 / 16 | SHIFT+Pitch-Bend: Rueck-/Vorspulen | **S9 implementiert.** Note32/33 mit Release, globales SHIFT erforderlich, 8s Quellverschiebung pro Sekunde am Steuerthread; Gap ueber100ms beendet ohne Nachholsprung. Kein kontinuierlicher Reverse-DSP. |
 | 25 / 17 | Hochaufloesender Pitch-Fader | **MIDI fehlt.** App-Pitchsteuerung vorhanden; zusammengehoerige CC41 MSB / CC9 LSB noch nicht verarbeitet. Pickup nach GUI-/Bereichswechsel fehlt. |
 | 25 / 18-20 | Drei unabhaengige FX und Auswahl | **Teilweise, derzeit abweichend.** Ein Delay je Deck. Die drei Regler steuern dessen Wet/Feedback/Zeit, nicht drei FX-Pegel. FX2/FX3-Tasten und Shift-Auswahl fehlen. Die historischen Pakete FX1/FX2/FX3 im Migrationsplan sind keine drei Effektslots. |
 | 25 / 19,21 | FX-Beats, Tap-Tempo, BPM-Reset | **App/MIDI fehlt.** BEATS aendert aktuell Delayzeit in 10-ms-Schritten. Musikalische Beat-Unterteilungen, Tap-Zeitbasis und Halten-zum-Reset fehlen. |
@@ -128,7 +128,7 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S6 Browse und normales LOAD | **Implementiert:** Encoder normal/zehnfach, Tracks/Crates per Druck, Back zu Crates, Panel zyklisch durch App-Librarytabs; LOAD A/B. | Seitenuebergreifende Auswahl/Queue, sichtbare Zielzeile, Editor-/Suchfokus, Revisionwechsel und Busy/Playing/Missing-Fehler automatisiert. Native Bibliotheksnavigation offen. |
 | S7 Instant Doubles | **Implementiert:** zwei aufeinanderfolgende LOAD auf dasselbe Ziel bis350ms; erster normaler LOAD sofort, eigener Ladejob beim erfolgreichen Klonen verworfen. Shared PCM/Keylock, Quellposition/Basistempo/Grid/Playzustand; Ziel pausiert erforderlich. | A/B, Grenzzeit, Unterbrechung, Quelle/Zielwechsel, spaete Ladeergebnisse, Keylock-Pitch und Render-Allokationen automatisiert. Ziel-Loops/TempCue zurueckgesetzt, Mixer/EQ/FX erhalten; Konflikte abgewiesen. Vertrag im GUI-Inventar, native Abnahme offen. |
 | S8 Prepare-Queue | **Implementiert:** eigener Prep-Queue-Tab, Note27/16, Deduplizierung und kuratierte Reihenfolge bis5000IDs; Remove/Up/Down, SQLite17 und Delta-/Retry-Persistenz. | Reihenfolge/Suche, neue Aenderungen nach Save-Ack, Migration16, Rollback/Retry, Missing/Relocation, Neustart und GUI-/MIDI-Isolation automatisiert. Kein Analyse-/Autoplay-Start; native Bedienabnahme offen. |
-| S9 Erweiterte Jog-Navigation | SHIFT-Suche, gehaltenes Vor-/Zurueckspulen und Loop-In/Out-Editmodus. S2/S3. | Anfang/EOF, Geschwindigkeit/Modusprioritaet, Release/Modifierwechsel, Loops Mindestlaenge, Sourcewechsel und Scratch-Konflikte. |
+| S9 Erweiterte Jog-Navigation | **Implementiert:** SHIFT-Jog50ms/Einheit, gehaltene Suche8s/s, Loop-Jog1ms/Einheit mit explizitem Off/In/Out. | Grenzen/ein Frame, Stereo-PCM, Play/Pause/A-B, Releases/Opposition/100ms-Gap, Quell-/Renderer-/Transportwechsel, GUI-Modus/Geometrie und Maus-Besitz automatisiert. Native Hoer-/Haptik-/Latenzabnahme offen. |
 | S10 Split Cue und Meterpolitik | Mono-Cue links/Mono-Master rechts sowie handbuchgerechte Hardwaremeter. | Stereo-/Mono-Summen und Pegel, Clip, Cue/Fader-Kombinationen und MASTER-Isolation; Mehrkanalrouting, gespeicherter Split-Zustand mit Profilmigration, native Kopfhoererprobe. |
 | S11 Censor | Reverse mit separater normaler Zeitlinie, S2/S5/S9. | Samplegenauer Reverse, Rueckkehrzeit bei verschiedenen Tempi, Pause/EOF/Loop/Sync/Keylock, Release/Disconnect; Allokations-/Lockfreiheit und Callback-Frist messen. |
 | S12 Musikalische FX-Zeitbasis | Beat-Unterteilungen, Tap und Hold-Reset; bestehendes Delay erhalten. | BPM/Tempo- und Gridwechsel, Tap-Ausreisser/Timeout, Rampen, Persistenz; keine Klicks oder unbeschraenkten Echtzeitpuffer. |
@@ -140,7 +140,7 @@ Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
 autorisierte Fallback: S2-S6 selbst fertigstellen. Separat wurde S7 mit vom
 Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8 folgt als eigener Queue-Slice.
-S9-S15 bleiben offen; der
+S9 ergaenzt Navigation und Loop-Jog; S10-S15 bleiben offen. Der
 Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits

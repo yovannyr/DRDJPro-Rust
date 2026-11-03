@@ -19,6 +19,12 @@ pub enum DeckId {
     A,
     B,
 }
+/// Boundary selected for source-frame loop adjustment on the control plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopEdge {
+    In,
+    Out,
+}
 impl DeckId {
     fn index(self) -> usize {
         match self {
@@ -1215,6 +1221,15 @@ impl DualDeckEngine {
             .as_ref()
             .map(|r| r.command_version())
     }
+    /// Weak identity distinguishes replacement renderers even when their command
+    /// counters restart and immutable track data is shared.
+    pub(crate) fn renderer_token(&self, id: DeckId) -> Option<std::sync::Weak<RenderControl>> {
+        self.decks[id.index()]
+            .borrow()
+            .render
+            .as_ref()
+            .map(Arc::downgrade)
+    }
     pub fn control_now(&self) -> std::time::Instant {
         (self.control_clock)()
     }
@@ -1396,6 +1411,50 @@ impl DualDeckEngine {
         Ok(())
     }
     // Manual-loop commands run on the control plane.
+    /// Move one boundary by 1ms per relative unit (at least one source frame).
+    /// Clamp to a nonempty loop and preserve transport. An active playhead excluded
+    /// by the new bounds returns to In; updates reuse the existing renderer.
+    pub fn adjust_loop_edge(&self, id: DeckId, edge: LoopEdge, steps: i32) -> Result<(), String> {
+        if steps == 0 || !(-64..=63).contains(&steps) {
+            return Err("Invalid loop jog movement".into());
+        }
+        if self.output_failed() || self.platter_touched(id) {
+            return Err("Release scratch and restore audio before editing a loop".into());
+        }
+        let (region, active, frame, frames, rate) = {
+            let deck = self.decks[id.index()].borrow();
+            let track = deck.track.as_ref().ok_or("Load a track first")?;
+            if deck.nudge != 0 || deck.sync_factor != 1. {
+                return Err("Release nudge and Sync before editing a loop".into());
+            }
+            (
+                deck.loop_region.ok_or("Set valid Loop In/Out first")?,
+                deck.loop_active,
+                deck.render.as_ref().unwrap().frame(),
+                track.samples.frames(),
+                track.samples.sample_rate(),
+            )
+        };
+        let delta = ((i128::from(steps.abs()) * i128::from(rate) + 500) / 1000).max(1)
+            * i128::from(steps.signum());
+        let next = match edge {
+            LoopEdge::In => FrameLoop {
+                start: (region.start as i128 + delta).clamp(0, region.end as i128 - 1) as usize,
+                end: region.end,
+            },
+            LoopEdge::Out => FrameLoop {
+                start: region.start,
+                end: (region.end as i128 + delta).clamp(region.start as i128 + 1, frames as i128)
+                    as usize,
+            },
+        };
+        FrameLoop::new(next.start, next.end, frames)?;
+        if next != region {
+            let seek = (active && (frame < next.start || frame >= next.end)).then_some(next.start);
+            self.apply_loop_region(id, next, active, seek)?;
+        }
+        Ok(())
+    }
     pub fn set_loop_in(&self, id: DeckId, position: Duration) -> Result<(), String> {
         let snapshot = self.snapshot(id);
         let rate = self.decks[id.index()]
@@ -1931,6 +1990,89 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn advanced_navigation_loop_jog_clamps_frames_preserves_transport_and_renders_new_region() {
+        let data: Vec<_> = (0..1000)
+            .flat_map(|i| [(i * 10) as i16, -(i * 10) as i16])
+            .collect();
+        let file = crate::test_support::wav_samples(&data, 1000, 2);
+        let (mixer, mut output) = rodio::mixer::mixer(2, 1000);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 1000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            crossfader: 0.,
+            channel_a: 1.,
+            channel_b: 0.,
+        });
+        engine
+            .restore_loop(
+                DeckId::A,
+                Duration::from_millis(100),
+                Duration::from_millis(200),
+            )
+            .unwrap();
+        let token = engine.renderer_token(DeckId::A).unwrap();
+        engine
+            .adjust_loop_edge(DeckId::A, LoopEdge::In, 63)
+            .unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(163))
+        );
+        engine
+            .adjust_loop_edge(DeckId::A, LoopEdge::Out, -64)
+            .unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(164))
+        );
+        engine
+            .adjust_loop_edge(DeckId::A, LoopEdge::In, 63)
+            .unwrap();
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(163))
+        );
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::A).loop_active);
+        engine.reloop(DeckId::A).unwrap();
+        engine.play(DeckId::A);
+        // Collapse to a single source frame. Both stereo channels must loop there.
+        engine
+            .adjust_loop_edge(DeckId::A, LoopEdge::Out, -64)
+            .unwrap();
+        for _ in 0..20 {
+            assert!((output.next().unwrap() - 1630. / 32768.).abs() < 1e-6);
+            assert!((output.next().unwrap() + 1630. / 32768.).abs() < 1e-6);
+        }
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::A).loop_active);
+        assert!(token.ptr_eq(&engine.renderer_token(DeckId::A).unwrap()));
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::ZERO);
+        for _ in 0..20 {
+            engine
+                .adjust_loop_edge(DeckId::A, LoopEdge::Out, 63)
+                .unwrap();
+        }
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_secs(1))
+        );
+        for _ in 0..4 {
+            engine
+                .adjust_loop_edge(DeckId::A, LoopEdge::In, -64)
+                .unwrap();
+        }
+        assert_eq!(engine.snapshot(DeckId::A).loop_in, Some(Duration::ZERO));
+        assert!(engine
+            .adjust_loop_edge(DeckId::A, LoopEdge::Out, 64)
+            .is_err());
+        engine.platter_touch(DeckId::A, true).unwrap();
+        let before = engine.snapshot(DeckId::A);
+        assert!(engine.adjust_loop_edge(DeckId::A, LoopEdge::In, 1).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).loop_in, before.loop_in);
+    }
     #[test]
     fn instant_double_shares_pcm_resets_same_source_state_and_preserves_source_and_mix() {
         for target in [DeckId::A, DeckId::B] {

@@ -25,6 +25,7 @@ pub enum Command {
     Shift(bool),
     PitchRange(usize),
     PitchBend(usize, i8, bool),
+    SeekHold(usize, i8, bool),
     PitchMsb(usize, u8),
     PitchLsb(usize, u8),
     PitchFader(usize, u16),
@@ -94,6 +95,11 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
             channel as usize,
             if bytes[1] == 11 { 1 } else { -1 },
             false,
+        )),
+        (status @ (0x90 | 0x80), 0..=1, note @ 32..=33, value) => Some(Command::SeekHold(
+            channel as usize,
+            if note == 32 { -1 } else { 1 },
+            status == 0x90 && value != 0,
         )),
         (0xb0, 0..=1, 41, value) => Some(Command::PitchMsb(channel as usize, value)),
         (0xb0, 0..=1, 9, value) => Some(Command::PitchLsb(channel as usize, value)),
@@ -837,7 +843,16 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
             ui.invoke_mixer_changed();
         }
 
-        Command::Shift(held) => ui.set_controller_shift(held),
+        Command::Shift(held) => {
+            let changed = ui.get_controller_shift() != held;
+            ui.set_controller_shift(held);
+            if changed {
+                ui.invoke_controller_navigation_shift(held);
+            }
+        }
+        Command::SeekHold(deck, direction, held) => {
+            ui.invoke_controller_seek_hold(deck as i32, i32::from(direction), held)
+        }
         Command::PitchRange(0) => ui.invoke_controller_pitch_range_left(),
         Command::PitchRange(_) => ui.invoke_controller_pitch_range_right(),
         Command::PitchBend(0, direction, held) => {
@@ -868,10 +883,8 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
             (1, 52) => ui.invoke_half_loop_right(),
             (0, 53) => ui.invoke_double_loop_left(),
             (1, 53) => ui.invoke_double_loop_right(),
-            (0, 56) => ui.invoke_loop_in_left(),
-            (1, 56) => ui.invoke_loop_in_right(),
-            (0, 57) => ui.invoke_loop_out_left(),
-            (1, 57) => ui.invoke_loop_out_right(),
+            (_, 56) => ui.invoke_controller_loop_boundary(deck as i32, 1),
+            (_, 57) => ui.invoke_controller_loop_boundary(deck as i32, 2),
             (_, 63) => ui.invoke_controller_four_bar_loop(deck as i32),
             _ => ui.set_status("Invalid MC4000 loop command".into()),
         },
@@ -879,6 +892,27 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn advanced_navigation_search_decode_preserves_both_release_forms_and_channels() {
+        for deck in 0..2 {
+            for (note, direction) in [(32, -1), (33, 1)] {
+                assert_eq!(
+                    decode(&[0x90 | deck, note, 127]),
+                    Some(Command::SeekHold(deck as usize, direction, true))
+                );
+                assert_eq!(
+                    decode(&[0x90 | deck, note, 0]),
+                    Some(Command::SeekHold(deck as usize, direction, false))
+                );
+                assert_eq!(
+                    decode(&[0x80 | deck, note, 64]),
+                    Some(Command::SeekHold(deck as usize, direction, false))
+                );
+            }
+        }
+        assert_eq!(decode(&[0x9f, 32, 127]), None);
+        assert_eq!(decode(&[0xb0, 33, 127]), None);
+    }
     use super::*;
     #[test]
     fn pad_decode_release_shift_and_palette() {

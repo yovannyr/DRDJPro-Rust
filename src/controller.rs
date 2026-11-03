@@ -1,6 +1,6 @@
 //! GUI control plane with injectable file selection and one bounded load worker.
 use crate::{
-    playback::{DeckId, DualDeckEngine, MixerLevels, PreparedTrack},
+    playback::{DeckId, DualDeckEngine, LoopEdge, MixerLevels, PreparedTrack},
     AppWindow,
 };
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -32,6 +32,22 @@ struct ControllerLoadPress {
 #[derive(Clone, Copy)]
 struct PointerPlatter {
     angle: Option<f64>,
+}
+struct NavigationOwner {
+    renderer: std::sync::Weak<crate::deck_render::RenderControl>,
+    source: Arc<crate::waveform::DetailPeaks>,
+    engine: std::rc::Weak<DualDeckEngine>,
+    version: u64,
+    bounds: (Option<Duration>, Option<Duration>, bool),
+}
+struct SeekHoldSession {
+    owner: NavigationOwner,
+    held: [bool; 2],
+    last: std::time::Instant,
+}
+struct LoopJogSession {
+    owner: NavigationOwner,
+    edge: LoopEdge,
 }
 #[derive(Default)]
 struct AnalysisBatch {
@@ -359,6 +375,8 @@ pub struct AudioController {
     keylock_jobs: RefCell<[Option<KeylockJob>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
     platter_holds: Cell<[bool; 2]>,
+    seek_holds: RefCell<[Option<SeekHoldSession>; 2]>,
+    loop_jogs: RefCell<[Option<LoopJogSession>; 2]>,
     pitch_pickup: Cell<[bool; 2]>,
     pitch_last_raw: Cell<[Option<u16>; 2]>,
     pointer_platters: Cell<[Option<PointerPlatter>; 2]>,
@@ -523,6 +541,8 @@ impl AudioController {
             keylock_next: Cell::new([None, None]),
             nudges: RefCell::new([None, None]),
             platter_holds: Cell::new([false; 2]),
+            seek_holds: RefCell::new([None, None]),
+            loop_jogs: RefCell::new([None, None]),
             pitch_pickup: Cell::new([false; 2]),
             pitch_last_raw: Cell::new([None; 2]),
             pointer_platters: Cell::new([None; 2]),
@@ -1994,6 +2014,8 @@ impl AudioController {
             return Err("Platter unavailable during loading".into());
         }
         self.cancel_temporary_hold(id)?;
+        self.seek_holds.borrow_mut()[Self::grid_index(id)] = None;
+        self.loop_jogs.borrow_mut()[Self::grid_index(id)] = None;
         self.stop_sync();
         self.cancel_nudge(id);
         let index = Self::grid_index(id);
@@ -2061,7 +2083,282 @@ impl AudioController {
         self.pointer_platters.set(pointers);
         Ok(())
     }
+    fn navigation_ready(&self, id: DeckId) -> Result<(), String> {
+        let index = Self::grid_index(id);
+        if !self.can_control_deck(id)
+            || self.engine.borrow().output_failed()
+            || self.pending_device_switch.borrow().is_some()
+            || self.pending_pitch.borrow()[index].is_some()
+            || self.keylock_jobs.borrow()[index].is_some()
+            || self.keylock_next.get()[index].is_some()
+            || self.pending_sync.borrow().is_some()
+        {
+            return Err("Finish loading and tempo preparation before navigating".into());
+        }
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        if ui.get_controller_editor_open() {
+            return Err("Finish editing before navigating".into());
+        }
+        if self.pointer_platters.get()[index].is_some()
+            || self.platter_holds.get()[index]
+            || self.engine.borrow().platter_touched(id)
+            || self.hot_cue_holds.borrow()[index].is_some()
+            || self.temporary_cues.borrow()[index]
+                .as_ref()
+                .is_some_and(|cue| cue.inputs != 0)
+            || self.nudges.borrow()[index].is_some()
+        {
+            return Err("Release scratch, cue and bend holds before navigating".into());
+        }
+        if !self.engine.borrow().snapshot(id).loaded {
+            return Err("Load a track first".into());
+        }
+        Ok(())
+    }
+    fn navigation_owner(&self, id: DeckId) -> Result<NavigationOwner, String> {
+        let engine = self.engine.borrow();
+        let snapshot = engine.snapshot(id);
+        Ok(NavigationOwner {
+            renderer: engine.renderer_token(id).ok_or("Missing renderer")?,
+            source: snapshot.detail.ok_or("Load a track first")?,
+            engine: Rc::downgrade(&engine),
+            version: engine.command_version(id).ok_or("Missing renderer")?,
+            bounds: (snapshot.loop_in, snapshot.loop_out, snapshot.loop_active),
+        })
+    }
+    fn navigation_valid(&self, id: DeckId, owner: &NavigationOwner) -> bool {
+        if self.navigation_ready(id).is_err() {
+            return false;
+        }
+        let engine = self.engine.borrow();
+        let snapshot = engine.snapshot(id);
+        owner
+            .engine
+            .upgrade()
+            .is_some_and(|old| Rc::ptr_eq(&old, &engine))
+            && engine
+                .renderer_token(id)
+                .is_some_and(|current| current.ptr_eq(&owner.renderer))
+            && engine.command_version(id) == Some(owner.version)
+            && snapshot
+                .detail
+                .as_ref()
+                .is_some_and(|source| Arc::ptr_eq(source, &owner.source))
+            && (snapshot.loop_in, snapshot.loop_out, snapshot.loop_active) == owner.bounds
+    }
+    fn prepare_navigation(&self, id: DeckId) {
+        self.stop_sync();
+        self.cancel_nudge(id);
+        let mut bends = self.jog_bends.get();
+        bends[Self::grid_index(id)] = None;
+        self.jog_bends.set(bends);
+        self.engine.borrow().cancel_scheduled_cue(id);
+    }
+    fn navigate_seconds(&self, id: DeckId, delta: f64) -> Result<bool, String> {
+        self.navigation_ready(id)?;
+        self.prepare_navigation(id);
+        self.engine.borrow().exit_loop(id)?;
+        let snapshot = self.engine.borrow().snapshot(id);
+        let seconds =
+            (snapshot.position.as_secs_f64() + delta).clamp(0., snapshot.duration.as_secs_f64());
+        self.engine
+            .borrow()
+            .seek_position(id, Duration::from_secs_f64(seconds))?;
+        Ok(seconds > 0. && seconds < snapshot.duration.as_secs_f64())
+    }
+    fn advance_seek_hold(&self, id: DeckId, now: std::time::Instant) {
+        let index = Self::grid_index(id);
+        let Some(mut session) = self.seek_holds.borrow_mut()[index].take() else {
+            return;
+        };
+        if !self.navigation_valid(id, &session.owner)
+            || self
+                .ui
+                .upgrade()
+                .is_none_or(|ui| !ui.get_controller_shift() || !ui.get_mc4000_connected())
+        {
+            return;
+        }
+        let Some(elapsed) = now
+            .checked_duration_since(session.last)
+            .filter(|elapsed| *elapsed <= Duration::from_millis(100))
+        else {
+            return;
+        };
+        session.last = now;
+        let direction = i32::from(session.held[1]) - i32::from(session.held[0]);
+        if direction != 0 && !elapsed.is_zero() {
+            match self.navigate_seconds(id, f64::from(direction) * 8. * elapsed.as_secs_f64()) {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    if let Some(ui) = self.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
+                    return;
+                }
+            }
+            let Ok(owner) = self.navigation_owner(id) else {
+                return;
+            };
+            session.owner = owner;
+        }
+        self.seek_holds.borrow_mut()[index] = Some(session);
+    }
+    fn seek_hold(&self, id: DeckId, direction: i32, held: bool) -> Result<(), String> {
+        if direction != -1 && direction != 1 {
+            return Err("Invalid search direction".into());
+        }
+        let index = Self::grid_index(id);
+        let button = usize::from(direction > 0);
+        let now = self.engine.borrow().control_now();
+        self.advance_seek_hold(id, now);
+        if !held {
+            let mut sessions = self.seek_holds.borrow_mut();
+            if let Some(session) = sessions[index].as_mut() {
+                session.held[button] = false;
+                if !session.held.iter().any(|held| *held) {
+                    sessions[index] = None;
+                }
+            }
+            return Ok(());
+        }
+        self.navigation_ready(id)?;
+        if self
+            .ui
+            .upgrade()
+            .is_none_or(|ui| !ui.get_controller_shift())
+        {
+            return Err("Hold SHIFT before fast search".into());
+        }
+        self.loop_jogs.borrow_mut()[index] = None;
+        if self.seek_holds.borrow()[index].is_none() {
+            self.prepare_navigation(id);
+            self.engine.borrow().exit_loop(id)?;
+            self.seek_holds.borrow_mut()[index] = Some(SeekHoldSession {
+                owner: self.navigation_owner(id)?,
+                held: [false; 2],
+                last: now,
+            });
+        }
+        self.seek_holds.borrow_mut()[index].as_mut().unwrap().held[button] = true;
+        Ok(())
+    }
+    fn set_loop_jog(&self, id: DeckId, mode: i32) -> Result<(), String> {
+        let index = Self::grid_index(id);
+        if mode == 0 {
+            self.seek_holds.borrow_mut()[index] = None;
+            self.loop_jogs.borrow_mut()[index] = None;
+            return Ok(());
+        }
+        let edge = match mode {
+            1 => LoopEdge::In,
+            2 => LoopEdge::Out,
+            _ => return Err("Invalid loop jog mode".into()),
+        };
+        self.navigation_ready(id)?;
+        if self.engine.borrow().snapshot(id).loop_out.is_none() {
+            return Err("Set valid Loop In/Out first".into());
+        }
+        self.prepare_navigation(id);
+        self.seek_holds.borrow_mut()[index] = None;
+        self.loop_jogs.borrow_mut()[index] = Some(LoopJogSession {
+            owner: self.navigation_owner(id)?,
+            edge,
+        });
+        Ok(())
+    }
+    fn maintain_navigation(&self) {
+        let now = self.engine.borrow().control_now();
+        for id in [DeckId::A, DeckId::B] {
+            let index = Self::grid_index(id);
+            self.advance_seek_hold(id, now);
+            let stale = self
+                .ui
+                .upgrade()
+                .is_none_or(|ui| !ui.get_mc4000_connected())
+                || self.loop_jogs.borrow()[index]
+                    .as_ref()
+                    .is_some_and(|session| !self.navigation_valid(id, &session.owner));
+            if stale {
+                self.loop_jogs.borrow_mut()[index] = None;
+            }
+        }
+    }
     fn wire_platters(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_controller_navigation_shift(move |_| {
+            if let Some(c) = weak.upgrade() {
+                *c.seek_holds.borrow_mut() = [None, None];
+                for id in [DeckId::A, DeckId::B] {
+                    let index = Self::grid_index(id);
+                    if c.pointer_platters.get()[index].is_none() && c.platter_holds.get()[index] {
+                        c.release_platter(id);
+                        let mut cancelled = c.platter_cancelled.get();
+                        cancelled[index] = true;
+                        c.platter_cancelled.set(cancelled);
+                    }
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_seek_hold(move |deck, direction, held| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if let Err(error) = c.seek_hold(id, direction, held) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_loop_jog(move |deck, mode| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if let Err(error) = c.set_loop_jog(id, mode) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_loop_boundary(move |deck, mode| {
+            let Some(c) = weak.upgrade() else { return };
+            let Some(ui) = c.ui.upgrade() else { return };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if c.engine.borrow().snapshot(id).loop_active {
+                let current = c.loop_jogs.borrow()[Self::grid_index(id)]
+                    .as_ref()
+                    .map(|session| if session.edge == LoopEdge::In { 1 } else { 2 });
+                if let Err(error) = c.set_loop_jog(id, if current == Some(mode) { 0 } else { mode })
+                {
+                    ui.set_status(error.into());
+                }
+            } else {
+                match (id, mode) {
+                    (DeckId::A, 1) => ui.invoke_loop_in_left(),
+                    (DeckId::A, 2) => ui.invoke_loop_out_left(),
+                    (DeckId::B, 1) => ui.invoke_loop_in_right(),
+                    (DeckId::B, 2) => ui.invoke_loop_out_right(),
+                    _ => {}
+                }
+            }
+            c.refresh();
+        });
         let weak = Rc::downgrade(self);
         ui.on_virtual_platter_pointer(move |deck, action, x, y| {
             let Some(c) = weak.upgrade() else {
@@ -2104,6 +2401,16 @@ impl AudioController {
                 if !c.can_control_deck(id) {
                     return Err("Platter unavailable during loading".into());
                 }
+                let index = Self::grid_index(id);
+                if c.ui.upgrade().is_some_and(|ui| ui.get_controller_shift())
+                    || c.loop_jogs.borrow()[index].is_some()
+                    || c.seek_holds.borrow()[index].is_some()
+                {
+                    let mut cancelled = c.platter_cancelled.get();
+                    cancelled[index] = true;
+                    c.platter_cancelled.set(cancelled);
+                    return Ok(());
+                }
                 if !c.vinyl_modes.get()[Self::grid_index(id)] {
                     return Ok(());
                 }
@@ -2140,6 +2447,27 @@ impl AudioController {
                 }
                 if !(-64..=63).contains(&steps) || steps == 0 {
                     return Err("Invalid jog movement".into());
+                }
+                let index = Self::grid_index(id);
+                let edit = c.loop_jogs.borrow()[index]
+                    .as_ref()
+                    .map(|session| (session.edge, c.navigation_valid(id, &session.owner)));
+                if let Some((edge, valid)) = edit {
+                    if !valid {
+                        c.loop_jogs.borrow_mut()[index] = None;
+                        return Err("Loop jog transport changed; select the mode again".into());
+                    }
+                    c.engine.borrow().adjust_loop_edge(id, edge, steps)?;
+                    c.loop_jogs.borrow_mut()[index] = Some(LoopJogSession {
+                        owner: c.navigation_owner(id)?,
+                        edge,
+                    });
+                    return Ok(());
+                }
+                if c.ui.upgrade().is_some_and(|ui| ui.get_controller_shift()) {
+                    c.seek_holds.borrow_mut()[index] = None;
+                    c.navigate_seconds(id, f64::from(steps) * 0.05)?;
+                    return Ok(());
                 }
                 if c.platter_cancelled.get()[Self::grid_index(id)] {
                     return Err("Platter transport changed; release and touch again".into());
@@ -2259,6 +2587,11 @@ impl AudioController {
     /// controller disconnects, reconnects, or the bounded MIDI queue overflows so no stale
     /// hold persists. GUI-held nudges are left untouched and remain effective.
     pub fn mc4000_release_holds(&self) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_controller_shift(false);
+        }
+        *self.seek_holds.borrow_mut() = [None, None];
+        *self.loop_jogs.borrow_mut() = [None, None];
         self.controller_load_press.borrow_mut().take();
         self.disarm_pitch_pickup();
         self.controller_browse_pending.set(0);
@@ -3350,6 +3683,11 @@ impl AudioController {
     }
     #[cfg(any(target_os = "windows", test))]
     pub(crate) fn handle_window_deactivated(&self) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_controller_shift(false);
+        }
+        *self.seek_holds.borrow_mut() = [None, None];
+        *self.loop_jogs.borrow_mut() = [None, None];
         for id in [DeckId::A, DeckId::B] {
             if let Err(error) = self.cancel_temporary_hold(id) {
                 if let Some(ui) = self.ui.upgrade() {
@@ -5664,6 +6002,7 @@ impl AudioController {
         self.handle_output_failure();
         self.poll_device_scan();
         self.engine.borrow().collect_retired();
+        self.maintain_navigation();
         for id in [DeckId::A, DeckId::B] {
             let index = Self::grid_index(id);
             let disconnected = self
@@ -7256,7 +7595,23 @@ impl AudioController {
                 (Some(start), None) => format!("IN {:.3} s", start.as_secs_f64()),
                 _ => "No loop".into(),
             };
-            let caption = format!("{}{}", if s.loop_active { "ACTIVE · " } else { "" }, bounds);
+            let jog_mode = self.loop_jogs.borrow()[Self::grid_index(id)]
+                .as_ref()
+                .filter(|session| self.navigation_valid(id, &session.owner))
+                .map_or(
+                    0,
+                    |session| if session.edge == LoopEdge::In { 1 } else { 2 },
+                );
+            let caption = format!(
+                "{}{}{}",
+                match jog_mode {
+                    1 => "EDIT IN · ",
+                    2 => "EDIT OUT · ",
+                    _ => "",
+                },
+                if s.loop_active { "ACTIVE · " } else { "" },
+                bounds
+            );
             let loop_range = loop_overlay(
                 s.loop_in,
                 s.loop_out,
@@ -7274,6 +7629,7 @@ impl AudioController {
             match id {
                 DeckId::A => {
                     ui.set_left_loop_range(loop_range);
+                    ui.set_left_loop_jog_mode(jog_mode);
                     ui.set_left_loop_caption(caption.into());
                     ui.set_left_loop_has_in(s.loop_in.is_some());
                     ui.set_left_loop_ready(s.loop_out.is_some());
@@ -7281,6 +7637,7 @@ impl AudioController {
                 }
                 DeckId::B => {
                     ui.set_right_loop_range(loop_range);
+                    ui.set_right_loop_jog_mode(jog_mode);
                     ui.set_right_loop_caption(caption.into());
                     ui.set_right_loop_has_in(s.loop_in.is_some());
                     ui.set_right_loop_ready(s.loop_out.is_some());
@@ -7714,6 +8071,335 @@ fn precise_time(time: std::time::Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn advanced_navigation_shift_jog_held_search_bounds_opposition_and_timeout() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let clock = Rc::new(Cell::new(Instant::now()));
+        let read = Rc::clone(&clock);
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            1,
+            48000,
+            Box::new(move || read.get()),
+        ));
+        let file = wav_file(8192, 48000 * 20);
+        let track = PreparedTrack::open(file.path()).unwrap();
+        engine.try_install(DeckId::A, track.clone()).unwrap();
+        engine.try_install(DeckId::B, track).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.set_mc4000_connected(true);
+        let dispatch =
+            |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(5))
+            .unwrap();
+        dispatch([0x9f, 50, 127]);
+        dispatch([0x90, 6, 127]);
+        dispatch([0xb0, 6, 20]);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(6));
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x8f, 50, 0]);
+        dispatch([0xb0, 6, 1]);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(6));
+        dispatch([0x80, 6, 0]);
+        engine.play(DeckId::A);
+        dispatch([0x9f, 50, 127]);
+        dispatch([0xb0, 6, 108]);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(5));
+        assert!(engine.snapshot(DeckId::A).playing);
+        engine.pause(DeckId::A);
+        dispatch([0x90, 33, 127]);
+        dispatch([0x9f, 50, 127]); // Repeated SHIFT state is not a modifier change.
+        assert!(c.seek_holds.borrow()[0].is_some());
+        clock.set(clock.get() + Duration::from_millis(100));
+        c.tick();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(5800)
+        );
+        assert!(!engine.snapshot(DeckId::A).playing);
+        clock.set(clock.get() + Duration::from_millis(100) + Duration::from_nanos(1));
+        c.tick();
+        assert!(c.seek_holds.borrow()[0].is_none());
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(5800)
+        );
+        dispatch([0x80, 33, 0]);
+        dispatch([0x90, 33, 127]);
+        clock.set(clock.get() - Duration::from_millis(1));
+        c.tick();
+        assert!(c.seek_holds.borrow()[0].is_none());
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(5800)
+        );
+        dispatch([0x90, 32, 127]);
+        dispatch([0x90, 33, 127]);
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.tick();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(5800)
+        );
+        dispatch([0x90, 33, 0]);
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.tick();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(5400)
+        );
+        dispatch([0x80, 32, 0]);
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.tick();
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(5400)
+        );
+        dispatch([0x90, 33, 127]);
+        dispatch([0x8f, 50, 0]);
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.tick();
+        assert!(c.seek_holds.borrow()[0].is_none());
+        assert_eq!(
+            engine.snapshot(DeckId::A).position,
+            Duration::from_millis(5400)
+        );
+        dispatch([0x9f, 50, 127]);
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(19900))
+            .unwrap();
+        dispatch([0x90, 33, 127]);
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(20));
+        assert!(c.seek_holds.borrow()[0].is_none());
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(10))
+            .unwrap();
+        dispatch([0xb0, 6, 64]);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+        assert_eq!(engine.snapshot(DeckId::B).position, Duration::ZERO);
+    }
+    #[test]
+    fn advanced_navigation_both_decks_cancel_on_transport_loading_and_source_changes() {
+        i_slint_backend_testing::init_no_event_loop();
+        for id in [DeckId::A, DeckId::B] {
+            let ui = AppWindow::new().unwrap();
+            let clock = Rc::new(Cell::new(Instant::now()));
+            let read = Rc::clone(&clock);
+            let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+            let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+                mixer,
+                1,
+                48000,
+                Box::new(move || read.get()),
+            ));
+            let file = wav_file(8192, 48000 * 10);
+            engine
+                .try_install(id, PreparedTrack::open(file.path()).unwrap())
+                .unwrap();
+            engine.seek_position(id, Duration::from_secs(5)).unwrap();
+            engine.set_speed(id, 1.04).unwrap();
+            let c = AudioController::wire(
+                &ui,
+                Rc::clone(&engine),
+                Arc::new(|| None),
+                Arc::new(|| None),
+            );
+            ui.set_mc4000_connected(true);
+            let channel = if id == DeckId::A { 0x90 } else { 0x91 };
+            let index = AudioController::grid_index(id);
+            let dispatch =
+                |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+            dispatch([0x9f, 50, 127]);
+            dispatch([channel, 33, 127]);
+            clock.set(clock.get() + Duration::from_millis(50));
+            c.tick();
+            assert_eq!(engine.snapshot(id).position, Duration::from_millis(5400));
+            dispatch([channel, 0, 127]); // PLAY changes ownership; no delayed search step.
+            clock.set(clock.get() + Duration::from_millis(50));
+            c.tick();
+            assert!(c.seek_holds.borrow()[index].is_none());
+            assert_eq!(engine.snapshot(id).position, Duration::from_millis(5400));
+            assert!(engine.snapshot(id).playing);
+            assert_eq!(engine.snapshot(id).requested_speed, 1.04);
+            dispatch([channel, 32, 127]);
+            let (_tx, rx) = mpsc::sync_channel(1);
+            *c.pending.borrow_mut() = Some((id, rx));
+            clock.set(clock.get() + Duration::from_millis(50));
+            c.tick();
+            assert!(c.seek_holds.borrow()[index].is_none());
+            assert_eq!(engine.snapshot(id).position, Duration::from_millis(5400));
+            c.pending.borrow_mut().take();
+            dispatch([channel, 32, 127]);
+            engine
+                .try_install(id, PreparedTrack::open(file.path()).unwrap())
+                .unwrap();
+            clock.set(clock.get() + Duration::from_millis(50));
+            c.tick();
+            assert!(c.seek_holds.borrow()[index].is_none());
+            assert_eq!(engine.snapshot(id).position, Duration::ZERO);
+        }
+    }
+    #[test]
+    fn advanced_navigation_gui_modes_geometry_and_mouse_ownership() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 10);
+        let track = PreparedTrack::open(file.path()).unwrap();
+        engine.try_install(DeckId::A, track.clone()).unwrap();
+        engine.try_install(DeckId::B, track).unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .restore_loop(id, Duration::from_secs(2), Duration::from_secs(4))
+                .unwrap();
+        }
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.set_mc4000_connected(true);
+        ui.show().unwrap();
+        for label in ["DECK A", "DECK B"] {
+            for _ in 0..2 {
+                control(&ui, &format!("{label} deck tools panel"))
+                    .invoke_accessible_default_action();
+            }
+        }
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for (index, label) in [(0, "DECK A"), (1, "DECK B")] {
+                let button = control(&ui, &format!("{label} loop jog edit mode"));
+                let p = button.absolute_position();
+                let s = button.size();
+                assert!(
+                    p.x >= 0.
+                        && p.y >= 0.
+                        && p.x + s.width <= width + 1.
+                        && p.y + s.height <= height + 1.
+                );
+                for mode in [1, 2, 0] {
+                    button.invoke_accessible_default_action();
+                    assert_eq!(
+                        if index == 0 {
+                            ui.get_left_loop_jog_mode()
+                        } else {
+                            ui.get_right_loop_jog_mode()
+                        },
+                        mode
+                    );
+                }
+            }
+        }
+        let button = control(&ui, "DECK A loop jog edit mode");
+        button.invoke_accessible_default_action();
+        assert!(ui.get_left_loop_caption().contains("EDIT IN"));
+        control(&ui, "DECK A deck tools panel").invoke_accessible_default_action();
+        assert_eq!(ui.get_left_loop_jog_mode(), 0);
+        c.pointer_platter(DeckId::A, 0, 24., 0.).unwrap();
+        let before = engine.snapshot(DeckId::A).position;
+        assert!(c.set_loop_jog(DeckId::A, 1).is_err());
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Shift(true));
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Jog(0, 63));
+        assert_eq!(engine.snapshot(DeckId::A).position, before);
+        assert!(engine.platter_touched(DeckId::A));
+        assert!(c.seek_hold(DeckId::A, 1, true).is_err());
+        c.pointer_platter(DeckId::A, 2, 24., 0.).unwrap();
+        assert!(!engine.platter_touched(DeckId::A));
+    }
+    #[test]
+    fn advanced_navigation_loop_modes_and_renderer_replacement_cancel_ownership() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let clock = Rc::new(Cell::new(Instant::now()));
+        let read = Rc::clone(&clock);
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            1,
+            48000,
+            Box::new(move || read.get()),
+        ));
+        let file = wav_file(8192, 48000 * 10);
+        let track = PreparedTrack::open(file.path()).unwrap();
+        engine.try_install(DeckId::A, track.clone()).unwrap();
+        engine.try_install(DeckId::B, track).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.set_mc4000_connected(true);
+        engine
+            .restore_loop(DeckId::A, Duration::from_secs(2), Duration::from_secs(4))
+            .unwrap();
+        engine.activate_loop(DeckId::A).unwrap();
+        let dispatch =
+            |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        dispatch([0x94, 56, 127]);
+        assert_eq!(ui.get_left_loop_jog_mode(), 1);
+        dispatch([0x90, 6, 127]);
+        dispatch([0xb0, 6, 10]);
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_in,
+            Some(Duration::from_millis(2010))
+        );
+        assert!(engine.snapshot(DeckId::A).loop_active);
+        assert!(!engine.platter_touched(DeckId::A));
+        dispatch([0x94, 57, 127]);
+        assert_eq!(ui.get_left_loop_jog_mode(), 2);
+        dispatch([0xb0, 6, 127]);
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(3999))
+        );
+        dispatch([0x94, 57, 127]);
+        assert_eq!(ui.get_left_loop_jog_mode(), 0);
+        let position = engine.snapshot(DeckId::A).position;
+        dispatch([0xb0, 6, 1]);
+        assert_eq!(engine.snapshot(DeckId::A).position, position);
+        dispatch([0x80, 6, 0]);
+        engine.exit_loop(DeckId::A).unwrap();
+        engine.instant_double(DeckId::A).unwrap();
+        dispatch([0x9f, 50, 127]);
+        dispatch([0x90, 33, 127]);
+        // Replace a renderer with the same shared PCM, bounds and command counter.
+        let version = engine.command_version(DeckId::A).unwrap();
+        engine.instant_double(DeckId::A).unwrap();
+        while engine.command_version(DeckId::A).unwrap() < version {
+            engine.cancel_scheduled_cue(DeckId::A);
+        }
+        assert_eq!(engine.command_version(DeckId::A), Some(version));
+        let before = engine.snapshot(DeckId::A).position;
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.tick();
+        assert!(c.seek_holds.borrow()[0].is_none());
+        assert_eq!(engine.snapshot(DeckId::A).position, before);
+        dispatch([0x90, 33, 127]);
+        c.handle_window_deactivated();
+        assert!(!ui.get_controller_shift());
+        assert!(c.seek_holds.borrow()[0].is_none());
+        dispatch([0x9f, 50, 127]);
+        dispatch([0x90, 33, 127]);
+        c.mc4000_release_holds();
+        assert!(!ui.get_controller_shift());
+        assert!(c.seek_holds.borrow()[0].is_none());
+        assert!(engine.snapshot(DeckId::B).loop_in.is_none());
+    }
     use super::*;
     use crate::test_support::{fixture, wav_file, TempFile};
     use i_slint_backend_testing::ElementHandle;

@@ -21,7 +21,9 @@ S7-Implementierung mit GPT-6.1 Sol. S8 liefert eine eigene persistente Prep Queu
 mit LoadPrep/OpenPrep, Entfernen und Reihenfolge, getrennt von der Analyse.
 SQLite17 migriert bestehende Bibliotheken; Missing/Relocation erhalten Track-IDs.
 Fuer die restlichen Slices entfaellt auf Nutzerwunsch der unabhaengige Review;
-Tests und finale Checks bleiben erforderlich. S9-S15 bleiben offen.
+Tests und finale Checks bleiben erforderlich. S9 ergaenzt SHIFT-Jog, gehaltene
+Suche und explizites Loop-Jog mit Grenzen und Eingabebesitz; Vertrag und
+native Abnahme im GUI-Inventar/Hardware-Testplan. S10-S15 bleiben offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 

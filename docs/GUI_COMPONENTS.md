@@ -1,5 +1,46 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S9: fast navigation and loop jog editing
+
+SHIFT+Jog seeks by 50ms of source time per relative MIDI unit (ten times the
+ordinary paused jog step). Shifted search notes32/33 hold backward/forward
+search while global SHIFT is held: each timely control tick adds 8 seconds of
+source displacement per elapsed second to the current software playhead.
+Normal playback advances between these discrete seeks; this is not continuous
+reverse DSP. Opposing held buttons cancel displacement. Pause remains paused;
+forward search at EOF pauses, and both boundaries clamp and end the hold.
+
+Release, a real SHIFT change, focus loss, MIDI recovery/overflow/disconnect,
+loading, changed source/renderer/transport/loop bounds, or a control gap over
+100ms cancels the held session. The 100ms boundary is inclusive; long/backward
+clock intervals cause no catch-up jump. This is a control-thread observation,
+not a device-latency deadline. Identical repeated SHIFT states are idempotent.
+Manual navigation cancels Sync, queued quantized cues and jog bend, and exits
+active loops while retaining their bounds. Pending tempo/device work, editors,
+cue/bend holds and scratch ownership reject navigation. SHIFT changes release
+hardware scratch on both decks, preserving play/pause intent; mouse ownership
+is retained. A touch ignored during navigation must release before ordinary
+touch-jog can resume. Explicit new inputs can acquire a new session.
+
+The AUTO tools panel's **JOG OFF / JOG IN / JOG OUT** button selects the loop
+boundary. Hardware Loop In/Out (channel5/6 notes56/57) toggle the respective
+edit mode while a loop is active; on inactive loops they retain their existing
+set-point behavior. The ordinary GUI IN/OUT buttons retain set-point semantics.
+Loop-edit Jog takes priority over SHIFT. Starting held search exits loop edit.
+The mode appears in the loop caption, and leaving AUTO cancels it immediately.
+
+Each loop-jog unit moves the selected edge by 1ms, rounded to source frames
+(at least one frame per movement). In stays before Out, Out stays within EOF,
+and the minimum loop is one source frame. An active playhead excluded by new
+bounds returns to In; other active positions and play/pause intent are retained.
+Inactive loops only update bounds. Save to a persistent loop slot explicitly;
+edit modes themselves are transient. Source/renderer identity, command version
+and bounds guard the session even when shared PCM is reused and command
+counters restart. No new DSP, render locks or audio-thread allocations; the
+existing renderer receives coherent seek/loop commands. Sensitivity and search
+rate are DrDJ defaults, not manufacturer-specified measurements. Native sound,
+end-to-end timing and hardware feel remain open.
+
 ## MC4000 S8: curated Prep Queue
 
 The separate **Prep Queue** tab holds at most 5,000 deduplicated library track

@@ -450,6 +450,9 @@ component NudgeHold inherits Rectangle {
 }
 
 component CompactDeck inherits Rectangle {
+    in property <int> loop-jog-mode;
+    callback loop-jog();
+    callback cancel-loop-jog();
     out property <bool> loop-name-focused;
     changed tools-panel => { root.loop-name-focused = false; }
     callback scratch-pointer(int, float, float);
@@ -679,7 +682,7 @@ component CompactDeck inherits Rectangle {
             Button { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
             Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " loop on/off"; accessible-description: root.loop-caption; enabled: loaded && !loading && loop-ready; clicked => { root.loop-activate(); } }
             Button { text: "RELOOP"; accessible-label: root.deck-label + " reloop"; accessible-description: "Restart at Loop In"; enabled: loaded && !loading && loop-ready; clicked => { root.reloop(); } }
-            Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : (root.tools-panel == 3 ? "NUDGE" : "CUES"))); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.cancel-nudge(); root.tools-panel = root.tools-panel == 4 ? 0 : root.tools-panel + 1; } }
+            Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : (root.tools-panel == 3 ? "NUDGE" : "CUES"))); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.cancel-nudge(); root.tools-panel = root.tools-panel == 4 ? 0 : root.tools-panel + 1; if root.tools-panel != 2 { root.cancel-loop-jog(); } } }
             Text { width: 64px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
         }
         if root.tools-panel == 1 : HorizontalLayout {
@@ -701,7 +704,8 @@ component CompactDeck inherits Rectangle {
         if root.tools-panel == 2 : HorizontalLayout {
             height: 26px; spacing: 2px;
             CheckBox { text: "BEAT SNAP"; checked <=> root.auto-loop-snap; accessible-label: root.deck-label + " auto loop beat snap"; enabled: root.quantize-preferences-ready && root.quantize-enabled && loaded && !loading && grid-active; }
-            Text { text: root.quantize-enabled && root.auto-loop-snap ? "Nearest beat · manual grid" : "Start at playhead"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
+            Button { text: root.loop-jog-mode == 1 ? "JOG IN" : (root.loop-jog-mode == 2 ? "JOG OUT" : "JOG OFF"); accessible-label: root.deck-label + " loop jog edit mode"; accessible-description: root.loop-caption; enabled: loaded && !loading && loop-ready; clicked => { root.loop-jog(); } }
+            Text { text: root.quantize-enabled && root.auto-loop-snap ? "Nearest beat" : "Playhead"; color: #a8b3c3; font-size: 10px; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
         }
         if root.tools-panel == 3 : VerticalLayout {
             spacing: 2px;
@@ -1191,6 +1195,12 @@ export component AppWindow inherits Window {
     in property <bool> right-platter-mouse-owned;
     callback virtual-platter-pointer(int, int, float, float);
     callback controller-jog(int, int);
+    callback controller-seek-hold(int, int, bool);
+    callback controller-navigation-shift(bool);
+    callback controller-loop-boundary(int, int);
+    callback controller-loop-jog(int, int);
+    in property <int> left-loop-jog-mode;
+    in property <int> right-loop-jog-mode;
     callback controller-platter-touch(int, bool);
     callback controller-vinyl(int);
     callback controller-pitch-fader(int, int);
@@ -1678,6 +1688,9 @@ export component AppWindow inherits Window {
                 save-loop => { root.save-loop-left(); } recall-loop => { root.recall-loop-left(); } delete-loop => { root.delete-loop-left(); }
                 loop-range: root.left-loop-range;
                 loop-caption: root.left-loop-caption; loop-has-in: root.left-loop-has-in; loop-ready: root.left-loop-ready; loop-active: root.left-loop-active;
+                loop-jog-mode: root.left-loop-jog-mode;
+                cancel-loop-jog => { root.controller-loop-jog(0, 0); }
+                loop-jog => { root.controller-loop-jog(0, root.left-loop-jog-mode == 0 ? 1 : (root.left-loop-jog-mode == 1 ? 2 : 0)); }
                 loop-in => { root.loop-in-left(); } loop-out => { root.loop-out-left(); } loop-activate => { root.loop-activate-left(); } reloop => { root.reloop-left(); }
                 hot-cues: root.left-hot-cues;
                 quantize-cues <=> root.left-quantize-cues;
@@ -1722,6 +1735,9 @@ export component AppWindow inherits Window {
                 save-loop => { root.save-loop-right(); } recall-loop => { root.recall-loop-right(); } delete-loop => { root.delete-loop-right(); }
                 loop-range: root.right-loop-range;
                 loop-caption: root.right-loop-caption; loop-has-in: root.right-loop-has-in; loop-ready: root.right-loop-ready; loop-active: root.right-loop-active;
+                loop-jog-mode: root.right-loop-jog-mode;
+                cancel-loop-jog => { root.controller-loop-jog(1, 0); }
+                loop-jog => { root.controller-loop-jog(1, root.right-loop-jog-mode == 0 ? 1 : (root.right-loop-jog-mode == 1 ? 2 : 0)); }
                 loop-in => { root.loop-in-right(); } loop-out => { root.loop-out-right(); } loop-activate => { root.loop-activate-right(); } reloop => { root.reloop-right(); }
                 hot-cues: root.right-hot-cues;
                 quantize-cues <=> root.right-quantize-cues;
