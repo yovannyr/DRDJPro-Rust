@@ -961,6 +961,12 @@ impl AudioController {
         let weak = Rc::downgrade(&controller);
         ui.on_sort_library(move |field| {
             if let Some(c) = weak.upgrade() {
+                if c.library.borrow().active_crate() == crate::library::PREP_SCOPE {
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status("Prep Queue uses curated order; use Up / Down".into());
+                    }
+                    return;
+                }
                 c.measure_library_action(crate::library_perf::Operation::Sort, || {
                     c.library.borrow_mut().sort(field);
                     c.publish_library();
@@ -1112,7 +1118,7 @@ impl AudioController {
         ui.on_library_tab_selected(move |tab| {
             if let Some(c) = weak.upgrade() {
                 let Some(ui) = c.ui.upgrade() else { return };
-                if !(0..=4).contains(&tab) {
+                if !(0..=5).contains(&tab) {
                     ui.set_status("Invalid library tab".into());
                     return;
                 }
@@ -1124,12 +1130,16 @@ impl AudioController {
                     return;
                 }
                 let current = c.library.borrow().active_crate();
-                let target = if tab == 3 {
-                    if current != -1 {
+                let target = if tab == 3 || tab == 5 {
+                    if current >= 0 {
                         saved_scope.set(current);
                     }
-                    -1
-                } else if current == -1 {
+                    if tab == 3 {
+                        crate::library::HISTORY_SCOPE
+                    } else {
+                        crate::library::PREP_SCOPE
+                    }
+                } else if current < 0 {
                     saved_scope.get()
                 } else {
                     current
@@ -1141,6 +1151,10 @@ impl AudioController {
                 }
                 c.controller_browse_row.set(None);
                 c.controller_browse_pending.set(0);
+                c.controller_load_press.borrow_mut().take();
+                if tab == 5 {
+                    ui.set_library_query("".into());
+                }
                 ui.set_library_tab(tab);
                 c.cancel_crate_dialog();
                 c.publish_library();
@@ -1153,18 +1167,22 @@ impl AudioController {
                     return;
                 }
                 let current = c.library.borrow().active_crate();
-                if id == -1 && current != -1 {
+                if id < 0 && current >= 0 {
                     previous_scope.set(current);
                 }
                 let result = c.library.borrow_mut().select_crate(id);
                 c.cancel_crate_dialog();
                 if result.is_ok() {
                     if let Some(ui) = c.ui.upgrade() {
-                        if id == -1 {
-                            ui.set_library_tab(3);
+                        if id < 0 {
+                            ui.set_library_tab(if id == crate::library::PREP_SCOPE {
+                                5
+                            } else {
+                                3
+                            });
                         } else {
                             previous_scope.set(id);
-                            if ui.get_library_tab() == 3 {
+                            if ui.get_library_tab() == 3 || ui.get_library_tab() == 5 {
                                 ui.set_library_tab(0);
                             }
                         }
@@ -6229,6 +6247,9 @@ impl AudioController {
         self.refresh();
     }
     fn publish_library(&self) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_prep_queue_count(self.library.borrow().prep_queue().len() as i32);
+        }
         let Some(ui) = self.ui.upgrade() else {
             return;
         };
@@ -6427,6 +6448,12 @@ impl AudioController {
     }
     fn wire_controller_browser(self: &Rc<Self>, ui: &AppWindow) {
         let weak = Rc::downgrade(self);
+        ui.on_prep_action(move |action| {
+            if let Some(c) = weak.upgrade() {
+                c.prep_action(action);
+            }
+        });
+        let weak = Rc::downgrade(self);
         ui.on_controller_cancel_load_gesture(move || {
             if let Some(c) = weak.upgrade() {
                 c.controller_load_press.borrow_mut().take();
@@ -6454,7 +6481,7 @@ impl AudioController {
                     ui.set_status("Wait for the library operation before browsing crates".into());
                     return;
                 }
-                let mut ids = vec![0, -1];
+                let mut ids = vec![0, -1, crate::library::PREP_SCOPE];
                 ids.extend(
                     c.library
                         .borrow()
@@ -6526,7 +6553,15 @@ impl AudioController {
                 17 => {
                     c.controller_browse_pending.set(0);
                     c.controller_browse_row.set(None);
-                    ui.invoke_library_tab_selected((ui.get_library_tab() + 1) % 5);
+                    ui.invoke_library_tab_selected((ui.get_library_tab() + 1) % 6);
+                }
+                27 => c.prep_action(0),
+                16 => {
+                    ui.invoke_library_tab_selected(5);
+                    if ui.get_library_tab() == 5 {
+                        ui.set_controller_browser_crates(false);
+                        ui.invoke_focus_library_tracks();
+                    }
                 }
                 100..=101 => {
                     c.controller_load(if action == 100 { DeckId::A } else { DeckId::B });
@@ -6534,6 +6569,59 @@ impl AudioController {
                 _ => ui.set_status("Invalid MC4000 browser action".into()),
             }
         });
+    }
+    fn prep_action(&self, action: i32) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        self.controller_load_press.borrow_mut().take();
+        if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+            || self.search_in_progress()
+            || ui.get_controller_editor_open()
+            || ui.get_controller_search_focused()
+        {
+            ui.set_status(
+                "Finish library selection or editing before changing the prep queue".into(),
+            );
+            return;
+        }
+        let selected = self.library.borrow().selected_id();
+        if selected < 1 || selected != ui.get_selected_track() {
+            ui.set_status("Select a library track first".into());
+            return;
+        }
+        let result = {
+            let mut library = self.library.borrow_mut();
+            match action {
+                0 => library.prep_add(selected).map(|added| {
+                    if added {
+                        "Added to prep queue"
+                    } else {
+                        "Track already in prep queue"
+                    }
+                }),
+                1 if library.active_crate() == crate::library::PREP_SCOPE => library
+                    .prep_remove(selected)
+                    .map(|()| "Removed from prep queue"),
+                2 | 3 if library.active_crate() == crate::library::PREP_SCOPE => library
+                    .prep_move(selected, if action == 2 { -1 } else { 1 })
+                    .map(|()| "Prep order updated"),
+                _ => Err("Open Prep Queue to remove or reorder tracks".into()),
+            }
+        };
+        match result {
+            Ok(message) => {
+                self.controller_browse_pending.set(0);
+                self.controller_browse_row.set(None);
+                if action == 1 {
+                    self.library.borrow_mut().select(-1);
+                }
+                self.library_changed();
+                self.publish_library();
+                ui.set_status(message.into());
+            }
+            Err(error) => ui.set_status(error.into()),
+        }
     }
     fn controller_load(&self, target: DeckId) {
         let Some(ui) = self.ui.upgrade() else { return };
@@ -6918,7 +7006,12 @@ impl AudioController {
         ui.set_library_can_previous_page(page_index > 0);
         ui.set_library_can_next_page(page_index + 1 < pages);
         ui.set_library_empty(
-            if library.len() == 0 {
+            if library.active_crate() == crate::library::PREP_SCOPE
+                && rows.is_empty()
+                && ui.get_library_query().is_empty()
+            {
+                "Prep Queue is empty. Select a Library track and use To Prep."
+            } else if library.len() == 0 {
                 "Add audio files to your library"
             } else if rows.is_empty()
                 && library.active_crate() != 0
@@ -8974,6 +9067,136 @@ mod tests {
             assert!(!ui.get_loading());
             assert!(c.controller_load_press.borrow().is_none());
         }
+    }
+    #[test]
+    fn prep_queue_midi_gui_persistence_missing_and_playback_isolation() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let first = wav_file(8192, 192000);
+        let second = wav_file(4096, 192000);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(
+            Ok(db.clone()),
+            vec![first.path().into(), second.path().into()],
+        );
+        finish_storage(&c);
+        finish_import(&c);
+        finish_storage(&c);
+        finish_search(&c);
+        let first_id = c
+            .library
+            .borrow()
+            .track_id_for_path(&first.path().canonicalize().unwrap())
+            .unwrap();
+        let second_id = c
+            .library
+            .borrow()
+            .track_id_for_path(&second.path().canonicalize().unwrap())
+            .unwrap();
+        engine.load_a(first.path()).unwrap();
+        engine.load_b(second.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        c.refresh();
+        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.show().unwrap();
+        let dispatch =
+            |note| crate::mc4000::apply(&ui, crate::mc4000::decode(&[0x9f, note, 127]).unwrap());
+        ui.invoke_select_library(second_id);
+        dispatch(27);
+        finish_search(&c);
+        let revision = c.library.borrow().revision();
+        dispatch(27);
+        finish_search(&c);
+        assert_eq!(c.library.borrow().revision(), revision);
+        ui.invoke_select_library(first_id);
+        control(&ui, "Add selected track to prep queue").invoke_accessible_default_action();
+        finish_search(&c);
+        assert_eq!(c.library.borrow().prep_queue(), &[second_id, first_id]);
+        dispatch(16);
+        finish_search(&c);
+        assert_eq!(ui.get_library_tab(), 5);
+        assert_eq!(ui.get_selected_crate(), crate::library::PREP_SCOPE);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, second_id);
+        assert_eq!(ui.get_library_rows().row_data(1).unwrap().id, first_id);
+        ui.invoke_select_library(first_id);
+        control(&ui, "Move prep track up").invoke_accessible_default_action();
+        finish_search(&c);
+        assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, first_id);
+        ui.invoke_sort_library(0); // Queue order is authoritative.
+        assert_eq!(c.library.borrow().prep_queue(), &[first_id, second_id]);
+        assert!(ui.get_status().contains("curated order"));
+        ui.invoke_select_library(second_id);
+        control(&ui, "Remove selected track from prep queue").invoke_accessible_default_action();
+        finish_search(&c);
+        assert_eq!(ui.get_selected_track(), -1);
+        assert_eq!(c.library.borrow().prep_queue(), &[first_id]);
+        assert_eq!(c.library.borrow().len(), 2);
+        assert!(first.path().exists() && second.path().exists());
+        assert!(c.pending_import.borrow().is_none());
+        assert!(c.analysis_batch.borrow().is_none());
+        assert!(c.pending.borrow().is_none());
+        assert!(engine.snapshot(DeckId::A).playing && engine.snapshot(DeckId::B).playing);
+        assert!(output.by_ref().take(4800).any(|sample| sample.abs() > 0.01));
+        ui.invoke_select_library(first_id);
+        dispatch(2); // LOAD A still rejects a playing target.
+        assert!(c.pending.borrow().is_none());
+        assert_eq!(c.library.borrow().prep_queue(), &[first_id]);
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            ui.show().unwrap();
+            for label in [
+                "Prep Queue library tab",
+                "Add selected track to prep queue",
+                "Remove selected track from prep queue",
+                "Move prep track up",
+                "Move prep track down",
+            ] {
+                let element = control(&ui, label);
+                let p = element.absolute_position();
+                let s = element.size();
+                assert!(
+                    s.width > 0.
+                        && p.x >= 0.
+                        && p.y >= 0.
+                        && p.x + s.width <= width
+                        && p.y + s.height <= height,
+                    "{label}: {p:?} {s:?}"
+                );
+            }
+        }
+        finish_storage(&c);
+        c.close_library().unwrap();
+        drop(c);
+        drop(ui);
+        drop(first); // missing file remains a queued ID on restart
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db), Vec::new());
+        finish_storage(&c);
+        finish_search(&c);
+        ui.invoke_controller_browser_action(16);
+        finish_search(&c);
+        assert_eq!(c.library.borrow().prep_queue(), &[first_id]);
+        assert_eq!(ui.get_library_rows().row_count(), 1);
+        assert!(!ui.get_library_rows().row_data(0).unwrap().available);
+        assert!(!ui.get_left_playing() && !ui.get_right_playing());
+        c.close_library().unwrap();
     }
     #[test]
     fn instant_double_gesture_expiry_completed_load_source_change_and_recovery() {
@@ -15046,6 +15269,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let legacy = dir.path().join("library.json");
         let catalog = crate::library::Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             crates: Default::default(),
             tracks: vec![crate::library::SavedTrack {
@@ -15491,20 +15715,35 @@ mod tests {
         finish_search(&c);
         for (width, height) in [(850., 740.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
-            for (index, name) in ["Library", "Files", "Crates", "History", "Prepare"]
-                .into_iter()
-                .enumerate()
+            for (index, name) in [
+                "Library",
+                "Files",
+                "Crates",
+                "History",
+                "Prepare",
+                "Prep Queue",
+            ]
+            .into_iter()
+            .enumerate()
             {
                 control(&ui, &format!("{name} library tab")).invoke_accessible_default_action();
                 finish_search(&c);
                 assert_eq!(ui.get_library_tab(), index as i32);
-                assert_eq!(ui.get_selected_crate(), if index == 3 { -1 } else { id });
+                assert_eq!(
+                    ui.get_selected_crate(),
+                    match index {
+                        3 => -1,
+                        5 => crate::library::PREP_SCOPE,
+                        _ => id,
+                    }
+                );
                 let mut labels = vec![
                     "Library library tab",
                     "Files library tab",
                     "Crates library tab",
                     "History library tab",
                     "Prepare library tab",
+                    "Prep Queue library tab",
                     "Analyze all library files",
                     "Load selected into deck A",
                     "Load selected into deck B",
@@ -16902,6 +17141,7 @@ mod tests {
         let db = profile.path().join("library.sqlite3");
         let file = crate::test_support::tagged_wav("Retained title", "Artist", "Album");
         let seed = crate::library::Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             crates: Default::default(),
             tracks: vec![crate::library::SavedTrack {
@@ -17516,6 +17756,7 @@ mod tests {
         );
         let old_path = missing_dir.path().join("missing-track.wav");
         *c.library.borrow_mut() = crate::library::Library::restore(crate::library::Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             tracks: vec![crate::library::SavedTrack {
                 id: 1,
@@ -17578,6 +17819,7 @@ mod tests {
             })
             .collect();
         *c.library.borrow_mut() = crate::library::Library::restore(crate::library::Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             tracks,
             crates: Default::default(),

@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Review workflow override (user instruction, 2026-11-03)
+
+For the remaining MC4000 slices S8-S15, the user explicitly removes the
+independent sub-agent review requirement. Complete appropriate automated tests
+and final checks before committing and pushing each bounded slice. The existing
+publication authorization and requirement to preserve unrelated changes remain.
+Do not claim independent review for these slices. Native hardware/listening
+acceptance remains separate from automated verification.
+
 ## Project Context
 
 DRDJPro-Rust is a professional DJ application focused on:

@@ -1,5 +1,32 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S8: curated Prep Queue
+
+The separate **Prep Queue** tab holds at most 5,000 deduplicated library track
+IDs in curated order. **To Prep** appends the selected track once; **Remove**,
+**Up** and **Down** edit the queue without deleting files or library tracks.
+Normal searches filter the queue while preserving that order. Column sorting
+is disabled in this view. Moving a filtered selection swaps it with its adjacent
+entry in the complete queue, which may be hidden by the current filter.
+
+MC4000 channel16 Note27 (LOAD PREP) appends the settled selected track; Note16
+(OPEN PREP) opens this tab, clears the search and selects controller track
+browsing. Panel cycles through six tabs; the crate target also includes the
+queue. Text editors/search focus and in-progress library/loading operations
+are protected. Queue actions never initiate analysis or start playback.
+Loading a queued track uses existing deck protection and retains the entry.
+Remove it explicitly when finished. The original **Prepare** tab remains the
+analysis view with its original Analyze Files workflow.
+
+SQLite schema17 stores ordered track IDs with unique membership and foreign
+keys. Migration from schema16 initializes an empty queue. Queue deltas use the
+existing transaction, acknowledgement, retry and shutdown flush paths; older
+save acknowledgements cannot erase newer queue edits. Missing files remain
+queued, and relocation preserves membership by track ID. Queue edits can
+rewrite at most 5,000 rows on the storage worker. No audio/render path changes.
+Automated tests cover persistence/failure recovery and GUI geometry at 850x740
+and 1280x860; native controller/visual acceptance remains open.
+
 ## MC4000 S7: Instant Doubles
 
 Two consecutive LOAD presses on the same target within 350 ms (inclusive,
@@ -39,9 +66,9 @@ a later LOAD. No full-library search or filesystem work is added to MIDI/audio
 callbacks.
 
 Encoder press switches the controller target between tracks and ordered crates
-(including All tracks/History); from focused search it explicitly returns to
+(including All tracks/History/Prep Queue); from focused search it explicitly returns to
 tracks. Back selects the crate target. SHIFT+Back cycles existing Library,
-Files, Crates, History and Prepare tabs, not an invented Serato panel.
+Files, Crates, History, Prepare and Prep Queue tabs.
 Open crate/grid/cue editors, focused loop-name fields and focused search are
 protected. LOAD A/B validates the settled selected ID, availability and busy
 state, then reuses paused-target loading. Missing/playing/busy targets report

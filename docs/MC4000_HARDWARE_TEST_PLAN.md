@@ -10,7 +10,8 @@ S1 und physisches/virtuelles Scratchen wurden vom Nutzer bereits bestaetigt.
 Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 
 S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
-implementiert. S8-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S7
+implementiert; S8 ergaenzt die persistente Prep Queue. S9-S15 bleiben
+**NOT IMPLEMENTED**. Native Abnahmen fuer S2-S8
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -61,7 +62,7 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S6-03 LOAD | A/B LOAD fuer ausgewaehlten Track; laufendes/beschaeftigtes Ziel und Missing-Track | Pausiertes Ziel laedt richtigen Track; Schutz/Fehler sichtbar, anderes Deck bleibt erhalten. |
 | S7-01 Doubles | Gueltigen Librarytrack waehlen; LOAD A/A bzw. B/B bis350ms und danach; A/B, dritter Druck, anderer Controllerbefehl zwischen den Drucken | Erster Druck normal sofort; zweiter bis350ms Klon des anderen Decks; ausserhalb normal. Andere Befehle/Recovery brechen Geste ab. Laufendes Ziel geschuetzt, fremder Ladejob erhalten. |
 | S7-02 CloneState | Quelle mit Position/Pitch/Keylock abspielen oder pausieren; auf pausiertes Ziel klonen, auch nach fertiggestelltem ersten LOAD | Ziel uebernimmt Softwareposition/Basistempo/Grid/Keylock/Playzustand, Loop aus und TempCue zurueckgesetzt, Mixer/EQ/FX unveraendert. Quelle unveraendert; Scratch/Loop/Nudge/Sync/gehaltene oder geplante Cues sowie ausstehende Vorbereitung werden abgewiesen. Hoerprobe und Zeitversatz messen. |
-| S8-01 Prepare | Track mit LOAD PREP hinzufuegen, erneut hinzufuegen, SHIFT+LOAD PREP oeffnen | Kuratierte Queue statt Analyse starten; keine Duplikate; nachvollziehbare Reihenfolge. |
+| S8-01 Prepare | Track mit LOAD PREP hinzufuegen, erneut hinzufuegen, SHIFT+LOAD PREP oeffnen; GUI Up/Down/Remove | Eigener Prep-Queue-Tab, keine Analyse starten; keine Duplikate; kuratierte Reihenfolge, Filter behaelt Ordnung. LOAD behaelt Eintrag, Remove loescht keine Datei. |
 | S8-02 Restart | Queue bearbeiten, Track fehlen lassen/relokalisieren, Neustart | Queue persistent; stabileIDs, fehlende Tracks erkennbar, kein automatisches Laden/Abspielen. |
 | S9-01 Search | SHIFT+Jog und SHIFT+Bend in beide Richtungen halten/loslassen | Schnelle Suche bis Trackgrenzen, Release stoppt Suche; nicht versehentlich Scratch/Pitch-Bend. |
 | S9-02 LoopEdit | In-/Out-Editmodus aktivieren und Jog bewegen | Nur gewaehlte Grenze veraendert; Mindestlaenge/Trackgrenze gesichert; Moduswechsel gibt gehaltene Eingabe frei. |

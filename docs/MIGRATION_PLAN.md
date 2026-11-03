@@ -17,7 +17,11 @@ autorisierte Fuenf-Slice-Fallback S2-S6 direkt umgesetzt. S7 Instant Doubles
 ist als separater Folgeschritt implementiert: LOAD-Doppeldruck bis350ms,
 geteilte PCM-/Keylock-Daten, geschuetztes Ziel und expliziter Zustandsvertrag
 im GUI-Inventar. Nach erneutem QWEN-Ausfall autorisierte der Nutzer die
-S7-Implementierung mit GPT-6.1 Sol. S8-S15 bleiben offen.
+S7-Implementierung mit GPT-6.1 Sol. S8 liefert eine eigene persistente Prep Queue
+mit LoadPrep/OpenPrep, Entfernen und Reihenfolge, getrennt von der Analyse.
+SQLite17 migriert bestehende Bibliotheken; Missing/Relocation erhalten Track-IDs.
+Fuer die restlichen Slices entfaellt auf Nutzerwunsch der unabhaengige Review;
+Tests und finale Checks bleiben erforderlich. S9-S15 bleiben offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 

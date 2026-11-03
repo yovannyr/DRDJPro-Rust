@@ -10,6 +10,8 @@ const MAX_DIRECTORY_ENTRIES: usize = 100_000;
 pub(crate) const MAX_TRACKS: usize = 100_000;
 pub const MAX_HISTORY: usize = 5_000;
 pub const HISTORY_SCOPE: i32 = -1;
+pub const PREP_SCOPE: i32 = -2;
+pub const MAX_PREP: usize = 5_000;
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
@@ -19,6 +21,8 @@ pub struct Catalog {
     pub crates: crate::crates::CrateCatalog,
     #[serde(skip)]
     pub history: Vec<HistoryEntry>,
+    #[serde(skip)]
+    pub prep_queue: Vec<i32>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryEntry {
@@ -42,6 +46,7 @@ pub struct SavedTrack {
     pub saved_loops: crate::saved_loops::SavedLoops,
 }
 pub struct CatalogDelta {
+    pub prep_queue: Option<Vec<i32>>,
     pub revision: u64,
     pub tracks: Vec<SavedTrack>,
     pub crates: Option<CrateDelta>,
@@ -79,6 +84,10 @@ impl Catalog {
             return Err("Playback history limit exceeded".into());
         }
         let mut history_ids = HashSet::new();
+        validate_prep_queue(&self.prep_queue)?;
+        if self.prep_queue.iter().any(|id| !ids.contains(id)) {
+            return Err("Prep queue references an unknown track".into());
+        }
         for entry in &self.history {
             if !ids.contains(&entry.track_id)
                 || entry.last_played_ms > i64::MAX as u64
@@ -91,6 +100,17 @@ impl Catalog {
         }
         self.crates.validate(&ids)
     }
+}
+pub(crate) fn validate_prep_queue(ids: &[i32]) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    if ids.len() > MAX_PREP
+        || ids
+            .iter()
+            .any(|id| *id <= 0 || *id == i32::MAX || !seen.insert(*id))
+    {
+        return Err("Invalid, duplicate or oversized prep queue".into());
+    }
+    Ok(())
 }
 pub struct ImportBatch {
     pub paths: Vec<PathBuf>,
@@ -578,6 +598,9 @@ impl Track {
 }
 #[derive(Default)]
 pub struct Library {
+    prep_queue: Vec<i32>,
+    prep_members: HashSet<i32>,
+    changed_prep: Option<u64>,
     revision: u64,
     search_revision: u64,
     changed_tracks: BTreeMap<usize, u64>,
@@ -729,12 +752,16 @@ impl Library {
         self.revision
     }
     pub fn has_changes(&self) -> bool {
-        !self.changed_tracks.is_empty()
+        self.changed_prep.is_some()
+            || !self.changed_tracks.is_empty()
             || !self.changed_crates.is_empty()
             || !self.changed_memberships.is_empty()
             || !self.changed_history.is_empty()
     }
     pub fn acknowledge(&mut self, revision: u64) {
+        if self.changed_prep.is_some_and(|changed| changed <= revision) {
+            self.changed_prep = None;
+        }
         self.changed_tracks.retain(|_, changed| *changed > revision);
         self.changed_memberships
             .retain(|_, (changed, _)| *changed > revision);
@@ -744,6 +771,7 @@ impl Library {
     }
     pub fn changes(&self) -> CatalogDelta {
         CatalogDelta {
+            prep_queue: self.changed_prep.map(|_| self.prep_queue.clone()),
             revision: self.revision,
             tracks: self
                 .changed_tracks
@@ -910,8 +938,70 @@ impl Library {
     pub fn active_crate(&self) -> i32 {
         self.active_crate
     }
+    pub fn prep_queue(&self) -> &[i32] {
+        &self.prep_queue
+    }
+    fn mark_prep(&mut self) {
+        self.prep_members = self.prep_queue.iter().copied().collect();
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("Library revision overflow");
+        self.search_revision = self
+            .search_revision
+            .checked_add(1)
+            .expect("Search revision overflow");
+        self.changed_prep = Some(self.revision);
+        *self.view_cache.get_mut() = None;
+        self.missing_cache.set(None);
+    }
+    /// Append once, preserving the user's curated order (including missing tracks).
+    pub fn prep_add(&mut self, id: i32) -> Result<bool, String> {
+        if !self.id_indices.contains_key(&id) {
+            return Err("Select a library track first".into());
+        }
+        if self.prep_queue.contains(&id) {
+            return Ok(false);
+        }
+        if self.prep_queue.len() == MAX_PREP {
+            return Err("Prep queue limit reached (5000 tracks)".into());
+        }
+        self.prep_queue.push(id);
+        self.mark_prep();
+        Ok(true)
+    }
+    pub fn prep_remove(&mut self, id: i32) -> Result<(), String> {
+        let index = self
+            .prep_queue
+            .iter()
+            .position(|entry| *entry == id)
+            .ok_or("Track is not in the prep queue")?;
+        self.prep_queue.remove(index);
+        self.mark_prep();
+        Ok(())
+    }
+    pub fn prep_move(&mut self, id: i32, direction: i32) -> Result<(), String> {
+        if direction != -1 && direction != 1 {
+            return Err("Prep movement must be -1 or 1".into());
+        }
+        let index = self
+            .prep_queue
+            .iter()
+            .position(|entry| *entry == id)
+            .ok_or("Track is not in the prep queue")?;
+        let target = (index as i32 + direction).clamp(0, self.prep_queue.len() as i32 - 1) as usize;
+        if target != index {
+            self.prep_queue.swap(index, target);
+            self.mark_prep();
+        }
+        Ok(())
+    }
     pub fn select_crate(&mut self, id: i32) -> Result<(), String> {
-        if id != 0 && id != HISTORY_SCOPE && !self.crates.entries.iter().any(|c| c.id == id) {
+        if id != 0
+            && id != HISTORY_SCOPE
+            && id != PREP_SCOPE
+            && !self.crates.entries.iter().any(|c| c.id == id)
+        {
             return Err("Crate no longer exists".into());
         }
         if self.active_crate != id {
@@ -1128,6 +1218,8 @@ impl Library {
         catalog.validate()?;
         let history = catalog.history;
         let mut library = Self {
+            prep_members: catalog.prep_queue.iter().copied().collect(),
+            prep_queue: catalog.prep_queue,
             crates: catalog.crates,
             ..Default::default()
         };
@@ -1186,6 +1278,7 @@ impl Library {
         let mut history: Vec<_> = self.history.values().cloned().collect();
         history.sort_by_key(|entry| (std::cmp::Reverse(entry.last_played_ms), entry.track_id));
         Catalog {
+            prep_queue: self.prep_queue.clone(),
             version: 1,
             crates: self.crates.clone(),
             tracks: self.tracks.iter().map(Track::saved).collect(),
@@ -1212,7 +1305,9 @@ impl Library {
             .map(|c| &c.tracks)
     }
     pub fn scope_len(&self) -> usize {
-        if self.active_crate == HISTORY_SCOPE {
+        if self.active_crate == PREP_SCOPE {
+            self.prep_queue.len()
+        } else if self.active_crate == HISTORY_SCOPE {
             self.history.len()
         } else if self.active_crate == 0 {
             self.len()
@@ -1226,7 +1321,9 @@ impl Library {
         }
     }
     fn in_active_scope(&self, track: &Track) -> bool {
-        if self.active_crate == HISTORY_SCOPE {
+        if self.active_crate == PREP_SCOPE {
+            self.prep_members.contains(&track.id)
+        } else if self.active_crate == HISTORY_SCOPE {
             self.history.contains_key(&track.id)
         } else if self.active_crate == 0 {
             true
@@ -1353,7 +1450,9 @@ impl Library {
             scope: self.active_crate,
             query: self.query.clone(),
             smart_query,
-            field: if self.active_crate == HISTORY_SCOPE && !self.sort_requested {
+            field: if self.active_crate == PREP_SCOPE
+                || (self.active_crate == HISTORY_SCOPE && !self.sort_requested)
+            {
                 -1
             } else {
                 self.sort_field
@@ -1364,7 +1463,19 @@ impl Library {
     }
 
     pub(crate) fn search_projection(&self) -> SearchProjection {
-        let (members, history_order) = if self.active_crate == HISTORY_SCOPE {
+        let (members, history_order) = if self.active_crate == PREP_SCOPE {
+            let mut words = Vec::new();
+            let mut order = HashMap::with_capacity(self.prep_queue.len());
+            for (rank, id) in self.prep_queue.iter().enumerate() {
+                order.insert(*id, rank);
+                let index = self.id_indices[id];
+                if words.len() <= index / 64 {
+                    words.resize(index / 64 + 1, 0);
+                }
+                words[index / 64] |= 1_u64 << (index % 64);
+            }
+            (Some(Arc::new(words)), Some(Arc::new(order)))
+        } else if self.active_crate == HISTORY_SCOPE {
             let mut words = Vec::new();
             let mut order = HashMap::with_capacity(self.history.len());
             let mut history: Vec<_> = self.history.values().collect();
@@ -1462,7 +1573,15 @@ impl Library {
                 .collect(),
         };
 
-        if self.active_crate == HISTORY_SCOPE && !self.sort_requested {
+        if self.active_crate == PREP_SCOPE {
+            let ranks: HashMap<_, _> = self
+                .prep_queue
+                .iter()
+                .enumerate()
+                .map(|(rank, id)| (*id, rank))
+                .collect();
+            tracks.sort_by_key(|track| ranks[&track.id]);
+        } else if self.active_crate == HISTORY_SCOPE && !self.sort_requested {
             tracks.sort_by_key(|track| std::cmp::Reverse(self.history[&track.id].last_played_ms));
         } else {
             tracks.sort_by(|a, b| {
@@ -1482,6 +1601,7 @@ impl Library {
     }
     fn matches_visible(&self, track: &Track, members: Option<&HashSet<i32>>) -> bool {
         (self.active_crate == 0
+            || (self.active_crate == PREP_SCOPE && self.prep_members.contains(&track.id))
             || (self.active_crate == HISTORY_SCOPE && self.history.contains_key(&track.id))
             || self
                 .active_smart_query()
@@ -1518,6 +1638,47 @@ impl Library {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prep_queue_order_filter_relocation_and_revision_ack() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = Library::default();
+        library.insert((1..=4).map(|i| dir.path().join(format!("track-{i}.wav"))));
+        let initial = library.revision();
+        library.acknowledge(initial);
+        assert!(library.prep_add(3).unwrap());
+        let first_save = library.changes();
+        assert!(!library.prep_add(3).unwrap());
+        assert_eq!(library.revision(), first_save.revision);
+        library.prep_add(1).unwrap();
+        library.acknowledge(first_save.revision);
+        assert_eq!(library.changes().prep_queue, Some(vec![3, 1]));
+        library.select_crate(PREP_SCOPE).unwrap();
+        library.sort(0); // sort requests cannot change the curated queue order
+        assert_eq!(
+            library.search_projection().search(&library.search_spec(0)),
+            vec![3, 1]
+        );
+        library.prep_move(1, -1).unwrap();
+        assert_eq!(library.prep_queue(), &[1, 3]);
+        library.set_query("track-3".into());
+        assert_eq!(
+            library.search_projection().search(&library.search_spec(0)),
+            vec![3]
+        );
+        assert!(library.prep_add(999).is_err());
+        assert!(library.prep_move(3, 2).is_err());
+        library.prep_remove(1).unwrap();
+        let catalog = library.catalog();
+        let mut restored = Library::restore(catalog).unwrap();
+        restored.select_crate(PREP_SCOPE).unwrap();
+        assert_eq!(restored.prep_queue(), &[3]);
+        assert_eq!(restored.missing_count(), 1);
+        assert_eq!(restored.scope_len(), 1);
+        assert!(!restored.has_changes());
+        assert!(validate_prep_queue(&vec![1; MAX_PREP + 1]).is_err());
+        assert!(validate_prep_queue(&[1, 1]).is_err());
+        assert!(validate_prep_queue(&[0]).is_err());
+    }
     use super::*;
     #[test]
     fn smart_crate_search_combines_saved_rule_and_user_query_and_tracks_metadata_changes() {
@@ -1905,6 +2066,7 @@ mod tests {
         let existing_path = existing.path().to_owned();
         let replacement_path = std::fs::canonicalize(replacement.path()).unwrap();
         let catalog = Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             tracks: vec![
                 SavedTrack {
@@ -2132,6 +2294,7 @@ mod tests {
         let missing2 = dir.path().join("missing2.wav");
 
         let catalog = Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             tracks: vec![
                 SavedTrack {

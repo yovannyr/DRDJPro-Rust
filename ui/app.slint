@@ -982,6 +982,8 @@ component CratePanel inherits Rectangle {
 }
 
 component TrackLibrary inherits Rectangle {
+    in property <int> prep-queue-count;
+    callback prep-action(int);
     out property <bool> search-focused: search-input.has-focus;
     callback focus-tracks();
     focus-tracks => { nav.focus(); }
@@ -1045,7 +1047,7 @@ component TrackLibrary inherits Rectangle {
         HorizontalLayout {
             spacing: 2px;
             LibraryButton { text: "Analyze Files"; accessible-label: "Analyze all library files"; enabled: root.can-analyze; clicked => { root.analyze(); } }
-            for title[index] in ["Library", "Files", "Crates", "History", "Prepare"] : LibraryButton {
+            for title[index] in ["Library", "Files", "Crates", "History", "Prepare", "Prep Queue"] : LibraryButton {
                 text: title; active: root.tab == index;
                 enabled: !root.busy || root.analysis-running;
                 accessible-label: title + " library tab";
@@ -1055,6 +1057,13 @@ component TrackLibrary inherits Rectangle {
             LibraryButton { text: "X"; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
             LibraryButton { text: "Load A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
             LibraryButton { text: "Load B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
+        }
+        if tab == 5 : HorizontalLayout {
+            height: 24px; spacing: 3px;
+            if tab == 5 : LibraryButton { text: "Remove"; accessible-label: "Remove selected track from prep queue"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(1); } }
+            if tab == 5 : LibraryButton { text: "Up"; accessible-label: "Move prep track up"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(2); } }
+            if tab == 5 : LibraryButton { text: "Down"; accessible-label: "Move prep track down"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(3); } }
+            if tab == 5 : Text { text: "" + root.prep-queue-count + " queued. LOAD keeps entries; remove explicitly."; color: #bbbbbb; font-size: 11px; overflow: elide; horizontal-stretch: 1; }
         }
         if tab == 1 : HorizontalLayout {
             spacing: 3px;
@@ -1098,7 +1107,8 @@ component TrackLibrary inherits Rectangle {
             spacing: 0px; horizontal-stretch: 0;
             for column in root.columns : LibraryButton {
                 width: column.width * 1px;
-                text: (column.id == 0 && root.tab != 4 ? "Title" : column.title) + (root.sort-field == column.id ? (root.sort-descending ? " ▼" : " ▲") : "");
+                enabled: root.tab != 5;
+                text: (column.id == 0 && root.tab != 4 ? "Title" : column.title) + (root.tab != 5 && root.sort-field == column.id ? (root.sort-descending ? " ▼" : " ▲") : "");
                 accessible-label: "Sort library by " + column.sort-label;
                 clicked => { root.sort-column(column.id); }
             }
@@ -1146,6 +1156,7 @@ component TrackLibrary inherits Rectangle {
             LibraryButton { text: "◀"; accessible-label: "Scroll track columns left"; enabled: root.table-scroll-x < 0px; clicked => { root.table-scroll-x = min(0px, root.table-scroll-x + 240px); } }
             LibraryButton { text: "▶"; accessible-label: "Scroll track columns right"; enabled: root.table-scroll-x > min(0px, table-scroll.width - root.table-width * 1px); clicked => { root.table-scroll-x = max(min(0px, table-scroll.width - root.table-width * 1px), root.table-scroll-x - 240px); } }
             Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
+            LibraryButton { text: "To Prep"; accessible-label: "Add selected track to prep queue"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(0); } }
             LibraryButton { text: "‹"; accessible-label: "Previous library page"; enabled: root.can-previous-page; clicked => { root.change-page(-1); } }
             Text { text: page-text; accessible-role: text; accessible-label: "Library page"; color: #9faec2; font-size: 11px; vertical-alignment: center; }
             LibraryButton { text: "›"; accessible-label: "Next library page"; enabled: root.can-next-page; clicked => { root.change-page(1); } }
@@ -1538,6 +1549,8 @@ export component AppWindow inherits Window {
     in property <bool> analysis-running;
     in property <[float]> analysis-waveform;
     callback library-tab-selected(int);
+    callback prep-action(int);
+    in property <int> prep-queue-count;
     in property <string> library-count: "0 tracks";
     in property <string> library-page-text: "0 / 0";
     in property <bool> library-can-previous-page;
@@ -1868,6 +1881,8 @@ export component AppWindow inherits Window {
             can-analyze: root.library-has-analysis-targets && !root.loading && !root.library-busy;
             analyze => { root.analyze-library(); }
             tab <=> root.library-tab;
+            prep-action(action) => { root.prep-action(action); }
+            prep-queue-count: root.prep-queue-count;
             tab-selected(index) => { root.library-tab-selected(index); }
             horizontal-stretch: 1; min-width: 0px;
             rows: root.library-rows; count-text: root.library-count; empty-text: root.library-empty;

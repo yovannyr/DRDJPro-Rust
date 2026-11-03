@@ -49,7 +49,7 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 | 26 / 26,28 | Browse/Library, schnelle Auswahl, Back/Panel | **MIDI/Navigation fehlt.** Suche, Auswahl, Paging und Tabs vorhanden; Encoder, Druck, Shift-Schnellwahl sowie klarer Fokus-/Panelpfad fehlen. |
 | 26 / 27 | LOAD A/B | **MIDI fehlt.** Selektierten Track laden funktioniert in der GUI; globale LOAD-Noten2/3 fehlen. Bestehenden Schutz spielender/beschaeftigter Decks erhalten. |
 | 26 / 27 | LOAD-Doppeldruck: Instant Doubles | **S7 implementiert.** Bis350ms am Steuerthread; geteilter Track, Softwareposition/Basistempo/Grid/Keylock/Playzustand. Erster Druck normaler Library-LOAD, zweiter ersetzt nur dessen eigenen Job; laufendes Ziel und Konflikte geschuetzt. Ziel-Loops/TempCue zurueckgesetzt, Mixer erhalten. Details im GUI-Inventar, native Abnahme offen. |
-| 26 / 29 | Load Prep / Open Prep | **App/MIDI fehlt.** Prepare ist aktuell Analyse-/Metadatenansicht, keine kuratierte Vorbereitungsqueue. Hinzufuegen und Oeffnen brauchen eine eigene persistente Liste. |
+| 26 / 29 | Load Prep / Open Prep | **S8 implementiert.** Eigene persistente Prep Queue mit geordneten Track-IDs; Note27 hinzufuegen, Note16 oeffnen, GUI Entfernen/Up/Down. Prepare-Analyse bleibt getrennt; native Bedienabnahme offen. |
 | 26 / 30-31 | Vier Sampler-Pads, SHIFT Stop, Sample-Pegel | **App/MIDI fehlt.** Kein Sampler mit vier Slots, begrenztem Audio-Mix und Pegelregelung. |
 | 26 / 32 | Situationsabhaengige Hardware-Pegelanzeigen | **Teilweise.** LEDs zeigen derzeit A/B-Pre-Fader-Peaks. Das beschriebene Umschalten zwischen Pre-Fader-Cue und summiertem Post-Fader-Mix je nach Fader/Cue fehlt. Bestehende Messwerte sind wiederverwendbar. |
 | 27 / Vorderseite4 | Split Cue | **App/MIDI fehlt.** Unabhaengiges Pre-Fader-Cue und Monitor-Gain/Mix inklusive Profilpersistenz funktionieren bereits. Es fehlt Mono-Cue links / Mono-Master rechts samt globaler Note28. |
@@ -113,7 +113,9 @@ Keine Sensitivitaet oder zeitliche Garantie aus Tabellenadressen ableiten.
 ## 4. Implementierungsreihenfolge in begrenzten Slices
 
 Jeder Slice liefert GUI-/Controller-Zustandsabgleich, explizite Fehler,
-Regressionen, passenden Dokumentationsstand und unabhaengigen Review.
+Regressionen und passenden Dokumentationsstand. Nach Nutzeranweisung vom
+2026-11-03 entfaellt der unabhaengige Review fuer die restlichen Slices S8-S15;
+automatisierte Tests und finale Checks bleiben vor Commit/Push erforderlich.
 Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 
 | Slice | Umfang / Abhaengigkeit | Abnahme und Tests |
@@ -125,7 +127,7 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S5 Temporaerer CUE und Stutter | **Implementiert:** separater temporaerer Punkt je Deck/Quelle; CUE Hold/Release, PLAY-Uebernahme, SHIFT+CUE Trackstart und SHIFT+PLAY Stutter. GUI CUE/START/STUTTER nutzen dieselben Pfade. | Set/Preview/Return/Latch, Hardware-/GUI-Besitz, Pad-Konflikt und Sourcewechsel automatisiert; Fenster-/Lifecycle-/EOF-Freigabe. Temporaer, keine Hot-Cue-/SQLite-Aenderung. Native Abnahme offen. |
 | S6 Browse und normales LOAD | **Implementiert:** Encoder normal/zehnfach, Tracks/Crates per Druck, Back zu Crates, Panel zyklisch durch App-Librarytabs; LOAD A/B. | Seitenuebergreifende Auswahl/Queue, sichtbare Zielzeile, Editor-/Suchfokus, Revisionwechsel und Busy/Playing/Missing-Fehler automatisiert. Native Bibliotheksnavigation offen. |
 | S7 Instant Doubles | **Implementiert:** zwei aufeinanderfolgende LOAD auf dasselbe Ziel bis350ms; erster normaler LOAD sofort, eigener Ladejob beim erfolgreichen Klonen verworfen. Shared PCM/Keylock, Quellposition/Basistempo/Grid/Playzustand; Ziel pausiert erforderlich. | A/B, Grenzzeit, Unterbrechung, Quelle/Zielwechsel, spaete Ladeergebnisse, Keylock-Pitch und Render-Allokationen automatisiert. Ziel-Loops/TempCue zurueckgesetzt, Mixer/EQ/FX erhalten; Konflikte abgewiesen. Vertrag im GUI-Inventar, native Abnahme offen. |
-| S8 Prepare-Queue | Persistente kuratierte Track-ID-Liste und LoadPrep/OpenPrep, getrennt vom Analyse-Tab. | Deduplizierung, Reihenfolge, Entfernen, Missing/Relocation und Neustart; keine unerwartete Analyse oder Wiedergabe. |
+| S8 Prepare-Queue | **Implementiert:** eigener Prep-Queue-Tab, Note27/16, Deduplizierung und kuratierte Reihenfolge bis5000IDs; Remove/Up/Down, SQLite17 und Delta-/Retry-Persistenz. | Reihenfolge/Suche, neue Aenderungen nach Save-Ack, Migration16, Rollback/Retry, Missing/Relocation, Neustart und GUI-/MIDI-Isolation automatisiert. Kein Analyse-/Autoplay-Start; native Bedienabnahme offen. |
 | S9 Erweiterte Jog-Navigation | SHIFT-Suche, gehaltenes Vor-/Zurueckspulen und Loop-In/Out-Editmodus. S2/S3. | Anfang/EOF, Geschwindigkeit/Modusprioritaet, Release/Modifierwechsel, Loops Mindestlaenge, Sourcewechsel und Scratch-Konflikte. |
 | S10 Split Cue und Meterpolitik | Mono-Cue links/Mono-Master rechts sowie handbuchgerechte Hardwaremeter. | Stereo-/Mono-Summen und Pegel, Clip, Cue/Fader-Kombinationen und MASTER-Isolation; Mehrkanalrouting, gespeicherter Split-Zustand mit Profilmigration, native Kopfhoererprobe. |
 | S11 Censor | Reverse mit separater normaler Zeitlinie, S2/S5/S9. | Samplegenauer Reverse, Rueckkehrzeit bei verschiedenen Tempi, Pause/EOF/Loop/Sync/Keylock, Release/Disconnect; Allokations-/Lockfreiheit und Callback-Frist messen. |
@@ -137,7 +139,8 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
 autorisierte Fallback: S2-S6 selbst fertigstellen. Separat wurde S7 mit vom
-Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8-S15 bleiben offen; der
+Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8 folgt als eigener Queue-Slice.
+S9-S15 bleiben offen; der
 Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits

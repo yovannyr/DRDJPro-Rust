@@ -105,7 +105,7 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
             };
             Some(Command::Browse(step * if note == 1 { 10 } else { 1 }))
         }
-        (0x90, 15, note @ (7 | 17 | 31), 1..=127) => Some(Command::BrowserAction(note)),
+        (0x90, 15, note @ (7 | 16 | 17 | 27 | 31), 1..=127) => Some(Command::BrowserAction(note)),
         (0x90, 15, note @ 2..=3, 1..=127) => Some(Command::Load(usize::from(note - 2))),
         (0x90, 0..=1, 2..=3, 1..=127) => Some(Command::Sync(channel as usize, bytes[1] == 2)),
         (0x90, 4..=5, note @ (50..=53 | 56..=57 | 63), 1..=127) => {
@@ -1216,7 +1216,10 @@ mod tests {
             );
         }
         // Channel 16, note 27 is Load Prep, not either headphone selector.
-        assert_eq!(decode(&[0x9f, 27, 127]), None);
+        assert_eq!(decode(&[0x9f, 27, 127]), Some(Command::BrowserAction(27)));
+        assert_eq!(decode(&[0x9f, 16, 127]), Some(Command::BrowserAction(16)));
+        assert_eq!(decode(&[0x9f, 27, 0]), None);
+        assert_eq!(decode(&[0x8f, 16, 64]), None);
         assert_eq!(decode(&[0x92, 27, 127]), None);
     }
     #[test]

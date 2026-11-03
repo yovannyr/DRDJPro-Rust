@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 16;
+const SCHEMA_VERSION: i32 = 17;
 const DECK_SESSION_QUERY: &str = "SELECT CASE WHEN length(CAST(value AS BLOB))<=256 THEN value ELSE '' END FROM library_meta WHERE key='deck_session_v1'";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -371,6 +371,11 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
         Default::default()
     };
     let catalog = Catalog {
+        prep_queue: if version >= 17 {
+            read_prep_queue(connection)?
+        } else {
+            Vec::new()
+        },
         version: 1,
         tracks,
         crates,
@@ -550,6 +555,38 @@ fn read_history(
         history.push(entry);
     }
     Ok(history)
+}
+fn create_prep_schema(connection: &Connection) -> Result<(), String> {
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS prep_queue(position INTEGER PRIMARY KEY CHECK(position>=0 AND position<5000),track_id INTEGER NOT NULL UNIQUE REFERENCES tracks(id) ON DELETE CASCADE) STRICT;").map_err(|e| e.to_string())
+}
+fn read_prep_queue(connection: &Connection) -> Result<Vec<i32>, InspectError> {
+    let mut statement = connection
+        .prepare("SELECT position,track_id FROM prep_queue ORDER BY position LIMIT 5001")?;
+    let mut rows = statement.query([])?;
+    let mut ids = Vec::new();
+    while let Some(row) = rows.next()? {
+        if row.get::<_, i64>(0)? != ids.len() as i64 {
+            return Err(InspectError::Damaged("Invalid prep queue order".into()));
+        }
+        ids.push(row.get(1)?);
+    }
+    library::validate_prep_queue(&ids).map_err(InspectError::Damaged)?;
+    Ok(ids)
+}
+fn write_prep_queue(connection: &Connection, ids: &[i32]) -> Result<(), String> {
+    library::validate_prep_queue(ids)?;
+    connection
+        .execute("DELETE FROM prep_queue", [])
+        .map_err(|e| e.to_string())?;
+    let mut statement = connection
+        .prepare("INSERT INTO prep_queue(position,track_id) VALUES(?1,?2)")
+        .map_err(|e| e.to_string())?;
+    for (position, id) in ids.iter().enumerate() {
+        statement
+            .execute(rusqlite::params![position as i64, id])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 fn write_history(connection: &Connection, catalog: &Catalog) -> Result<(), String> {
     connection
@@ -902,7 +939,8 @@ fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String
     write_grids(connection, catalog)?;
     write_hot_cues(connection, catalog)?;
     write_saved_loops(connection, catalog)?;
-    write_history(connection, catalog)
+    write_history(connection, catalog)?;
+    write_prep_queue(connection, &catalog.prep_queue)
 }
 fn create_metadata_schema(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("CREATE TABLE track_metadata(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
@@ -948,6 +986,7 @@ fn initialize(connection: &mut Connection, catalog: &Catalog, source: &str) -> R
     create_hot_cue_schema(&transaction)?;
     create_saved_loop_schema(&transaction)?;
     create_history_schema(&transaction)?;
+    create_prep_schema(&transaction)?;
     transaction
         .pragma_update(None, "application_id", APPLICATION_ID)
         .map_err(|e| e.to_string())?;
@@ -1067,7 +1106,7 @@ impl Store {
         let has_backup = side_path(&path, ".bak")
             .try_exists()
             .map_err(|e| e.to_string())?;
-        let (mut connection, catalog, note) = match opened {
+        let (mut connection, mut catalog, note) = match opened {
             Ok(Some((connection, Some(catalog)))) => {
                 (connection, catalog, "SQLite library restored".to_string())
             }
@@ -1160,6 +1199,12 @@ impl Store {
             }
             if version < 16 {
                 create_analysis_schema(&tx)?;
+            }
+            if version < 17 {
+                create_prep_schema(&tx)?;
+                catalog.prep_queue = read_prep_queue(&tx)
+                    .map_err(|error| format!("Prep queue migration failed: {error:?}"))?;
+                catalog.validate()?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
@@ -1388,6 +1433,7 @@ impl Store {
             })
             .transpose()?;
         if delta.tracks.is_empty()
+            && delta.prep_queue.is_none()
             && delta.crates.is_none()
             && delta.memberships.is_empty()
             && delta.history.is_empty()
@@ -1400,6 +1446,7 @@ impl Store {
             return self.checkpoint(true);
         }
         Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             tracks: delta.tracks.clone(),
             crates: Default::default(),
@@ -1656,6 +1703,9 @@ impl Store {
         if history_count > library::MAX_HISTORY as i64 {
             return Err("Playback history limit exceeded".into());
         }
+        if let Some(ids) = &delta.prep_queue {
+            write_prep_queue(&tx, ids)?;
+        }
         if let Some(session) = deck_session {
             for track_id in session.decks.into_iter().flatten() {
                 let exists: bool = tx
@@ -1874,6 +1924,7 @@ impl Worker {
                                 || columns.is_some()
                             {
                                 let delta = delta.unwrap_or(crate::library::CatalogDelta {
+                                    prep_queue: None,
                                     revision: 0,
                                     tracks: vec![],
                                     crates: None,
@@ -2060,6 +2111,66 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn prep_queue_migration_roundtrip_atomic_retry_and_relocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        library.insert([dir.path().join("one.wav"), dir.path().join("two.wav")]);
+        store.save_delta(&library.changes()).unwrap();
+        // Represent an actual v16 catalog: the new table did not yet exist.
+        store
+            .connection
+            .execute_batch("DROP TABLE prep_queue; PRAGMA user_version=16;")
+            .unwrap();
+        drop(store);
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        assert!(library.prep_queue().is_empty());
+        assert_eq!(library.len(), 2);
+        library.prep_add(2).unwrap();
+        library.prep_add(1).unwrap();
+        store.save_delta(&library.changes()).unwrap();
+        library.acknowledge(library.revision());
+        library.prep_move(1, -1).unwrap();
+        store.connection.execute_batch("CREATE TRIGGER fail_prep BEFORE INSERT ON prep_queue BEGIN SELECT RAISE(ABORT,'injected prep failure'); END;").unwrap();
+        assert!(store.save_delta(&library.changes()).is_err());
+        assert_eq!(read_prep_queue(&store.connection).unwrap(), vec![2, 1]);
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_prep;")
+            .unwrap();
+        store.save_delta(&library.changes()).unwrap();
+        library.acknowledge(library.revision());
+        let replacement = crate::test_support::wav_file(4096, 48000);
+        let relocated = dir.path().join("relocated.wav");
+        fs::copy(replacement.path(), &relocated).unwrap();
+        library
+            .relocate_track(2, relocated.clone(), Default::default())
+            .unwrap();
+        store.save_delta(&library.changes()).unwrap();
+        assert_eq!(read_prep_queue(&store.connection).unwrap(), vec![1, 2]);
+        let mut invalid = Library::default().changes();
+        invalid.prep_queue = Some(vec![1, 999]);
+        assert!(store.save_delta(&invalid).is_err());
+        assert_eq!(read_prep_queue(&store.connection).unwrap(), vec![1, 2]);
+        invalid.prep_queue = Some(vec![1, 1]);
+        assert!(store.save_delta(&invalid).is_err());
+        fs::remove_file(relocated).unwrap();
+        drop(store);
+        let (mut store, library, _) = Store::open(db).unwrap();
+        assert_eq!(library.prep_queue(), &[1, 2]);
+        assert!(library
+            .track_by_id(2)
+            .unwrap()
+            .path
+            .ends_with("relocated.wav"));
+        assert!(!library.track_by_id(2).unwrap().available);
+        let mut cleared = Library::restore(library.catalog()).unwrap();
+        cleared.prep_remove(1).unwrap();
+        cleared.prep_remove(2).unwrap();
+        store.save_delta(&cleared.changes()).unwrap();
+        assert!(read_prep_queue(&store.connection).unwrap().is_empty());
+    }
+    #[test]
     fn table_columns_roundtrip_atomic_failure_and_malformed_data() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("library.sqlite3");
@@ -2095,6 +2206,7 @@ mod tests {
         fx.decks[0].time_ms = 500;
         fx.presets[7] = Some(fx.decks[0]);
         let empty = crate::library::CatalogDelta {
+            prep_queue: None,
             revision: 0,
             tracks: vec![],
             crates: None,
@@ -2136,6 +2248,7 @@ mod tests {
             .unwrap();
         assert!(store.read_fx_preferences().is_err());
         let empty = crate::library::CatalogDelta {
+            prep_queue: None,
             revision: 0,
             tracks: vec![],
             crates: None,
@@ -2210,6 +2323,7 @@ mod tests {
         let db = dir.path().join("library.sqlite3");
         let (mut store, _, _) = Store::open(db.clone()).unwrap();
         let delta = library::CatalogDelta {
+            prep_queue: None,
             revision: 1,
             tracks: vec![],
             crates: None,
@@ -2261,6 +2375,7 @@ mod tests {
         let db = dir.path().join("library.sqlite3");
         let (mut store, _, _) = Store::open(db.clone()).unwrap();
         let delta = library::CatalogDelta {
+            prep_queue: None,
             revision: 1,
             tracks: vec![],
             crates: None,
@@ -2332,6 +2447,7 @@ mod tests {
             monitor: None,
         };
         let delta = library::CatalogDelta {
+            prep_queue: None,
             revision: 1,
             tracks: catalog(dir.path().join("missing.wav"), 27).tracks,
             crates: None,
@@ -2365,6 +2481,7 @@ mod tests {
             monitor: None,
         };
         let empty = library::CatalogDelta {
+            prep_queue: None,
             revision: 2,
             tracks: vec![],
             crates: None,
@@ -2445,6 +2562,7 @@ mod tests {
         prefs.decks[1].step = 5;
         let data = catalog(dir.path().join("missing.wav"), 27);
         let delta = library::CatalogDelta {
+            prep_queue: None,
             revision: 1,
             tracks: data.tracks,
             crates: None,
@@ -2538,6 +2656,7 @@ mod tests {
     }
     fn catalog(path: PathBuf, id: i32) -> Catalog {
         Catalog {
+            prep_queue: Vec::new(),
             version: 1,
             crates: Default::default(),
             tracks: vec![SavedTrack {
@@ -2918,6 +3037,7 @@ mod tests {
             decks: [Some(1), Some(2)],
         };
         let empty = library::CatalogDelta {
+            prep_queue: None,
             revision: library.revision(),
             tracks: vec![],
             crates: None,
@@ -3049,6 +3169,7 @@ mod tests {
             .unwrap();
         collision.path = second_replacement_path.clone();
         let conflicting_delta = library::CatalogDelta {
+            prep_queue: None,
             revision: 1,
             tracks: vec![collision],
             crates: None,
@@ -3132,6 +3253,7 @@ mod tests {
         };
         data.tracks[0].metadata.analysis = Some(analysis.clone());
         let delta = crate::library::CatalogDelta {
+            prep_queue: None,
             tracks: data.tracks.clone(),
             revision: 1,
             crates: None,
@@ -3146,6 +3268,7 @@ mod tests {
             Some(analysis)
         );
         let mut bad = crate::library::CatalogDelta {
+            prep_queue: None,
             tracks: delta.tracks.clone(),
             revision: 2,
             crates: None,
@@ -3292,6 +3415,7 @@ mod tests {
         let data = catalog(dir.path().join("checkpoint-marker.wav"), 1);
         store
             .save_delta(&library::CatalogDelta {
+                prep_queue: None,
                 revision: 1,
                 tracks: data.tracks,
                 crates: None,
@@ -3309,6 +3433,7 @@ mod tests {
         fs::remove_dir(&backup).unwrap();
         store
             .save_delta(&library::CatalogDelta {
+                prep_queue: None,
                 revision: 1,
                 tracks: Vec::new(),
                 crates: None,
@@ -3332,6 +3457,7 @@ mod tests {
         let data = catalog(dir.path().join("checkpoint-marker.wav"), 1);
         worker
             .save_delta(library::CatalogDelta {
+                prep_queue: None,
                 revision: 1,
                 tracks: data.tracks,
                 crates: None,
@@ -3388,6 +3514,7 @@ mod tests {
                 .set(0, Some(cue(1, "First".into())))
                 .unwrap();
             let mut delta = library::CatalogDelta {
+                prep_queue: None,
                 revision: 1,
                 tracks: vec![target],
                 crates: None,
@@ -4347,6 +4474,7 @@ mod tests {
         assert_eq!(restored.crates.entries[0].tracks, HashSet::from([1]));
         for (id, track, present) in [(crate_id, 999, true), (999, 1, false), (0, 1, true)] {
             let bad = library::CatalogDelta {
+                prep_queue: None,
                 revision: 0,
                 tracks: Vec::new(),
                 crates: None,
