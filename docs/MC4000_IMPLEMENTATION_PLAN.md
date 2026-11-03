@@ -51,8 +51,8 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 | 26 / 27 | LOAD-Doppeldruck: Instant Doubles | **S7 implementiert.** Bis350ms am Steuerthread; geteilter Track, Softwareposition/Basistempo/Grid/Keylock/Playzustand. Erster Druck normaler Library-LOAD, zweiter ersetzt nur dessen eigenen Job; laufendes Ziel und Konflikte geschuetzt. Ziel-Loops/TempCue zurueckgesetzt, Mixer erhalten. Details im GUI-Inventar, native Abnahme offen. |
 | 26 / 29 | Load Prep / Open Prep | **S8 implementiert.** Eigene persistente Prep Queue mit geordneten Track-IDs; Note27 hinzufuegen, Note16 oeffnen, GUI Entfernen/Up/Down. Prepare-Analyse bleibt getrennt; native Bedienabnahme offen. |
 | 26 / 30-31 | Vier Sampler-Pads, SHIFT Stop, Sample-Pegel | **App/MIDI fehlt.** Kein Sampler mit vier Slots, begrenztem Audio-Mix und Pegelregelung. |
-| 26 / 32 | Situationsabhaengige Hardware-Pegelanzeigen | **Teilweise.** LEDs zeigen derzeit A/B-Pre-Fader-Peaks. Das beschriebene Umschalten zwischen Pre-Fader-Cue und summiertem Post-Fader-Mix je nach Fader/Cue fehlt. Bestehende Messwerte sind wiederverwendbar. |
-| 27 / Vorderseite4 | Split Cue | **App/MIDI fehlt.** Unabhaengiges Pre-Fader-Cue und Monitor-Gain/Mix inklusive Profilpersistenz funktionieren bereits. Es fehlt Mono-Cue links / Mono-Master rechts samt globaler Note28. |
+| 26 / 32 | Situationsabhaengige Hardware-Pegelanzeigen | **S10 implementiert.** Fader geschlossen: Pre A/B; sobald einer offen: Stereo-Master auf beiden, ausser laufendem Cue bei geschlossenem eigenen Fader. Frischekontrolle statt GUI-Clip-Hold, native LED-Abnahme offen. |
+| 27 / Vorderseite4 | Split Cue | **S10 implementiert.** MON-Checkbox und absolute Note28; Mono-Cue links / Mono-Master rechts auf3/4, Gain/Mix aktiv,5ms Blend und geraetespezifische Profile. Routing-/Formatkonflikte geschuetzt; native Kopfhoererprobe offen. |
 
 ### Bereits vorhanden; nicht neu implementieren
 
@@ -129,7 +129,7 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S7 Instant Doubles | **Implementiert:** zwei aufeinanderfolgende LOAD auf dasselbe Ziel bis350ms; erster normaler LOAD sofort, eigener Ladejob beim erfolgreichen Klonen verworfen. Shared PCM/Keylock, Quellposition/Basistempo/Grid/Playzustand; Ziel pausiert erforderlich. | A/B, Grenzzeit, Unterbrechung, Quelle/Zielwechsel, spaete Ladeergebnisse, Keylock-Pitch und Render-Allokationen automatisiert. Ziel-Loops/TempCue zurueckgesetzt, Mixer/EQ/FX erhalten; Konflikte abgewiesen. Vertrag im GUI-Inventar, native Abnahme offen. |
 | S8 Prepare-Queue | **Implementiert:** eigener Prep-Queue-Tab, Note27/16, Deduplizierung und kuratierte Reihenfolge bis5000IDs; Remove/Up/Down, SQLite17 und Delta-/Retry-Persistenz. | Reihenfolge/Suche, neue Aenderungen nach Save-Ack, Migration16, Rollback/Retry, Missing/Relocation, Neustart und GUI-/MIDI-Isolation automatisiert. Kein Analyse-/Autoplay-Start; native Bedienabnahme offen. |
 | S9 Erweiterte Jog-Navigation | **Implementiert:** SHIFT-Jog50ms/Einheit, gehaltene Suche8s/s, Loop-Jog1ms/Einheit mit explizitem Off/In/Out. | Grenzen/ein Frame, Stereo-PCM, Play/Pause/A-B, Releases/Opposition/100ms-Gap, Quell-/Renderer-/Transportwechsel, GUI-Modus/Geometrie und Maus-Besitz automatisiert. Native Hoer-/Haptik-/Latenzabnahme offen. |
-| S10 Split Cue und Meterpolitik | Mono-Cue links/Mono-Master rechts sowie handbuchgerechte Hardwaremeter. | Stereo-/Mono-Summen und Pegel, Clip, Cue/Fader-Kombinationen und MASTER-Isolation; Mehrkanalrouting, gespeicherter Split-Zustand mit Profilmigration, native Kopfhoererprobe. |
+| S10 Split Cue und Meterpolitik | **Implementiert:** Split in MON/Note28, gemittelte Mono-Signale und5ms Blend, Profilfeld mit Defaultaus; kontextuelle Hardwaremeter mit separatem Stereo-Master-Peak und100ms Produzentenbeobachtung. | Mono/Stereo/6-Kanal-Routing, Frame-/Sync-Kohaerenz, Master-Isolation, Allokationsfreiheit/Release-Zeitbudget, Profil-Neustart4/2/4, Konflikte und Meterumschaltung automatisiert. Native Kopfhoerer-/LED-Abnahme offen. |
 | S11 Censor | Reverse mit separater normaler Zeitlinie, S2/S5/S9. | Samplegenauer Reverse, Rueckkehrzeit bei verschiedenen Tempi, Pause/EOF/Loop/Sync/Keylock, Release/Disconnect; Allokations-/Lockfreiheit und Callback-Frist messen. |
 | S12 Musikalische FX-Zeitbasis | Beat-Unterteilungen, Tap und Hold-Reset; bestehendes Delay erhalten. | BPM/Tempo- und Gridwechsel, Tap-Ausreisser/Timeout, Rampen, Persistenz; keine Klicks oder unbeschraenkten Echtzeitpuffer. |
 | S13 Drei FX-Slots und Auswahl | Begrenzte Slots je Deck, serieller/paralleler Signalvertrag, FX1-3/Shift-Pegel/-Auswahl. S12. | Vorab unterstuetzte Effekttypen und Routing festlegen; alten Delayzustand migrieren, Bypass/Fahnen/Parameter und CPU-/Speicherbudget; bisheriges Controller-Mapping nicht still veraendern. |
@@ -140,7 +140,7 @@ Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
 autorisierte Fallback: S2-S6 selbst fertigstellen. Separat wurde S7 mit vom
 Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8 folgt als eigener Queue-Slice.
-S9 ergaenzt Navigation und Loop-Jog; S10-S15 bleiben offen. Der
+S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11-S15 bleiben offen. Der
 Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits

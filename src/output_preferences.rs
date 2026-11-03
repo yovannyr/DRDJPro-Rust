@@ -57,6 +57,8 @@ impl OutputDeviceKey {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MonitorPreferences {
+    #[serde(default)]
+    pub split: bool,
     pub gain: f32,
     pub mix: f32,
     pub cues: [bool; 2],
@@ -64,6 +66,7 @@ pub struct MonitorPreferences {
 impl MonitorPreferences {
     pub fn settings(self) -> crate::output_routing::MonitorSettings {
         crate::output_routing::MonitorSettings {
+            split: self.split,
             gain: self.gain,
             mix: self.mix,
         }
@@ -83,7 +86,8 @@ impl OutputRoute {
         if let Some(monitor) = self.monitor {
             monitor.settings().validate()?;
             if self.device.channels < 4
-                || (self.pair == 1 && (monitor.mix > 0. || monitor.cues.into_iter().any(|v| v)))
+                || (self.pair == 1
+                    && (monitor.split || monitor.mix > 0. || monitor.cues.into_iter().any(|v| v)))
             {
                 return Err(
                     "Saved monitor profile conflicts with the output format or master route".into(),
@@ -151,6 +155,32 @@ impl OutputRoutes {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_cue_legacy_default_and_profile_format_conflicts() {
+        let old = r#"{"gain":0.5,"mix":0.5,"cues":[false,true]}"#;
+        let mut monitor: MonitorPreferences = serde_json::from_str(old).unwrap();
+        assert!(!monitor.split);
+        monitor.split = true;
+        let key = OutputDeviceKey::unique("Test".into(), "MC4000".into(), 4, 1).unwrap();
+        let mut route = OutputRoute {
+            device: key,
+            pair: 0,
+            monitor: Some(monitor),
+        };
+        route.validate().unwrap();
+        let saved = serde_json::to_string(&route).unwrap();
+        let restored: OutputRoute = serde_json::from_str(&saved).unwrap();
+        assert!(restored.monitor.unwrap().split);
+        route.pair = 1;
+        assert!(route.validate().is_err());
+        route.pair = 0;
+        route.device.channels = 2;
+        assert!(route.validate().is_err());
+        assert!(serde_json::from_str::<MonitorPreferences>(
+            r#"{"gain":1,"mix":0,"cues":[false,false],"split":"yes"}"#
+        )
+        .is_err());
+    }
     use super::*;
     #[test]
     fn endpoint_identity_survives_rename_but_never_inherits_by_name() {
@@ -171,6 +201,7 @@ mod tests {
                 device: key.clone(),
                 pair: 0,
                 monitor: Some(MonitorPreferences {
+                    split: false,
                     gain: 0.2,
                     mix: 0.,
                     cues: [false, true],
@@ -223,6 +254,7 @@ mod tests {
         profiles.validate().unwrap();
         assert_eq!(profiles.routes[0].monitor, None);
         let settings = MonitorPreferences {
+            split: false,
             gain: 0.4,
             mix: 0.75,
             cues: [true, false],

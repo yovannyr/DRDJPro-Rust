@@ -11,7 +11,8 @@ Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 
 S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
 implementiert; S8 ergaenzt die persistente Prep Queue, S9 Navigation/Loop-Jog.
-S10-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S9
+S10 ergaenzt Split Cue/kontextuelle Hardwaremeter. S11-S15 bleiben
+**NOT IMPLEMENTED**. Native Abnahmen fuer S2-S10
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -66,8 +67,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S8-02 Restart | Queue bearbeiten, Track fehlen lassen/relokalisieren, Neustart | Queue persistent; stabileIDs, fehlende Tracks erkennbar, kein automatisches Laden/Abspielen. |
 | S9-01 Search | SHIFT+Jog; SHIFT+Bend32/33 halten/loslassen, beide Tasten, SHIFT loslassen, Fokus/USB wechseln; A/B pausiert/laufend | Jog50ms/Einheit, gehaltene Suche8s/s additiv zum Softwareplayhead, >100ms Tick-Gap beendet ohne Nachholen. Pause bleibt Pause, EOF stoppt; kein versehentliches Scratch/Bend. Native Hoer-/Latenzprobe noetig. |
 | S9-02 LoopEdit | AUTO JOG Off/In/Out; bei aktivem Loop Hardware IN/OUT druecken, beruehren/drehen; AUTO verlassen und Source/Transport wechseln | Edit hat Vorrang vor SHIFT, nur gewaehlte Grenze1ms/Einheit, Sample-Rundung und mindestens ein Frame. Aktiver ausgeschlossener Playhead geht zu In; sonst Transport erhalten. Modus im Caption, unmittelbare Freigabe bei Panelwechsel; Slot-Speichern explizit. |
-| S10-01 Split | CueB/MasterA, Split ein/aus, Mono-/Stereo-Tracks | Split: Cue mono links, Master mono rechts; aus: vorhandener Cue/Master-Mix; MASTER selbst unveraendert. |
-| S10-02 Meter | Fader unten/oben, Cue ein/aus, Deck pausiert/laufend | LEDs folgen dokumentierter Pre-/Post-Fader-Politik, nicht MASTER-Hardwarepegel; kein stale Clip/Stillstand. |
+| S10-01 Split | CueB/MasterA, Split-Schalter/GUI ein/aus, Mix0/50/100%, Gain und Mono-/Stereo-Tracks | Split: gemitteltes Cue mono links, Master mono rechts; Mix0/100 schaltet jeweils andere Seite stumm, Mitte halbes Gewicht je Seite.5ms Blend, aus vorhandener Stereo-Mix; MASTER unveraendert.3/4 reserviert auch ohne aktive Cue-Auswahl. |
+| S10-02 Meter | Fader beide unten/einer oben, Cue ein/aus, Deck pausiert/laufend/scratch; Audiofortschritt stoppen und fortsetzen | Beide unten: Pre A/B; sonst Master auf beiden ausser laufendem Cue mit eigenem Fader unten. Pausiertes Cue zurueck zu Master. Aktuelles50ms Fenster, kein GUI-Clip-Hold; bei weiterlaufendem UI und >100ms ohne Produzentenfortschritt dunkel, nach neuem Fortschritt wieder aktiv. Kein physischer MASTER-Einfluss. |
 | S10-03 Profile | Split speichern, Neustart und Geraetewechsel2/4Kanaele | Profil korrekt wiederhergestellt; Konflikte/fehlendes Cuepaar explizit statt falscher Ausgabe. |
 | S11-01 Censor | Laufend SHIFT+VINYL halten, dann loslassen | Rueckwaerts hoerbar; Rueckkehr auf parallel fortgelaufene normale Zeitlinie, nicht auf Start des Holds. |
 | S11-02 CensorEdges | Bei anderem Pitch, nahe Anfang/EOF, mit Loop/Sync/Keylock | Dokumentierte Kombinationen korrekt oder explizit abgewiesen; kein Underflow, Haengen oder Tempowechsel. |

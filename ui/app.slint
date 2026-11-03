@@ -1387,6 +1387,10 @@ export component AppWindow inherits Window {
     callback monitor-cue-changed(int);
     in-out property <float> monitor-gain: 100;
     in-out property <float> monitor-mix: 0;
+    in-out property <bool> monitor-split: false;
+    in property <bool> controller-meter-live: false;
+    in property <float> controller-master-peak-level;
+    in property <bool> controller-master-peak-warning;
     callback monitor-changed();
     in-out property <bool> audio-device-open:false;
     in property <[string]> audio-device-names:["System default"];
@@ -1959,10 +1963,11 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 CheckBox {text:"CUE A (pre-fader)";accessible-label:"Deck A headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-a;toggled=>{root.monitor-cue-changed(0);}}
                 CheckBox {text:"CUE B (pre-fader)";accessible-label:"Deck B headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-b;toggled=>{root.monitor-cue-changed(1);}}
+                CheckBox {text:"SPLIT CUE";accessible-label:"Split headphone cue";accessible-description:"Cue mono left, master mono right; mix and level remain active";enabled:root.monitor-available;checked <=> root.monitor-split;toggled=>{root.monitor-changed();}}
             }
             Text {text:"HEADPHONE LEVEL " + round(root.monitor-gain) + "%";color:#edf2fa;}
             Slider {accessible-label:"Headphone monitor gain";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-gain;changed=>{root.monitor-changed();}}
-            Text {text:"CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:#edf2fa;}
+            Text {text:root.monitor-split ? "CUE mono L ← BALANCE " + round(root.monitor-mix) + "% → MASTER mono R" : "CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:#edf2fa;}
             Slider {accessible-label:"Headphone cue master mix";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-mix;changed=>{root.monitor-changed();}}
             Text {text:"Settings follow audio profile status. MC4000 Monitor Level / Pan control these sliders.";color:#a6b4c8;}
         }

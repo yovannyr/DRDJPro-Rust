@@ -334,6 +334,7 @@ pub struct AudioController {
     search_worker: RefCell<Option<SearchWorker>>,
     library_perf: RefCell<Option<Rc<RefCell<crate::library_perf::Recorder>>>>,
     perf_status_updated: Cell<std::time::Instant>,
+    hardware_meter_clock: RefCell<crate::render_bus::ClockObserver>,
     persistence: RefCell<Option<crate::library_store::Worker>>,
     storage_ready: Cell<bool>,
     dirty: Cell<bool>,
@@ -500,6 +501,7 @@ impl AudioController {
             search_worker: RefCell::new(None),
             library_perf: RefCell::new(None),
             perf_status_updated: Cell::new(std::time::Instant::now()),
+            hardware_meter_clock: RefCell::new(Default::default()),
             persistence: RefCell::new(None),
             storage_ready: Cell::new(true),
             dirty: Cell::new(false),
@@ -820,6 +822,7 @@ impl AudioController {
                 if let Some(ui) = c.ui.upgrade() {
                     let result = c.engine.borrow().set_monitor_settings(
                         crate::output_routing::MonitorSettings {
+                            split: ui.get_monitor_split(),
                             gain: ui.get_monitor_gain() / 100.,
                             mix: ui.get_monitor_mix() / 100.,
                         },
@@ -4560,6 +4563,7 @@ impl AudioController {
                 monitor: (self.engine.borrow().output_channels() >= 4).then(|| {
                     let settings = self.engine.borrow().monitor_settings();
                     crate::output_preferences::MonitorPreferences {
+                        split: settings.split,
                         gain: settings.gain,
                         mix: settings.mix,
                         cues: [
@@ -4682,6 +4686,7 @@ impl AudioController {
         if self.engine.borrow().output_channels() >= 4 {
             let _ = self.engine.borrow().restore_monitor_state(
                 crate::output_preferences::MonitorPreferences {
+                    split: false,
                     gain: 1.,
                     mix: 0.,
                     cues: [false; 2],
@@ -7424,10 +7429,23 @@ impl AudioController {
         let monitor = self.engine.borrow().monitor_settings();
         ui.set_monitor_gain(monitor.gain * 100.);
         ui.set_monitor_mix(monitor.mix * 100.);
+        ui.set_monitor_split(monitor.split);
+        let engine = self.engine.borrow();
+        ui.set_controller_meter_live(
+            !engine.output_failed()
+                && self
+                    .hardware_meter_clock
+                    .borrow_mut()
+                    .observe(engine.rendered_frames(), engine.control_now()),
+        );
+        drop(engine);
         let (caption, level, warning) = peak_display(self.engine.borrow().output_peak());
         ui.set_output_peak_caption(caption.into());
         ui.set_output_peak_level(level);
         ui.set_output_peak_warning(warning);
+        let (_, master_level, master_warning) = peak_display(self.engine.borrow().master_peak());
+        ui.set_controller_master_peak_level(master_level);
+        ui.set_controller_master_peak_warning(master_warning);
         for (id, name) in [(DeckId::A, "A"), (DeckId::B, "B")] {
             let (caption, level, invalid) = peak_display(self.engine.borrow().channel_peak(id));
             let state = if self.engine.borrow().snapshot(id).playing {
@@ -8071,6 +8089,81 @@ fn precise_time(time: std::time::Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_cue_gui_midi_and_hardware_meter_liveness() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let clock = Rc::new(Cell::new(Instant::now()));
+        let read = Rc::clone(&clock);
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            4,
+            48000,
+            Box::new(move || read.get()),
+        ));
+        let a = wav_file(16384, 48000 * 3);
+        let b = wav_file(8192, 48000 * 3);
+        engine.load_a(a.path()).unwrap();
+        engine.load_b(b.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        ui.set_channel_a(0.);
+        ui.set_channel_b(0.);
+        ui.invoke_mixer_changed();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        c.refresh();
+        assert!(!ui.get_controller_meter_live());
+        output.by_ref().take(10000).for_each(drop);
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.refresh();
+        assert!(ui.get_controller_meter_live());
+        assert_eq!(ui.get_channel_a_peak_level(), 0.5);
+        assert_eq!(ui.get_channel_b_peak_level(), 0.25);
+        assert_eq!(ui.get_output_peak_level(), 0.);
+        ui.show().unwrap();
+        control(&ui, "Show headphone monitor").invoke_accessible_default_action();
+        control(&ui, "Split headphone cue").invoke_accessible_default_action();
+        assert!(engine.monitor_settings().split && ui.get_monitor_split());
+        crate::mc4000::apply(&ui, crate::mc4000::decode(&[0x9f, 28, 0]).unwrap());
+        assert!(!engine.monitor_settings().split);
+        crate::mc4000::apply(&ui, crate::mc4000::decode(&[0x9f, 28, 127]).unwrap());
+        crate::mc4000::apply(&ui, crate::mc4000::decode(&[0x9f, 28, 127]).unwrap());
+        assert!(engine.monitor_settings().split); // Absolute switch is idempotent.
+        assert!(engine.snapshot(DeckId::A).playing && engine.snapshot(DeckId::B).playing);
+        clock.set(clock.get() + Duration::from_millis(101));
+        c.refresh();
+        assert!(!ui.get_controller_meter_live());
+        assert_eq!(ui.get_channel_a_peak_level(), 0.5); // GUI latest window is still available.
+        output.by_ref().take(10000).for_each(drop);
+        clock.set(clock.get() + Duration::from_millis(50));
+        c.refresh();
+        assert!(ui.get_controller_meter_live());
+        engine.pause(DeckId::A);
+        engine.pause(DeckId::B);
+        c.refresh();
+        assert!(!ui.get_left_playing() && !ui.get_right_playing());
+        drop(c);
+        drop(ui);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let _c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        crate::mc4000::apply(&ui, crate::mc4000::Command::SplitCue(true));
+        assert!(!ui.get_monitor_split());
+        assert!(!engine.monitor_settings().split);
+        assert!(ui.get_status().contains("four output channels"));
+    }
     #[test]
     fn advanced_navigation_shift_jog_held_search_bounds_opposition_and_timeout() {
         i_slint_backend_testing::init_no_event_loop();
@@ -8968,6 +9061,7 @@ mod tests {
             for label in [
                 "Deck A headphone cue",
                 "Deck B headphone cue",
+                "Split headphone cue",
                 "Close headphone monitor",
                 "Headphone monitor gain",
                 "Headphone cue master mix",
@@ -14292,16 +14386,22 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("library.sqlite3");
-        for (round, name) in [(0, "MC4000"), (1, "MC4000"), (2, "Other")] {
+        for (round, name, channels) in [
+            (0, "MC4000", 4),
+            (1, "MC4000", 4),
+            (2, "Other", 4),
+            (3, "MC4000", 2),
+            (4, "MC4000", 4),
+        ] {
             let ui = AppWindow::new().unwrap();
-            let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+            let (mixer, _output) = rodio::mixer::mixer(channels, 48000);
             let engine = Rc::new(
-                DualDeckEngine::from_mixer(mixer, 4, 48000).with_output_device_key(
+                DualDeckEngine::from_mixer(mixer, channels, 48000).with_output_device_key(
                     crate::output_preferences::OutputDeviceKey {
                         endpoint_id: None,
                         backend: "Test".into(),
                         name: name.into(),
-                        channels: 4,
+                        channels,
                     },
                 ),
             );
@@ -14316,7 +14416,9 @@ mod tests {
             assert!(!engine.headphone_cue(DeckId::A));
             finish_storage(&c);
             assert!(!engine.snapshot(DeckId::A).loaded && !engine.snapshot(DeckId::B).playing);
-            if round == 1 {
+            if round == 1 || round == 4 {
+                assert!(engine.monitor_settings().split);
+                assert!(ui.get_monitor_split());
                 assert!((engine.monitor_settings().gain - 0.6).abs() < 1e-6);
                 assert_eq!(engine.monitor_settings().mix, 0.5);
                 assert!(!engine.headphone_cue(DeckId::A) && engine.headphone_cue(DeckId::B));
@@ -14338,6 +14440,7 @@ mod tests {
                 assert!(c.saving.get());
                 ui.set_monitor_gain(20.);
                 ui.set_monitor_mix(75.);
+                ui.set_monitor_split(true);
                 ui.invoke_monitor_changed();
                 ui.set_monitor_cue_b(true);
                 ui.invoke_monitor_cue_changed(1);

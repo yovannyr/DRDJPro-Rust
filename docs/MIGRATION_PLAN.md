@@ -23,7 +23,9 @@ SQLite17 migriert bestehende Bibliotheken; Missing/Relocation erhalten Track-IDs
 Fuer die restlichen Slices entfaellt auf Nutzerwunsch der unabhaengige Review;
 Tests und finale Checks bleiben erforderlich. S9 ergaenzt SHIFT-Jog, gehaltene
 Suche und explizites Loop-Jog mit Grenzen und Eingabebesitz; Vertrag und
-native Abnahme im GUI-Inventar/Hardware-Testplan. S10-S15 bleiben offen.
+native Abnahme im GUI-Inventar/Hardware-Testplan. S10 liefert Split Cue mit
+persistenten Geraeteprofilen und kontextuelle Hardwaremeter; native
+Kopfhoerer-/LED-/Latenzabnahme bleibt offen. S11-S15 bleiben offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 

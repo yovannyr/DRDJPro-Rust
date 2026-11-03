@@ -12,6 +12,7 @@ pub enum Command {
     TrackStart(usize),
     Stutter(usize),
     HeadphoneCue(usize),
+    SplitCue(bool),
     Monitor(usize, u8),
     Fader(usize, u8),
     Crossfader(u8),
@@ -85,6 +86,9 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         // S2 modifier and pitch: SHIFT on channel16 (nibble15), range/bend on deck channels.
         (0x90, 15, 50, value) => Some(Command::Shift(value != 0)),
         (0x80, 15, 50, _) => Some(Command::Shift(false)),
+        (status @ (0x90 | 0x80), 15, 28, value) => {
+            Some(Command::SplitCue(status == 0x90 && value != 0))
+        }
         (0x90, 0..=1, 14, 1..=127) => Some(Command::PitchRange(channel as usize)),
         (0x90, 0..=1, 11..=12, value) => Some(Command::PitchBend(
             channel as usize,
@@ -273,24 +277,9 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             messages[deck * 9 + 5 + slot] = [0x94 | channel, 0x14 + slot as u8, color];
         }
     }
-    messages[18] = [
-        0xbf,
-        0x44,
-        meter_value(
-            ui.get_channel_a_peak_level(),
-            ui.get_channel_a_clipped(),
-            ui.get_channel_a_peak_warning(),
-        ),
-    ];
-    messages[19] = [
-        0xbf,
-        0x45,
-        meter_value(
-            ui.get_channel_b_peak_level(),
-            ui.get_channel_b_clipped(),
-            ui.get_channel_b_peak_warning(),
-        ),
-    ];
+    let meters = hardware_meters(ui);
+    messages[18] = [0xbf, 0x44, meter_value(meters[0].0, false, meters[0].1)];
+    messages[19] = [0xbf, 0x45, meter_value(meters[1].0, false, meters[1].1)];
     messages[20] = [0x90, 7, if ui.get_left_vinyl() { 127 } else { 0 }];
     messages[21] = [0x91, 7, if ui.get_right_vinyl() { 127 } else { 0 }];
     messages[22] = [0x90, 2, if ui.get_left_sync_active() { 127 } else { 0 }];
@@ -730,6 +719,47 @@ impl Drop for Input {
         }
     }
 }
+// Device policy: both faders closed => deck pre-fader; otherwise master on
+// both sides, except a selected, sounding cue deck with its own fader closed.
+// Hardware uses current peak windows, never the GUI's persistent clip latch.
+fn hardware_meters(ui: &crate::AppWindow) -> [(f32, bool); 2] {
+    if !ui.get_controller_meter_live() {
+        return [(0., false); 2];
+    }
+    let faders = [ui.get_channel_a(), ui.get_channel_b()];
+    let sounding = [
+        ui.get_left_playing() || ui.get_left_platter_touched(),
+        ui.get_right_playing() || ui.get_right_platter_touched(),
+    ];
+    let cues = [ui.get_monitor_cue_a(), ui.get_monitor_cue_b()];
+    let pre = [
+        (
+            ui.get_channel_a_peak_level(),
+            ui.get_channel_a_peak_warning(),
+        ),
+        (
+            ui.get_channel_b_peak_level(),
+            ui.get_channel_b_peak_warning(),
+        ),
+    ];
+    let master = (
+        ui.get_controller_master_peak_level(),
+        ui.get_controller_master_peak_warning(),
+    );
+    std::array::from_fn(|deck| {
+        let use_pre = faders.iter().all(|value| *value == 0.)
+            || (faders[deck] == 0. && cues[deck] && sounding[deck]);
+        if use_pre {
+            if sounding[deck] {
+                pre[deck]
+            } else {
+                (0., false)
+            }
+        } else {
+            master
+        }
+    })
+}
 pub fn apply(ui: &crate::AppWindow, command: Command) {
     if !matches!(&command, Command::Load(_)) {
         ui.invoke_controller_cancel_load_gesture();
@@ -742,6 +772,11 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         return;
     }
     match command {
+        Command::SplitCue(enabled) => {
+            ui.set_monitor_split(enabled);
+            ui.invoke_monitor_changed();
+            ui.set_status(ui.get_monitor_status());
+        }
         Command::EqKnob(deck, knob, value) => {
             if deck > 1 || knob > 4 || value > 127 {
                 ui.set_status("Invalid MC4000 EQ control".into());
@@ -892,6 +927,41 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_cue_absolute_switch_and_hardware_meter_policy() {
+        assert_eq!(decode(&[0x9f, 28, 127]), Some(Command::SplitCue(true)));
+        assert_eq!(decode(&[0x9f, 28, 0]), Some(Command::SplitCue(false)));
+        assert_eq!(decode(&[0x8f, 28, 64]), Some(Command::SplitCue(false)));
+        assert_eq!(decode(&[0x90, 28, 127]), None);
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        ui.set_controller_meter_live(true);
+        ui.set_channel_a(0.);
+        ui.set_channel_b(0.);
+        ui.set_left_playing(true);
+        ui.set_right_playing(true);
+        ui.set_channel_a_peak_level(0.5);
+        ui.set_channel_b_peak_level(0.25);
+        ui.set_controller_master_peak_level(0.1);
+        assert_eq!(hardware_meters(&ui), [(0.5, false), (0.25, false)]);
+        ui.set_channel_a(1.);
+        assert_eq!(hardware_meters(&ui), [(0.1, false); 2]);
+        ui.set_monitor_cue_b(true);
+        assert_eq!(hardware_meters(&ui), [(0.1, false), (0.25, false)]);
+        ui.set_right_playing(false);
+        assert_eq!(hardware_meters(&ui), [(0.1, false); 2]);
+        ui.set_right_platter_touched(true);
+        assert_eq!(hardware_meters(&ui)[1], (0.25, false));
+        ui.set_right_platter_touched(false);
+        ui.set_channel_a(0.);
+        ui.set_channel_a_clipped(true); // Old GUI clip latch must not latch hardware.
+        assert_eq!(feedback_messages(&ui)[18], [0xbf, 0x44, 55]);
+        ui.set_channel_a_peak_warning(true);
+        assert_eq!(feedback_messages(&ui)[18], [0xbf, 0x44, 127]);
+        ui.set_controller_meter_live(false);
+        assert_eq!(feedback_messages(&ui)[18], [0xbf, 0x44, 0]);
+        assert_eq!(feedback_messages(&ui)[19], [0xbf, 0x45, 0]);
+    }
     #[test]
     fn advanced_navigation_search_decode_preserves_both_release_forms_and_channels() {
         for deck in 0..2 {
@@ -1416,6 +1486,10 @@ mod tests {
         use slint::ModelRc;
         i_slint_backend_testing::init_no_event_loop();
         let ui = crate::AppWindow::new().unwrap();
+        ui.set_controller_meter_live(true);
+        ui.set_channel_a(0.);
+        ui.set_channel_b(0.);
+        ui.set_right_playing(true);
         ui.set_left_loaded(true);
         ui.set_left_playing(true);
         ui.set_right_loaded(true);
@@ -1461,8 +1535,8 @@ mod tests {
         assert_eq!(
             &messages[9..14],
             &[
-                [0x91, 0, 0],
-                [0x91, 1, 127],
+                [0x91, 0, 127],
+                [0x91, 1, 0],
                 [0x91, 13, 0],
                 [0x91, 27, 127],
                 [0x99, 0, 0],
@@ -1488,6 +1562,7 @@ mod tests {
         ui.set_left_playing(false);
         ui.set_channel_a_peak_level(0.);
         ui.set_channel_b_clipped(true);
+        ui.set_channel_b_peak_warning(true);
         let mut changed = Vec::new();
         feedback
             .send(feedback_messages(&ui), |message| {
@@ -1505,6 +1580,7 @@ mod tests {
             ]
         );
         ui.set_channel_b_clipped(false);
+        ui.set_channel_b_peak_warning(false);
         let mut cleared = Vec::new();
         feedback
             .send(feedback_messages(&ui), |message| {
@@ -1572,8 +1648,13 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = crate::AppWindow::new().unwrap();
         let (mixer, mut output) = rodio::mixer::mixer(1, 48_000);
-        let engine = Rc::new(crate::playback::DualDeckEngine::from_mixer(
-            mixer, 1, 48_000,
+        let clock = Rc::new(std::cell::Cell::new(std::time::Instant::now()));
+        let read = Rc::clone(&clock);
+        let engine = Rc::new(crate::playback::DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            1,
+            48_000,
+            Box::new(move || read.get()),
         ));
         let track = crate::test_support::wav_file(8192, 48_000);
         engine.load_a(track.path()).unwrap();
@@ -1585,6 +1666,7 @@ mod tests {
         );
         ui.invoke_toggle_left();
         output.by_ref().take(4096).for_each(drop);
+        clock.set(clock.get() + std::time::Duration::from_millis(50));
         controller.tick();
         let messages = feedback_messages(&ui);
         assert_eq!(
@@ -1594,16 +1676,20 @@ mod tests {
         assert_eq!(
             messages[18][2],
             meter_value(
-                ui.get_channel_a_peak_level(),
-                ui.get_channel_a_clipped(),
-                ui.get_channel_a_peak_warning(),
+                ui.get_output_peak_level(),
+                false,
+                ui.get_output_peak_warning(),
             )
         );
+        assert!(ui.get_controller_meter_live());
         assert!(ui.get_channel_a_peak_level() > 0.);
         apply(&ui, Command::Toggle(0));
         controller.tick();
         assert!(!ui.get_left_playing());
         assert_eq!(feedback_messages(&ui)[0], [0x90, 0, 0]);
+        clock.set(clock.get() + std::time::Duration::from_millis(101));
+        controller.tick();
+        assert_eq!(feedback_messages(&ui)[18], [0xbf, 0x44, 0]);
         controller.close_library().unwrap();
     }
     #[test]

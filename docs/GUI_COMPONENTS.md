@@ -1,5 +1,52 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S10: Split Cue and contextual hardware meters
+
+MON now has **SPLIT CUE**. Channel16 Note28 is an absolute switch request:
+NoteOn>0 enables, NoteOn0/NoteOff disables; repeated states are idempotent.
+On devices with at least four output channels, OUT3/4 carries averaged mono
+Cue on the left and averaged mono master on the right. Headphone gain applies
+to both; the existing linear mix knob balances `(1-mix)*Cue` against
+`mix*Master`. At the center each side has half weight; at either endpoint the
+other side is silent. Normal stereo cue/master mixing returns when Split is
+off. The mode change crossfades over5ms with the existing gain/mix ramp.
+Master routing/audio remain independent of the headphone controls.
+
+Split alone reserves OUT3/4, even with no selected cues and mix0. Enabling it
+fails without four output channels, with master already on3/4, or with native
+multichannel tracks loaded. Such tracks cannot be installed while Split is
+active. Errors restore authoritative GUI state. Profiles store Split alongside
+gain/mix/cues under the existing endpoint/backend/channel-shape identity.
+Older monitor JSON defaults Split off; malformed values remain rejected and
+preserved through the existing profile error path. No SQLite schema change.
+Tests simulate profile reopen4→2→4; this is not physical device acceptance.
+
+Hardware meters keep manufacturer CC68/69 and the existing seven segment
+thresholds. With both channel faders closed, left/right show their respective
+sounding deck's pre-fader peak (paused decks are dark). Once either fader is
+open, both show the summed post-fader/FX stereo master, except a selected cue
+deck with its own fader closed and audio playing/scratching shows its pre-fader
+peak on its side. A paused cue side returns to master. Master is measured from
+logical channels1/2 before routing, excluding headphone/auxiliary channels and
+the physical MASTER knob. GUI deck PRE/PRE LAST and clip holds are unchanged;
+hardware clipping follows the latest complete50ms peak window, not those holds.
+
+A separate control-plane producer observer acquires on progress and darkens
+hardware meters after over100ms without observed progress or on a long poll
+gap/output failure. It needs new progress to reacquire. This is not a hardware
+watchdog: a stopped UI/MIDI loop cannot send a clearing frame until it resumes.
+These are producer sample peaks, not calibrated device/true-peak meters.
+
+Mode/gain/mix use one coherent atomic word (the validated nonnegative gain's
+unused sign bit stores Split). The router caches only the current cue pair
+when splitting/ramping so it can average L/R without allocation or locks;
+this can finish a logical producer frame at the left cue sample, rather than
+at the last physical channel. Sync observation remains a producer-clock
+contract; per-channel phase-pair regressions cover this lookahead. The new
+master accumulator does bounded stereo work and publishes every50ms. Release
+timing is checked separately with a100ms offline block; native headphone
+orientation, sound, LED response and sustained latency remain open.
+
 ## MC4000 S9: fast navigation and loop jog editing
 
 SHIFT+Jog seeks by 50ms of source time per relative MIDI unit (ten times the
@@ -585,7 +632,7 @@ This slice addresses MIDI/LED connection lifecycle only. Unplugging the combined
 
 The five-round greeting remains, but now ends with All LEDs Off and a complete state frame instead of permanent all-on illumination. After each 33-ms controller tick refreshes MainView, the MIDI output reads those same Slint properties: PLAY follows playing, transport CUE indicates loaded/paused, Keylock follows its GUI state, headphone CUE follows the actual MON selection, and FX1 follows the single delay toggle. Four physical hot-cue pads per deck show occupied slots in blue; arbitrary GUI cue colors, additional FX slots, sampler and other unmapped lamps are not implemented.
 
-The left/right seven-segment meters use manufacturer channel-16 CC68/69 and the same linear pre-fader peak levels as MainView. Zero extinguishes the meter; levels are rounded up to one of seven segments. Clip hold or an invalid-peak warning lights the full meter, until MainView clears it. Paused PRE LAST values are retained exactly as in MainView, rather than independently decaying or switching to post-fader MASTER. This deliberately follows the requested GUI display, not the manufacturer's default mixer-meter behavior.
+Historical initial policy: the seven-segment meters mirrored MainView pre-fader peaks and clip holds. S10 supersedes that policy with contextual pre-fader/master selection and producer-liveness gating as described above; the manufacturer CC68/69 addresses and segment ranges remain unchanged. MainView's own PRE LAST and clip displays retain their existing behavior.
 
 Only changed three-byte messages are sent (at most 22 per feedback frame, including the two Vinyl LEDs); all output work is on the GUI control plane, never the real-time audio callback. Failed sends release the output, report a visible retry status and do not acknowledge the state frame. Output recovery repeats the greeting and publishes a fresh full frame. Tests cover exact manufacturer ranges, independent A/B state, unchanged-tick coalescing, partial failure/replay and real engine/GUI/MIDI transport. Native LED timing, appearance and listening acceptance remain open: a shared tick is not a guarantee of simultaneous physical MIDI/display presentation.
 

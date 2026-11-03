@@ -2352,6 +2352,7 @@ mod tests {
             .unwrap();
         identified.device.name = "Renamed mixer".into();
         identified.monitor = Some(crate::output_preferences::MonitorPreferences {
+            split: false,
             gain: 0.2,
             mix: 0.,
             cues: [true, false],
@@ -2391,6 +2392,7 @@ mod tests {
             },
             pair: 0,
             monitor: Some(crate::output_preferences::MonitorPreferences {
+                split: false,
                 gain: 0.4,
                 mix: 0.5,
                 cues: [false, true],

@@ -12,10 +12,15 @@ use std::{
 pub struct MonitorSettings {
     pub gain: f32,
     pub mix: f32,
+    pub split: bool,
 }
 impl Default for MonitorSettings {
     fn default() -> Self {
-        Self { gain: 1., mix: 0. }
+        Self {
+            gain: 1.,
+            mix: 0.,
+            split: false,
+        }
     }
 }
 impl MonitorSettings {
@@ -30,12 +35,17 @@ impl MonitorSettings {
         }
     }
     fn bits(self) -> u64 {
-        u64::from(self.gain.to_bits()) | (u64::from(self.mix.to_bits()) << 32)
+        // Gain is validated nonnegative; its unused sign bit carries Split so
+        // mode/gain/mix remain one coherent word without reducing precision.
+        u64::from(self.gain.to_bits() & 0x7fff_ffff)
+            | (u64::from(self.split) << 31)
+            | (u64::from(self.mix.to_bits()) << 32)
     }
     fn from_bits(bits: u64) -> Self {
         Self {
-            gain: f32::from_bits(bits as u32),
+            gain: f32::from_bits(bits as u32 & 0x7fff_ffff),
             mix: f32::from_bits((bits >> 32) as u32),
+            split: bits & (1 << 31) != 0,
         }
     }
 }
@@ -94,6 +104,9 @@ pub struct PairRouter<S> {
     ramp: u32,
     remaining: u32,
     monitor_tail: bool,
+    split_blend: f32,
+    cue_stereo: [f32; 2],
+    cue_prefetched: bool,
 }
 impl<S: Source> PairRouter<S> {
     pub fn new(source: S) -> (Self, Arc<RoutingControl>) {
@@ -117,6 +130,9 @@ impl<S: Source> PairRouter<S> {
                 ramp,
                 remaining: 0,
                 monitor_tail: false,
+                split_blend: 0.,
+                cue_stereo: [0.; 2],
+                cue_prefetched: false,
             },
             control,
         )
@@ -126,6 +142,7 @@ impl<S: Source> Iterator for PairRouter<S> {
     type Item = f32;
     fn next(&mut self) -> Option<f32> {
         if self.channel == 0 {
+            self.cue_prefetched = false;
             let was_monitoring = self.cue || self.monitor_tail;
             let state = self.control.requested.load(Ordering::Acquire);
             self.pair = state as u16;
@@ -138,26 +155,55 @@ impl<S: Source> Iterator for PairRouter<S> {
             if self.remaining > 0 {
                 self.monitor.gain += (self.target.gain - self.monitor.gain) / self.remaining as f32;
                 self.monitor.mix += (self.target.mix - self.monitor.mix) / self.remaining as f32;
+                self.split_blend += ((if self.target.split { 1. } else { 0. }) - self.split_blend)
+                    / self.remaining as f32;
                 self.remaining -= 1;
                 if self.remaining == 0 {
                     self.monitor = self.target;
+                    self.split_blend = if self.target.split { 1. } else { 0. };
                 }
             }
             // Finish parameter ramps after the last cue/preview request is disabled.
             // An explicit master reroute to 3/4 takes precedence over this tail.
             self.monitor_tail = !self.cue
                 && was_monitoring
-                && (self.remaining > 0 || self.monitor.mix > 0.)
+                && (self.remaining > 0 || self.monitor.mix > 0. || self.split_blend > 0.)
                 && self.pair != 1;
         }
-        let input = self.source.next()?;
+        // Only split/ramping cue needs the right cue sample before returning left.
+        // Cache that pair without looking ahead into another logical audio frame.
+        let input = if self.channel == 3 && self.cue_prefetched {
+            self.cue_stereo[1]
+        } else {
+            self.source.next()?
+        };
+        if self.channel == 2 && self.control.channels >= 4 && self.split_blend > 0. {
+            self.cue_stereo = [input, self.source.next()?];
+            self.cue_prefetched = true;
+        }
         if self.channel < 2 {
             self.stereo[usize::from(self.channel)] = input;
         }
         let output = if (self.cue || self.monitor_tail) && self.channel / 2 == 1 {
-            self.monitor.gain
+            let stereo = self.monitor.gain
                 * ((1. - self.monitor.mix) * if self.cue { input } else { 0. }
-                    + self.monitor.mix * self.stereo[usize::from(self.channel % 2)])
+                    + self.monitor.mix * self.stereo[usize::from(self.channel % 2)]);
+            if self.split_blend > 0. {
+                let split = self.monitor.gain
+                    * if self.channel == 2 {
+                        (1. - self.monitor.mix)
+                            * if self.cue {
+                                self.cue_stereo[0] * 0.5 + self.cue_stereo[1] * 0.5
+                            } else {
+                                0.
+                            }
+                    } else {
+                        self.monitor.mix * (self.stereo[0] * 0.5 + self.stereo[1] * 0.5)
+                    };
+                stereo + self.split_blend * (split - stereo)
+            } else {
+                stereo
+            }
         } else if self.pair == 0 && (!self.cue || self.channel < 2) {
             // Keep the original mapping, including mono and existing multichannel sources.
             input
@@ -187,6 +233,64 @@ impl<S: Source> Source for PairRouter<S> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_cue_mono_sums_ramps_and_keeps_master_and_frame_state() {
+        let (mut source, control) = PairRouter::new(rodio::buffer::SamplesBuffer::new(
+            4,
+            1000,
+            [0.2, 0.6, 0.8, -0.4].repeat(100),
+        ));
+        control.set_cue_enabled(true).unwrap();
+        control.set_monitor(MonitorSettings {
+            gain: 0.8,
+            mix: 0.25,
+            split: true,
+        });
+        for _ in 0..5 {
+            assert_eq!(source.next(), Some(0.2));
+            assert_eq!(source.next(), Some(0.6));
+            source.by_ref().take(2).for_each(drop);
+        }
+        assert_eq!(source.next(), Some(0.2));
+        // A request between physical channels cannot tear this frame's cue pair.
+        control.set_monitor(MonitorSettings {
+            gain: 0.8,
+            mix: 0.25,
+            split: false,
+        });
+        assert_eq!(source.next(), Some(0.6));
+        assert!((source.next().unwrap() - 0.12).abs() < 1e-6);
+        assert!((source.next().unwrap() - 0.08).abs() < 1e-6);
+        source.by_ref().take(20).for_each(drop);
+        let frame: Vec<_> = source.by_ref().take(4).collect();
+        assert_eq!(&frame[..2], &[0.2, 0.6]);
+        assert!((frame[2] - 0.52).abs() < 1e-6);
+        assert!((frame[3] + 0.12).abs() < 1e-6);
+        let settings = MonitorSettings {
+            gain: -0.,
+            mix: 0.7,
+            split: false,
+        };
+        let unpacked = MonitorSettings::from_bits(settings.bits());
+        assert!(!unpacked.split);
+        assert_eq!(unpacked.gain, 0.);
+        let (mut six, control) = PairRouter::new(rodio::buffer::SamplesBuffer::new(
+            6,
+            1000,
+            [0.2, 0.6, 0.8, -0.4, 0.9, 0.95].repeat(20),
+        ));
+        control.set_pair(2).unwrap();
+        control.set_cue_enabled(true).unwrap();
+        control.set_monitor(MonitorSettings {
+            gain: 0.8,
+            mix: 0.25,
+            split: true,
+        });
+        six.by_ref().take(30).for_each(drop);
+        for expected in [0., 0., 0.12, 0.08, 0.2, 0.6] {
+            assert!((six.next().unwrap() - expected).abs() < 1e-6);
+        }
+    }
     use super::*;
     #[test]
     fn headphone_gain_mix_ramp_is_stereo_coherent_and_leaves_master_untouched() {
@@ -196,7 +300,11 @@ mod tests {
             [0.2, -0.4, 0.8, -0.6].repeat(100),
         ));
         control.set_cue_enabled(true).unwrap();
-        control.set_monitor(MonitorSettings { gain: 0., mix: 1. });
+        control.set_monitor(MonitorSettings {
+            split: false,
+            gain: 0.,
+            mix: 1.,
+        });
         for frame in 1..=5 {
             let gain = 1. - frame as f32 / 5.;
             let mix = frame as f32 / 5.;
@@ -218,7 +326,11 @@ mod tests {
             [1., -0.5, 0., 0.].repeat(30),
         ));
         control.set_cue_enabled(true).unwrap();
-        control.set_monitor(MonitorSettings { gain: 1., mix: 1. });
+        control.set_monitor(MonitorSettings {
+            split: false,
+            gain: 1.,
+            mix: 1.,
+        });
         source.by_ref().take(24).for_each(drop);
         control.set_cue_enabled(false).unwrap();
         // Force the engine's publication window: route changes before mix arrives.
@@ -226,7 +338,11 @@ mod tests {
             source.by_ref().take(4).collect::<Vec<_>>(),
             vec![1., -0.5, 1., -0.5]
         );
-        control.set_monitor(MonitorSettings { gain: 1., mix: 0. });
+        control.set_monitor(MonitorSettings {
+            split: false,
+            gain: 1.,
+            mix: 0.,
+        });
         for step in 1..=5 {
             let frame: Vec<_> = source.by_ref().take(4).collect();
             assert_eq!(&frame[..2], &[1., -0.5]);

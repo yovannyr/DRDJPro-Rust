@@ -12,6 +12,7 @@ use std::{
 pub(crate) struct RenderClock {
     pub completed: AtomicU64,
     pub peak_window: AtomicU64,
+    pub master_peak_window: AtomicU64,
 }
 const MAX_FRAME_AGE_MS: u64 = 5;
 const MAX_PROGRESS_GAP: Duration = Duration::from_millis(100);
@@ -60,6 +61,7 @@ pub(crate) struct RenderBus<S> {
     rate: u32,
     channel: u16,
     peak: crate::peak_meter::PeakAccumulator,
+    master_peak: crate::peak_meter::PeakAccumulator,
     cue_controls: Option<[Arc<crate::cue_bus::DeckMixControl>; 2]>,
     stereo_meter: bool,
 }
@@ -77,6 +79,7 @@ impl<S: Source> RenderBus<S> {
                 rate,
                 channel: 0,
                 peak: crate::peak_meter::PeakAccumulator::new(rate),
+                master_peak: crate::peak_meter::PeakAccumulator::new(rate),
                 stereo_meter: false,
                 cue_controls: None,
             },
@@ -102,10 +105,17 @@ impl<S: Source> Iterator for RenderBus<S> {
         if !self.stereo_meter || self.channel < 2 {
             self.peak.sample(sample);
         }
+        // Hardware MASTER is the logical stereo pair, even when uncued native
+        // multichannel playback also carries samples in auxiliary channels.
+        if self.channel < 2 {
+            self.master_peak.sample(sample);
+        }
         self.channel += 1;
         if self.channel == self.channels {
             self.channel = 0;
             self.peak.complete_frame(&self.clock.peak_window);
+            self.master_peak
+                .complete_frame(&self.clock.master_peak_window);
             self.clock.completed.fetch_add(1, Ordering::Release);
         }
         Some(sample)

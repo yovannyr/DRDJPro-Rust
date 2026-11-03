@@ -659,7 +659,9 @@ impl DualDeckEngine {
     }
     pub fn try_install(&self, id: DeckId, track: PreparedTrack) -> Result<(), String> {
         if track.samples.channels() > 2
-            && (self.cue_enabled.iter().any(Cell::get) || self.monitor_settings.get().mix > 0.)
+            && (self.cue_enabled.iter().any(Cell::get)
+                || self.monitor_settings.get().mix > 0.
+                || self.monitor_settings.get().split)
         {
             return Err("Disable headphone cue before loading multichannel audio".into());
         }
@@ -715,7 +717,9 @@ impl DualDeckEngine {
             return Err("Wait for matching Keylock preparation".into());
         }
         if track.samples.channels() > 2
-            && (self.cue_enabled.iter().any(Cell::get) || self.monitor_settings.get().mix > 0.)
+            && (self.cue_enabled.iter().any(Cell::get)
+                || self.monitor_settings.get().mix > 0.
+                || self.monitor_settings.get().split)
         {
             return Err("Disable headphone cue before loading multichannel audio".into());
         }
@@ -1809,6 +1813,10 @@ impl DualDeckEngine {
     pub fn output_peak(&self) -> Option<f32> {
         crate::peak_meter::PeakAccumulator::read_peak(&self.render_clock.peak_window)
     }
+    /// Latest complete post-fader/FX stereo master peak, excluding auxiliary/cue lanes.
+    pub fn master_peak(&self) -> Option<f32> {
+        crate::peak_meter::PeakAccumulator::read_peak(&self.render_clock.master_peak_window)
+    }
     pub fn channel_peak(&self, id: DeckId) -> Option<f32> {
         self.decks[id.index()]
             .borrow()
@@ -1850,7 +1858,8 @@ impl DualDeckEngine {
         }
         let any = enabled
             || self.cue_enabled[1 - id.index()].get()
-            || self.monitor_settings.get().mix > 0.;
+            || self.monitor_settings.get().mix > 0.
+            || self.monitor_settings.get().split;
         self.output_routing.set_cue_enabled(any)?;
         for control in &self.mix_controls {
             control.set_monitor_mode(any);
@@ -1867,7 +1876,8 @@ impl DualDeckEngine {
         preferences: crate::output_preferences::MonitorPreferences,
     ) -> Result<(), String> {
         preferences.settings().validate()?;
-        let active = preferences.mix > 0. || preferences.cues.into_iter().any(|v| v);
+        let active =
+            preferences.split || preferences.mix > 0. || preferences.cues.into_iter().any(|v| v);
         if self.output_channels < 4 {
             return Err("Monitor preferences require at least four output channels".into());
         }
@@ -1899,7 +1909,7 @@ impl DualDeckEngine {
         if self.output_channels < 4 {
             return Err("Monitor controls require at least four output channels".into());
         }
-        if settings.mix > 0.
+        if (settings.split || settings.mix > 0.)
             && self.decks.iter().any(|d| {
                 d.borrow()
                     .track
@@ -1911,7 +1921,7 @@ impl DualDeckEngine {
                 "Independent headphone monitor currently supports mono/stereo tracks only".into(),
             );
         }
-        let active = settings.mix > 0. || self.cue_enabled.iter().any(Cell::get);
+        let active = settings.split || settings.mix > 0. || self.cue_enabled.iter().any(Cell::get);
         self.output_routing.set_cue_enabled(active)?;
         for control in &self.mix_controls {
             control.set_monitor_mode(active);
@@ -1990,6 +2000,199 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_cue_master_meter_excludes_native_auxiliary_channels() {
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let file =
+            crate::test_support::wav_samples(&[4096, 8192, 30000, 30000].repeat(48000), 48000, 4);
+        engine.load_a(file.path()).unwrap();
+        engine.set_levels(MixerLevels {
+            crossfader: 0.,
+            channel_a: 1.,
+            channel_b: 0.,
+        });
+        engine.play(DeckId::A);
+        output.by_ref().take(12000).for_each(drop);
+        assert_eq!(engine.output_peak(), Some(30000. / 32768.));
+        assert_eq!(engine.master_peak(), Some(0.25));
+    }
+    #[test]
+    fn split_cue_preserves_fresh_phase_pair_coherence_with_cue_pair_lookahead() {
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let file = wav_file(8192, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.set_headphone_cue(DeckId::B, true).unwrap();
+        engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                gain: 1.,
+                mix: 0.5,
+                split: true,
+            })
+            .unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        let start = std::time::Instant::now();
+        let pair = |now| {
+            engine.fresh_phase_positions_at(
+                &engine.decks[0].borrow(),
+                &engine.decks[1].borrow(),
+                now,
+                || now,
+            )
+        };
+        assert!(pair(start).is_none());
+        for frame in 1..=300 {
+            for channel in 0..4 {
+                output.next();
+                if let Some((a, b)) = pair(start + Duration::from_micros(frame * 20 + channel)) {
+                    assert_eq!(a, b);
+                }
+            }
+            assert!(pair(start + Duration::from_micros(frame * 20 + 4)).is_some());
+        }
+        engine.set_speed(DeckId::A, 1.1).unwrap();
+        assert!(pair(start + Duration::from_millis(7)).is_none());
+        output.by_ref().take(4).for_each(drop);
+        assert!(pair(start + Duration::from_millis(8)).is_some());
+    }
+    #[test]
+    fn split_cue_engine_mono_stereo_master_isolation_and_realtime_budget() {
+        for channels in [1, 2] {
+            let a = crate::test_support::wav_samples(
+                &if channels == 1 {
+                    vec![4096; 48000]
+                } else {
+                    [4096, 12288].repeat(48000)
+                },
+                48000,
+                channels,
+            );
+            let b = crate::test_support::wav_samples(
+                &if channels == 1 {
+                    vec![8192; 48000]
+                } else {
+                    [16384, -8192].repeat(48000)
+                },
+                48000,
+                channels,
+            );
+            let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+            let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+            engine.load_a(a.path()).unwrap();
+            engine.load_b(b.path()).unwrap();
+            engine.set_levels(MixerLevels {
+                crossfader: 0.,
+                channel_a: 1.,
+                channel_b: 0.,
+            });
+            engine.set_headphone_cue(DeckId::B, true).unwrap();
+            engine
+                .set_monitor_settings(crate::output_routing::MonitorSettings {
+                    gain: 1.,
+                    mix: 0.5,
+                    split: true,
+                })
+                .unwrap();
+            engine.play(DeckId::A);
+            engine.play(DeckId::B);
+            output.by_ref().take(24000).for_each(drop);
+            let expected = if channels == 1 {
+                [0.125, 0.125, 0.125, 0.0625]
+            } else {
+                [0.125, 0.375, 0.0625, 0.125]
+            };
+            for wanted in expected {
+                assert!((output.next().unwrap() - wanted).abs() < 1e-6);
+            }
+            let start = std::time::Instant::now();
+            let stats = crate::looping::measured_heap(|| {
+                output.by_ref().take(19200).for_each(drop);
+            });
+            assert_eq!(stats.allocations, 0);
+            assert_eq!(stats.reallocations, 0);
+            assert_eq!(stats.deallocations, 0);
+            let elapsed = start.elapsed();
+            eprintln!("Split {channels}-channel source, 100ms block: {elapsed:?}");
+            // Debug parallel test scheduling is not an audio deadline benchmark.
+            // Run this test explicitly in optimized mode with --test-threads=1.
+            if !cfg!(debug_assertions) {
+                assert!(
+                    elapsed < Duration::from_millis(100),
+                    "100ms split render block missed its offline budget"
+                );
+            }
+            engine
+                .set_monitor_settings(crate::output_routing::MonitorSettings {
+                    gain: 0.,
+                    mix: 0.5,
+                    split: true,
+                })
+                .unwrap();
+            output.by_ref().take(4000).for_each(drop);
+            let frame: Vec<_> = output.by_ref().take(4).collect();
+            assert_eq!(&frame[..2], &expected[..2]);
+            assert_eq!(&frame[2..], &[0., 0.]);
+            assert!(engine.set_output_pair(1).is_err());
+            assert!(engine
+                .restore_monitor_state(crate::output_preferences::MonitorPreferences {
+                    gain: 1.,
+                    mix: 0.,
+                    cues: [false; 2],
+                    split: true
+                })
+                .is_ok());
+            assert!(engine.set_output_pair(1).is_err()); // Split alone still reserves headphones.
+        }
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 2, 48000);
+        let before = engine.monitor_settings();
+        assert!(engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                gain: 1.,
+                mix: 0.,
+                split: true
+            })
+            .is_err());
+        assert_eq!(engine.monitor_settings(), before);
+        let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let multi =
+            crate::test_support::wav_samples(&[4096, 8192, 12288, 16384].repeat(1000), 48000, 4);
+        engine.set_output_pair(0).unwrap();
+        engine.load_b(multi.path()).unwrap();
+        assert!(engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                gain: 1.,
+                mix: 0.,
+                split: true
+            })
+            .is_err());
+        assert_eq!(engine.monitor_settings(), before);
+        engine.eject(DeckId::B);
+        engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                gain: 1.,
+                mix: 0.,
+                split: true,
+            })
+            .unwrap();
+        assert!(engine.load_a(multi.path()).is_err());
+        assert!(!engine.snapshot(DeckId::A).loaded);
+        let (mixer, _output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        engine.set_output_pair(1).unwrap();
+        assert!(engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                gain: 1.,
+                mix: 0.,
+                split: true
+            })
+            .is_err());
+        assert_eq!(engine.monitor_settings(), before);
+    }
     #[test]
     fn advanced_navigation_loop_jog_clamps_frames_preserves_transport_and_renders_new_region() {
         let data: Vec<_> = (0..1000)
@@ -2370,7 +2573,11 @@ mod tests {
         engine.play(DeckId::B);
         for (gain, mix, headphone) in [(1., 0., 0.5), (0.5, 0.5, 0.1875), (0., 0.5, 0.)] {
             engine
-                .set_monitor_settings(crate::output_routing::MonitorSettings { gain, mix })
+                .set_monitor_settings(crate::output_routing::MonitorSettings {
+                    split: false,
+                    gain,
+                    mix,
+                })
                 .unwrap();
             output.by_ref().take(12000).for_each(drop);
             let actual: Vec<_> = output.by_ref().take(4).collect();
@@ -2378,7 +2585,11 @@ mod tests {
         }
         engine.set_headphone_cue(DeckId::B, false).unwrap();
         engine
-            .set_monitor_settings(crate::output_routing::MonitorSettings { gain: 0.5, mix: 1. })
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                split: false,
+                gain: 0.5,
+                mix: 1.,
+            })
             .unwrap();
         assert!(engine.set_output_pair(1).is_err());
         output.by_ref().take(12000).for_each(drop);
@@ -2390,12 +2601,14 @@ mod tests {
         for invalid in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
             assert!(engine
                 .set_monitor_settings(crate::output_routing::MonitorSettings {
+                    split: false,
                     gain: invalid,
                     mix: 0.
                 })
                 .is_err());
             assert!(engine
                 .set_monitor_settings(crate::output_routing::MonitorSettings {
+                    split: false,
                     gain: 0.,
                     mix: invalid
                 })
