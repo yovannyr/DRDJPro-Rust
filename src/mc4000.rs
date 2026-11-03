@@ -1,6 +1,6 @@
 //! MC4000 input: no engine/UI access from the MIDI callback.
 use std::sync::{
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering},
     mpsc::{self, Receiver},
     Arc,
 };
@@ -20,6 +20,12 @@ pub enum Command {
     PlatterTouch(usize, bool),
     Vinyl(usize),
     EqKnob(usize, usize, u8),
+    Shift(bool),
+    PitchRange(usize),
+    PitchBend(usize, i8, bool),
+    PitchMsb(usize, u8),
+    PitchLsb(usize, u8),
+    PitchFader(usize, u16),
 }
 pub fn decode(bytes: &[u8]) -> Option<Command> {
     if bytes.len() != 3 || bytes[1] > 127 || bytes[2] > 127 {
@@ -64,6 +70,22 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         (0xb0, 0..=1, 28, value) => Some(Command::Fader(channel as usize, value)),
         (0xb0, 15, 8, value) => Some(Command::Crossfader(value)),
         (0xb0, 15, 12..=13, value) => Some(Command::Monitor(usize::from(bytes[1] - 12), value)),
+        // S2 modifier and pitch: SHIFT on channel16 (nibble15), range/bend on deck channels.
+        (0x90, 15, 50, value) => Some(Command::Shift(value != 0)),
+        (0x80, 15, 50, _) => Some(Command::Shift(false)),
+        (0x90, 0..=1, 14, 1..=127) => Some(Command::PitchRange(channel as usize)),
+        (0x90, 0..=1, 11..=12, value) => Some(Command::PitchBend(
+            channel as usize,
+            if bytes[1] == 11 { 1 } else { -1 },
+            value != 0,
+        )),
+        (0x80, 0..=1, 11..=12, _) => Some(Command::PitchBend(
+            channel as usize,
+            if bytes[1] == 11 { 1 } else { -1 },
+            false,
+        )),
+        (0xb0, 0..=1, 41, value) => Some(Command::PitchMsb(channel as usize, value)),
+        (0xb0, 0..=1, 9, value) => Some(Command::PitchLsb(channel as usize, value)),
         _ => None,
     }
 }
@@ -259,6 +281,7 @@ pub struct Input {
     levels: Arc<[AtomicU8; 5]>,
     fx_levels: Arc<[AtomicU8; 6]>,
     eq_levels: Arc<[AtomicU8; 10]>,
+    pitch_faders: Arc<[AtomicU16; 2]>,
     overflow: Arc<AtomicBool>,
     trace: Option<InputTrace>,
 }
@@ -282,6 +305,14 @@ impl Input {
         let fx_values = Arc::clone(&fx_levels);
         let eq_levels = Arc::new(std::array::from_fn(|_| AtomicU8::new(128)));
         let eq_values = Arc::clone(&eq_levels);
+        let pitch_partial_msb = Arc::new(std::array::from_fn(|_| AtomicU8::new(0)));
+        let pitch_partial_msb_values = Arc::clone(&pitch_partial_msb);
+        let pitch_partial_lsb = Arc::new(std::array::from_fn(|_| AtomicU8::new(0)));
+        let pitch_partial_lsb_values = Arc::clone(&pitch_partial_lsb);
+        let pitch_fresh = Arc::new(std::array::from_fn(|_| AtomicU8::new(0)));
+        let pitch_fresh_values = Arc::clone(&pitch_fresh);
+        let pitch_faders = Arc::new(std::array::from_fn(|_| AtomicU16::new(PITCH_FADER_NONE)));
+        let pitch_fader_values = Arc::clone(&pitch_faders);
         let overflow = Arc::new(AtomicBool::new(false));
         let failed = overflow.clone();
         let trace_enabled = std::env::var_os("DRDJ_MIDI_TRACE").is_some_and(|v| v == "1");
@@ -319,6 +350,24 @@ impl Input {
                             Command::Monitor(index, value) => {
                                 values[3 + index].store(value, Ordering::Release)
                             }
+                            Command::PitchMsb(deck, value) => accumulate_pitch(
+                                deck,
+                                Half::Msb,
+                                value,
+                                &pitch_partial_msb_values,
+                                &pitch_partial_lsb_values,
+                                &pitch_fresh_values,
+                                &pitch_fader_values,
+                            ),
+                            Command::PitchLsb(deck, value) => accumulate_pitch(
+                                deck,
+                                Half::Lsb,
+                                value,
+                                &pitch_partial_msb_values,
+                                &pitch_partial_lsb_values,
+                                &pitch_fresh_values,
+                                &pitch_fader_values,
+                            ),
                             command => {
                                 if sender
                                     .try_send((std::time::Instant::now(), command))
@@ -354,6 +403,7 @@ impl Input {
             levels,
             fx_levels,
             eq_levels,
+            pitch_faders,
             overflow,
             trace: trace_enabled.then_some(InputTrace {
                 receiver: trace_receiver,
@@ -445,6 +495,7 @@ impl Input {
             }
         }
         poll_eq_knobs(&self.eq_levels, &mut apply);
+        poll_pitch_faders(&self.pitch_faders, &mut apply);
         dispatch_buttons(
             &self.buttons,
             &mut self.accept_buttons_after,
@@ -461,6 +512,92 @@ fn poll_eq_knobs(values: &[AtomicU8; 10], mut apply: impl FnMut(Command)) {
         }
     }
 }
+/// Sentinel for a pitch-fader slot with no complete 14-bit value yet.
+const PITCH_FADER_NONE: u16 = u16::MAX;
+
+/// Which 7-bit half of a 14-bit pitch-fader value a CC message carries.
+#[derive(Clone, Copy)]
+enum Half {
+    Msb,
+    Lsb,
+}
+
+// Freshness bits for a pitched deck: set when that half arrived, cleared when a
+// complete pair is published. A pair is only published when both halves are fresh,
+// so a poll landing between the halves of a new fader position never mixes them
+// with a stale half of an earlier generation.
+const HALF_MSB_FRESH: u8 = 0b01;
+const HALF_LSB_FRESH: u8 = 0b10;
+
+/// Accumulate one pitch-fader nibble in the MIDI callback and atomically publish a
+/// complete 14-bit value only once both halves of the same fader generation are
+/// fresh. A lone half is preserved (not dropped) until its pair arrives, so a poll
+/// never sees a half tempo step or a value mixing different generations.
+#[allow(clippy::too_many_arguments)]
+fn accumulate_pitch(
+    deck: usize,
+    half: Half,
+    value: u8,
+    partial_msb: &[AtomicU8; 2],
+    partial_lsb: &[AtomicU8; 2],
+    fresh: &[AtomicU8; 2],
+    published: &[AtomicU16; 2],
+) {
+    let stored = value + 1; // 1-based; 0 means none so literal 0..=127 all map >= 1.
+    match half {
+        Half::Msb => partial_msb[deck].store(stored, Ordering::Release),
+        Half::Lsb => partial_lsb[deck].store(stored, Ordering::Release),
+    }
+    let fresh_bit = match half {
+        Half::Msb => HALF_MSB_FRESH,
+        Half::Lsb => HALF_LSB_FRESH,
+    };
+    let other_bit = match half {
+        Half::Msb => HALF_LSB_FRESH,
+        Half::Lsb => HALF_MSB_FRESH,
+    };
+    let mut state = fresh[deck].load(Ordering::Acquire);
+    loop {
+        if state & fresh_bit != 0 {
+            // This half was already fresh (duplicate message); keep the stored value
+            // but do not re-publish, so transient pairs never repeat.
+            return;
+        }
+        let next = state | fresh_bit;
+        match fresh[deck].compare_exchange_weak(state, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                if next & other_bit != 0 {
+                    // Both halves are fresh: publish the complete value and clear them.
+                    let msb = partial_msb[deck].load(Ordering::Acquire);
+                    let lsb = partial_lsb[deck].load(Ordering::Acquire);
+                    published[deck].store(
+                        (u16::from(msb - 1) << 7) | u16::from(lsb - 1),
+                        Ordering::Release,
+                    );
+                    fresh[deck].store(0, Ordering::Release);
+                }
+                return;
+            }
+            Err(actual) => state = actual,
+        }
+    }
+}
+
+fn poll_pitch_faders(values: &[AtomicU16; 2], mut apply: impl FnMut(Command)) {
+    for (deck, slot) in values.iter().enumerate() {
+        let value = slot.swap(PITCH_FADER_NONE, Ordering::AcqRel);
+        if value != PITCH_FADER_NONE {
+            apply(Command::PitchFader(deck, value));
+        }
+    }
+}
+
+/// Map a 14-bit fader value to a pitch percent across a range. Provisional pending a
+/// native MIDI recording: 0 maps to min, 16383 to max, the midpoint to the centre.
+pub fn pitch_fader_percent(value: u16, min: f32, max: f32) -> f32 {
+    min + (max - min) * f32::from(value) / 16383.
+}
+
 fn centered_knob(value: u8, minimum: f32, maximum: f32) -> f32 {
     // Both central MIDI values are neutral; physical detents vary between 63 and 64.
     if value < 63 {
@@ -640,11 +777,146 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
             ui.set_crossfader(f32::from(v) / 127.0);
             ui.invoke_mixer_changed();
         }
+
+        Command::Shift(held) => ui.set_controller_shift(held),
+        Command::PitchRange(0) => ui.invoke_controller_pitch_range_left(),
+        Command::PitchRange(_) => ui.invoke_controller_pitch_range_right(),
+        Command::PitchBend(0, direction, held) => {
+            ui.invoke_controller_bend_left(i32::from(direction), held)
+        }
+        Command::PitchBend(_, direction, held) => {
+            ui.invoke_controller_bend_right(i32::from(direction), held)
+        }
+        Command::PitchFader(deck, value) => {
+            ui.invoke_controller_pitch_fader(deck as i32, i32::from(value))
+        }
+        Command::PitchMsb(_, _) | Command::PitchLsb(_, _) => (),
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pitch_fader_percent_maps_endpoints_and_midpoint() {
+        for (min, max) in [(-8., 8.), (-50., 100.)] {
+            assert_eq!(pitch_fader_percent(0, min, max), min);
+            assert_eq!(pitch_fader_percent(16383, min, max), max);
+            let mid = (min + max) / 2.;
+            assert!((pitch_fader_percent(8191, min, max) - mid).abs() < 0.01);
+            assert!((pitch_fader_percent(8192, min, max) - mid).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn pitch_fader_pairs_order_lone_halves_and_abi_isolation() {
+        let msb = std::array::from_fn(|_| AtomicU8::new(0));
+        let lsb = std::array::from_fn(|_| AtomicU8::new(0));
+        let published = std::array::from_fn(|_| AtomicU16::new(PITCH_FADER_NONE));
+        let fresh = std::array::from_fn(|_| AtomicU8::new(0));
+        let mut emitted = Vec::new();
+        // A lone MSB is preserved, never published as a half tempo step.
+        accumulate_pitch(0, Half::Msb, 41, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert!(emitted.is_empty());
+        // The poll between halves must not drop the preserved MSB: the matching LSB
+        // later completes a single coherent pair and yields the 14-bit value.
+        accumulate_pitch(0, Half::Lsb, 9, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert_eq!(emitted, vec![Command::PitchFader(0, (41 << 7) | 9)]);
+        emitted.clear();
+        // No repeated emission without fresh MIDI after the pair is consumed.
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert!(emitted.is_empty());
+        // Deck 1 pairs independently (A/B isolation) regardless of arrival order.
+        accumulate_pitch(1, Half::Lsb, 1, &msb, &lsb, &fresh, &published);
+        accumulate_pitch(1, Half::Msb, 1, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert_eq!(emitted, vec![Command::PitchFader(1, (1 << 7) | 1)]);
+        emitted.clear();
+        // A lone half published while the other deck's pair is unconsumed stays isolated.
+        accumulate_pitch(0, Half::Msb, 100, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert!(emitted.is_empty());
+        // Completing deck 0 emits only deck 0; deck 1 is not republished.
+        accumulate_pitch(0, Half::Lsb, 3, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert_eq!(emitted, vec![Command::PitchFader(0, (100 << 7) | 3)]);
+    }
+
+    #[test]
+    fn pitch_fader_poll_between_halves_never_mixes_generations() {
+        let msb = std::array::from_fn(|_| AtomicU8::new(0));
+        let lsb = std::array::from_fn(|_| AtomicU8::new(0));
+        let published = std::array::from_fn(|_| AtomicU16::new(PITCH_FADER_NONE));
+        let fresh = std::array::from_fn(|_| AtomicU8::new(0));
+        let mut emitted = Vec::new();
+        // Generation 1 completes and is consumed by the poll.
+        accumulate_pitch(0, Half::Msb, 41, &msb, &lsb, &fresh, &published);
+        accumulate_pitch(0, Half::Lsb, 9, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert_eq!(emitted, vec![Command::PitchFader(0, (41 << 7) | 9)]);
+        emitted.clear();
+        // Generation 2 sends only its MSB now; a poll in between must not surface
+        // a partially-updated value (the stale LSB from gen 1 is preserved, not published).
+        accumulate_pitch(0, Half::Msb, 80, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert!(emitted.is_empty());
+        // Gen 2's LSB completes the pair; only the new coherent value is published.
+        accumulate_pitch(0, Half::Lsb, 1, &msb, &lsb, &fresh, &published);
+        poll_pitch_faders(&published, |c| emitted.push(c));
+        assert_eq!(emitted, vec![Command::PitchFader(0, (80 << 7) | 1)]);
+    }
+    #[test]
+    fn modifier_and_pitch_command_decode() {
+        // SHIFT lives only on channel16 (nibble15): press (value>0), release by
+        // NoteOn0 or NoteOff.
+        assert_eq!(decode(&[0x9f, 50, 127]), Some(Command::Shift(true)));
+        assert_eq!(decode(&[0x9f, 50, 0]), Some(Command::Shift(false)));
+        assert_eq!(decode(&[0x8f, 50, 0]), Some(Command::Shift(false)));
+        assert_ne!(decode(&[0x90, 50, 127]), Some(Command::Shift(true)));
+        // Pitch range (Note14) and bend (Note11/12) on the two deck channels.
+        assert_eq!(decode(&[0x90, 14, 1]), Some(Command::PitchRange(0)));
+        assert_eq!(decode(&[0x91, 14, 127]), Some(Command::PitchRange(1)));
+        assert_eq!(
+            decode(&[0x90, 11, 127]),
+            Some(Command::PitchBend(0, 1, true))
+        );
+        assert_eq!(
+            decode(&[0x91, 12, 127]),
+            Some(Command::PitchBend(1, -1, true))
+        );
+        assert_eq!(
+            decode(&[0x80, 11, 0]),
+            Some(Command::PitchBend(0, 1, false))
+        );
+        assert_eq!(
+            decode(&[0x81, 12, 0]),
+            Some(Command::PitchBend(1, -1, false))
+        );
+        assert_eq!(
+            decode(&[0x80, 12, 0]),
+            Some(Command::PitchBend(0, -1, false))
+        );
+        // 14-bit pitch: CC41 MSB and CC9 LSB on deck channels.
+        assert_eq!(decode(&[0xb0, 41, 100]), Some(Command::PitchMsb(0, 100)));
+        assert_eq!(decode(&[0xb1, 9, 50]), Some(Command::PitchLsb(1, 50)));
+    }
+
+    #[test]
+    fn shift_state_applies_to_ui_property() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        assert!(!ui.get_controller_shift());
+        apply(&ui, Command::Shift(true));
+        assert!(ui.get_controller_shift());
+        apply(&ui, Command::Shift(false));
+        assert!(!ui.get_controller_shift());
+        apply(&ui, Command::Shift(true));
+        assert!(ui.get_controller_shift());
+        // Lifecycle/overflow resets explicit state rather than leaving a stale hold.
+        ui.set_controller_shift(false);
+        assert!(!ui.get_controller_shift());
+    }
     #[test]
     fn eq_knobs_decode_coalesce_and_map_neutral_and_endpoints() {
         i_slint_backend_testing::init_no_event_loop();

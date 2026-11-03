@@ -1161,6 +1161,12 @@ export component AppWindow inherits Window {
     callback controller-jog(int, int);
     callback controller-platter-touch(int, bool);
     callback controller-vinyl(int);
+    callback controller-pitch-fader(int, int);
+    callback controller-pitch-range-left();
+    callback controller-pitch-range-right();
+    callback controller-bend-left(int, bool);
+    callback controller-bend-right(int, bool);
+    in-out property <bool> controller-shift;
     in property <float> left-platter-angle;
     in property <float> right-platter-angle;
     in property <bool> left-platter-touched;

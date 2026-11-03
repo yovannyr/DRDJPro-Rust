@@ -55,9 +55,18 @@ struct PendingSync {
     tempo: f64,
     prepared: bool,
 }
+/// Distinguishes whether a nudge/bend button hold originates from the MC4000 hardware
+/// (jog bend) or from the GUI. Hardware disconnect/discovery must only release the
+/// holds it owns, leaving GUI holds untouched.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NudgeOwner {
+    Gui,
+    Hardware,
+}
 struct NudgeSession {
     source: Arc<crate::waveform::DetailPeaks>,
     held: [bool; 2],
+    owned: [NudgeOwner; 2],
 }
 struct CueSession {
     path: Arc<std::path::Path>,
@@ -186,6 +195,10 @@ type SearchRequest = (
     crate::library::SearchSpec,
 );
 const LIBRARY_PAGE_SIZE: usize = 200;
+
+/// Physical pitch fader must be within this many percentage points of the current pitch
+/// before it may drive a deck; prevents a tempo jump after a GUI or range change.
+const PITCH_PICKUP_TOLERANCE: f32 = 0.05;
 
 struct SearchPage {
     ids: Vec<i32>,
@@ -326,6 +339,8 @@ pub struct AudioController {
     keylock_jobs: RefCell<[Option<KeylockJob>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
     platter_holds: Cell<[bool; 2]>,
+    pitch_pickup: Cell<[bool; 2]>,
+    pitch_last_raw: Cell<[Option<u16>; 2]>,
     pointer_platters: Cell<[Option<PointerPlatter>; 2]>,
     platter_cancelled: Cell<[bool; 2]>,
     vinyl_modes: Cell<[bool; 2]>,
@@ -480,6 +495,8 @@ impl AudioController {
             keylock_next: Cell::new([None, None]),
             nudges: RefCell::new([None, None]),
             platter_holds: Cell::new([false; 2]),
+            pitch_pickup: Cell::new([false; 2]),
+            pitch_last_raw: Cell::new([None; 2]),
             pointer_platters: Cell::new([None; 2]),
             platter_cancelled: Cell::new([false; 2]),
             vinyl_modes: Cell::new([true; 2]),
@@ -998,6 +1015,7 @@ impl AudioController {
             }
         }
         controller.wire_nudge(ui);
+        controller.wire_mc4000_pitch(ui);
         controller.wire_platters(ui);
         controller.wire_saved_loops(ui);
         controller.refresh();
@@ -1792,6 +1810,7 @@ impl AudioController {
     }
     fn match_tempo(&self, id: DeckId) -> Result<(), String> {
         let factor = self.tempo_match_target(id)?;
+        self.reset_pitch_pickup(id);
         if self.keylock_requested(id) {
             // Preserve the current prepared rate until the worker result is adopted.
             self.start_keylock(id, factor)
@@ -1827,8 +1846,26 @@ impl AudioController {
         let mut ranges = self.pitch_ranges.get();
         ranges[Self::grid_index(id)] = range;
         self.pitch_ranges.set(ranges);
+        self.disarm_pitch_pickup();
         Ok(())
     }
+    /// Advance the pitch-range bound index for a hardware Note14 press, then apply it.
+    /// The GUI ComboBox sets its own index before firing its callback, so a controller
+    /// press must advance explicitly or a real Note14 would never change the bound range.
+    fn mc4000_pitch_range(&self, id: DeckId) -> Result<(), String> {
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        let index = match id {
+            DeckId::A => ui.get_left_pitch_range_index(),
+            DeckId::B => ui.get_right_pitch_range_index(),
+        };
+        let next = (index + 1).max(0) % 4;
+        match id {
+            DeckId::A => ui.set_left_pitch_range_index(next),
+            DeckId::B => ui.set_right_pitch_range_index(next),
+        }
+        self.change_pitch_range(id)
+    }
+
     fn desired_pitch(
         &self,
         id: DeckId,
@@ -1853,6 +1890,7 @@ impl AudioController {
         fallback
     }
     fn fine_pitch(&self, id: DeckId, up: bool) -> Result<(), String> {
+        self.disarm_pitch_pickup();
         if !self.can_control_deck(id) {
             return Err("Finish loading before changing pitch".into());
         }
@@ -2055,6 +2093,12 @@ impl AudioController {
                     c.stop_sync();
                     let snapshot = c.engine.borrow().snapshot(id);
                     if snapshot.playing {
+                        if c.nudges.borrow()[Self::grid_index(id)]
+                            .as_ref()
+                            .is_some_and(|session| session.held != [false; 2])
+                        {
+                            return Ok(());
+                        }
                         c.engine.borrow().set_nudge(id, steps.signum())?;
                         let mut bends = c.jog_bends.get();
                         bends[Self::grid_index(id)] = Some(std::time::Instant::now());
@@ -2126,7 +2170,43 @@ impl AudioController {
             }
         }
     }
-    fn hold_nudge(&self, id: DeckId, direction: i32, held: bool) -> Result<(), String> {
+    fn current_pitch_percent(&self, id: DeckId) -> Option<f32> {
+        let snapshot = self.engine.borrow().snapshot(id);
+        let source = snapshot.detail?;
+        let factor = self.desired_pitch(id, &source, snapshot.requested_speed);
+        Some(((factor - 1.) * 100.) as f32)
+    }
+    fn disarm_pitch_pickup(&self) {
+        self.pitch_pickup.set([false, false]);
+        self.pitch_last_raw.set([None; 2]);
+    }
+    /// Reset pickup for one deck when its source identity changes (track load or eject),
+    /// so the physical fader must be re-acquired against the new track's current pitch.
+    fn reset_pitch_pickup(&self, id: DeckId) {
+        let mut armed = self.pitch_pickup.get();
+        let mut prior = self.pitch_last_raw.get();
+        let index = Self::grid_index(id);
+        armed[index] = false;
+        prior[index] = None;
+        self.pitch_pickup.set(armed);
+        self.pitch_last_raw.set(prior);
+    }
+    /// Release all MC4000-held inputs (bend holds owned by hardware, fader pickup) when the
+    /// controller disconnects, reconnects, or the bounded MIDI queue overflows so no stale
+    /// hold persists. GUI-held nudges are left untouched and remain effective.
+    pub fn mc4000_release_holds(&self) {
+        self.disarm_pitch_pickup();
+        for id in [DeckId::A, DeckId::B] {
+            self.release_mc4000_bends(id);
+        }
+    }
+    fn hold_nudge(
+        &self,
+        id: DeckId,
+        direction: i32,
+        held: bool,
+        owner: NudgeOwner,
+    ) -> Result<(), String> {
         if direction != -1 && direction != 1 {
             return Err("Invalid nudge direction".into());
         }
@@ -2151,17 +2231,25 @@ impl AudioController {
             sessions[index] = Some(NudgeSession {
                 source: snapshot.detail.ok_or("Load a track first")?,
                 held: [false; 2],
+                owned: [NudgeOwner::Gui; 2],
             });
         }
         let Some(session) = sessions[index].as_mut() else {
             return Ok(());
         };
         let button = usize::from(direction > 0);
+        if !held && session.owned[button] != owner {
+            return Ok(());
+        }
         if session.held[button] == held {
             return Ok(());
         }
+        let mut owned = session.owned;
         let mut next = session.held;
         next[button] = held;
+        if held {
+            owned[button] = owner;
+        }
         let target = i32::from(next[1]) - i32::from(next[0]);
         if let Err(error) = self.engine.borrow().set_nudge(id, target) {
             if !held || session.held == [false; 2] {
@@ -2172,17 +2260,55 @@ impl AudioController {
             return Err(error);
         }
         session.held = next;
+        session.owned = owned;
         if next == [false; 2] {
             sessions[index] = None;
         }
         Ok(())
+    }
+    /// MC4000 jog-bend hold: a hardware-owned nudge distinct from GUI holds, so a
+    /// hardware disconnect/discovery releases only these bends and never the GUI's.
+    fn mc4000_hold_bend(&self, id: DeckId, direction: i32, held: bool) -> Result<(), String> {
+        if held {
+            let mut bends = self.jog_bends.get();
+            bends[Self::grid_index(id)] = None;
+            self.jog_bends.set(bends);
+        }
+        self.hold_nudge(id, direction, held, NudgeOwner::Hardware)
+    }
+    /// Release only the nudge/bend buttons currently owned by MC4000 hardware for one
+    /// deck, preserving any GUI-held nudges. Returns the retained button state.
+    fn release_mc4000_bends(&self, id: DeckId) {
+        let index = Self::grid_index(id);
+        let mut active = self.nudges.borrow_mut();
+        let Some(session) = active[index].as_mut() else {
+            return;
+        };
+        let mut changed = false;
+        let mut next = session.held;
+        for (button, held) in next.iter_mut().enumerate() {
+            if *held && session.owned[button] == NudgeOwner::Hardware {
+                *held = false;
+                session.owned[button] = NudgeOwner::Gui;
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        let target = i32::from(next[1]) - i32::from(next[0]);
+        let _ = self.engine.borrow().set_nudge(id, target);
+        session.held = next;
+        if next == [false; 2] {
+            active[index] = None;
+        }
     }
     fn wire_nudge(self: &Rc<Self>, ui: &AppWindow) {
         for id in [DeckId::A, DeckId::B] {
             let weak = Rc::downgrade(self);
             let hold = move |direction, held| {
                 if let Some(c) = weak.upgrade() {
-                    if let Err(error) = c.hold_nudge(id, direction, held) {
+                    if let Err(error) = c.hold_nudge(id, direction, held, NudgeOwner::Gui) {
                         if let Some(ui) = c.ui.upgrade() {
                             ui.set_status(error.into());
                         }
@@ -2204,6 +2330,108 @@ impl AudioController {
             match id {
                 DeckId::A => ui.on_cancel_nudge_left(cancel),
                 DeckId::B => ui.on_cancel_nudge_right(cancel),
+            }
+        }
+    }
+    fn wire_mc4000_pitch(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_controller_pitch_fader(move |deck, raw| {
+            let Some(c) = weak.upgrade() else {
+                return;
+            };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            let index = Self::grid_index(id);
+            let (min, max) = c.pitch_ranges.get()[index].bounds();
+            let target = crate::mc4000::pitch_fader_percent(raw as u16, min as f32, max as f32);
+            // Track the most recent hardware fader position so a fast sweep crossing
+            // the target engages pickup even when no single sample lands within the
+            // tolerance band (e.g. raw 5400 -> 5500 crossing 0%).
+            let prior = c.pitch_last_raw.get()[index];
+            let mut positions = c.pitch_last_raw.get();
+            positions[index] = Some(raw as u16);
+            c.pitch_last_raw.set(positions);
+            if !c.pitch_pickup.get()[index] {
+                // Pickup: require the physical fader near, or sweeping across, the
+                // current pitch before it may drive the deck; otherwise ignore it so
+                // no tempo jump occurs after a GUI or range change.
+                let Some(current) = c.current_pitch_percent(id) else {
+                    return;
+                };
+                let near = (target - current).abs() <= PITCH_PICKUP_TOLERANCE;
+                // Crossing is detected when the previous and current hardware samples
+                // lie on opposite sides of the target (a strict sign change), so the
+                // fader provably travelled through the current pitch.
+                let crossed = prior
+                    .map(|prev| {
+                        let prev_target =
+                            crate::mc4000::pitch_fader_percent(prev, min as f32, max as f32);
+                        prev_target != current && (prev_target - current) * (target - current) < 0.0
+                    })
+                    .unwrap_or(false);
+                if !near && !crossed {
+                    return;
+                }
+            }
+            let mut armed = c.pitch_pickup.get();
+            armed[index] = true;
+            c.pitch_pickup.set(armed);
+            if let Err(error) = c.queue_pitch(id, target) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_pitch_range_left(move || {
+            if let Some(c) = weak.upgrade() {
+                let result = c.mc4000_pitch_range(DeckId::A);
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(
+                        result
+                            .map(|()| "MC4000 pitch range advanced; playback retained".to_string())
+                            .unwrap_or_else(|error| error)
+                            .into(),
+                    );
+                }
+                c.refresh();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_pitch_range_right(move || {
+            if let Some(c) = weak.upgrade() {
+                let result = c.mc4000_pitch_range(DeckId::B);
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(
+                        result
+                            .map(|()| "MC4000 pitch range advanced; playback retained".to_string())
+                            .unwrap_or_else(|error| error)
+                            .into(),
+                    );
+                }
+                c.refresh();
+            }
+        });
+        for (id, is_left) in [(DeckId::A, true), (DeckId::B, false)] {
+            let weak = Rc::downgrade(self);
+            let hold = move |direction, held| {
+                if let Some(c) = weak.upgrade() {
+                    if let Err(error) = c.mc4000_hold_bend(id, direction, held) {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                    }
+                    c.refresh();
+                }
+            };
+            if is_left {
+                ui.on_controller_bend_left(hold);
+            } else {
+                ui.on_controller_bend_right(hold);
             }
         }
     }
@@ -2348,6 +2576,7 @@ impl AudioController {
             let weak = Rc::downgrade(self);
             let change = move |value| {
                 if let Some(c) = weak.upgrade() {
+                    c.disarm_pitch_pickup();
                     let result = c.queue_pitch(id, value);
                     if let Some(ui) = c.ui.upgrade() {
                         match result {
@@ -2367,6 +2596,7 @@ impl AudioController {
             let weak = Rc::downgrade(self);
             let reset = move || {
                 if let Some(c) = weak.upgrade() {
+                    c.disarm_pitch_pickup();
                     if let Err(error) = c.queue_pitch(id, 0.) {
                         if let Some(ui) = c.ui.upgrade() {
                             ui.set_status(error.into());
@@ -4616,6 +4846,7 @@ impl AudioController {
 
         self.stop_sync();
         self.cancel_nudge(id);
+        self.reset_pitch_pickup(id);
         self.pending_pitch.borrow_mut()[Self::grid_index(id)].take();
         self.keylock_jobs.borrow_mut()[Self::grid_index(id)].take();
         let mut keylock_next = self.keylock_next.get();
@@ -4688,6 +4919,7 @@ impl AudioController {
                     restore_failed = true;
                     ui.set_status(format!("Deck {id:?}: {error}").into());
                 } else {
+                    self.reset_pitch_pickup(id);
                     if let Some(track_id) = self.library.borrow().track_id_for_path(&path) {
                         self.set_session_track(id, Some(track_id));
                     }
@@ -6725,7 +6957,7 @@ mod tests {
             engine.set_speed(id, 1.).unwrap();
             let channel = if id == DeckId::A { 0x90 } else { 0x91 };
             crate::mc4000::apply(&ui, crate::mc4000::decode(&[channel, 13, 127]).unwrap());
-            assert!(c.hold_nudge(id, 1, true).is_err());
+            assert!(c.hold_nudge(id, 1, true, NudgeOwner::Gui).is_err());
             c.fine_pitch(id, true).unwrap();
             c.apply_pending_pitch();
             c.fine_pitch(id, true).unwrap();
@@ -6956,7 +7188,7 @@ mod tests {
             assert!(c.sync_session.borrow().is_none());
             assert_eq!(engine.snapshot(id).sync_factor, 1.);
             c.start_keylock(id, 1.04).unwrap();
-            assert!(c.hold_nudge(id, 1, true).is_err());
+            assert!(c.hold_nudge(id, 1, true, NudgeOwner::Gui).is_err());
             assert!(c.sync_session.borrow().is_none());
             assert_eq!(engine.snapshot(follower).sync_factor, 1.);
             assert!(c.tempo_match_target(follower).is_err());
@@ -9804,6 +10036,139 @@ mod tests {
         c.tick();
         assert!(!engine.platter_touched(DeckId::A));
         assert!(!ui.get_left_platter_touched());
+    }
+
+    #[test]
+    fn mc4000_pitch_fader_pickup_and_range_redarm() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let pitch = |raw| {
+            crate::mc4000::apply(&ui, crate::mc4000::Command::PitchFader(0, raw));
+        };
+        // Default range index 3 maps 0..16383 to -50%..+100%. A fader far from the current
+        // 0% pitch is ignored until pickup is armed, so a GUI/range change cannot yank tempo.
+        pitch(16000); // ~+96%
+        assert!(!c.pitch_pickup.get()[0]);
+        assert!(c.pending_pitch.borrow()[0].is_none());
+        // Matching the current pitch arms pickup and starts following the fader.
+        pitch(5461); // ~0%
+        assert!(c.pitch_pickup.get()[0]);
+        assert!(c.pending_pitch.borrow()[0].is_some());
+        pitch(16000); // ~+96%
+        assert!(c.pitch_pickup.get()[0]);
+        // A range change (Note14) disarms pickup; a far fader is ignored again.
+        ui.set_left_pitch_range_index(0);
+        c.change_pitch_range(DeckId::A).unwrap();
+        assert!(!c.pitch_pickup.get()[0]);
+        assert!(c.pending_pitch.borrow()[0].is_none());
+        pitch(16000);
+        assert!(!c.pitch_pickup.get()[0]);
+        assert!(c.pending_pitch.borrow()[0].is_none());
+        // Matching the current (still 0%) pitch in the new -8%..+8% range re-arms pickup.
+        pitch(8192); // 0% in (-8, 8)
+        assert!(c.pitch_pickup.get()[0]);
+        assert!(c.pending_pitch.borrow()[0].is_some());
+        c.apply_pending_pitch();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.0);
+    }
+
+    #[test]
+    fn mc4000_pitch_fader_a_b_isolation_and_release() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let pitch = |deck, raw| {
+            crate::mc4000::apply(&ui, crate::mc4000::Command::PitchFader(deck, raw));
+        };
+        // Deck A arms and follows; deck B keeps its own independent pickup state.
+        pitch(0, 16000); // ~+96%, far from current 0% -> ignored
+        assert!(!c.pitch_pickup.get()[0]);
+        pitch(0, 5461); // ~0% -> arms deck A
+        assert!(c.pitch_pickup.get()[0]);
+        pitch(0, 16000); // armed -> follows to ~+96%
+        assert!(c.pending_pitch.borrow()[0].is_some());
+        // Deck B's own far fader is rejected (no cross-deck pickup).
+        pitch(1, 16000);
+        assert!(!c.pitch_pickup.get()[1]);
+        assert!(c.pending_pitch.borrow()[1].is_none());
+        // Applying writes only the armed deck A's queued pitch; deck B is untouched.
+        c.apply_pending_pitch();
+        assert!((engine.snapshot(DeckId::A).requested_speed - 1.96).abs() < 0.01);
+        assert_eq!(engine.snapshot(DeckId::B).requested_speed, 1.0);
+        // Lifecycle release disarms both decks and blocks a subsequent stale far fader.
+        c.mc4000_release_holds();
+        assert_eq!(c.pitch_pickup.get(), [false, false]);
+        pitch(0, 5461); // ~0%, far from deck A's +96% current pitch -> still rejected
+        assert!(!c.pitch_pickup.get()[0]);
+        assert!(c.pending_pitch.borrow()[0].is_none());
+    }
+    #[test]
+    fn mc4000_pitch_crossing_range_and_owned_release_regressions() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(4096, 192000);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.invoke_controller_pitch_fader(0, 5400);
+        assert!(!c.pitch_pickup.get()[0]);
+        ui.invoke_controller_pitch_fader(0, 5500);
+        assert!(c.pitch_pickup.get()[0]);
+        c.apply_pending_pitch();
+        let old_range = ui.get_left_pitch_range_index();
+        crate::mc4000::apply(&ui, crate::mc4000::decode(&[0x90, 14, 127]).unwrap());
+        assert_ne!(ui.get_left_pitch_range_index(), old_range);
+        assert!(!c.pitch_pickup.get()[0]);
+        c.reset_pitch_pickup(DeckId::A);
+        ui.invoke_controller_pitch_fader(0, 16000);
+        assert!(!c.pitch_pickup.get()[0]);
+        engine.play(DeckId::A);
+        ui.invoke_nudge_left(1, true);
+        ui.invoke_controller_bend_left(1, false);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        c.mc4000_release_holds();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        ui.invoke_nudge_left(1, false);
+        ui.invoke_controller_bend_left(-1, true);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, -1);
+        c.jog_bends.set([
+            Some(std::time::Instant::now() - Duration::from_millis(130)),
+            None,
+        ]);
+        ui.invoke_controller_bend_left(-1, true);
+        assert!(c.jog_bends.get()[0].is_none());
+        ui.set_mc4000_connected(true);
+        c.tick();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, -1);
+        ui.invoke_controller_jog(0, 1);
+        assert!(c.jog_bends.get()[0].is_none());
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, -1);
+        c.mc4000_release_holds();
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        engine.pause(DeckId::A);
+        engine.load_b(file.path()).unwrap();
+        for (id, bpm) in [(DeckId::A, 120.), (DeckId::B, 128.)] {
+            engine
+                .set_grid(
+                    id,
+                    Some(crate::beatgrid::BeatGrid::new(bpm, Duration::ZERO).unwrap()),
+                )
+                .unwrap();
+        }
+        c.pitch_pickup.set([true, false]);
+        c.match_tempo(DeckId::A).unwrap();
+        assert!(!c.pitch_pickup.get()[0]);
     }
 
     #[test]

@@ -286,6 +286,9 @@ fn main() -> Result<(), slint::PlatformError> {
         None
     };
     let mut midi_discovery = std::time::Instant::now();
+    // Track the previously observed connection so holds are released only on the
+    // transition to absent, not on every absent-discovery poll.
+    let mut mc4000_was_connected = midi.is_some();
     let midi_trace = std::env::var_os("DRDJ_MIDI_TRACE").is_some_and(|v| v == "1");
     let timer = Timer::default();
     let closing_controller = controller.clone();
@@ -298,6 +301,8 @@ fn main() -> Result<(), slint::PlatformError> {
                 if reconnect {
                     ui.invoke_controller_platter_touch(0, false);
                     ui.invoke_controller_platter_touch(1, false);
+                    controller.mc4000_release_holds();
+                    ui.set_controller_shift(false);
                 }
                 mc4000::release_for_reconnect(&mut midi, reconnect);
                 if reconnect || midi_discovery.elapsed() >= Duration::from_secs(2) {
@@ -305,6 +310,11 @@ fn main() -> Result<(), slint::PlatformError> {
                     match mc4000::present() {
                         Ok(false) => {
                             midi = None;
+                            if mc4000_was_connected {
+                                controller.mc4000_release_holds();
+                                ui.set_controller_shift(false);
+                            }
+                            mc4000_was_connected = false;
                             ui.set_mc4000_connected(false);
                             ui.set_controller_status("MC4000 disconnected".into());
                         }
@@ -312,6 +322,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             Ok(input) => {
                                 midi = input;
                                 if midi.is_some() {
+                                    mc4000_was_connected = true;
                                     ui.set_mc4000_connected(true);
                                     ui.set_status("MC4000 connected".into());
                                 } else {
@@ -328,6 +339,11 @@ fn main() -> Result<(), slint::PlatformError> {
                         },
                         Err(error) => {
                             midi = None;
+                            if mc4000_was_connected {
+                                controller.mc4000_release_holds();
+                                ui.set_controller_shift(false);
+                            }
+                            mc4000_was_connected = false;
                             ui.set_mc4000_connected(false);
                             ui.set_controller_status(
                                 format!("MC4000 discovery failed: {error}").into(),
@@ -364,8 +380,11 @@ fn main() -> Result<(), slint::PlatformError> {
                     }) {
                         ui.invoke_controller_platter_touch(0, false);
                         ui.invoke_controller_platter_touch(1, false);
+                        controller.mc4000_release_holds();
+                        ui.set_controller_shift(false);
                         ui.set_status(
-                            "MC4000 input queue overflow; platter controls released safely".into(),
+                            "MC4000 input queue overflow; platter and pitch holds released safely"
+                                .into(),
                         );
                     }
                 }

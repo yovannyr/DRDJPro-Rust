@@ -1,5 +1,16 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S2: modifier and pitch
+
+Global SHIFT, pitch range cycling, paired 14-bit pitch CC41/9 and held
+pitch-bend buttons reuse the control-plane tempo/nudge APIs. Pickup arms only
+near or across the current target; GUI pitch, range, tempo match and track
+replacement disarm it. Incomplete MIDI pairs survive polling without producing
+partial tempo jumps. Hardware lifecycle release preserves GUI-owned nudges.
+Held bend buttons take priority over transient untouched jog bends.
+No new DSP or audio-callback work; physical fader calibration and listening
+remain open in the [hardware test plan](MC4000_HARDWARE_TEST_PLAN.md).
+
 ## MC4000 S1: channel trim, EQ and filter
 
 Deck MIDI channels 1/2, CC22-26 now control Trim, High, Mid, Low and Filter

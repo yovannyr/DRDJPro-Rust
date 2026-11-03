@@ -119,7 +119,7 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | Slice | Umfang / Abhaengigkeit | Abnahme und Tests |
 | --- | --- | --- |
 | S1 Mixer-Anbindung | **Implementiert:** CC22-26; bestehende Trim/EQ/Filter-APIs, kein neues DSP. | A/B-Isolation, Mitte/Endpunkte, Neutral63/64, Coalescing und Audio-/GUI-Rampen automatisiert geprueft; native jeden Regler mit MASTER/Cue noch gegenpruefen. |
-| S2 Modifier und Pitch | Globaler SHIFT-Zustand, explizite Shift-Noten, 14-Bit-Pitch, Bereich und Bend. | MSB/LSB-Reihenfolge und unvollstaendige Paare, Bereichswechsel, Pickup statt Temposprung, Druck/Release/Disconnect/Overflow; MIDI-Aufzeichnung fuer Fader erforderlich. |
+| S2 Modifier und Pitch | **Implementiert:** globaler SHIFT-Zustand (Note50 ch16), 14-Bit-Pitch (CC41/MSB + CC9/LSB gekoalesziert), Bereich (Note14) und Bend (Note11/12) mit Pickup und Freigabe bei Disconnect/Reconnect/Overflow. | MSB/LSB-Reihenfolge und unvollstaendige Paare, Endpunkte/Mitte, Modifier/Dekodierung, A/B-Isolation, Pickup- und Bereichswechsel-Disarm, Lifecycle-Freigabe automatisiert; native Fader-/Bend-Aufzeichnung und Haptik weiter erforderlich. |
 | S3 Sync und Loop-Tasten | Vorhandenes Sync, Auto/halb/doppelt/In/Out/Reloop; neue vier-Takte-Auswahl. Modifier-Grundlage aus S2. | Sync-Aus idempotent, Loopgrenzen/Quantize/EOF, vier Takte statt vier Beats, nicht4/4 und Taktwechsel; Wiedergabe- und A/B-Regression. |
 | S4 Hot-Cue-Pads | Physische Pads1-4, Set/Recall/Preview, SHIFT Delete, passende LED-Farben. | Leeres/belegtes Pad, Hold/Release/PLAY-Uebernahme, Busy-/Quantize-Schutz, Persistenz und Neustart. Acht App-Slots erhalten. |
 | S5 Temporaerer CUE und Stutter | Eigene temporaere Cue-Zustandsmaschine, getrennt von gespeicherten Cues; Trackstart und Stutter. | Pause->Punkt setzen->Hold->Release rueckkehr/pausieren; PLAY uebernimmt; Sourcewechsel/EOF/Disconnect; gleiche Regeln in GUI und MIDI. |
@@ -133,6 +133,11 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S13 Drei FX-Slots und Auswahl | Begrenzte Slots je Deck, serieller/paralleler Signalvertrag, FX1-3/Shift-Pegel/-Auswahl. S12. | Vorab unterstuetzte Effekttypen und Routing festlegen; alten Delayzustand migrieren, Bypass/Fahnen/Parameter und CPU-/Speicherbudget; bisheriges Controller-Mapping nicht still veraendern. |
 | S14 Vier-Slot-Sampler | Offline vorbereitete Samples, bounded Mixer, Play/Stop, Gesamtpegel und GUI. | Polyphonie/Restart-/OneShot-Vertrag festlegen; keine Datei-/Speicherarbeit im Callback, Peaks/Routing, Deck-Isolation, Stop/Disconnect und Neustart. |
 | S15 Pad-Modus und Gesamtqualifikation | Nur konkret ausgewaehlte App-Modi, S4/S14; weitere Serato-Modi gesondert entscheiden. | Modus/LED/Fokus konsistent, keine verlorenen Releases bei Wechsel; alle Controller-Elemente A/B nach Testmatrix, reale Tracks, Latenz/Langzeit und Recovery messen. |
+
+Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
+Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
+autorisierte Fallback: S2-S6 selbst fertigstellen. S7-S15 bleiben danach
+offen; der Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits
 vorhandene App-Funktionen am Controller nutzbar, bevor neue Audiofunktionen
