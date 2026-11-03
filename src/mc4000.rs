@@ -28,6 +28,7 @@ pub enum Command {
     PitchFader(usize, u16),
     Sync(usize, bool),
     Loop(usize, u8),
+    HotCue(usize, usize, bool, bool),
 }
 pub fn decode(bytes: &[u8]) -> Option<Command> {
     if bytes.len() != 3 || bytes[1] > 127 || bytes[2] > 127 {
@@ -91,6 +92,15 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         (0x90, 0..=1, 2..=3, 1..=127) => Some(Command::Sync(channel as usize, bytes[1] == 2)),
         (0x90, 4..=5, note @ (50..=53 | 56..=57 | 63), 1..=127) => {
             Some(Command::Loop((channel - 4) as usize, note))
+        }
+        (status @ (0x90 | 0x80), 4..=5, note @ (20..=23 | 28..=31), value) => {
+            let delete = note >= 28;
+            Some(Command::HotCue(
+                (channel - 4) as usize,
+                usize::from(note - if delete { 28 } else { 20 }),
+                status == 0x90 && value != 0,
+                delete,
+            ))
         }
         _ => None,
     }
@@ -183,6 +193,19 @@ fn meter_value(level: f32, clipped: bool, warning: bool) -> u8 {
         1 + (segments - 1) * 18
     }
 }
+fn pad_color(tint: slint::Color) -> u8 {
+    [(1, [0i32, 0, 255]), (2, [255, 0, 0]), (3, [128, 0, 128])]
+        .into_iter()
+        .min_by_key(|(_, rgb)| {
+            [tint.red(), tint.green(), tint.blue()]
+                .into_iter()
+                .zip(rgb)
+                .map(|(component, target)| (i32::from(component) - target).pow(2))
+                .sum::<i32>()
+        })
+        .unwrap()
+        .0
+}
 fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
     use slint::Model;
     let decks = [
@@ -219,8 +242,11 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             messages[deck * 9 + index] = [status, note, if active { 127 } else { 0 }];
         }
         for slot in 0..4 {
-            let occupied = cues.row_data(slot).is_some_and(|cue| cue.occupied);
-            messages[deck * 9 + 5 + slot] = [0x94 | channel, 0x14 + slot as u8, u8::from(occupied)];
+            let color = cues
+                .row_data(slot)
+                .filter(|cue| cue.occupied)
+                .map_or(0, |cue| pad_color(cue.tint));
+            messages[deck * 9 + 5 + slot] = [0x94 | channel, 0x14 + slot as u8, color];
         }
     }
     messages[18] = [
@@ -802,6 +828,9 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         }
         Command::PitchMsb(_, _) | Command::PitchLsb(_, _) => (),
         Command::Sync(deck, enabled) => ui.invoke_controller_sync(deck as i32, enabled),
+        Command::HotCue(deck, slot, held, delete) => {
+            ui.invoke_controller_hot_cue(deck as i32, slot as i32, held, delete)
+        }
         Command::Loop(deck, note) => match (deck, note) {
             (0, 50) if ui.get_left_loop_active() => ui.invoke_loop_exit_left(),
             (1, 50) if ui.get_right_loop_active() => ui.invoke_loop_exit_right(),
@@ -825,6 +854,28 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pad_decode_release_shift_and_palette() {
+        for deck in 0..2 {
+            for slot in 0..4 {
+                assert_eq!(
+                    decode(&[0x94 + deck, 20 + slot, 127]),
+                    Some(Command::HotCue(deck as usize, slot as usize, true, false))
+                );
+                assert_eq!(
+                    decode(&[0x84 + deck, 20 + slot, 127]),
+                    Some(Command::HotCue(deck as usize, slot as usize, false, false))
+                );
+                assert_eq!(
+                    decode(&[0x94 + deck, 28 + slot, 0]),
+                    Some(Command::HotCue(deck as usize, slot as usize, false, true))
+                );
+            }
+        }
+        assert_eq!(pad_color(slint::Color::from_rgb_u8(255, 0, 0)), 2);
+        assert_eq!(pad_color(slint::Color::from_rgb_u8(0, 0, 255)), 1);
+        assert_eq!(pad_color(slint::Color::from_rgb_u8(128, 0, 128)), 3);
+    }
     #[test]
     fn pitch_fader_percent_maps_endpoints_and_midpoint() {
         for (min, max) in [(-8., 8.), (-50., 100.)] {
@@ -1313,11 +1364,13 @@ mod tests {
         ui.set_left_hot_cues(ModelRc::new(slint::VecModel::from(vec![
             crate::HotCueRow {
                 occupied: true,
+                tint: slint::Color::from_rgb_u8(0, 0, 255),
                 ..Default::default()
             },
             crate::HotCueRow::default(),
             crate::HotCueRow {
                 occupied: true,
+                tint: slint::Color::from_rgb_u8(255, 0, 0),
                 ..Default::default()
             },
             crate::HotCueRow::default(),
@@ -1338,7 +1391,7 @@ mod tests {
             &[
                 [0x94, 0x14, 1],
                 [0x94, 0x15, 0],
-                [0x94, 0x16, 1],
+                [0x94, 0x16, 2],
                 [0x94, 0x17, 0],
             ]
         );

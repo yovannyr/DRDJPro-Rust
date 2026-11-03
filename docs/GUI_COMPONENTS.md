@@ -1,5 +1,15 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S4: hardware hot cues
+
+Pad channels 5/6 notes20-23 reuse the eight-slot persisted hot-cue workflow
+for slots1-4 only; notes28-31 delete. Both NoteOff and zero-velocity NoteOn
+release previews, including shifted releases. Hardware uses its own input bit:
+disconnect/overflow releases it without clearing GUI holds. Paused occupied
+pads preview until release; PLAY promotes to normal playback. Empty pads set
+a cue without starting playback. LEDs use the closest supported blue/red/purple
+palette color; arbitrary RGB remains intact in the library and GUI.
+
 ## MC4000 S3: sync and loops
 
 Deck notes 2/3 explicitly enable/disable that deck's Sync follower; repeated

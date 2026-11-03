@@ -2198,6 +2198,16 @@ impl AudioController {
         self.disarm_pitch_pickup();
         for id in [DeckId::A, DeckId::B] {
             self.release_mc4000_bends(id);
+            let slot = self.hot_cue_holds.borrow()[Self::grid_index(id)]
+                .as_ref()
+                .map(|session| session.slot);
+            if let Some(slot) = slot {
+                if let Err(error) = self.hold_hot_cue(id, slot as i32, false, 16) {
+                    if let Some(ui) = self.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
+                }
+            }
         }
     }
     fn hold_nudge(
@@ -3319,6 +3329,23 @@ impl AudioController {
         }
     }
     fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_controller_hot_cue(move |deck, slot, held, delete| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = if deck == 0 { DeckId::A } else { DeckId::B };
+            let result = if delete && held {
+                c.hold_hot_cue(id, slot, false, 16)
+                    .and_then(|()| c.change_hot_cue(id, slot, true))
+            } else {
+                c.hold_hot_cue(id, slot, held, 16)
+            };
+            if let Err(error) = result {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
         let engine = Rc::clone(&self.engine);
         let weak_ui = ui.as_weak();
         ui.on_quantize_mode_changed(move || {
@@ -10988,6 +11015,49 @@ mod tests {
         assert_eq!(count("DECK A overview loop range"), 0);
         assert!(engine.snapshot(DeckId::B).playing);
         assert!(!c.dirty.get());
+    }
+    #[test]
+    fn mc4000_pads_preview_release_latch_and_owned_recovery() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let dispatch =
+            |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(2))
+            .unwrap();
+        dispatch([0x94, 20, 127]);
+        dispatch([0x84, 20, 0]);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x94, 20, 127]);
+        assert!(engine.snapshot(DeckId::A).playing);
+        output.by_ref().take(24000).for_each(drop);
+        dispatch([0x94, 20, 0]);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(2));
+        dispatch([0x94, 20, 127]);
+        dispatch([0x90, 0, 127]);
+        dispatch([0x84, 20, 0]);
+        assert!(engine.snapshot(DeckId::A).playing);
+        engine.pause(DeckId::A);
+        ui.invoke_hold_hot_cue_left(0, true, 1);
+        dispatch([0x94, 20, 127]);
+        c.mc4000_release_holds();
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.invoke_hold_hot_cue_left(0, false, 1);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x94, 20, 127]);
+        c.mc4000_release_holds();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x94, 28, 127]);
+        dispatch([0x84, 28, 0]);
+        assert!(c.library.borrow().hot_cues(file.path()).slots()[0].is_none());
+        assert!(!engine.snapshot(DeckId::B).playing);
     }
     #[test]
     fn mc4000_sync_and_loop_buttons_use_existing_transport() {

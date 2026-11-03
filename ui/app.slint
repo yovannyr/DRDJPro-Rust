@@ -1168,6 +1168,7 @@ export component AppWindow inherits Window {
     callback controller-bend-right(int, bool);
     callback controller-sync(int, bool);
     callback controller-four-bar-loop(int);
+    callback controller-hot-cue(int, int, bool, bool);
     in-out property <bool> controller-shift;
     in property <float> left-platter-angle;
     in property <float> right-platter-angle;
