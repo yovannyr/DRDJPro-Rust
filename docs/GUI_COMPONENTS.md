@@ -1,5 +1,17 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S3: sync and loops
+
+Deck notes 2/3 explicitly enable/disable that deck's Sync follower; repeated
+commands are idempotent and cannot cancel the other deck's follower.
+Loop-channel notes 50/51/52/53/56/57 reuse Auto toggle, Reloop, half/double,
+In/Out. Note63 (SHIFT+AUTO) creates four musical bars, not four beats.
+Its start follows the existing quantize/snap preference; its end preserves
+the fractional position within the bar four bars later, evaluating committed
+meter, tempo and warp changes. Out-of-track regions fail without replacing
+valid boundaries. Existing control-plane region publication is reused: no
+new render-thread locks, allocation or DSP; native timing/listening remains open.
+
 ## MC4000 S2: modifier and pitch
 
 Global SHIFT, pitch range cycling, paired 14-bit pitch CC41/9 and held

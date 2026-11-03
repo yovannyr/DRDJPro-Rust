@@ -2436,6 +2436,37 @@ impl AudioController {
         }
     }
     fn wire_pitch(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_controller_sync(move |deck, enabled| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = if deck == 0 { DeckId::A } else { DeckId::B };
+            let is_target = c
+                .sync_session
+                .borrow()
+                .as_ref()
+                .is_some_and(|s| s.target == id)
+                || c.pending_sync
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|s| s.session.target == id);
+            let result = if enabled && !is_target {
+                c.toggle_sync(id)
+            } else {
+                if !enabled && is_target {
+                    c.stop_sync();
+                }
+                Ok(())
+            };
+            if let Some(ui) = c.ui.upgrade() {
+                ui.set_status(
+                    result
+                        .map(|()| "Controller Sync updated".to_string())
+                        .unwrap_or_else(|e| e)
+                        .into(),
+                );
+            }
+            c.refresh();
+        });
         for id in [DeckId::A, DeckId::B] {
             let weak = Rc::downgrade(self);
             let alignment = move || {
@@ -2780,6 +2811,36 @@ impl AudioController {
         }
     }
     fn wire_loops(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_controller_four_bar_loop(move |deck| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = if deck == 0 { DeckId::A } else { DeckId::B };
+            let result = if !c.can_control_deck(id) {
+                Err("Finish loading before changing a loop".into())
+            } else {
+                let snap = c.ui.upgrade().is_some_and(|ui| {
+                    ui.get_quantize_enabled()
+                        && if deck == 0 {
+                            ui.get_left_auto_loop_snap()
+                        } else {
+                            ui.get_right_auto_loop_snap()
+                        }
+                });
+                c.engine.borrow().four_bar_loop(id, snap)
+            };
+            if result.is_ok() {
+                c.cancel_nudge(id);
+            }
+            if let Some(ui) = c.ui.upgrade() {
+                ui.set_status(
+                    result
+                        .map(|()| "Four-bar loop active".to_string())
+                        .unwrap_or_else(|e| e)
+                        .into(),
+                );
+            }
+            c.refresh();
+        });
         for id in [DeckId::A, DeckId::B] {
             for command in 0..8 {
                 let weak = Rc::downgrade(self);
@@ -10927,6 +10988,59 @@ mod tests {
         assert_eq!(count("DECK A overview loop range"), 0);
         assert!(engine.snapshot(DeckId::B).playing);
         assert!(!c.dirty.get());
+    }
+    #[test]
+    fn mc4000_sync_and_loop_buttons_use_existing_transport() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 20);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let dispatch =
+            |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        dispatch([0x90, 3, 127]);
+        dispatch([0x90, 3, 127]);
+        assert!(c.sync_session.borrow().is_none());
+        dispatch([0x90, 2, 127]);
+        assert!(ui.get_status().contains("grid") || ui.get_status().contains("Play"));
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_time_signature_change(3, 3, 4)
+            .unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        dispatch([0x94, 63, 127]);
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_secs(7))
+        );
+        assert!(engine.snapshot(DeckId::A).loop_active);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(engine.snapshot(DeckId::B).loop_in.is_none());
+        dispatch([0x94, 52, 127]);
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_millis(3500))
+        );
+        dispatch([0x94, 53, 127]);
+        assert_eq!(
+            engine.snapshot(DeckId::A).loop_out,
+            Some(Duration::from_secs(7))
+        );
+        dispatch([0x94, 50, 127]);
+        assert!(!engine.snapshot(DeckId::A).loop_active);
+        dispatch([0x94, 51, 127]);
+        assert!(engine.snapshot(DeckId::A).loop_active);
+        engine.exit_loop(DeckId::A).unwrap();
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(19))
+            .unwrap();
+        let before = engine.snapshot(DeckId::A).loop_out;
+        dispatch([0x94, 63, 127]);
+        assert_eq!(engine.snapshot(DeckId::A).loop_out, before);
+        assert!(!engine.snapshot(DeckId::A).loop_active);
     }
     #[test]
     fn auto_loop_gui_uses_committed_grid_and_preserves_failures_and_saved_slots() {

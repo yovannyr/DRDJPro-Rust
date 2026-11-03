@@ -1410,6 +1410,26 @@ impl DualDeckEngine {
         };
         self.apply_loop_region(id, region, true, Some(region.start))
     }
+    /// Activate a four-bar loop from the current (optionally beat-snapped) source position.
+    pub fn four_bar_loop(&self, id: DeckId, snap: bool) -> Result<(), String> {
+        let position = self.snapshot(id).position;
+        let region = {
+            let deck = self.decks[id.index()].borrow();
+            let track = deck.track.as_ref().ok_or("Load a track first")?;
+            let grid = deck
+                .grid
+                .ok_or("Save a manual beatgrid before using Auto Loop")?;
+            let rate = track.samples.sample_rate();
+            let start = if snap {
+                grid.nearest_beat_frame(position, rate)?
+            } else {
+                deck.render.as_ref().unwrap().frame()
+            };
+            let end = grid.four_bar_end_frame(frame_time(start, rate), rate)?;
+            FrameLoop::new(start, end, track.samples.frames())?
+        };
+        self.apply_loop_region(id, region, true, Some(region.start))
+    }
     pub fn resize_loop(&self, id: DeckId, double: bool) -> Result<(), String> {
         let (region, active) = {
             let deck = self.decks[id.index()].borrow();

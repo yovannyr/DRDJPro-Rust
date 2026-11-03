@@ -309,6 +309,25 @@ impl BeatGrid {
         }
         start + (bar - current) as f64 * quarter_beats_per_bar(beats, denominator)
     }
+    /// End frame four bars later, preserving the fractional position within a bar.
+    /// Meter, tempo and warp changes are evaluated on the committed musical grid.
+    pub fn four_bar_end_frame(self, position: Duration, rate: u32) -> Result<usize, String> {
+        if rate == 0 {
+            return Err("Sample rate must be positive".into());
+        }
+        let beat = self.beat_at_time(position.as_secs_f64());
+        let (bar, _) = self.bar_at_beat(beat);
+        let start = self.bar_start_beat_signed(bar);
+        let fraction = (beat - start) / (self.bar_start_beat_signed(bar + 1) - start);
+        let end = self.bar_start_beat_signed(bar + 4)
+            + fraction
+                * (self.bar_start_beat_signed(bar + 5) - self.bar_start_beat_signed(bar + 4));
+        let frame = self.time_at_beat(end) * f64::from(rate);
+        if !frame.is_finite() || frame < 0. || frame >= usize::MAX as f64 {
+            return Err("Four-bar loop end is outside the frame range".into());
+        }
+        Ok(frame.round() as usize)
+    }
     fn bar_at_beat(self, index: f64) -> (i64, bool) {
         let (mut bar, mut start, mut beats, mut denominator) =
             (1_i64, 0_f64, self.beats_per_bar, self.meter_denominator);
@@ -976,6 +995,47 @@ impl GridDraft {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn four_bars_follow_meter_tempo_and_warp() {
+        use super::BeatGrid;
+        use std::time::Duration;
+        let grid = BeatGrid::new(120., Duration::ZERO).unwrap();
+        assert_eq!(
+            grid.four_bar_end_frame(Duration::ZERO, 48000).unwrap(),
+            384000
+        );
+        let triple = grid.with_time_signature(3, 4).unwrap();
+        assert_eq!(
+            triple.four_bar_end_frame(Duration::ZERO, 48000).unwrap(),
+            288000
+        );
+        let eighths = grid.with_time_signature(7, 8).unwrap();
+        assert_eq!(
+            eighths.four_bar_end_frame(Duration::ZERO, 48000).unwrap(),
+            336000
+        );
+        let changing = grid.with_time_signature_change(3, 3, 4).unwrap();
+        assert_eq!(
+            changing.four_bar_end_frame(Duration::ZERO, 48000).unwrap(),
+            336000
+        );
+        let tempo = grid.with_tempo_change(8, 60.).unwrap();
+        assert_eq!(
+            tempo.four_bar_end_frame(Duration::ZERO, 48000).unwrap(),
+            576000
+        );
+        let warp = grid.with_warp_marker(16, Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            warp.four_bar_end_frame(Duration::ZERO, 48000).unwrap(),
+            480000
+        );
+        assert_eq!(
+            grid.four_bar_end_frame(Duration::from_millis(500), 48000)
+                .unwrap(),
+            408000
+        );
+        assert!(grid.four_bar_end_frame(Duration::ZERO, 0).is_err());
+    }
     use super::*;
     #[test]
     fn mixed_meters_number_bars_and_survive_draft_edits() {

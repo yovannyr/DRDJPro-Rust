@@ -26,6 +26,8 @@ pub enum Command {
     PitchMsb(usize, u8),
     PitchLsb(usize, u8),
     PitchFader(usize, u16),
+    Sync(usize, bool),
+    Loop(usize, u8),
 }
 pub fn decode(bytes: &[u8]) -> Option<Command> {
     if bytes.len() != 3 || bytes[1] > 127 || bytes[2] > 127 {
@@ -86,6 +88,10 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         )),
         (0xb0, 0..=1, 41, value) => Some(Command::PitchMsb(channel as usize, value)),
         (0xb0, 0..=1, 9, value) => Some(Command::PitchLsb(channel as usize, value)),
+        (0x90, 0..=1, 2..=3, 1..=127) => Some(Command::Sync(channel as usize, bytes[1] == 2)),
+        (0x90, 4..=5, note @ (50..=53 | 56..=57 | 63), 1..=127) => {
+            Some(Command::Loop((channel - 4) as usize, note))
+        }
         _ => None,
     }
 }
@@ -141,7 +147,7 @@ impl Greeting {
         ])
     }
 }
-const FEEDBACK_MESSAGES: usize = 22;
+const FEEDBACK_MESSAGES: usize = 26;
 #[derive(Default)]
 struct Feedback {
     last: Option<[[u8; 3]; FEEDBACK_MESSAGES]>,
@@ -237,6 +243,10 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
     ];
     messages[20] = [0x90, 7, if ui.get_left_vinyl() { 127 } else { 0 }];
     messages[21] = [0x91, 7, if ui.get_right_vinyl() { 127 } else { 0 }];
+    messages[22] = [0x90, 2, if ui.get_left_sync_active() { 127 } else { 0 }];
+    messages[23] = [0x91, 2, if ui.get_right_sync_active() { 127 } else { 0 }];
+    messages[24] = [0x94, 50, if ui.get_left_loop_active() { 127 } else { 0 }];
+    messages[25] = [0x95, 50, if ui.get_right_loop_active() { 127 } else { 0 }];
     messages
 }
 pub fn present() -> Result<bool, String> {
@@ -791,6 +801,25 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
             ui.invoke_controller_pitch_fader(deck as i32, i32::from(value))
         }
         Command::PitchMsb(_, _) | Command::PitchLsb(_, _) => (),
+        Command::Sync(deck, enabled) => ui.invoke_controller_sync(deck as i32, enabled),
+        Command::Loop(deck, note) => match (deck, note) {
+            (0, 50) if ui.get_left_loop_active() => ui.invoke_loop_exit_left(),
+            (1, 50) if ui.get_right_loop_active() => ui.invoke_loop_exit_right(),
+            (0, 50) => ui.invoke_auto_loop_left(),
+            (1, 50) => ui.invoke_auto_loop_right(),
+            (0, 51) => ui.invoke_reloop_left(),
+            (1, 51) => ui.invoke_reloop_right(),
+            (0, 52) => ui.invoke_half_loop_left(),
+            (1, 52) => ui.invoke_half_loop_right(),
+            (0, 53) => ui.invoke_double_loop_left(),
+            (1, 53) => ui.invoke_double_loop_right(),
+            (0, 56) => ui.invoke_loop_in_left(),
+            (1, 56) => ui.invoke_loop_in_right(),
+            (0, 57) => ui.invoke_loop_out_left(),
+            (1, 57) => ui.invoke_loop_out_right(),
+            (_, 63) => ui.invoke_controller_four_bar_loop(deck as i32),
+            _ => ui.set_status("Invalid MC4000 loop command".into()),
+        },
     }
 }
 #[cfg(test)]
