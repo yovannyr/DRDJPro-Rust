@@ -82,6 +82,12 @@ struct HotCueHoldSession {
     preview: bool,
     promoted: bool,
 }
+struct TemporaryCue {
+    source: Arc<crate::waveform::DetailPeaks>,
+    position: Duration,
+    inputs: u8,
+    preview: bool,
+}
 struct GridSession {
     path: Arc<std::path::Path>,
     source: Arc<crate::waveform::DetailPeaks>,
@@ -349,6 +355,7 @@ pub struct AudioController {
     pending_sync: RefCell<Option<PendingSync>>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     hot_cue_holds: RefCell<[Option<HotCueHoldSession>; 2]>,
+    temporary_cues: RefCell<[Option<TemporaryCue>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
     pending_relocation_id: Cell<Option<i32>>,
@@ -365,6 +372,9 @@ pub struct AudioController {
 impl Drop for AudioController {
     fn drop(&mut self) {
         for id in [DeckId::A, DeckId::B] {
+            if let Err(error) = self.cancel_temporary_hold(id) {
+                eprintln!("Could not release temporary CUE: {error}");
+            }
             if let Some(session) = self.hot_cue_holds.get_mut()[Self::grid_index(id)].take() {
                 let engine = self.engine.borrow();
                 if session.preview
@@ -505,6 +515,7 @@ impl AudioController {
             pending_sync: RefCell::new(None),
             cue_editors: RefCell::new([None, None]),
             hot_cue_holds: RefCell::new([None, None]),
+            temporary_cues: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
             pending_relocation_id: Cell::new(None),
@@ -632,7 +643,7 @@ impl AudioController {
                         }
                         return;
                     }
-                    if c.promote_hot_cue_hold(id) {
+                    if c.promote_temporary_cue(id) || c.promote_hot_cue_hold(id) {
                         c.refresh();
                         return;
                     }
@@ -653,6 +664,12 @@ impl AudioController {
             let weak = Rc::downgrade(&controller);
             let cue = move || {
                 if let Some(c) = weak.upgrade() {
+                    if let Err(error) = c.cancel_temporary_hold(id) {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                        return;
+                    }
                     c.cancel_nudge(id);
                     c.engine.borrow().cue(id);
                     c.refresh();
@@ -689,6 +706,12 @@ impl AudioController {
             let weak = Rc::downgrade(&controller);
             let seek = move |percent| {
                 if let Some(c) = weak.upgrade() {
+                    if let Err(error) = c.cancel_temporary_hold(id) {
+                        if let Some(ui) = c.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                        return;
+                    }
                     if let Err(err) = c.engine.borrow().seek_percent(id, percent) {
                         if let Some(ui) = c.ui.upgrade() {
                             ui.set_status(format!("Deck {id:?}: {err}").into());
@@ -1017,6 +1040,7 @@ impl AudioController {
         controller.wire_nudge(ui);
         controller.wire_mc4000_pitch(ui);
         controller.wire_platters(ui);
+        controller.wire_temporary_cues(ui);
         controller.wire_saved_loops(ui);
         controller.refresh();
         controller
@@ -1930,6 +1954,7 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Platter unavailable during loading".into());
         }
+        self.cancel_temporary_hold(id)?;
         self.stop_sync();
         self.cancel_nudge(id);
         let index = Self::grid_index(id);
@@ -2198,6 +2223,11 @@ impl AudioController {
         self.disarm_pitch_pickup();
         for id in [DeckId::A, DeckId::B] {
             self.release_mc4000_bends(id);
+            if let Err(error) = self.hold_temporary_cue(id, false, 2) {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
             let slot = self.hot_cue_holds.borrow()[Self::grid_index(id)]
                 .as_ref()
                 .map(|session| session.slot);
@@ -2836,7 +2866,8 @@ impl AudioController {
                             ui.get_right_auto_loop_snap()
                         }
                 });
-                c.engine.borrow().four_bar_loop(id, snap)
+                c.cancel_temporary_hold(id)
+                    .and_then(|()| c.engine.borrow().four_bar_loop(id, snap))
             };
             if result.is_ok() {
                 c.cancel_nudge(id);
@@ -2859,6 +2890,12 @@ impl AudioController {
                         let result = if !c.can_control_deck(id) {
                             Err("Finish loading before changing a loop".into())
                         } else {
+                            if let Err(error) = c.cancel_temporary_hold(id) {
+                                if let Some(ui) = c.ui.upgrade() {
+                                    ui.set_status(error.into());
+                                }
+                                return;
+                            }
                             let position = c.engine.borrow().snapshot(id).position;
                             match command {
                                 0 => c.engine.borrow().set_loop_in(id, position),
@@ -3040,6 +3077,12 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Finish loading before using hot cues".into());
         }
+        if self.temporary_cues.borrow()[Self::grid_index(id)]
+            .as_ref()
+            .is_some_and(|cue| cue.inputs != 0)
+        {
+            return Err("Release temporary CUE before using hot cues".into());
+        }
         let slot = usize::try_from(slot)
             .ok()
             .filter(|s| *s < crate::hot_cues::SLOT_COUNT)
@@ -3174,6 +3217,12 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Finish loading before using hot cues".into());
         }
+        if self.temporary_cues.borrow()[index]
+            .as_ref()
+            .is_some_and(|cue| cue.inputs != 0)
+        {
+            return Err("Release temporary CUE before using hot cues".into());
+        }
         if let Some(session) = self.hot_cue_holds.borrow_mut()[index].as_mut() {
             if session.slot != slot {
                 return Err("Release the current hot cue before triggering another".into());
@@ -3259,6 +3308,13 @@ impl AudioController {
     }
     #[cfg(any(target_os = "windows", test))]
     pub(crate) fn handle_window_deactivated(&self) {
+        for id in [DeckId::A, DeckId::B] {
+            if let Err(error) = self.cancel_temporary_hold(id) {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+        }
         if let Some(ui) = self.ui.upgrade() {
             ui.set_active_hot_cue_key(-1);
         }
@@ -3327,6 +3383,147 @@ impl AudioController {
                 sessions[index] = None;
             }
         }
+    }
+    fn hold_temporary_cue(&self, id: DeckId, held: bool, input: u8) -> Result<(), String> {
+        let index = Self::grid_index(id);
+        let snapshot = self.engine.borrow().snapshot(id);
+        let mut cues = self.temporary_cues.borrow_mut();
+        if cues[index].as_ref().is_some_and(|cue| {
+            snapshot
+                .detail
+                .as_ref()
+                .is_none_or(|source| !Arc::ptr_eq(source, &cue.source))
+        }) {
+            cues[index] = None;
+        }
+        if !held {
+            if let Some(cue) = cues[index].as_mut() {
+                if cue.inputs & input == 0 {
+                    return Ok(());
+                }
+                cue.inputs &= !input;
+                if cue.inputs == 0 && cue.preview {
+                    cue.preview = false;
+                    self.engine.borrow().pause(id);
+                    self.engine.borrow().seek_position(id, cue.position)?;
+                }
+            }
+            return Ok(());
+        }
+        if !self.can_control_deck(id) || self.engine.borrow().output_failed() {
+            return Err("Temporary CUE unavailable during loading or output failure".into());
+        }
+        if self.hot_cue_holds.borrow()[index].is_some() || self.engine.borrow().platter_touched(id)
+        {
+            return Err("Release the platter or hot cue before using temporary CUE".into());
+        }
+        let source = snapshot.detail.ok_or("Load a track first")?;
+        let cue = cues[index].get_or_insert(TemporaryCue {
+            source,
+            position: Duration::ZERO,
+            inputs: 0,
+            preview: false,
+        });
+        if cue.inputs != 0 {
+            cue.inputs |= input;
+            return Ok(());
+        }
+        self.stop_sync();
+        self.cancel_nudge(id);
+        if snapshot.playing {
+            self.engine.borrow().pause(id);
+            self.engine.borrow().seek_position(id, cue.position)?;
+        } else if snapshot.position != cue.position {
+            if snapshot.position >= snapshot.duration {
+                return Err("Temporary CUE must be before track end".into());
+            }
+            cue.position = snapshot.position;
+        } else {
+            self.engine.borrow().seek_position(id, cue.position)?;
+            self.engine.borrow().play(id);
+            cue.preview = true;
+        }
+        cue.inputs = input;
+        Ok(())
+    }
+    fn promote_temporary_cue(&self, id: DeckId) -> bool {
+        let mut cues = self.temporary_cues.borrow_mut();
+        let Some(cue) = cues[Self::grid_index(id)].as_mut() else {
+            return false;
+        };
+        if cue.preview
+            && cue.inputs != 0
+            && self
+                .engine
+                .borrow()
+                .snapshot(id)
+                .detail
+                .as_ref()
+                .is_some_and(|source| Arc::ptr_eq(source, &cue.source))
+        {
+            cue.preview = false;
+            drop(cues);
+            self.record_history(id);
+            true
+        } else {
+            false
+        }
+    }
+    fn cancel_temporary_hold(&self, id: DeckId) -> Result<(), String> {
+        self.hold_temporary_cue(id, false, 1)?;
+        self.hold_temporary_cue(id, false, 2)
+    }
+    fn stutter(&self, id: DeckId) -> Result<(), String> {
+        if !self.can_control_deck(id) || self.engine.borrow().output_failed() {
+            return Err("Stutter unavailable during loading or output failure".into());
+        }
+        if self.engine.borrow().platter_touched(id)
+            || self.hot_cue_holds.borrow()[Self::grid_index(id)].is_some()
+        {
+            return Err("Release the platter or hot cue before Stutter".into());
+        }
+        self.cancel_temporary_hold(id)?;
+        let snapshot = self.engine.borrow().snapshot(id);
+        snapshot.detail.as_ref().ok_or("Load a track first")?;
+        let position = self.temporary_cues.borrow()[Self::grid_index(id)]
+            .as_ref()
+            .filter(|cue| {
+                snapshot
+                    .detail
+                    .as_ref()
+                    .is_some_and(|source| Arc::ptr_eq(source, &cue.source))
+            })
+            .map_or(Duration::ZERO, |cue| cue.position);
+        self.stop_sync();
+        self.cancel_nudge(id);
+        self.engine.borrow().seek_position(id, position)?;
+        self.engine.borrow().play(id);
+        self.record_history(id);
+        Ok(())
+    }
+    fn wire_temporary_cues(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_temporary_cue(move |deck, held, hardware| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = if deck == 0 { DeckId::A } else { DeckId::B };
+            if let Err(error) = c.hold_temporary_cue(id, held, if hardware { 2 } else { 1 }) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_stutter(move |deck| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = if deck == 0 { DeckId::A } else { DeckId::B };
+            if let Err(error) = c.stutter(id) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
     }
     fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
         let weak = Rc::downgrade(self);
@@ -5444,6 +5641,28 @@ impl AudioController {
         }
         self.cancel_stale_nudges();
         self.cancel_stale_hot_cue_holds();
+        for id in [DeckId::A, DeckId::B] {
+            let snapshot = self.engine.borrow().snapshot(id);
+            if !self.can_control_deck(id)
+                || self.engine.borrow().output_failed()
+                || snapshot.position >= snapshot.duration
+            {
+                if let Err(error) = self.cancel_temporary_hold(id) {
+                    if let Some(ui) = self.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
+                }
+            }
+            let mut cues = self.temporary_cues.borrow_mut();
+            if cues[Self::grid_index(id)].as_ref().is_some_and(|cue| {
+                snapshot
+                    .detail
+                    .as_ref()
+                    .is_none_or(|source| !Arc::ptr_eq(source, &cue.source))
+            }) {
+                cues[Self::grid_index(id)] = None;
+            }
+        }
         self.apply_pending_pitch();
         self.poll_keylock();
         self.poll_pending_sync();
@@ -8711,7 +8930,7 @@ mod tests {
             "ELAPSED 00:02.000   LEFT 00:00.000\nTOTAL 00:02.000"
         );
         assert_eq!(ui.get_right_time(), b);
-        control(&ui, "DECK B cue").invoke_accessible_default_action();
+        control(&ui, "DECK B track start").invoke_accessible_default_action();
         c.tick();
         assert_eq!(
             ui.get_right_time(),
@@ -11017,6 +11236,78 @@ mod tests {
         assert!(!c.dirty.get());
     }
     #[test]
+    fn temporary_cue_preview_play_latch_stutter_and_source_recovery() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        let other = wav_file(4096, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let dispatch =
+            |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        engine
+            .seek_position(DeckId::A, Duration::from_secs(2))
+            .unwrap();
+        dispatch([0x90, 1, 127]);
+        dispatch([0x80, 1, 0]);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(c
+            .library
+            .borrow()
+            .hot_cues(file.path())
+            .slots()
+            .iter()
+            .all(Option::is_none));
+        dispatch([0x90, 1, 127]);
+        assert!(engine.snapshot(DeckId::A).playing);
+        output.by_ref().take(24000).for_each(drop);
+        dispatch([0x90, 1, 0]);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(2));
+        ui.invoke_temporary_cue(0, true, false);
+        dispatch([0x90, 1, 127]);
+        c.mc4000_release_holds();
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.invoke_temporary_cue(0, false, false);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x90, 1, 127]);
+        dispatch([0x90, 0, 127]);
+        dispatch([0x80, 1, 0]);
+        assert!(engine.snapshot(DeckId::A).playing);
+        dispatch([0x90, 5, 127]);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x90, 4, 127]);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(2));
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.invoke_hot_cue_left(0);
+        dispatch([0x90, 1, 127]);
+        dispatch([0x94, 20, 127]);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(ui.get_status().contains("Release temporary CUE"));
+        dispatch([0x84, 20, 0]);
+        dispatch([0x80, 1, 0]);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        dispatch([0x90, 1, 127]);
+        c.mc4000_release_holds();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        // The real GUI hold component uses the same state machine.
+        control(&ui, "DECK A cue").invoke_accessible_default_action();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(2));
+        dispatch([0x90, 1, 127]);
+        engine.load_a(other.path()).unwrap();
+        c.tick();
+        dispatch([0x80, 1, 0]);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::B).playing);
+        assert!(c.temporary_cues.borrow()[0].is_none());
+    }
+    #[test]
     fn mc4000_pads_preview_release_latch_and_owned_recovery() {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
@@ -11405,7 +11696,7 @@ mod tests {
         assert!(!ui.get_left_loop_active());
         assert!(ui.get_left_loop_ready());
         ui.invoke_loop_activate_left();
-        control(&ui, "DECK A cue").invoke_accessible_default_action();
+        control(&ui, "DECK A track start").invoke_accessible_default_action();
         assert!(!ui.get_left_loop_active());
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
         assert!(ui.get_left_loop_ready());
@@ -16380,7 +16671,7 @@ mod tests {
         control(&ui, "DECK A zoom in").invoke_accessible_default_action();
         assert!(ui.get_left_beats().row_count() <= 9);
         assert_eq!(ui.get_right_beats(), right);
-        control(&ui, "DECK A cue").invoke_accessible_default_action();
+        control(&ui, "DECK A track start").invoke_accessible_default_action();
         assert!(ui.get_left_grid_active());
         control(&ui, "DECK A clear beatgrid").invoke_accessible_default_action();
         control(&ui, "DECK A save beatgrid").invoke_accessible_default_action();
@@ -17324,7 +17615,7 @@ mod tests {
         control(&ui, "DECK A play/pause").invoke_accessible_default_action();
         assert!(ui.get_left_playing());
         assert_eq!(ui.get_left_position(), 0.0);
-        control(&ui, "DECK A cue").invoke_accessible_default_action();
+        control(&ui, "DECK A track start").invoke_accessible_default_action();
         assert!(!ui.get_left_playing());
         assert_eq!(ui.get_left_position(), 0.0);
         assert!((ui.get_right_position() - 80.0).abs() < 0.001);
@@ -17393,7 +17684,7 @@ mod tests {
         control(&ui, "DECK A play/pause").invoke_accessible_default_action();
         assert!(!engine.snapshot(DeckId::A).playing);
         control(&ui, "DECK B play/pause").invoke_accessible_default_action();
-        control(&ui, "DECK A cue").invoke_accessible_default_action();
+        control(&ui, "DECK A track start").invoke_accessible_default_action();
         assert_eq!(ui.get_left_position(), 0.0);
         assert!(ui.get_right_playing());
         let title = ui.get_left_title();

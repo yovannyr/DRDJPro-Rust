@@ -517,6 +517,7 @@ component CompactDeck inherits Rectangle {
     callback edit-hot-cue(int); callback save-hot-cue(); callback cancel-hot-cue();
     callback hot-cue(int, bool, int); callback delete-hot-cue(int);
     callback load(); callback toggle(); callback cue(); callback eject(); callback seek(float);
+    callback temporary-cue(bool); callback stutter();
     pure callback accepts-drop(data-transfer) -> bool;
     callback drop-track(data-transfer) -> bool;
     in property <bool> external-hover: false;
@@ -540,10 +541,15 @@ component CompactDeck inherits Rectangle {
             }
             Button { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !load-busy && !playing; clicked => { root.load(); } }
             Button { text: playing ? "PAUSE" : "PLAY"; accessible-label: deck-label + " play/pause"; enabled: !audio-enabled || loaded; clicked => { root.toggle(); } }
-            Button { text: "CUE"; accessible-label: deck-label + " cue"; enabled: !audio-enabled || loaded; clicked => { root.cue(); } }
+            NudgeHold { height: 24px; text: "CUE"; label: deck-label + " cue"; enabled: !audio-enabled || (loaded && !loading); held(value) => { if root.audio-enabled { root.temporary-cue(value); } else if value { root.cue(); } } cancel => { if root.audio-enabled { root.temporary-cue(false); } } }
             Button { text: "EJECT"; accessible-label: deck-label + " eject"; accessible-description: "Stop and unload this deck; keep the track in the library"; enabled: loaded && !loading && !load-busy; clicked => { root.eject(); } }
         }
-        Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
+        HorizontalLayout {
+            height: 20px;
+            Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
+            Button { height: 20px; text: "START"; accessible-label: deck-label + " track start"; enabled: !audio-enabled || (loaded && !loading); clicked => { root.cue(); } }
+            Button { height: 20px; text: "STUTTER"; accessible-label: deck-label + " stutter"; enabled: loaded && !loading; clicked => { root.stutter(); } }
+        }
         if !root.controller-mode : WaveformStrip {
             height: 42px; overview: true; deck-label: root.deck-label; accent: root.accent;
             values: root.waveform; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; position: root.position; marker: root.position;
@@ -1169,6 +1175,8 @@ export component AppWindow inherits Window {
     callback controller-sync(int, bool);
     callback controller-four-bar-loop(int);
     callback controller-hot-cue(int, int, bool, bool);
+    callback temporary-cue(int, bool, bool);
+    callback stutter(int);
     in-out property <bool> controller-shift;
     in property <float> left-platter-angle;
     in property <float> right-platter-angle;
@@ -1648,6 +1656,7 @@ export component AppWindow inherits Window {
                 delete-hot-cue(slot) => { root.delete-hot-cue-left(slot); }
                 playing: root.left-playing; position <=> root.left-position;
                 audio-enabled: root.audio-enabled; loaded: root.left-loaded; loading: root.left-busy; load-busy: root.loading || root.library-busy;
+                temporary-cue(held) => { root.temporary-cue(0, held, false); } stutter => { root.stutter(0); }
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } eject => { root.eject-left(); } seek(value) => { root.seek-left(value); }
             }
             right-deck := CompactDeck {
@@ -1691,6 +1700,7 @@ export component AppWindow inherits Window {
                 delete-hot-cue(slot) => { root.delete-hot-cue-right(slot); }
                 playing: root.right-playing; position <=> root.right-position;
                 audio-enabled: root.audio-enabled; loaded: root.right-loaded; loading: root.right-busy; load-busy: root.loading || root.library-busy;
+                temporary-cue(held) => { root.temporary-cue(1, held, false); } stutter => { root.stutter(1); }
                 load => { root.load-right(); } toggle => { root.toggle-right(); } cue => { root.reset-right(); } eject => { root.eject-right(); } seek(value) => { root.seek-right(value); }
             }
         }

@@ -8,7 +8,9 @@ use std::sync::{
 pub enum Command {
     Toggle(usize),
     Keylock(usize),
-    Cue(usize),
+    Cue(usize, bool),
+    TrackStart(usize),
+    Stutter(usize),
     HeadphoneCue(usize),
     Monitor(usize, u8),
     Fader(usize, u8),
@@ -68,7 +70,10 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         )),
         (0x90, 0..=1, 13, 1..=127) => Some(Command::Keylock(channel as usize)),
         (0x90, 0..=1, 0, 1..=127) => Some(Command::Toggle(channel as usize)),
-        (0x90, 0..=1, 1, 1..=127) => Some(Command::Cue(channel as usize)),
+        (0x90, 0..=1, 1, value) => Some(Command::Cue(channel as usize, value != 0)),
+        (0x80, 0..=1, 1, _) => Some(Command::Cue(channel as usize, false)),
+        (0x90, 0..=1, 5, 1..=127) => Some(Command::TrackStart(channel as usize)),
+        (0x90, 0..=1, 4, 1..=127) => Some(Command::Stutter(channel as usize)),
         (0x90, 0..=1, 27, 1..=127) => Some(Command::HeadphoneCue(channel as usize)),
         (0xb0, 0..=1, 28, value) => Some(Command::Fader(channel as usize, value)),
         (0xb0, 15, 8, value) => Some(Command::Crossfader(value)),
@@ -799,8 +804,10 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         }
         Command::Toggle(0) => ui.invoke_toggle_left(),
         Command::Toggle(_) => ui.invoke_toggle_right(),
-        Command::Cue(0) => ui.invoke_reset_left(),
-        Command::Cue(_) => ui.invoke_reset_right(),
+        Command::Cue(deck, held) => ui.invoke_temporary_cue(deck as i32, held, true),
+        Command::TrackStart(0) => ui.invoke_reset_left(),
+        Command::TrackStart(_) => ui.invoke_reset_right(),
+        Command::Stutter(deck) => ui.invoke_stutter(deck as i32),
         Command::Fader(0, v) => {
             ui.set_channel_a(f32::from(v) / 127.0);
             ui.invoke_mixer_changed();
@@ -1186,7 +1193,7 @@ mod tests {
             assert_eq!(decode(&[0xb0 | deck, 27, 127]), None);
             assert_eq!(
                 decode(&[0x90 | deck, 1, 127]),
-                Some(Command::Cue(usize::from(deck)))
+                Some(Command::Cue(usize::from(deck), true))
             );
         }
         // Channel 16, note 27 is Load Prep, not either headphone selector.
@@ -1553,7 +1560,11 @@ mod tests {
         ui.on_toggle_left(move || count.set(count.get() + 1));
         let cues = Rc::new(Cell::new(0));
         let count = cues.clone();
-        ui.on_reset_right(move || count.set(count.get() + 1));
+        ui.on_temporary_cue(move |deck, held, hardware| {
+            assert_eq!(deck, 1);
+            assert!(held && hardware);
+            count.set(count.get() + 1);
+        });
         apply(&ui, decode(&[0x90, 0, 127]).unwrap());
         apply(&ui, decode(&[0x91, 1, 127]).unwrap());
         assert_eq!(toggles.get(), 1);
@@ -1576,14 +1587,16 @@ mod tests {
     fn manufacturer_messages_ignore_release_shift_and_other_channels() {
         assert_eq!(decode(&[0x90, 0, 127]), Some(Command::Toggle(0)));
         assert_eq!(decode(&[0x91, 0, 127]), Some(Command::Toggle(1)));
-        assert_eq!(decode(&[0x91, 1, 127]), Some(Command::Cue(1)));
+        assert_eq!(decode(&[0x91, 1, 127]), Some(Command::Cue(1, true)));
+        assert_eq!(decode(&[0x91, 4, 127]), Some(Command::Stutter(1)));
+        assert_eq!(decode(&[0x91, 5, 127]), Some(Command::TrackStart(1)));
+        assert_eq!(decode(&[0x81, 1, 127]), Some(Command::Cue(1, false)));
         assert_eq!(decode(&[0xb1, 28, 63]), Some(Command::Fader(1, 63)));
         assert_eq!(decode(&[0xbf, 8, 127]), Some(Command::Crossfader(127)));
         for data in [
             &[0x91, 0, 0][..],
             &[0x81, 0, 127],
             &[0x92, 0, 127],
-            &[0x91, 4, 127],
             &[0xb2, 6, 1],
             &[0x91, 0],
             &[0xbf, 8, 128],

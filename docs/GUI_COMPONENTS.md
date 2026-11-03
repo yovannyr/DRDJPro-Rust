@@ -1,5 +1,23 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S5: temporary transport CUE
+
+CUE is now a source-bound temporary point, separate from persisted hot cues.
+While paused away from the point, pressing CUE sets it without starting audio.
+At the point, holding CUE previews; the last input release pauses and returns.
+During ordinary playback CUE pauses and returns. PLAY during preview promotes
+it to normal playback. Initial point is zero; replacement clears it. EOF,
+loading, output failure, window deactivation and controller recovery release
+unpromoted previews. GUI and hardware have separate hold bits.
+
+GUI CUE is a pointer/Space/Return hold control. START retains the previous
+cue-to-zero action (also SHIFT+CUE, note5); it does not overwrite the temporary
+point. STUTTER (SHIFT+PLAY, note4) restarts playback from the temporary point.
+Seek, platter and loop operations release temporary holds first; overlapping
+hot-cue holds are explicitly rejected. Existing source-time seek/play APIs
+run on the control plane; no new DSP, render-thread locks or allocation.
+Native onset/release latency and listening remain unqualified.
+
 ## MC4000 S4: hardware hot cues
 
 Pad channels 5/6 notes20-23 reuse the eight-slot persisted hot-cue workflow
