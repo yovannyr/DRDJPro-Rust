@@ -19,6 +19,16 @@ use std::{
 type LoadResult =
     Option<Result<(PathBuf, PreparedTrack, crate::track_metadata::TrackMetadata), String>>;
 type ImportResult = Option<Result<crate::library::ImportBatch, String>>;
+const DOUBLE_LOAD_WINDOW: Duration = Duration::from_millis(350);
+struct ControllerLoadPress {
+    target: DeckId,
+    at: std::time::Instant,
+    generation: u64,
+    owns_loader: bool,
+    engine: std::rc::Weak<DualDeckEngine>,
+    source: Option<Arc<crate::waveform::DetailPeaks>>,
+    destination: Option<Arc<crate::waveform::DetailPeaks>>,
+}
 #[derive(Clone, Copy)]
 struct PointerPlatter {
     angle: Option<f64>,
@@ -302,6 +312,8 @@ pub struct AudioController {
     library_page: Cell<usize>,
     controller_browse_pending: Cell<i32>,
     controller_browse_row: Cell<Option<usize>>,
+    controller_load_press: RefCell<Option<ControllerLoadPress>>,
+    load_generation: Cell<u64>,
     pending_page_selection: Cell<i8>,
     search_worker: RefCell<Option<SearchWorker>>,
     library_perf: RefCell<Option<Rc<RefCell<crate::library_perf::Recorder>>>>,
@@ -464,6 +476,8 @@ impl AudioController {
             library_page: Cell::new(0),
             controller_browse_pending: Cell::new(0),
             controller_browse_row: Cell::new(None),
+            controller_load_press: RefCell::new(None),
+            load_generation: Cell::new(0),
             pending_page_selection: Cell::new(0),
             search_worker: RefCell::new(None),
             library_perf: RefCell::new(None),
@@ -2227,6 +2241,7 @@ impl AudioController {
     /// controller disconnects, reconnects, or the bounded MIDI queue overflows so no stale
     /// hold persists. GUI-held nudges are left untouched and remain effective.
     pub fn mc4000_release_holds(&self) {
+        self.controller_load_press.borrow_mut().take();
         self.disarm_pitch_pickup();
         self.controller_browse_pending.set(0);
         self.controller_browse_row.set(None);
@@ -5005,6 +5020,9 @@ impl AudioController {
         self.start_load_work(id, picker, false);
     }
     fn start_load_work(&self, id: DeckId, picker: TrackPicker, restoring: bool) {
+        self.controller_load_press.borrow_mut().take();
+        self.load_generation
+            .set(self.load_generation.get().wrapping_add(1));
         if !self.storage_ready.get()
             || self.pending.borrow().is_some()
             || self.pending_import.borrow().is_some()
@@ -5124,6 +5142,7 @@ impl AudioController {
     }
 
     fn eject_deck(&self, id: DeckId) -> Result<(), String> {
+        self.controller_load_press.borrow_mut().take();
         if self
             .pending
             .borrow()
@@ -5245,6 +5264,14 @@ impl AudioController {
                 } else {
                     "Selection cancelled".into()
                 });
+            }
+        }
+        if restore_failed {
+            self.controller_load_press.borrow_mut().take();
+        } else if let Some(press) = self.controller_load_press.borrow_mut().as_mut() {
+            if press.target == id && press.generation == self.load_generation.get() {
+                press.destination = self.engine.borrow().snapshot(id).detail;
+                press.owns_loader = false;
             }
         }
         self.refresh();
@@ -6400,8 +6427,15 @@ impl AudioController {
     }
     fn wire_controller_browser(self: &Rc<Self>, ui: &AppWindow) {
         let weak = Rc::downgrade(self);
+        ui.on_controller_cancel_load_gesture(move || {
+            if let Some(c) = weak.upgrade() {
+                c.controller_load_press.borrow_mut().take();
+            }
+        });
+        let weak = Rc::downgrade(self);
         ui.on_controller_browse(move |delta| {
             let Some(c) = weak.upgrade() else { return };
+            c.controller_load_press.borrow_mut().take();
             let Some(ui) = c.ui.upgrade() else { return };
             if !c.storage_ready.get()
                 || ui.get_controller_editor_open()
@@ -6450,7 +6484,11 @@ impl AudioController {
         ui.on_controller_browser_action(move |action| {
             let Some(c) = weak.upgrade() else { return };
             let Some(ui) = c.ui.upgrade() else { return };
+            if !(100..=101).contains(&action) {
+                c.controller_load_press.borrow_mut().take();
+            }
             if ui.get_controller_editor_open() {
+                c.controller_load_press.borrow_mut().take();
                 ui.set_status("Save or cancel the open editor before controller navigation".into());
                 return;
             }
@@ -6472,6 +6510,7 @@ impl AudioController {
                 return;
             }
             if ui.get_controller_search_focused() {
+                c.controller_load_press.borrow_mut().take();
                 ui.set_status(
                     "Press the library encoder to leave search before controller navigation".into(),
                 );
@@ -6490,37 +6529,176 @@ impl AudioController {
                     ui.invoke_library_tab_selected((ui.get_library_tab() + 1) % 5);
                 }
                 100..=101 => {
-                    let selected = c.library.borrow().selected_id();
-                    let error = if !c.storage_ready.get()
-                        || c.pending.borrow().is_some()
-                        || c.pending_import.borrow().is_some()
-                    {
-                        Some("Wait for the library/load operation")
-                    } else if c.search_in_progress() || c.controller_browse_pending.get() != 0 {
-                        Some("Wait for the controller selection to finish")
-                    } else if selected < 0 || selected != ui.get_selected_track() {
-                        Some("Select a library track before LOAD")
-                    } else if c
-                        .library
-                        .borrow()
-                        .track_by_id(selected)
-                        .is_none_or(|track| !track.available)
-                    {
-                        Some("The selected library track is missing")
-                    } else {
-                        None
-                    };
-                    if let Some(error) = error {
-                        ui.set_status(error.into());
-                    } else if action == 100 {
-                        ui.invoke_load_library_left();
-                    } else {
-                        ui.invoke_load_library_right();
-                    }
+                    c.controller_load(if action == 100 { DeckId::A } else { DeckId::B });
                 }
                 _ => ui.set_status("Invalid MC4000 browser action".into()),
             }
         });
+    }
+    fn controller_load(&self, target: DeckId) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let engine = Rc::clone(&self.engine.borrow());
+        let now = engine.control_now();
+        let previous = self.controller_load_press.borrow_mut().take();
+        if let Some(press) = previous.filter(|press| {
+            press.target == target
+                && now
+                    .checked_duration_since(press.at)
+                    .is_some_and(|elapsed| elapsed <= DOUBLE_LOAD_WINDOW)
+        }) {
+            let result = self.controller_double(&press);
+            ui.set_status(
+                result.map_or_else(|error| error.into(), |_| "Instant Double ready".into()),
+            );
+            self.refresh();
+            return;
+        }
+        let selected = self.library.borrow().selected_id();
+        let error = if !self.storage_ready.get()
+            || self.pending.borrow().is_some()
+            || self.pending_import.borrow().is_some()
+        {
+            Some("Wait for the library/load operation")
+        } else if self.search_in_progress() || self.controller_browse_pending.get() != 0 {
+            Some("Wait for the controller selection to finish")
+        } else if engine.snapshot(target).playing {
+            Some("Pause deck before replacing its track")
+        } else if selected < 0 || selected != ui.get_selected_track() {
+            Some("Select a library track before LOAD")
+        } else if self
+            .library
+            .borrow()
+            .track_by_id(selected)
+            .is_none_or(|track| !track.available)
+        {
+            Some("The selected library track is missing")
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            ui.set_status(error.into());
+            return;
+        }
+        let source_id = if target == DeckId::A {
+            DeckId::B
+        } else {
+            DeckId::A
+        };
+        let source = engine.snapshot(source_id).detail;
+        if target == DeckId::A {
+            ui.invoke_load_library_left();
+        } else {
+            ui.invoke_load_library_right();
+        }
+        if self
+            .pending
+            .borrow()
+            .as_ref()
+            .is_some_and(|(id, _)| *id == target)
+        {
+            *self.controller_load_press.borrow_mut() = Some(ControllerLoadPress {
+                target,
+                at: now,
+                generation: self.load_generation.get(),
+                owns_loader: true,
+                engine: Rc::downgrade(&engine),
+                source,
+                destination: engine.snapshot(target).detail,
+            });
+        }
+    }
+    fn controller_double(&self, press: &ControllerLoadPress) -> Result<(), String> {
+        let engine = Rc::clone(&self.engine.borrow());
+        let source_id = if press.target == DeckId::A {
+            DeckId::B
+        } else {
+            DeckId::A
+        };
+        let same_source =
+            |a: &Option<Arc<crate::waveform::DetailPeaks>>,
+             b: &Option<Arc<crate::waveform::DetailPeaks>>| {
+                match (a, b) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                }
+            };
+        if press.generation != self.load_generation.get()
+            || press
+                .engine
+                .upgrade()
+                .is_none_or(|old| !Rc::ptr_eq(&old, &engine))
+            || !same_source(&press.source, &engine.snapshot(source_id).detail)
+            || !same_source(&press.destination, &engine.snapshot(press.target).detail)
+        {
+            return Err("Instant Double cancelled after source or loader change".into());
+        }
+        let own_pending = press.owns_loader
+            && self
+                .pending
+                .borrow()
+                .as_ref()
+                .is_some_and(|(id, _)| *id == press.target);
+        if !self.storage_ready.get()
+            || self.pending_import.borrow().is_some()
+            || (self.pending.borrow().is_some() && !own_pending)
+            || self.restoring_deck.get().is_some()
+            || self.pending_device_switch.borrow().is_some()
+            || self.search_in_progress()
+            || self.controller_browse_pending.get() != 0
+            || self.pending_pitch.borrow().iter().any(Option::is_some)
+            || self.keylock_jobs.borrow().iter().any(Option::is_some)
+            || self.pending_sync.borrow().is_some()
+            || self.sync_session.borrow().is_some()
+            || self.hot_cue_holds.borrow().iter().any(Option::is_some)
+            || self.platter_holds.get().iter().any(|held| *held)
+            || self.nudges.borrow().iter().any(Option::is_some)
+            || self.keylock_next.get().iter().any(Option::is_some)
+            || self
+                .temporary_cues
+                .borrow()
+                .iter()
+                .flatten()
+                .any(|cue| cue.inputs != 0)
+        {
+            return Err("Finish library, cue and tempo operations before Instant Doubles".into());
+        }
+        if self.keylock_requested(source_id) != self.keylock_active(source_id) {
+            return Err("Wait for source Keylock preparation".into());
+        }
+        // Validation and replacement are synchronous on the UI thread. Only after a
+        // successful clone do we discard this gesture's own loader and its late result.
+        engine.instant_double(press.target)?;
+        if own_pending {
+            if let Some(cancel) = self.pending_cancel.borrow_mut().take() {
+                cancel.request();
+            }
+            self.pending.borrow_mut().take();
+        }
+        let index = Self::grid_index(press.target);
+        self.temporary_cues.borrow_mut()[index] = None;
+        self.nudges.borrow_mut()[index] = None;
+        self.reset_pitch_pickup(press.target);
+        let mut ranges = self.pitch_ranges.get();
+        ranges[index] = ranges[Self::grid_index(source_id)];
+        self.pitch_ranges.set(ranges);
+        if let Some(ui) = self.ui.upgrade() {
+            let keylock = engine.keylock_factor(source_id).is_some();
+            if press.target == DeckId::A {
+                ui.set_left_keylock(keylock);
+            } else {
+                ui.set_right_keylock(keylock);
+            }
+            ui.set_loading(false);
+        }
+        if let Some(path) = engine.snapshot(press.target).path {
+            let track_id = self.library.borrow().track_id_for_path(&path);
+            self.set_session_track(press.target, track_id);
+        }
+        if engine.snapshot(press.target).playing {
+            self.record_history(press.target);
+        }
+        Ok(())
     }
     fn drain_controller_browse(&self) {
         if self.search_in_progress() || self.controller_browse_pending.get() == 0 {
@@ -8720,6 +8898,180 @@ mod tests {
             c.library.borrow().selected_id()
         );
         assert!(!engine.snapshot(DeckId::B).loaded);
+    }
+    #[test]
+    fn instant_double_load_gesture_owns_only_its_loader_and_clones_both_directions() {
+        i_slint_backend_testing::init_no_event_loop();
+        for target in [DeckId::A, DeckId::B] {
+            let source = if target == DeckId::A {
+                DeckId::B
+            } else {
+                DeckId::A
+            };
+            let ui = AppWindow::new().unwrap();
+            let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+            let clock = Rc::new(Cell::new(std::time::Instant::now()));
+            let read = Rc::clone(&clock);
+            let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+                mixer,
+                1,
+                48000,
+                Box::new(move || read.get()),
+            ));
+            let c = AudioController::wire(
+                &ui,
+                Rc::clone(&engine),
+                Arc::new(|| None),
+                Arc::new(|| None),
+            );
+            let file = wav_file(8192, 192000);
+            let selected = wav_file(4096, 192000);
+            engine
+                .try_install(
+                    source,
+                    PreparedTrack::open(&file.path().canonicalize().unwrap()).unwrap(),
+                )
+                .unwrap();
+            engine.set_speed(source, 1.04).unwrap();
+            engine
+                .seek_position(source, Duration::from_secs(1))
+                .unwrap();
+            engine.play(source);
+            c.library.borrow_mut().insert([
+                selected.path().canonicalize().unwrap(),
+                file.path().canonicalize().unwrap(),
+            ]);
+            c.publish_library();
+            finish_search(&c);
+            ui.invoke_select_library(1);
+            let load = if target == DeckId::A { 100 } else { 101 };
+            ui.invoke_controller_browser_action(load);
+            assert!(c.pending.borrow().is_some());
+            let cancel = c.pending_cancel.borrow().as_ref().unwrap().clone();
+            // Replace the owned worker's result channel to deterministically prove a
+            // late decode result cannot be installed after the gesture takes over.
+            let (tx, rx) = mpsc::sync_channel(1);
+            *c.pending.borrow_mut() = Some((target, rx));
+            clock.set(clock.get() + DOUBLE_LOAD_WINDOW);
+            ui.invoke_controller_browser_action(load);
+            assert_eq!(ui.get_status(), "Instant Double ready");
+            assert!(cancel.is_cancelled());
+            assert!(c.pending.borrow().is_none());
+            assert!(tx.send(None).is_err());
+            let a = engine.snapshot(source);
+            let b = engine.snapshot(target);
+            assert!(b.playing);
+            assert_eq!(a.position, b.position);
+            assert_eq!(a.requested_speed, b.requested_speed);
+            assert!(Arc::ptr_eq(
+                a.detail.as_ref().unwrap(),
+                b.detail.as_ref().unwrap()
+            ));
+            assert_eq!(
+                c.deck_session.borrow().decks[AudioController::grid_index(target)],
+                Some(2)
+            );
+            assert!(!ui.get_loading());
+            assert!(c.controller_load_press.borrow().is_none());
+        }
+    }
+    #[test]
+    fn instant_double_gesture_expiry_completed_load_source_change_and_recovery() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let clock = Rc::new(Cell::new(std::time::Instant::now()));
+        let read = Rc::clone(&clock);
+        let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            1,
+            48000,
+            Box::new(move || read.get()),
+        ));
+        let c = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let file = wav_file(8192, 192000);
+        let selected = wav_file(4096, 192000);
+        engine.load_b(file.path()).unwrap();
+        c.library.borrow_mut().insert([
+            selected.path().canonicalize().unwrap(),
+            file.path().canonicalize().unwrap(),
+        ]);
+        c.publish_library();
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        ui.invoke_controller_browser_action(100);
+        finish(&c);
+        finish_search(&c);
+        clock.set(clock.get() + DOUBLE_LOAD_WINDOW + Duration::from_nanos(1));
+        ui.invoke_controller_browser_action(100);
+        assert!(c.pending.borrow().is_some());
+        assert_ne!(
+            engine.snapshot(DeckId::A).path,
+            engine.snapshot(DeckId::B).path
+        );
+        finish(&c);
+        finish_search(&c);
+        // The second normal load completed within a fresh window: cloning still works.
+        ui.invoke_controller_browser_action(100);
+        assert_eq!(ui.get_status(), "Instant Double ready");
+        assert!(!engine.snapshot(DeckId::A).playing);
+        ui.invoke_select_library(1);
+        ui.invoke_controller_browser_action(100);
+        engine.load_b(selected.path()).unwrap();
+        ui.invoke_controller_browser_action(100);
+        assert!(ui.get_status().contains("source or loader change"));
+        assert!(c.pending.borrow().is_some()); // rejected clone leaves normal load intact
+        finish(&c);
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        ui.invoke_controller_browser_action(100);
+        ui.invoke_controller_browser_action(101); // alternate LOAD is not a double
+        assert!(ui.get_status().contains("operation"));
+        assert!(c.controller_load_press.borrow().is_none());
+        c.mc4000_release_holds();
+        assert!(c.pending.borrow().is_some());
+        finish(&c);
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        ui.invoke_controller_browser_action(100);
+        c.mc4000_release_holds();
+        assert!(c.controller_load_press.borrow().is_none());
+        finish(&c);
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Load(0));
+        assert!(c.controller_load_press.borrow().is_some());
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Toggle(1));
+        assert!(c.controller_load_press.borrow().is_none());
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Load(0));
+        assert!(ui.get_status().contains("operation"));
+        assert!(engine.snapshot(DeckId::B).playing);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        finish(&c);
+        finish_search(&c);
+        engine.pause(DeckId::B);
+        ui.invoke_select_library(1);
+        ui.invoke_controller_browser_action(100);
+        let cancel = c.pending_cancel.borrow().as_ref().unwrap().clone();
+        engine.platter_touch(DeckId::B, true).unwrap();
+        ui.invoke_controller_browser_action(100);
+        assert!(ui.get_status().contains("Release"));
+        assert!(!cancel.is_cancelled());
+        assert!(c.pending.borrow().is_some());
+        engine.platter_touch(DeckId::B, false).unwrap();
+        finish(&c);
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        ui.invoke_controller_browser_action(100);
+        engine.load_a(file.path()).unwrap();
+        ui.invoke_controller_browser_action(100);
+        assert!(ui.get_status().contains("source or loader change"));
+        assert!(c.pending.borrow().is_some());
     }
     #[test]
     fn page_navigation_resets_filters_and_keeps_keyboard_edge_visible() {

@@ -1194,6 +1194,7 @@ export component AppWindow inherits Window {
     callback stutter(int);
     callback controller-browse(int);
     callback controller-browser-action(int);
+    callback controller-cancel-load-gesture();
     in-out property <bool> controller-browser-crates;
     out property <bool> controller-editor-open: root.crate-editor-open || root.left-grid-editing || root.right-grid-editing || root.left-cue-editing || root.right-cue-editing || left-deck.loop-name-focused || right-deck.loop-name-focused;
     out property <bool> controller-search-focused: track-library.search-focused;

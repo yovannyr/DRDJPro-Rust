@@ -13,7 +13,11 @@ Browse/LOAD). Details, Grenzen und Pruefnachweise stehen im
 [Implementierungsplan](MC4000_IMPLEMENTATION_PLAN.md) und im gemeinsamen
 [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Versuchen wurde der vom Nutzer
-autorisierte Fuenf-Slice-Fallback S2-S6 direkt umgesetzt. S7-S15 bleiben offen.
+autorisierte Fuenf-Slice-Fallback S2-S6 direkt umgesetzt. S7 Instant Doubles
+ist als separater Folgeschritt implementiert: LOAD-Doppeldruck bis350ms,
+geteilte PCM-/Keylock-Daten, geschuetztes Ziel und expliziter Zustandsvertrag
+im GUI-Inventar. Nach erneutem QWEN-Ausfall autorisierte der Nutzer die
+S7-Implementierung mit GPT-6.1 Sol. S8-S15 bleiben offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 

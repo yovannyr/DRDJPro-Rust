@@ -9,9 +9,9 @@ Automatisierte Tests, Review und native Hoer-/Bedienabnahme getrennt notieren.
 S1 und physisches/virtuelles Scratchen wurden vom Nutzer bereits bestaetigt.
 Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 
-Implementierungsumfang dieses Durchlaufs: **S2-S6**, nach dem autorisierten
-Fuenf-Slice-Fallback. S7-S15 sind weiterhin **NOT IMPLEMENTED** und werden
-nicht als Bestandteil dieses Durchlaufs abgenommen.
+S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
+implementiert. S8-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S7
+bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
 Samplerate, Ausgangspaare, Tracks, Ergebnis PASS/FAIL/NOT IMPLEMENTED,
@@ -59,8 +59,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S6-01 Browse | Encoder langsam/schnell mit SHIFT, Seite wechseln und Suchfilter aktivieren | Stabile Reihenfolge/Auswahl ueber Seiten; sichtbarer Track folgt Auswahl, keine verlorenen oder doppelten Spruenge. |
 | S6-02 Focus | Encoderdruck, Back und SHIFT+Back bei Library/Panel/Texteditor | Druck wechselt Tracks/Crates bzw. verlaesst Suchfokus; Back zu Crates; SHIFT+Back naechster App-Librarytab. Offene Editoren geschuetzt, kein unbeabsichtigtes Bearbeiten von Textwerten. |
 | S6-03 LOAD | A/B LOAD fuer ausgewaehlten Track; laufendes/beschaeftigtes Ziel und Missing-Track | Pausiertes Ziel laedt richtigen Track; Schutz/Fehler sichtbar, anderes Deck bleibt erhalten. |
-| S7-01 Doubles | LOAD-Doppeldruck innerhalb/draussen Zeitfenster | Innerhalb expliziter Klonvertrag; ausserhalb zwei normale Aktionen. Keine versehentliche Uebernahme laufender Ziele. |
-| S7-02 CloneState | Quelltrack mit Pitch/Position/Cues/Loop auf zweites Deck klonen | Position/Tempo/Transport gemaess dokumentiertem Vertrag, richtige Sourceidentitaet und keine Fremdcues. |
+| S7-01 Doubles | Gueltigen Librarytrack waehlen; LOAD A/A bzw. B/B bis350ms und danach; A/B, dritter Druck, anderer Controllerbefehl zwischen den Drucken | Erster Druck normal sofort; zweiter bis350ms Klon des anderen Decks; ausserhalb normal. Andere Befehle/Recovery brechen Geste ab. Laufendes Ziel geschuetzt, fremder Ladejob erhalten. |
+| S7-02 CloneState | Quelle mit Position/Pitch/Keylock abspielen oder pausieren; auf pausiertes Ziel klonen, auch nach fertiggestelltem ersten LOAD | Ziel uebernimmt Softwareposition/Basistempo/Grid/Keylock/Playzustand, Loop aus und TempCue zurueckgesetzt, Mixer/EQ/FX unveraendert. Quelle unveraendert; Scratch/Loop/Nudge/Sync/gehaltene oder geplante Cues sowie ausstehende Vorbereitung werden abgewiesen. Hoerprobe und Zeitversatz messen. |
 | S8-01 Prepare | Track mit LOAD PREP hinzufuegen, erneut hinzufuegen, SHIFT+LOAD PREP oeffnen | Kuratierte Queue statt Analyse starten; keine Duplikate; nachvollziehbare Reihenfolge. |
 | S8-02 Restart | Queue bearbeiten, Track fehlen lassen/relokalisieren, Neustart | Queue persistent; stabileIDs, fehlende Tracks erkennbar, kein automatisches Laden/Abspielen. |
 | S9-01 Search | SHIFT+Jog und SHIFT+Bend in beide Richtungen halten/loslassen | Schnelle Suche bis Trackgrenzen, Release stoppt Suche; nicht versehentlich Scratch/Pitch-Bend. |

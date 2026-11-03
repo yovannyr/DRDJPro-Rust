@@ -1,5 +1,33 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S7: Instant Doubles
+
+Two consecutive LOAD presses on the same target within 350 ms (inclusive,
+measured at control-thread dispatch using `engine.control_now`, not hardware
+event timestamps)
+copy the opposite deck. The first press must be an accepted normal library
+LOAD and still starts that operation immediately; GUI LOAD remains unchanged.
+A successful second press supersedes only its own first decode job. A failed
+clone leaves that normal job intact. Other controller commands, alternating
+LOAD targets, recovery, unrelated loader changes and source replacement break
+the gesture. A completed first load can still be followed by the second press.
+
+The target must be paused. The clone shares immutable PCM, waveform and prepared
+Keylock data, captures the source's current software position, base pitch, grid,
+Keylock and play/pause state, and adopts its pitch range with fader pickup reset.
+It clears target loop bounds and temporary cue state. Persisted hot cues/saved
+loops are looked up for the cloned track; no foreign track's cue state is copied.
+Target mixer/EQ/FX and headphone routing remain independent. Missing/EOF source,
+scratch, loop, nudge, cue holds/pending quantized cues, active Sync and pending
+tempo/device/library operations reject the clone. Search/edit focus protection
+continues to apply. A successful pair is consumed; a third LOAD starts a new pair.
+
+This is a control-plane software snapshot, not sample-exact alignment at the
+physical outputs. Replacement can allocate on the UI thread but does not decode
+or copy PCM. Render-trigger completion adds one atomic acknowledgement per
+executed quantized cue; no new audio-thread locks or allocations. Native timing,
+audible transition quality and controller usability remain to be qualified.
+
 ## MC4000 S6: library navigation and LOAD
 
 Global encoder CC0 moves through the complete filtered/sorted library;
@@ -17,7 +45,7 @@ Files, Crates, History and Prepare tabs, not an invented Serato panel.
 Open crate/grid/cue editors, focused loop-name fields and focused search are
 protected. LOAD A/B validates the settled selected ID, availability and busy
 state, then reuses paused-target loading. Missing/playing/busy targets report
-errors and do not replace the other deck. Double-press cloning remains S7.
+errors and do not replace the other deck. Double-press cloning is described in S7.
 
 ## MC4000 S5: temporary transport CUE
 

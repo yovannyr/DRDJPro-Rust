@@ -661,6 +661,85 @@ impl DualDeckEngine {
         self.replace_source(id, track, source, Duration::ZERO, false, None);
         Ok(())
     }
+    /// Clone the opposite deck on the control plane, sharing immutable PCM and prepared
+    /// Keylock data. Position is a software snapshot, not a device-synchronous handoff.
+    /// All fallible validation precedes replacement; mixer/FX settings remain per deck.
+    pub fn instant_double(&self, target: DeckId) -> Result<(), String> {
+        let source_id = if target == DeckId::A {
+            DeckId::B
+        } else {
+            DeckId::A
+        };
+        if self.output_failed() {
+            return Err("Audio output unavailable".into());
+        }
+        if self.snapshot(target).playing || self.platter_touched(target) {
+            return Err("Pause and release the target deck before Instant Doubles".into());
+        }
+        if self.decks[source_id.index()]
+            .borrow()
+            .render
+            .as_ref()
+            .is_some_and(|render| render.trigger_pending())
+        {
+            return Err("Wait for the pending quantized cue before Instant Doubles".into());
+        }
+        let snapshot = self.snapshot(source_id);
+        if !snapshot.loaded || snapshot.position >= snapshot.duration {
+            return Err("Load the opposite deck and move before EOF for Instant Doubles".into());
+        }
+        if self.platter_touched(source_id)
+            || snapshot.loop_active
+            || snapshot.nudge_direction != 0
+            || snapshot.sync_factor != 1.
+        {
+            return Err("Release scratch, loop, nudge and Sync before Instant Doubles".into());
+        }
+        let track = self.decks[source_id.index()]
+            .borrow()
+            .track
+            .clone()
+            .ok_or("Load the opposite deck first")?;
+        let speed = PlaybackSpeed::new(snapshot.requested_speed, track.samples.sample_rate())?;
+        if track
+            .keylock
+            .as_ref()
+            .is_some_and(|(factor, _)| (*factor - snapshot.requested_speed).abs() > 1e-10)
+        {
+            return Err("Wait for matching Keylock preparation".into());
+        }
+        if track.samples.channels() > 2
+            && (self.cue_enabled.iter().any(Cell::get) || self.monitor_settings.get().mix > 0.)
+        {
+            return Err("Disable headphone cue before loading multichannel audio".into());
+        }
+        let mut source = track.samples.clone();
+        source
+            .try_seek(snapshot.position)
+            .map_err(|error| error.to_string())?;
+        // Reset even when the destination already shares this source identity: normal
+        // same-track replacement deliberately retains its existing loop/rate state.
+        self.eject(target);
+        self.replace_source(
+            target,
+            track,
+            source,
+            snapshot.position,
+            false,
+            snapshot.grid,
+        );
+        let mut deck = self.decks[target.index()].borrow_mut();
+        deck.speed = Some(speed);
+        deck.base_factor = snapshot.requested_speed;
+        deck.render
+            .as_ref()
+            .expect("Installed double renderer")
+            .publish(speed.output_rate().get(), snapshot.playing, None, None);
+        if snapshot.playing {
+            deck.sink.play();
+        }
+        Ok(())
+    }
     pub fn eject(&self, id: DeckId) -> bool {
         let mut old = {
             let mut deck = self.decks[id.index()].borrow_mut();
@@ -1852,6 +1931,205 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn instant_double_shares_pcm_resets_same_source_state_and_preserves_source_and_mix() {
+        for target in [DeckId::A, DeckId::B] {
+            let source = if target == DeckId::A {
+                DeckId::B
+            } else {
+                DeckId::A
+            };
+            let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+            let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+            let file = wav_file(8192, 192000);
+            engine
+                .try_install(source, PreparedTrack::open(file.path()).unwrap())
+                .unwrap();
+            engine.set_speed(source, 1.04).unwrap();
+            engine
+                .seek_position(source, Duration::from_millis(500))
+                .unwrap();
+            let levels = MixerLevels {
+                crossfader: 0.3,
+                channel_a: 0.7,
+                channel_b: 0.6,
+            };
+            engine.set_levels(levels);
+            engine.instant_double(target).unwrap();
+            let pcm = engine.decks[source.index()]
+                .borrow()
+                .track
+                .as_ref()
+                .unwrap()
+                .samples
+                .shared_samples();
+            let target_pcm = engine.decks[target.index()]
+                .borrow()
+                .track
+                .as_ref()
+                .unwrap()
+                .samples
+                .shared_samples();
+            assert!(Arc::ptr_eq(&pcm, &target_pcm));
+            assert!(!engine.snapshot(target).playing);
+            engine
+                .set_loop_in(target, Duration::from_millis(100))
+                .unwrap();
+            engine
+                .set_loop_out(target, Duration::from_millis(300))
+                .unwrap();
+            engine.set_speed(target, 0.96).unwrap();
+            engine.play(source);
+            let before = engine.snapshot(source);
+            engine.instant_double(target).unwrap();
+            let double = engine.snapshot(target);
+            assert!(double.playing);
+            assert_eq!(double.position, before.position);
+            assert_eq!(double.requested_speed, before.requested_speed);
+            assert_eq!(double.loop_in, None);
+            assert_eq!(double.loop_out, None);
+            assert!(!double.loop_active);
+            assert_eq!(engine.output_volumes(), levels.volumes());
+            assert_eq!(engine.snapshot(source).position, before.position);
+            let audio: Vec<_> = output.by_ref().take(4800).collect();
+            assert!(audio.iter().any(|sample| sample.abs() > 0.01));
+            assert!(engine.snapshot(target).position > double.position);
+        }
+    }
+    #[test]
+    fn instant_double_rejection_preserves_destination() {
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let file = wav_file(8192, 192000);
+        engine.load_a(file.path()).unwrap();
+        let before = engine.snapshot(DeckId::A);
+        assert!(engine.instant_double(DeckId::A).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).path, before.path);
+        engine.load_b(file.path()).unwrap();
+        engine.play(DeckId::A);
+        assert!(engine.instant_double(DeckId::A).is_err());
+        assert!(engine.snapshot(DeckId::A).playing);
+        engine.pause(DeckId::A);
+        engine.platter_touch(DeckId::B, true).unwrap();
+        assert!(engine.instant_double(DeckId::A).is_err());
+        engine.platter_touch(DeckId::B, false).unwrap();
+        engine.set_loop_in(DeckId::B, Duration::ZERO).unwrap();
+        engine
+            .set_loop_out(DeckId::B, Duration::from_millis(250))
+            .unwrap();
+        engine.activate_loop(DeckId::B).unwrap();
+        assert!(engine.instant_double(DeckId::A).is_err());
+        assert_eq!(engine.snapshot(DeckId::A).path, before.path);
+        assert_eq!(engine.snapshot(DeckId::A).position, before.position);
+    }
+    #[test]
+    fn instant_double_rejects_pending_cue_but_accepts_consumed_and_cancelled_trigger() {
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, 48000);
+        let file = wav_file(8192, 192000);
+        engine.load_b(file.path()).unwrap();
+        engine
+            .set_grid(
+                DeckId::B,
+                Some(crate::beatgrid::BeatGrid::new(120., Duration::ZERO).unwrap()),
+            )
+            .unwrap();
+        engine.play(DeckId::B);
+        engine
+            .schedule_cue(
+                DeckId::B,
+                Duration::from_secs(1),
+                crate::beatgrid::QuantizeStep::Beat,
+            )
+            .unwrap();
+        assert!(engine
+            .instant_double(DeckId::A)
+            .unwrap_err()
+            .contains("pending quantized cue"));
+        assert!(!engine.snapshot(DeckId::A).loaded);
+        output.by_ref().take(25000).for_each(drop);
+        engine.instant_double(DeckId::A).unwrap();
+        assert!(engine.snapshot(DeckId::A).position >= Duration::from_secs(1));
+        engine.pause(DeckId::A);
+        engine
+            .schedule_cue(
+                DeckId::B,
+                Duration::ZERO,
+                crate::beatgrid::QuantizeStep::Beat,
+            )
+            .unwrap();
+        engine.cancel_scheduled_cue(DeckId::B);
+        engine.instant_double(DeckId::A).unwrap();
+    }
+    #[test]
+    fn instant_double_shares_prepared_keylock_and_renders_original_pitch_without_heap_work() {
+        let rate = 48000_u32;
+        let input: Vec<_> = (0..rate * 3)
+            .map(|i| ((std::f32::consts::TAU * 440. * i as f32 / rate as f32).sin() * 8000.) as i16)
+            .collect();
+        let file = crate::test_support::wav_samples(&input, rate, 1);
+        let (mixer, mut output) = rodio::mixer::mixer(1, rate);
+        let engine = DualDeckEngine::from_mixer(mixer, 1, rate);
+        engine.load_b(file.path()).unwrap();
+        let job = engine.prepare_keylock(DeckId::B, 1, 1.25).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let prepared = loop {
+            if let Some(result) = job.poll().unwrap() {
+                break result.unwrap();
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        engine
+            .adopt_keylock(DeckId::B, Some((1.25, prepared.clip)))
+            .unwrap();
+        let eq = crate::mixer_dsp::EqSettings {
+            trim: -3.,
+            ..Default::default()
+        };
+        let fx = crate::delay_fx::DelaySettings {
+            enabled: true,
+            time_ms: 50,
+            wet: 0.2,
+            feedback: 0.1,
+        };
+        engine.set_eq(DeckId::A, eq).unwrap();
+        engine.set_fx(DeckId::A, fx).unwrap();
+        engine.play(DeckId::B);
+        engine.instant_double(DeckId::A).unwrap();
+        assert_eq!(engine.eq_settings(DeckId::A), eq);
+        assert_eq!(engine.fx_settings(DeckId::A), fx);
+        {
+            let a = engine.decks[0].borrow();
+            let b = engine.decks[1].borrow();
+            assert!(Arc::ptr_eq(
+                &a.track.as_ref().unwrap().keylock.as_ref().unwrap().1,
+                &b.track.as_ref().unwrap().keylock.as_ref().unwrap().1
+            ));
+        }
+        engine.set_levels(MixerLevels {
+            crossfader: 0.,
+            channel_a: 1.,
+            channel_b: 0.,
+        });
+        let audio: Vec<_> = output.by_ref().take(48000).collect();
+        let hz = audio[12000..36000]
+            .windows(2)
+            .filter(|s| s[0] <= 0. && s[1] > 0.)
+            .count() as f64
+            * 2.;
+        assert!((hz - 440.).abs() < 3., "cloned Keylock pitch: {hz}");
+        let started = std::time::Instant::now();
+        let stats = crate::looping::measured_heap(|| {
+            output.by_ref().take(4800).for_each(drop);
+        });
+        assert_eq!(stats.allocations, 0);
+        assert_eq!(stats.reallocations, 0);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "100ms offline render budget exceeded"
+        );
+    }
     #[test]
     fn paused_device_handoff_keeps_pcm_position_pitch_grid_loops_and_mixer_state() {
         let (mixer, _old_output) = rodio::mixer::mixer(4, 48000);

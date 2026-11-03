@@ -66,6 +66,7 @@ pub(crate) struct RenderControl {
     applied_seek: AtomicU64,
     seek_units: AtomicU64,
     trigger_serial: AtomicU64,
+    completed_trigger: AtomicU64,
     trigger_at: AtomicU64,
     trigger_units: AtomicU64,
     phase_units: AtomicU64,
@@ -117,6 +118,7 @@ impl RenderControl {
             ),
             applied_seek: AtomicU64::new(0),
             trigger_serial: AtomicU64::new(0),
+            completed_trigger: AtomicU64::new(0),
             trigger_at: AtomicU64::new(0),
             trigger_units: AtomicU64::new(0),
             phase_units: AtomicU64::new(0),
@@ -155,6 +157,13 @@ impl RenderControl {
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.trigger_at.store(0, Ordering::SeqCst);
         self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
+    /// Control-plane query. A consumed trigger is acknowledged once per execution;
+    /// cancellation leaves no pending trigger even before the renderer observes it.
+    pub fn trigger_pending(&self) -> bool {
+        self.trigger_at.load(Ordering::SeqCst) != 0
+            && self.completed_trigger.load(Ordering::Acquire)
+                != self.trigger_serial.load(Ordering::SeqCst)
     }
     /// Single control-plane writer; signed source-time motion, no audio-thread allocation.
     pub fn scratch_touch(&self, held: bool) {
@@ -486,6 +495,9 @@ impl DeckRenderer {
             self.phase = u128::from(settings.trigger_units);
             self.applied_trigger = settings.trigger_serial;
             self.publish_position();
+            self.control
+                .completed_trigger
+                .store(settings.trigger_serial, Ordering::Release);
         }
         if !settings.scratch {
             self.phase = self.wrap(self.phase);

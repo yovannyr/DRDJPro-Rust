@@ -725,6 +725,9 @@ impl Drop for Input {
     }
 }
 pub fn apply(ui: &crate::AppWindow, command: Command) {
+    if !matches!(&command, Command::Load(_)) {
+        ui.invoke_controller_cancel_load_gesture();
+    }
     if matches!(
         &command,
         Command::FxToggle(_) | Command::FxKnob(_, _, _) | Command::FxTimeStep(_, _)
