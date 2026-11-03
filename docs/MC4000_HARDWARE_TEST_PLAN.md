@@ -9,6 +9,10 @@ Automatisierte Tests, Review und native Hoer-/Bedienabnahme getrennt notieren.
 S1 und physisches/virtuelles Scratchen wurden vom Nutzer bereits bestaetigt.
 Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 
+Implementierungsumfang dieses Durchlaufs: **S2-S6**, nach dem autorisierten
+Fuenf-Slice-Fallback. S7-S15 sind weiterhin **NOT IMPLEMENTED** und werden
+nicht als Bestandteil dieses Durchlaufs abgenommen.
+
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
 Samplerate, Ausgangspaare, Tracks, Ergebnis PASS/FAIL/NOT IMPLEMENTED,
 Fehlermeldung und Wiederholungsschritte. Keine persoenlichen Dateipfade oder
@@ -53,7 +57,7 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S5-02 PlayLatch | TempCue halten, PLAY druecken, beide loslassen | Wiedergabe laeuft weiter; kein Ruecksprung oder haengender Hold. |
 | S5-03 Start/Stutter | SHIFT+CUE; danach temporaeren Punkt setzen und SHIFT+PLAY wiederholen | Trackstart0 bei erstem Befehl; Stutter ab temporaerem Punkt, nicht aus gespeichertem Hot-Cue-Slot. |
 | S6-01 Browse | Encoder langsam/schnell mit SHIFT, Seite wechseln und Suchfilter aktivieren | Stabile Reihenfolge/Auswahl ueber Seiten; sichtbarer Track folgt Auswahl, keine verlorenen oder doppelten Spruenge. |
-| S6-02 Focus | Encoderdruck, Back und SHIFT+Back bei Library/Panel/Texteditor | Dokumentierter Fokus-/Panelpfad; kein unbeabsichtigtes Tippen oder Bearbeiten von Textwerten. |
+| S6-02 Focus | Encoderdruck, Back und SHIFT+Back bei Library/Panel/Texteditor | Druck wechselt Tracks/Crates bzw. verlaesst Suchfokus; Back zu Crates; SHIFT+Back naechster App-Librarytab. Offene Editoren geschuetzt, kein unbeabsichtigtes Bearbeiten von Textwerten. |
 | S6-03 LOAD | A/B LOAD fuer ausgewaehlten Track; laufendes/beschaeftigtes Ziel und Missing-Track | Pausiertes Ziel laedt richtigen Track; Schutz/Fehler sichtbar, anderes Deck bleibt erhalten. |
 | S7-01 Doubles | LOAD-Doppeldruck innerhalb/draussen Zeitfenster | Innerhalb expliziter Klonvertrag; ausserhalb zwei normale Aktionen. Keine versehentliche Uebernahme laufender Ziele. |
 | S7-02 CloneState | Quelltrack mit Pitch/Position/Cues/Loop auf zweites Deck klonen | Position/Tempo/Transport gemaess dokumentiertem Vertrag, richtige Sourceidentitaet und keine Fremdcues. |

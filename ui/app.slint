@@ -450,6 +450,8 @@ component NudgeHold inherits Rectangle {
 }
 
 component CompactDeck inherits Rectangle {
+    out property <bool> loop-name-focused;
+    changed tools-panel => { root.loop-name-focused = false; }
     callback scratch-pointer(int, float, float);
     in property <bool> platter-mouse-owned;
     in property <float> platter-angle;
@@ -683,7 +685,7 @@ component CompactDeck inherits Rectangle {
         if root.tools-panel == 1 : HorizontalLayout {
             height: 28px; spacing: 2px;
             SpinBox { width: 64px; minimum: 1; maximum: 8; value <=> root.saved-loop-slot; accessible-label: root.deck-label + " saved loop slot"; }
-            LineEdit { width: 68px; text <=> root.saved-loop-name; placeholder-text: "Loop name"; accessible-label: root.deck-label + " saved loop name"; }
+            LineEdit { width: 68px; text <=> root.saved-loop-name; placeholder-text: "Loop name"; accessible-label: root.deck-label + " saved loop name"; changed has-focus => { root.loop-name-focused = self.has-focus; } }
             Button { text: "SAVE"; accessible-label: root.deck-label + " save loop slot"; enabled: loaded && !loading && loop-ready; clicked => { root.save-loop(); } }
             Button { text: "RECALL"; accessible-label: root.deck-label + " recall loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.recall-loop(); } }
             Button { text: "DELETE"; accessible-label: root.deck-label + " delete loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.delete-loop(); } }
@@ -980,6 +982,19 @@ component CratePanel inherits Rectangle {
 }
 
 component TrackLibrary inherits Rectangle {
+    out property <bool> search-focused: search-input.has-focus;
+    callback focus-tracks();
+    focus-tracks => { nav.focus(); }
+    callback reveal-row(int);
+    reveal-row(index) => {
+        if index >= 0 {
+            if index * 22px + library-list.content-y < 0px {
+                library-list.content-y = -index * 22px;
+            } else if (index + 1) * 22px + library-list.content-y > library-list.height {
+                library-list.content-y = min(0px, library-list.height - (index + 1) * 22px);
+            }
+        }
+    }
     in property <[TableColumn]> columns;
     in property <[TableColumn]> all-columns;
     in property <float> table-width;
@@ -1036,7 +1051,7 @@ component TrackLibrary inherits Rectangle {
                 accessible-label: title + " library tab";
                 clicked => { root.tab-selected(index); }
             }
-            LineEdit { height: 24px; min-width: 80px; text <=> query; placeholder-text: "Search library"; accessible-label: "Library search"; edited => { root.search(); } }
+            search-input := LineEdit { height: 24px; min-width: 80px; text <=> query; placeholder-text: "Search library"; accessible-label: "Library search"; edited => { root.search(); } }
             LibraryButton { text: "X"; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
             LibraryButton { text: "Load A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
             LibraryButton { text: "Load B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
@@ -1177,6 +1192,15 @@ export component AppWindow inherits Window {
     callback controller-hot-cue(int, int, bool, bool);
     callback temporary-cue(int, bool, bool);
     callback stutter(int);
+    callback controller-browse(int);
+    callback controller-browser-action(int);
+    in-out property <bool> controller-browser-crates;
+    out property <bool> controller-editor-open: root.crate-editor-open || root.left-grid-editing || root.right-grid-editing || root.left-cue-editing || root.right-cue-editing || left-deck.loop-name-focused || right-deck.loop-name-focused;
+    out property <bool> controller-search-focused: track-library.search-focused;
+    callback focus-library-tracks();
+    focus-library-tracks => { track-library.focus-tracks(); }
+    callback reveal-library-row(int);
+    reveal-library-row(index) => { track-library.reveal-row(index); }
     in-out property <bool> controller-shift;
     in property <float> left-platter-angle;
     in property <float> right-platter-angle;

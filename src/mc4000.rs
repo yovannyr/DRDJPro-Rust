@@ -31,6 +31,9 @@ pub enum Command {
     Sync(usize, bool),
     Loop(usize, u8),
     HotCue(usize, usize, bool, bool),
+    Browse(i32),
+    BrowserAction(u8),
+    Load(usize),
 }
 pub fn decode(bytes: &[u8]) -> Option<Command> {
     if bytes.len() != 3 || bytes[1] > 127 || bytes[2] > 127 {
@@ -94,6 +97,16 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         )),
         (0xb0, 0..=1, 41, value) => Some(Command::PitchMsb(channel as usize, value)),
         (0xb0, 0..=1, 9, value) => Some(Command::PitchLsb(channel as usize, value)),
+        (0xb0, 15, note @ 0..=1, value @ 1..=127) => {
+            let step = if value < 64 {
+                i32::from(value)
+            } else {
+                i32::from(value) - 128
+            };
+            Some(Command::Browse(step * if note == 1 { 10 } else { 1 }))
+        }
+        (0x90, 15, note @ (7 | 17 | 31), 1..=127) => Some(Command::BrowserAction(note)),
+        (0x90, 15, note @ 2..=3, 1..=127) => Some(Command::Load(usize::from(note - 2))),
         (0x90, 0..=1, 2..=3, 1..=127) => Some(Command::Sync(channel as usize, bytes[1] == 2)),
         (0x90, 4..=5, note @ (50..=53 | 56..=57 | 63), 1..=127) => {
             Some(Command::Loop((channel - 4) as usize, note))
@@ -835,6 +848,9 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         }
         Command::PitchMsb(_, _) | Command::PitchLsb(_, _) => (),
         Command::Sync(deck, enabled) => ui.invoke_controller_sync(deck as i32, enabled),
+        Command::Browse(delta) => ui.invoke_controller_browse(delta),
+        Command::BrowserAction(action) => ui.invoke_controller_browser_action(i32::from(action)),
+        Command::Load(deck) => ui.invoke_controller_browser_action(100 + deck as i32),
         Command::HotCue(deck, slot, held, delete) => {
             ui.invoke_controller_hot_cue(deck as i32, slot as i32, held, delete)
         }

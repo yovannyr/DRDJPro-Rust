@@ -300,6 +300,8 @@ pub struct AudioController {
     library: Rc<RefCell<crate::library::Library>>,
     library_generation: Rc<Cell<u64>>,
     library_page: Cell<usize>,
+    controller_browse_pending: Cell<i32>,
+    controller_browse_row: Cell<Option<usize>>,
     pending_page_selection: Cell<i8>,
     search_worker: RefCell<Option<SearchWorker>>,
     library_perf: RefCell<Option<Rc<RefCell<crate::library_perf::Recorder>>>>,
@@ -460,6 +462,8 @@ impl AudioController {
             library: Rc::new(RefCell::new(crate::library::Library::default())),
             library_generation: Rc::new(Cell::new(0)),
             library_page: Cell::new(0),
+            controller_browse_pending: Cell::new(0),
+            controller_browse_row: Cell::new(None),
             pending_page_selection: Cell::new(0),
             search_worker: RefCell::new(None),
             library_perf: RefCell::new(None),
@@ -1041,6 +1045,7 @@ impl AudioController {
         controller.wire_mc4000_pitch(ui);
         controller.wire_platters(ui);
         controller.wire_temporary_cues(ui);
+        controller.wire_controller_browser(ui);
         controller.wire_saved_loops(ui);
         controller.refresh();
         controller
@@ -1120,6 +1125,8 @@ impl AudioController {
                     ui.set_status(error.into());
                     return;
                 }
+                c.controller_browse_row.set(None);
+                c.controller_browse_pending.set(0);
                 ui.set_library_tab(tab);
                 c.cancel_crate_dialog();
                 c.publish_library();
@@ -2221,6 +2228,8 @@ impl AudioController {
     /// hold persists. GUI-held nudges are left untouched and remain effective.
     pub fn mc4000_release_holds(&self) {
         self.disarm_pitch_pickup();
+        self.controller_browse_pending.set(0);
+        self.controller_browse_row.set(None);
         for id in [DeckId::A, DeckId::B] {
             self.release_mc4000_bends(id);
             if let Err(error) = self.hold_temporary_cue(id, false, 2) {
@@ -6269,6 +6278,8 @@ impl AudioController {
                 Err(error) => {
                     self.fail_library_performance();
                     ui.set_status(format!("Cannot start library search: {error}").into());
+                    self.controller_browse_pending.set(0);
+                    self.controller_browse_row.set(None);
                     ui.set_library_rows(ModelRc::new(Rc::new(
                         VecModel::<crate::LibraryRow>::default(),
                     )));
@@ -6284,6 +6295,16 @@ impl AudioController {
         }
         let worker = worker_slot.as_mut().unwrap();
         if let Some(previous) = worker.wanted.as_ref().or(worker.published.as_ref()) {
+            if previous.revision != spec.revision
+                && (self.controller_browse_row.get().is_some()
+                    || self.controller_browse_pending.get() != 0)
+            {
+                self.controller_browse_row.set(None);
+                self.controller_browse_pending.set(0);
+                ui.set_status(
+                    "Queued controller browsing cancelled after library ordering changed".into(),
+                );
+            }
             if previous.generation != spec.generation
                 || previous.scope != spec.scope
                 || previous.query != spec.query
@@ -6293,6 +6314,15 @@ impl AudioController {
             {
                 self.library_page.set(0);
                 self.pending_page_selection.set(0);
+                if self.controller_browse_row.take().is_some()
+                    || self.controller_browse_pending.replace(0) != 0
+                {
+                    self.controller_browse_pending.set(0);
+                    ui.set_status(
+                        "Queued controller browsing cancelled after library ordering changed"
+                            .into(),
+                    );
+                }
             }
         }
         spec.page_index = self.library_page.get();
@@ -6334,6 +6364,8 @@ impl AudioController {
         if let Err(error) = worker.send_pending() {
             self.fail_library_performance();
             ui.set_status(error.into());
+            self.controller_browse_pending.set(0);
+            self.controller_browse_row.set(None);
             *worker_slot = None;
             ui.set_library_rows(ModelRc::new(Rc::new(
                 VecModel::<crate::LibraryRow>::default(),
@@ -6366,6 +6398,184 @@ impl AudioController {
                 .is_some_and(|track| !track.available),
         );
     }
+    fn wire_controller_browser(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_controller_browse(move |delta| {
+            let Some(c) = weak.upgrade() else { return };
+            let Some(ui) = c.ui.upgrade() else { return };
+            if !c.storage_ready.get()
+                || ui.get_controller_editor_open()
+                || ui.get_controller_search_focused()
+            {
+                ui.set_status(
+                    "Finish editing or press the library encoder to leave search before browsing"
+                        .into(),
+                );
+                return;
+            }
+            if ui.get_controller_browser_crates() {
+                if c.pending.borrow().is_some()
+                    || (c.pending_import.borrow().is_some() && c.analysis_batch.borrow().is_none())
+                {
+                    ui.set_status("Wait for the library operation before browsing crates".into());
+                    return;
+                }
+                let mut ids = vec![0, -1];
+                ids.extend(
+                    c.library
+                        .borrow()
+                        .crates()
+                        .ordered_with_depth()
+                        .iter()
+                        .map(|(entry, _)| entry.id),
+                );
+                let index = ids
+                    .iter()
+                    .position(|id| *id == c.library.borrow().active_crate())
+                    .unwrap_or(0);
+                let target =
+                    (index as i64 + i64::from(delta)).clamp(0, ids.len() as i64 - 1) as usize;
+                ui.invoke_select_crate(ids[target]);
+            } else {
+                let requested = c.controller_browse_pending.get().saturating_add(delta);
+                if !(-100_000..=100_000).contains(&requested) {
+                    ui.set_status("Controller browse queue limit reached".into());
+                    return;
+                }
+                c.controller_browse_pending.set(requested);
+                c.drain_controller_browse();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_browser_action(move |action| {
+            let Some(c) = weak.upgrade() else { return };
+            let Some(ui) = c.ui.upgrade() else { return };
+            if ui.get_controller_editor_open() {
+                ui.set_status("Save or cancel the open editor before controller navigation".into());
+                return;
+            }
+            if action == 31 {
+                c.controller_browse_pending.set(0);
+                c.controller_browse_row.set(None);
+                ui.set_controller_browser_crates(
+                    !ui.get_controller_search_focused() && !ui.get_controller_browser_crates(),
+                );
+                ui.invoke_focus_library_tracks();
+                ui.set_status(
+                    if ui.get_controller_browser_crates() {
+                        "MC4000 browse: crates"
+                    } else {
+                        "MC4000 browse: tracks"
+                    }
+                    .into(),
+                );
+                return;
+            }
+            if ui.get_controller_search_focused() {
+                ui.set_status(
+                    "Press the library encoder to leave search before controller navigation".into(),
+                );
+                return;
+            }
+            match action {
+                7 => {
+                    c.controller_browse_pending.set(0);
+                    c.controller_browse_row.set(None);
+                    ui.set_controller_browser_crates(true);
+                    ui.set_status("MC4000 browse: crates".into());
+                }
+                17 => {
+                    c.controller_browse_pending.set(0);
+                    c.controller_browse_row.set(None);
+                    ui.invoke_library_tab_selected((ui.get_library_tab() + 1) % 5);
+                }
+                100..=101 => {
+                    let selected = c.library.borrow().selected_id();
+                    let error = if !c.storage_ready.get()
+                        || c.pending.borrow().is_some()
+                        || c.pending_import.borrow().is_some()
+                    {
+                        Some("Wait for the library/load operation")
+                    } else if c.search_in_progress() || c.controller_browse_pending.get() != 0 {
+                        Some("Wait for the controller selection to finish")
+                    } else if selected < 0 || selected != ui.get_selected_track() {
+                        Some("Select a library track before LOAD")
+                    } else if c
+                        .library
+                        .borrow()
+                        .track_by_id(selected)
+                        .is_none_or(|track| !track.available)
+                    {
+                        Some("The selected library track is missing")
+                    } else {
+                        None
+                    };
+                    if let Some(error) = error {
+                        ui.set_status(error.into());
+                    } else if action == 100 {
+                        ui.invoke_load_library_left();
+                    } else {
+                        ui.invoke_load_library_right();
+                    }
+                }
+                _ => ui.set_status("Invalid MC4000 browser action".into()),
+            }
+        });
+    }
+    fn drain_controller_browse(&self) {
+        if self.search_in_progress() || self.controller_browse_pending.get() == 0 {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else { return };
+        if ui.get_controller_editor_open()
+            || ui.get_controller_search_focused()
+            || ui.get_controller_browser_crates()
+        {
+            self.controller_browse_pending.set(0);
+            ui.set_status("Queued controller browsing cancelled after focus change".into());
+            return;
+        }
+        let delta = self.controller_browse_pending.replace(0);
+        let rows = ui.get_library_rows();
+        let Some(model) = rows.as_any().downcast_ref::<LibraryRows>() else {
+            return;
+        };
+        if model.rows.is_empty() {
+            return;
+        }
+        let total = self
+            .search_worker
+            .borrow()
+            .as_ref()
+            .map_or(0, |w| w.published_total);
+        if total == 0 {
+            return;
+        }
+        let current = self.library.borrow().selected_id();
+        let index = model.rows.iter().position(|id| *id == current);
+        let delta = if index.is_some() {
+            delta
+        } else {
+            delta - delta.signum()
+        };
+        let target = (self.library_page.get() as i64 * LIBRARY_PAGE_SIZE as i64
+            + index.unwrap_or(0) as i64
+            + i64::from(delta))
+        .clamp(0, total as i64 - 1) as usize;
+        let page = target / LIBRARY_PAGE_SIZE;
+        let row = target % LIBRARY_PAGE_SIZE;
+        if page == self.library_page.get() {
+            self.library.borrow_mut().select(model.rows[row]);
+            self.publish_selected_library_track(&ui);
+            ui.invoke_reveal_library_row(row as i32);
+        } else {
+            self.library_page.set(page);
+            self.pending_page_selection.set(0);
+            self.controller_browse_row.set(Some(row));
+            self.library.borrow_mut().select(-1);
+            self.publish_library();
+        }
+    }
     fn change_library_page(&self, delta: i32, select_edge: i8) {
         if self.search_in_progress() {
             return;
@@ -6381,6 +6591,7 @@ impl AudioController {
         if next != self.library_page.get() {
             self.measure_library_action(crate::library_perf::Operation::Page, || {
                 self.library_page.set(next);
+                self.controller_browse_row.set(None);
                 self.pending_page_selection.set(select_edge);
                 self.library.borrow_mut().select(-1);
                 self.publish_library();
@@ -6421,6 +6632,8 @@ impl AudioController {
                             worker.published_total = page.total;
                             accepted = Some((spec, page));
                         } else {
+                            self.controller_browse_pending.set(0);
+                            self.controller_browse_row.set(None);
                             worker.wanted = None;
                             worker.pending = None;
                             worker.published = None;
@@ -6439,6 +6652,8 @@ impl AudioController {
             failed = true;
         }
         if failed {
+            self.controller_browse_pending.set(0);
+            self.controller_browse_row.set(None);
             *slot = None;
         }
         drop(slot);
@@ -6457,9 +6672,25 @@ impl AudioController {
             self.publish_library();
         } else if let Some((spec, page)) = accepted {
             let edge = self.pending_page_selection.replace(0);
+            let requested_row = self.controller_browse_row.take();
+            let controller_row = requested_row.filter(|_| {
+                self.ui.upgrade().is_some_and(|ui| {
+                    !ui.get_controller_editor_open()
+                        && !ui.get_controller_search_focused()
+                        && !ui.get_controller_browser_crates()
+                })
+            });
+            if requested_row.is_some() && controller_row.is_none() {
+                self.controller_browse_pending.set(0);
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status("Queued controller browsing cancelled after focus change".into());
+                }
+            }
             let mut library = self.library.borrow_mut();
             library.install_search_result(&page.ids);
-            if edge != 0 {
+            if let Some(row) = controller_row {
+                library.select(page.ids.get(row).copied().unwrap_or(-1));
+            } else if edge != 0 {
                 let id = if edge > 0 {
                     page.ids.first()
                 } else {
@@ -6474,9 +6705,14 @@ impl AudioController {
             drop(library);
             self.publish_search_rows(page.ids, page.total);
             if let Some(ui) = self.ui.upgrade() {
-                ui.invoke_library_scroll_page(edge < 0);
+                if let Some(row) = controller_row {
+                    ui.invoke_reveal_library_row(row as i32);
+                } else if requested_row.is_none() {
+                    ui.invoke_library_scroll_page(edge < 0);
+                }
             }
             self.library_perf_ready(&spec);
+            self.drain_controller_browse();
         }
     }
 
@@ -8072,8 +8308,12 @@ mod tests {
             published: None,
             published_total: 0,
         });
+        c.controller_browse_row.set(Some(1));
+        c.controller_browse_pending.set(3);
         ui.set_library_query("no-match".into());
         ui.invoke_library_search();
+        assert!(c.controller_browse_row.get().is_none());
+        assert_eq!(c.controller_browse_pending.get(), 0);
         assert_eq!(c.library.borrow().selected_id(), -1);
         assert_eq!(ui.get_selected_track(), -1);
         assert_eq!(ui.get_library_rows().row_count(), 0);
@@ -8302,6 +8542,185 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mc4000_browser_crosses_pages_buffers_steps_and_protects_editors() {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let c = AudioController::wire(
+            &ui,
+            Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000)),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        c.library
+            .borrow_mut()
+            .insert((0..401).map(|i| dir.path().join(format!("track-{i:04}.wav"))));
+        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.show().unwrap();
+        c.publish_library();
+        finish_search(&c);
+        let dispatch =
+            |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        ui.invoke_select_library(195);
+        dispatch([0xbf, 1, 2]);
+        assert!(c.search_in_progress());
+        dispatch([0xbf, 0, 3]);
+        dispatch([0x9f, 2, 127]);
+        assert!(ui.get_status().contains("selection"));
+        finish_search(&c);
+        assert_eq!(ui.get_selected_track(), 218);
+        assert_eq!(ui.get_library_page_text(), "2 / 3");
+        dispatch([0xbf, 1, 126]);
+        finish_search(&c);
+        assert_eq!(ui.get_selected_track(), 198);
+        assert_eq!(ui.get_library_page_text(), "1 / 3");
+        let row = control(&ui, "Library track 198");
+        let area = control(&ui, "Track library area");
+        assert!(row.absolute_position().y >= area.absolute_position().y);
+        assert!(
+            row.absolute_position().y + row.size().height
+                <= area.absolute_position().y + area.size().height
+        );
+        dispatch([0xbf, 1, 2]);
+        ui.set_left_grid_editing(true);
+        finish_search(&c);
+        assert_eq!(ui.get_selected_track(), -1);
+        assert!(ui.get_status().contains("focus change"));
+        ui.set_left_grid_editing(false);
+        ui.invoke_library_change_page(-1);
+        finish_search(&c);
+        ui.invoke_select_library(198);
+        dispatch([0xbf, 1, 2]);
+        c.library.borrow_mut().set_metadata(
+            &dir.path().join("track-0000.wav"),
+            crate::track_metadata::TrackMetadata {
+                title: "Reordered".into(),
+                ..Default::default()
+            },
+        );
+        c.publish_library();
+        assert!(c.controller_browse_row.get().is_none());
+        assert_eq!(c.controller_browse_pending.get(), 0);
+        assert!(ui.get_status().contains("ordering changed"));
+        finish_search(&c);
+        ui.invoke_library_change_page(-1);
+        finish_search(&c);
+        ui.invoke_select_library(198);
+        ui.set_left_grid_editing(true);
+        dispatch([0xbf, 0, 1]);
+        assert_eq!(ui.get_selected_track(), 198);
+        assert!(ui.get_status().contains("editing"));
+        ui.set_left_grid_editing(false);
+        let search = control(&ui, "Library search");
+        let p = search.absolute_position();
+        let size = search.size();
+        let position = slint::LogicalPosition::new(p.x + size.width / 2., p.y + size.height / 2.);
+        ui.window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        ui.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        ui.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        assert!(ui.get_controller_search_focused());
+        dispatch([0xbf, 0, 1]);
+        assert_eq!(ui.get_selected_track(), 198);
+        dispatch([0x9f, 31, 127]);
+        assert!(!ui.get_controller_search_focused());
+        assert!(!ui.get_controller_browser_crates());
+        dispatch([0xbf, 0, 1]);
+        assert_eq!(ui.get_selected_track(), 199);
+        dispatch([0xbf, 1, 2]);
+        assert!(c.search_in_progress());
+        dispatch([0xbf, 0, 3]);
+        assert!(c.controller_browse_row.get().is_some());
+        assert_eq!(c.controller_browse_pending.get(), 3);
+        ui.invoke_library_tab_selected(1);
+        assert_eq!(ui.get_library_tab(), 1);
+        assert!(c.controller_browse_row.get().is_none());
+        assert_eq!(c.controller_browse_pending.get(), 0);
+        finish_search(&c);
+        assert_eq!(ui.get_selected_track(), -1);
+        ui.invoke_library_tab_selected(0);
+        finish_search(&c);
+        dispatch([0x9f, 7, 127]);
+        assert!(ui.get_controller_browser_crates());
+        dispatch([0xbf, 0, 1]);
+        finish_search(&c);
+        assert_eq!(ui.get_selected_crate(), -1);
+        dispatch([0x9f, 17, 127]);
+        finish_search(&c);
+        assert_eq!(ui.get_library_tab(), 4);
+    }
+    #[test]
+    fn mc4000_load_uses_selected_id_and_reports_busy_playing_missing() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000);
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.library.borrow_mut().insert([file.path().to_path_buf()]);
+        c.publish_library();
+        finish_search(&c);
+        ui.invoke_select_library(1);
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Load(0));
+        assert!(c.pending.borrow().is_some());
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Load(1));
+        assert!(ui.get_status().contains("operation"));
+        finish(&c);
+        finish_search(&c);
+        assert!(engine.snapshot(DeckId::A).loaded);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::B).loaded);
+        ui.invoke_select_library(1);
+        engine.play(DeckId::A);
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Load(0));
+        assert!(ui.get_status().contains("Pause deck"));
+        assert!(c.pending.borrow().is_none());
+        c.library
+            .borrow_mut()
+            .insert([file.path().with_file_name("missing-browse.wav")]);
+        let catalog = c.library.borrow().catalog();
+        let missing_id = catalog
+            .tracks
+            .iter()
+            .find(|track| {
+                track
+                    .path
+                    .file_name()
+                    .is_some_and(|name| name == "missing-browse.wav")
+            })
+            .unwrap()
+            .id;
+        *c.library.borrow_mut() = crate::library::Library::restore(catalog).unwrap();
+        assert!(
+            !c.library
+                .borrow()
+                .track_by_id(missing_id)
+                .unwrap()
+                .available
+        );
+        c.library_generation.set(c.library_generation.get() + 1);
+        c.publish_library();
+        finish_search(&c);
+        ui.invoke_select_library(missing_id);
+        crate::mc4000::apply(&ui, crate::mc4000::Command::Load(1));
+        assert!(
+            ui.get_status().contains("missing"),
+            "status={} selected={} library={}",
+            ui.get_status(),
+            ui.get_selected_track(),
+            c.library.borrow().selected_id()
+        );
+        assert!(!engine.snapshot(DeckId::B).loaded);
+    }
     #[test]
     fn page_navigation_resets_filters_and_keeps_keyboard_edge_visible() {
         use slint::Model;

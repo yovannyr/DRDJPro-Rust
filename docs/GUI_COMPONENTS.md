@@ -1,5 +1,24 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S6: library navigation and LOAD
+
+Global encoder CC0 moves through the complete filtered/sorted library;
+SHIFT CC1 applies ten rows per relative step. Cross-page targets retain their
+row offset, and bounded pending deltas wait for the existing search worker.
+The selected row is revealed without taking keyboard focus. Ordering revisions,
+pane changes and recovery cancel stale queued navigation instead of redirecting
+a later LOAD. No full-library search or filesystem work is added to MIDI/audio
+callbacks.
+
+Encoder press switches the controller target between tracks and ordered crates
+(including All tracks/History); from focused search it explicitly returns to
+tracks. Back selects the crate target. SHIFT+Back cycles existing Library,
+Files, Crates, History and Prepare tabs, not an invented Serato panel.
+Open crate/grid/cue editors, focused loop-name fields and focused search are
+protected. LOAD A/B validates the settled selected ID, availability and busy
+state, then reuses paused-target loading. Missing/playing/busy targets report
+errors and do not replace the other deck. Double-press cloning remains S7.
+
 ## MC4000 S5: temporary transport CUE
 
 CUE is now a source-bound temporary point, separate from persisted hot cues.

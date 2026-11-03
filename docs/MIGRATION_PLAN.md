@@ -7,6 +7,16 @@ Reihenfolge der fehlenden Controller-/App-Funktionen stehen im
 [MC4000-Implementierungsplan](MC4000_IMPLEMENTATION_PLAN.md) (Stand 2026-11-02).
 Ergaenzendes Backlog, noch keine Implementierung der dort offenen Slices.
 
+MC4000-Fortschreibung: S1 hardwarebestaetigt; S2-S6 implementiert und lokal
+automatisiert geprueft (Modifier/Pitch, Sync/Loops, Pads, temporaerer CUE/Stutter,
+Browse/LOAD). Details, Grenzen und Pruefnachweise stehen im
+[Implementierungsplan](MC4000_IMPLEMENTATION_PLAN.md) und im gemeinsamen
+[Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
+Nach unzuverlaessigen QWEN-/DeepSeek-Versuchen wurde der vom Nutzer
+autorisierte Fuenf-Slice-Fallback S2-S6 direkt umgesetzt. S7-S15 bleiben offen.
+Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
+vorbehalten; Headless-Tests sind kein Ersatz.
+
 The target is a complete professional DJ application. Spikes in the historical checkpoints below describe evaluation work, not the intended finished product. Current builds are development checkpoints; production readiness is not established by compilation or headless tests alone.
 
 Release requires a traceable disposition and acceptance evidence for every FEATURE_CATALOG capability and all 59 numbered UI reference items. Core acceptance includes durable library/session data, reliable transport and cue/loop workflows, tempo/sync, mixer DSP, device/output/headphone routing, hardware integration, recovery and measured performance. Optional/provider-dependent features need explicit supported scope rather than hidden stubs. Windows/macOS builds, sustained physical audio/device tests, visual/usability review and representative music-corpus analysis remain release gates.
