@@ -1,5 +1,81 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S14: four-slot one-shot sampler
+
+SAMPLER opens four independent LOAD/PLAY/STOP/CLEAR rows, STOP ALL and a global
+level. Each slot has one voice: PLAY always restarts from the beginning, release
+is ignored, EOF stops without looping. Four slots may overlap; rapid retriggers
+replace their slot's voice rather than spawning more. There is no sampler
+beat-sync, keylock, per-deck FX assignment or Serato pad-mode parity in S14.
+GUI playback is independent of deck transport/pitch/crossfader. The bus is added
+after deck FX and before logical master metering/physical output routing.
+It sends stereo only to logical1/2 (averaged mono on a mono output); cue3/4 is
+untouched. Master headphone mix/Split right can include sampler audio, while
+pre-fader Cue-only contains deck audio alone.
+
+Channel16 Note33-36 starts slots1-4, shifted Note40-43 stops the corresponding
+slot, CC26 controls global0-100% level. NoteOn>0 acts, NoteOn0/NoteOff do not
+retrigger. Level uses a sixth coalesced absolute-control slot before transport,
+so knob storms do not fill the transport queue. MIDI recovery/overflow/disconnect
+stops MIDI-owned voices; GUI-owned one-shots remain independent. Explicit Stop
+always stops its target. Output failure stops all; reconstruction stops the old
+bank and reloads saved paths into the new output format without autoplay.
+Physical sampler-pad LEDs/modes remain part of S15/native qualification.
+
+Samples decode/prepare on a background thread using the shared bounded deck
+codec path, without waveform/BPM analysis. Mono/stereo8-192kHz only, at most10s
+and480000 source frames per slot; higher rates reach the frame cap earlier.
+Finite float samples above full scale are attenuated to peak1; quieter samples
+keep their gain. Each voice gets fixed25% headroom, global level defaults50%.
+Thus the isolated sampler sum fits full scale at maximum level; the combined
+master can still clip when decks/FX are added, and existing master meters apply.
+Native-rate linear interpolation preserves natural playback duration across
+output rates; it is not an independently qualified mastering resampler.
+
+Start/retrigger/stop and global level changes use bounded fades up to5ms. Short
+clips shorten their fades, including a valid single-frame clip. Natural EOF
+fades its end. Retrigger/stop blends from the previous output sample, not another
+unbounded tail voice; this is a held-sample dezipper, not a general click-free
+musical-transition guarantee. All command effects use complete output frames.
+
+Four fixed stereo AtomicU32 buffers are allocated before the bus is attached:
+15,360,000 PCM bytes total plus allocator/metadata overhead, including empty
+slots. Decoded and stereo-preparation workspaces are bounded separately. The
+persistent bus never adds/removes a source or releases sample buffers on a play,
+stop, clear or replacement event. Idle voices read only their command counter.
+The render path does no file I/O, allocation/deallocation, mutex waiting or task
+spawning. It reads bounded versioned atomic snapshots and uses private fixed
+voice state; invalid/busy generations fade silent without spinning. A generation
+also tags PLAY so an old trigger cannot start newly loaded/restored PCM.
+
+Only preparation workers write PCM. An odd sequence is an exclusive replacement
+marker: a cancelled older copy and its successor serialize on workers with a
+bounded retry wait, never on the audio thread. Readers validate the sequence and
+generation again after stereo reads. Clear, bank reload, output reconstruction
+and controller drop invalidate late results. Failed/cancelled decode restores
+the previous availability and preserves its path, while a cleared tombstone
+cannot be resurrected by rollback. Native dialogs/OS I/O cannot be force-closed;
+cancellation rejects their results when they return. No unsafe code/dependency.
+
+The library worker stores version1 sampler_v1 metadata (four absolute paths and
+level, max16KiB) in SQLite17; PCM remains in memory/source files, not the DB.
+Saves use the existing bounded worker channel, schema-checked transactions and
+snapshot acknowledgements; close explicitly flushes the latest sampler snapshot
+before the library checkpoint. Metadata restore loads clips serially without
+playing them. Missing/oversized/unreadable files remain visible as unavailable;
+Clear or Load repairs a slot. Missing paths are preserved for later repair;
+library track relocation does not automatically relink this separate bank.
+Malformed/oversized bank metadata is preserved and sampler edits stay session-only.
+
+Tests cover four-voice headroom, mono/stereo input, stereo master/cue routing
+and output-rate duration,
+retrigger/stop/EOF, single-frame scheduling, worker publication/clear rollback,
+concurrent reader/writer and overlapping replacement workers, float normalization
+and nonfinite/length rejection, MIDI/GUI ownership/recovery, SQLite/latest flush,
+missing files/restart/output reconstruction, two-size panel bounds, and measured
+render heap/optimized deadlines. Native listening, controller timing, sustained
+latency and mode/LED qualification remain open.
+
 ## MC4000 S13: three fixed serial FX slots
 
 Each deck has a fixed post-fader chain1->2->3. Each slot independently selects

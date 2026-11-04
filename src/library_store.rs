@@ -1085,6 +1085,40 @@ struct Store {
     _locks: [File; 2],
 }
 impl Store {
+    fn read_sampler(&self) -> Result<crate::sampler::Preferences, String> {
+        let raw:Option<String>=self.connection.query_row("SELECT CASE WHEN length(CAST(value AS BLOB))<=16384 THEN value ELSE '' END FROM library_meta WHERE key='sampler_v1'",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        let Some(raw) = raw else {
+            return Ok(Default::default());
+        };
+        let prefs: crate::sampler::Preferences =
+            serde_json::from_str(&raw).map_err(|e| format!("Invalid sampler bank: {e}"))?;
+        prefs.validate()?;
+        Ok(prefs)
+    }
+    fn save_sampler(&mut self, prefs: &crate::sampler::Preferences) -> Result<(), String> {
+        prefs.validate()?;
+        let raw = serde_json::to_string(prefs).map_err(|e| e.to_string())?;
+        if raw.len() > 16384 {
+            return Err("Sampler bank exceeds16KiB".into());
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let app: i32 = tx
+            .pragma_query_value(None, "application_id", |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let version: i32 = tx
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if app != APPLICATION_ID || version != SCHEMA_VERSION {
+            return Err("Library schema changed; sampler not saved".into());
+        }
+        tx.execute("INSERT INTO library_meta(key,value) VALUES('sampler_v1',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[raw]).map_err(|e|e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        self.backup_pending = true;
+        Ok(())
+    }
     fn open(requested: PathBuf) -> Result<(Self, Library, String), String> {
         let (path, legacy) = paths(&requested)?;
         fs::create_dir_all(path.parent().ok_or("Library path has no parent")?)
@@ -1771,6 +1805,7 @@ impl Store {
 }
 
 pub struct LoadedLibrary {
+    pub sampler_preferences: Result<crate::sampler::Preferences, String>,
     pub table_columns: Result<crate::table_columns::TableColumns, String>,
     pub startup_audio: Result<crate::audio_devices::StartupSelection, String>,
     pub fx_preferences: Result<crate::delay_fx::FxPreferences, String>,
@@ -1783,12 +1818,17 @@ pub struct LoadedLibrary {
     pub output_routes: Result<OutputRoutes, String>,
 }
 pub enum Event {
+    SamplerSaved(Result<crate::sampler::Preferences, String>),
     StartupAudioSaved(Result<crate::audio_devices::StartupSelection, String>),
     Loaded(Result<Box<LoadedLibrary>, String>),
     Saved(Result<(), String>),
     CheckpointFailed(String),
 }
 enum Command {
+    SaveSampler(
+        crate::sampler::Preferences,
+        Option<mpsc::Sender<Result<(), String>>>,
+    ),
     SaveStartupAudio(crate::audio_devices::StartupSelection),
     #[cfg(test)]
     Save(Catalog),
@@ -1817,6 +1857,20 @@ pub struct Worker {
     join: JoinHandle<Result<(), String>>,
 }
 impl Worker {
+    pub fn save_sampler(&self, prefs: crate::sampler::Preferences) -> Result<(), String> {
+        self.tx
+            .try_send(Command::SaveSampler(prefs, None))
+            .map_err(|e| e.to_string())
+    }
+    pub fn flush_sampler(&self, prefs: crate::sampler::Preferences) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(Command::SaveSampler(prefs, Some(tx)))
+            .map_err(|e| e.to_string())?;
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .map_err(|e| e.to_string())?
+    }
+
     pub fn save_startup_audio(
         &self,
         selection: crate::audio_devices::StartupSelection,
@@ -1852,6 +1906,7 @@ impl Worker {
                     table_columns: store.read_table_columns(),
                     startup_audio: startup_selection(&store.connection),
                     fx_preferences: store.read_fx_preferences(),
+                    sampler_preferences:store.read_sampler(),
                     deck_session,
                     library,
                     note,
@@ -1887,6 +1942,11 @@ impl Worker {
                         }
                     };
                     match command {
+                        Command::SaveSampler(prefs,reply)=>{
+                            let result=store.save_sampler(&prefs);
+                            if let Some(reply)=reply{let _=reply.send(result.clone());}
+                            let _=events_tx.send(Event::SamplerSaved(result.map(|()|prefs)));
+                        }
                         Command::SaveStartupAudio(selection)=>{
                             let result=(|| {
                                 selection.validate()?;
@@ -2196,6 +2256,64 @@ mod tests {
         assert!(store.read_table_columns().is_err());
     }
 
+    #[test]
+    fn sampler_bank_roundtrip_limits_corruption_and_worker_flush() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let (mut store, _, _) = Store::open(db.clone()).unwrap();
+        let mut prefs = crate::sampler::Preferences {
+            gain: 0.75,
+            ..Default::default()
+        };
+        prefs.paths[0] = Some(dir.path().join("missing-sample.wav"));
+        store.save_sampler(&prefs).unwrap();
+        assert_eq!(store.read_sampler().unwrap(), prefs);
+        drop(store);
+        let worker = Worker::start(db.clone()).unwrap();
+        let Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+            panic!("library failed")
+        };
+        assert_eq!(loaded.sampler_preferences.unwrap(), prefs);
+        prefs.gain = 0.25;
+        worker.save_sampler(prefs.clone()).unwrap();
+        prefs.gain = 0.9;
+        worker.flush_sampler(prefs.clone()).unwrap();
+        worker.close_delta(None).unwrap();
+        let (mut store, _, _) = Store::open(db).unwrap();
+        assert_eq!(store.read_sampler().unwrap(), prefs);
+        let raw = "{\"version\":99}";
+        store
+            .connection
+            .execute(
+                "UPDATE library_meta SET value=?1 WHERE key='sampler_v1'",
+                [raw],
+            )
+            .unwrap();
+        assert!(store.read_sampler().is_err());
+        let empty = crate::library::CatalogDelta {
+            prep_queue: None,
+            revision: 0,
+            tracks: vec![],
+            crates: None,
+            memberships: vec![],
+            history: vec![],
+        };
+        store.save_session_state(&empty, None, None, None).unwrap();
+        let saved: String = store
+            .connection
+            .query_row(
+                "SELECT value FROM library_meta WHERE key='sampler_v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, raw);
+        prefs.gain = f32::NAN;
+        assert!(store.save_sampler(&prefs).is_err());
+        store.connection.execute_batch("CREATE TRIGGER reject_sampler BEFORE INSERT ON library_meta WHEN NEW.key='sampler_v1' BEGIN SELECT RAISE(ABORT,'injected sampler failure'); END;").unwrap();
+        prefs.gain = 0.5;
+        assert!(store.save_sampler(&prefs).is_err());
+    }
     #[test]
     fn fx_preferences_roundtrip_and_combined_transaction_rollback() {
         let dir = tempfile::tempdir().unwrap();

@@ -320,6 +320,7 @@ pub struct AudioController {
     startup_audio_saving: Cell<bool>,
     ui: slint::Weak<AppWindow>,
     engine: Rc<RefCell<Rc<DualDeckEngine>>>,
+    sampler: RefCell<crate::sampler::State>,
     picker: TrackPicker,
     library_picker: LibraryPicker,
     library_folder_picker: RefCell<Option<LibraryFolderPicker>>,
@@ -491,6 +492,7 @@ impl AudioController {
             saved_startup_audio: RefCell::new(Default::default()),
             startup_audio_saving: Cell::new(false),
             ui: ui.as_weak(),
+            sampler: RefCell::new(crate::sampler::State::new(engine.sampler())),
             engine: Rc::new(RefCell::new(engine)),
             picker,
             library_picker,
@@ -982,6 +984,31 @@ impl AudioController {
                         c.sync_fx_timing(id);
                         c.observe_quantize_preferences();
                     }
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_sampler_action(move |slot, action, hardware| {
+            if let Some(c) = weak.upgrade() {
+                if let Err(error) = c.sampler_action(slot, action, hardware) {
+                    c.sampler_status(error);
+                }
+                c.publish_sampler();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_sampler_level(move || {
+            if let Some(c) = weak.upgrade() {
+                if let Some(ui) = c.ui.upgrade() {
+                    let gain = ui.get_sampler_gain() / 100.;
+                    if c.storage_ready.get() {
+                        let result = c.engine.borrow().sampler().set_gain(gain);
+                        match result {
+                            Ok(()) => c.sampler.borrow_mut().preferences.gain = gain,
+                            Err(error) => c.sampler_status(error),
+                        }
+                    }
+                    c.publish_sampler();
                 }
             }
         });
@@ -2754,6 +2781,15 @@ impl AudioController {
     /// controller disconnects, reconnects, or the bounded MIDI queue overflows so no stale
     /// hold persists. GUI-held nudges are left untouched and remain effective.
     pub fn mc4000_release_holds(&self) {
+        {
+            let mut s = self.sampler.borrow_mut();
+            for i in 0..4 {
+                if s.owners[i] == 2 {
+                    s.shared.stop(i);
+                    s.owners[i] = 0;
+                }
+            }
+        }
         for index in 0..2 {
             if self.fx_tap_owner.get()[index] == 2 {
                 self.cancel_fx_tap(index);
@@ -4963,6 +4999,16 @@ impl AudioController {
             .as_ref()
             .map(|w| w.events.try_recv());
         match event {
+            Some(Ok(crate::library_store::Event::SamplerSaved(result))) => {
+                self.sampler.borrow_mut().saving = false;
+                match result {
+                    Ok(prefs) => {
+                        self.sampler.borrow_mut().saved = prefs;
+                        self.sampler_status("Sampler bank saved".into());
+                    }
+                    Err(error) => self.sampler_status(format!("Sampler bank not saved: {error}")),
+                }
+            }
             Some(Ok(crate::library_store::Event::StartupAudioSaved(result))) => {
                 self.startup_audio_saving.set(false);
                 if let Some(ui) = self.ui.upgrade() {
@@ -4991,6 +5037,7 @@ impl AudioController {
                 match result {
                     Ok(loaded) => {
                         let crate::library_store::LoadedLibrary {
+                            sampler_preferences,
                             table_columns,
                             startup_audio,
                             deck_session,
@@ -5045,6 +5092,7 @@ impl AudioController {
                             }
                         }
                         self.restore_quantize_preferences(quantize_preferences);
+                        self.restore_sampler(sampler_preferences);
                         let output_warning = self.restore_output_routes(output_routes);
                         let fx_warning = self.restore_fx(fx_preferences);
                         self.library_generation.set(
@@ -5307,6 +5355,20 @@ impl AudioController {
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
+        {
+            let mut s = self.sampler.borrow_mut();
+            s.shared.stop_all();
+            s.cancel_load();
+            s.restore.clear();
+        }
+        if self.storage_ready.get() {
+            let s = self.sampler.borrow();
+            if s.writable && s.preferences != s.saved {
+                if let Some(worker) = self.persistence.borrow().as_ref() {
+                    worker.flush_sampler(s.preferences.clone())?;
+                }
+            }
+        }
         self.analysis_batch.borrow_mut().take();
         for job in self.keylock_jobs.borrow_mut().iter_mut() {
             job.take();
@@ -5430,6 +5492,200 @@ impl AudioController {
             }
             ui.set_status(error.into());
         }
+    }
+    fn sampler_status(&self, message: String) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.set_sampler_status(message.into());
+        }
+    }
+    fn restore_sampler(&self, value: Result<crate::sampler::Preferences, String>) {
+        let mut s = self.sampler.borrow_mut();
+        s.shared.stop_all();
+        s.cancel_load();
+        s.restore.clear();
+        for i in 0..4 {
+            s.shared.clear(i);
+        }
+        match value {
+            Ok(prefs) => {
+                s.preferences = prefs.clone();
+                s.saved = prefs;
+                s.writable = true;
+                self.sampler_status("Sampler bank restored; no autoplay".into());
+            }
+            Err(error) => {
+                s.preferences = Default::default();
+                s.saved = Default::default();
+                s.writable = false;
+                self.sampler_status(format!(
+                    "Sampler session only; saved bank preserved: {error}"
+                ));
+            }
+        }
+        let _ = s.shared.set_gain(s.preferences.gain);
+        for (i, path) in s.preferences.paths.clone().into_iter().enumerate() {
+            if let Some(path) = path {
+                s.restore.push_back((i, path));
+            }
+        }
+    }
+    fn sampler_action(&self, slot: i32, action: i32, hardware: bool) -> Result<(), String> {
+        let slot = usize::try_from(slot)
+            .ok()
+            .filter(|i| *i < 4)
+            .ok_or("Sampler slot must be1-4")?;
+        let mut s = self.sampler.borrow_mut();
+        match action {
+            0 => {
+                if !self.storage_ready.get()
+                    || self.engine.borrow().output_failed()
+                    || self.pending_device_switch.borrow().is_some()
+                    || s.job.as_ref().is_some_and(|j| j.slot == slot)
+                    || s.restore.iter().any(|(i, _)| *i == slot)
+                {
+                    return Err("Sampler unavailable during restore/load/output change".into());
+                }
+                s.shared.play(slot)?;
+                s.owners[slot] = if hardware { 2 } else { 1 };
+            }
+            1 => {
+                s.shared.stop(slot);
+                s.owners[slot] = 0;
+            }
+            2 => {
+                if !self.storage_ready.get()
+                    || self.pending_device_switch.borrow().is_some()
+                    || s.job.is_some()
+                    || !s.restore.is_empty()
+                {
+                    return Err("Finish the current sampler load/restore first".into());
+                }
+                s.job = Some(crate::sampler::Load::start(
+                    s.shared.clone(),
+                    slot,
+                    self.picker.clone(),
+                )?);
+                self.sampler_status(format!("Loading sampler slot{}", slot + 1));
+            }
+            3 => {
+                if let Some(job) = s.job.as_ref().filter(|j| j.slot == slot) {
+                    job.cancel.request();
+                }
+                s.shared.clear(slot);
+                s.preferences.paths[slot] = None;
+                s.restore.retain(|(i, _)| *i != slot);
+                s.owners[slot] = 0;
+            }
+            4 => {
+                s.shared.stop_all();
+                s.owners = [0; 4];
+            }
+            _ => return Err("Invalid sampler action".into()),
+        }
+        Ok(())
+    }
+    fn poll_sampler(&self) {
+        let current = self.engine.borrow().sampler();
+        let mut s = self.sampler.borrow_mut();
+        if !Arc::ptr_eq(&current, &s.shared) {
+            s.shared.stop_all();
+            s.cancel_load();
+            s.restore.clear();
+            s.shared = current;
+            let _ = s.shared.set_gain(s.preferences.gain);
+            for (i, path) in s.preferences.paths.clone().into_iter().enumerate() {
+                if let Some(path) = path {
+                    s.restore.push_back((i, path));
+                }
+            }
+            s.owners = [0; 4];
+            self.sampler_status("Sampler reloading after output change; stopped".into());
+        }
+        if self.engine.borrow().output_failed() {
+            s.shared.stop_all();
+            s.owners = [0; 4];
+        }
+        let result = s.job.as_ref().map(|j| j.result.try_recv());
+        if let Some(result) =
+            result.filter(|r| !matches!(r, Err(std::sync::mpsc::TryRecvError::Empty)))
+        {
+            let job = s.job.take().expect("Sampler job produced this result");
+            match result {
+                Ok(Ok(Some(path)))
+                    if Arc::ptr_eq(&job.shared, &s.shared)
+                        && s.shared.owns(job.slot, job.token) =>
+                {
+                    s.preferences.paths[job.slot] = Some(path);
+                    self.sampler_status(format!("Sampler slot{} ready (stopped)", job.slot + 1));
+                }
+                Ok(Ok(_)) => (),
+                Ok(Err(error)) => {
+                    self.sampler_status(format!("Sampler slot{}: {error}", job.slot + 1))
+                }
+                Err(error) => {
+                    s.shared
+                        .rollback(job.slot, job.token, job.token.wrapping_sub(1));
+                    self.sampler_status(format!("Sampler worker: {error}"));
+                }
+            }
+        }
+        if self.storage_ready.get() && s.job.is_none() {
+            if let Some((slot, path)) = s.restore.pop_front() {
+                match crate::sampler::Load::start(
+                    s.shared.clone(),
+                    slot,
+                    Arc::new(move || Some(path.clone())),
+                ) {
+                    Ok(job) => s.job = Some(job),
+                    Err(error) => self.sampler_status(error),
+                }
+            }
+        }
+        if self.storage_ready.get() && s.writable && !s.saving && s.preferences != s.saved {
+            if let Some(worker) = self.persistence.borrow().as_ref() {
+                match worker.save_sampler(s.preferences.clone()) {
+                    Ok(()) => s.saving = true,
+                    Err(error) => self.sampler_status(format!("Sampler not queued: {error}")),
+                }
+            }
+        }
+        drop(s);
+        self.publish_sampler();
+    }
+    fn publish_sampler(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let s = self.sampler.borrow();
+        ui.set_sampler_ready(self.storage_ready.get() && !self.engine.borrow().output_failed());
+        ui.set_sampler_loading(s.job.is_some() || !s.restore.is_empty());
+        ui.set_sampler_gain(s.preferences.gain * 100.);
+        let rows = (0..4)
+            .map(|i| {
+                let busy = s.job.as_ref().is_some_and(|j| j.slot == i)
+                    || s.restore.iter().any(|(slot, _)| *slot == i);
+                let loaded = s.shared.ready(i);
+                let name = s.preferences.paths[i].as_ref().map_or_else(
+                    || "Empty".into(),
+                    |p| {
+                        p.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    },
+                );
+                crate::SamplerRow {
+                    name: if !loaded && !busy && s.preferences.paths[i].is_some() {
+                        format!("Unavailable: {name}").into()
+                    } else {
+                        name.into()
+                    },
+                    loaded,
+                    busy,
+                    playing: s.shared.active(i),
+                    occupied: s.preferences.paths[i].is_some() || loaded,
+                }
+            })
+            .collect::<Vec<_>>();
+        ui.set_sampler_slots(ModelRc::new(Rc::new(VecModel::from(rows))));
     }
     fn fx_deck(deck: i32) -> Option<DeckId> {
         match deck {
@@ -6457,6 +6713,7 @@ impl AudioController {
         }
     }
     pub fn tick(&self) {
+        self.poll_sampler();
         if let Some(perf) = self.library_perf.borrow().as_ref() {
             let (tracks, both_playing) = self.library_perf_context();
             perf.borrow_mut().tick(
@@ -9343,6 +9600,144 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sampler_gui_midi_recovery_persistence_missing_and_geometry() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let sample = wav_file(8192, 48000 * 2);
+        let sample_path = sample.path().to_path_buf();
+        let pick = sample_path.clone();
+        let ui = AppWindow::new().unwrap();
+        ui.set_mc4000_connected(true);
+        let (mixer, mut output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let c = AudioController::wire(
+            &ui,
+            engine.clone(),
+            Arc::new(move || Some(pick.clone())),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(db.clone()), vec![]);
+        finish_storage(&c);
+        let wait = |c: &AudioController| {
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                c.tick();
+                let s = c.sampler.borrow();
+                if s.job.is_none() && s.restore.is_empty() && !s.saving {
+                    break;
+                }
+                drop(s);
+                assert!(Instant::now() < end);
+                std::thread::yield_now();
+            }
+        };
+        for slot in 0..4 {
+            ui.invoke_sampler_action(slot, 2, false);
+            wait(&c);
+            assert!(engine.sampler().ready(slot as usize));
+        }
+        ui.invoke_sampler_action(0, 0, false);
+        crate::mc4000::apply(&ui, crate::mc4000::decode(&[0x9f, 34, 127]).unwrap());
+        output.by_ref().take(2000).for_each(drop);
+        assert!(engine.sampler().active(0) && engine.sampler().active(1));
+        c.mc4000_release_holds();
+        assert!(engine.sampler().active(0));
+        assert!(!engine.sampler().active(1));
+        crate::mc4000::apply(&ui, crate::mc4000::decode(&[0xbf, 26, 127]).unwrap());
+        assert_eq!(engine.sampler().gain(), 1.);
+        ui.show().unwrap();
+        ui.set_sampler_open(true);
+        c.publish_sampler();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for slot in 1..=4 {
+                for action in ["load", "play", "stop", "clear"] {
+                    let item = control(&ui, &format!("Sampler slot {slot} {action}"));
+                    let p = item.absolute_position();
+                    let size = item.size();
+                    assert!(
+                        size.width > 0.
+                            && size.height > 0.
+                            && p.x >= 0.
+                            && p.y >= 0.
+                            && p.x + size.width <= width + 1.
+                            && p.y + size.height <= height + 1.
+                    );
+                }
+            }
+        }
+        ui.invoke_sampler_action(0, 4, false);
+        assert!((0..4).all(|i| !engine.sampler().active(i)));
+        c.close_library().unwrap();
+        ui.hide().unwrap();
+        drop(c);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), vec![]);
+        finish_storage(&c);
+        wait(&c);
+        assert_eq!(engine.sampler().gain(), 1.);
+        assert!((0..4).all(|i| engine.sampler().ready(i) && !engine.sampler().active(i)));
+        // Device reconstruction reloads the same bank, without starting samples.
+        let (mixer, _new_output) = rodio::mixer::mixer(4, 48000);
+        let replacement = Rc::new(DualDeckEngine::from_mixer(mixer, 4, 48000));
+        *c.engine.borrow_mut() = replacement.clone();
+        c.tick();
+        wait(&c);
+        assert!((0..4).all(|i| replacement.sampler().ready(i) && !replacement.sampler().active(i)));
+        c.close_library().unwrap();
+        drop(c);
+        drop(sample);
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db), vec![]);
+        finish_storage(&c);
+        wait(&c);
+        assert!(!engine.sampler().ready(0));
+        assert!(c.sampler.borrow().preferences.paths[0].is_some());
+        ui.invoke_sampler_action(0, 3, false);
+        assert!(c.sampler.borrow().preferences.paths[0].is_none());
+        assert!(c.sampler.borrow().preferences.paths[1].is_some());
+        c.close_library().unwrap();
+    }
+    #[test]
+    fn sampler_cancelled_late_loader_cannot_resurrect_cleared_slot() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let file = wav_file(8192, 4800);
+        let path = file.path().to_path_buf();
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let gate = std::sync::Mutex::new(receive);
+        let c = AudioController::wire(
+            &ui,
+            engine.clone(),
+            Arc::new(move || {
+                gate.lock().unwrap().recv().unwrap();
+                Some(path.clone())
+            }),
+            Arc::new(|| None),
+        );
+        ui.invoke_sampler_action(0, 2, false);
+        ui.invoke_sampler_action(0, 3, false);
+        send.send(()).unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        while c.sampler.borrow().job.is_some() {
+            c.tick();
+            assert!(Instant::now() < end);
+            std::thread::yield_now();
+        }
+        assert!(!engine.sampler().ready(0));
+        assert!(!engine.sampler().active(0));
+        assert!(c.sampler.borrow().preferences.paths[0].is_none());
+    }
     #[test]
     fn fx_chain_midi_legacy_mode_slots_selection_presets_and_geometry() {
         use crate::fx_chain::Kind;

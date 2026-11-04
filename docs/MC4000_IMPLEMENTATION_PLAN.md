@@ -50,7 +50,7 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 | 26 / 27 | LOAD A/B | **MIDI fehlt.** Selektierten Track laden funktioniert in der GUI; globale LOAD-Noten2/3 fehlen. Bestehenden Schutz spielender/beschaeftigter Decks erhalten. |
 | 26 / 27 | LOAD-Doppeldruck: Instant Doubles | **S7 implementiert.** Bis350ms am Steuerthread; geteilter Track, Softwareposition/Basistempo/Grid/Keylock/Playzustand. Erster Druck normaler Library-LOAD, zweiter ersetzt nur dessen eigenen Job; laufendes Ziel und Konflikte geschuetzt. Ziel-Loops/TempCue zurueckgesetzt, Mixer erhalten. Details im GUI-Inventar, native Abnahme offen. |
 | 26 / 29 | Load Prep / Open Prep | **S8 implementiert.** Eigene persistente Prep Queue mit geordneten Track-IDs; Note27 hinzufuegen, Note16 oeffnen, GUI Entfernen/Up/Down. Prepare-Analyse bleibt getrennt; native Bedienabnahme offen. |
-| 26 / 30-31 | Vier Sampler-Pads, SHIFT Stop, Sample-Pegel | **App/MIDI fehlt.** Kein Sampler mit vier Slots, begrenztem Audio-Mix und Pegelregelung. |
+| 26 / 30-31 | Vier Sampler-Pads, SHIFT Stop, Sample-Pegel | **Implementiert S14:** vier One-Shot-/Restart-Slots, GUI Load/Play/Stop/Clear, Note33-36/40-43 und CC26; fester Masterbus, begrenzte PCM-Puffer und SQLite-Bank ohne Autoplay. |
 | 26 / 32 | Situationsabhaengige Hardware-Pegelanzeigen | **S10 implementiert.** Fader geschlossen: Pre A/B; sobald einer offen: Stereo-Master auf beiden, ausser laufendem Cue bei geschlossenem eigenen Fader. Frischekontrolle statt GUI-Clip-Hold, native LED-Abnahme offen. |
 | 27 / Vorderseite4 | Split Cue | **S10 implementiert.** MON-Checkbox und absolute Note28; Mono-Cue links / Mono-Master rechts auf3/4, Gain/Mix aktiv,5ms Blend und geraetespezifische Profile. Routing-/Formatkonflikte geschuetzt; native Kopfhoererprobe offen. |
 
@@ -133,14 +133,14 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S11 Censor | **Implementiert:** Note16 Hold/Release, eigener Reverse-Kopf und normale vorlaufende Zeitlinie; CENSOR-Anzeige, Loop-Wrap und vorbereiteter Keylock. | Exakte Samples/Phase bei mehreren Tempi, Stereo-/Frame-Kohaerenz, Anfang/EOF, Pause/Seek, Sync-/Scratch-/Cue-Konflikte, Keylock-Pitch, Focus/SHIFT/Recovery und Quellwechsel automatisiert; Heap/optimiertes Renderbudget geprueft. Native Uebergaenge/Hoer-/Latenzabnahme offen. |
 | S12 Musikalische FX-Zeitbasis | **Implementiert:** Millisekunden/Deck-/Tap-BPM,1/16 bis4 Beats, Note4 TAP mit1s Hold-Reset, persistente Timing-/Preset-Felder; vorhandener Delay-DSP bleibt. | Gridsegment/Pitch, Tap-Ausreisser/Timeout/Ownership, Bypass/Resume, Legacy/SQLite/Latest-Ack/Neustart, GUI-Grenzen und Stereo-Rampen/Heap/Release-Budget automatisiert. Native Hoer-/Timing-Abnahme offen. |
 | S13 Drei FX-Slots und Auswahl | **Implementiert:** drei serielle Delay/LP/HP-Slots je Deck, FX1-3/SHIFT-Auswahl und Pegel/Feedback, eigener Legacy-Reglermodus, Kettenpresets und Slot1-Migration. | Impulsreihenfolge, Filter/Cue/History, sechs aktive Slots/Heap/Release-Budget, Format-Speichergrenze, MIDI/GUI-Isolation und Preset-/SQLite-/Device-Neustart automatisiert. Native Uebergaenge/Hoer-/Latenzabnahme offen. |
-| S14 Vier-Slot-Sampler | Offline vorbereitete Samples, bounded Mixer, Play/Stop, Gesamtpegel und GUI. | Polyphonie/Restart-/OneShot-Vertrag festlegen; keine Datei-/Speicherarbeit im Callback, Peaks/Routing, Deck-Isolation, Stop/Disconnect und Neustart. |
+| S14 Vier-Slot-Sampler | **Implementiert:** vier One-Shot-/Restart-Stimmen, vorbereitete Mono-/Stereo-Clips, fester Stereo-Masterbus, globale Pegelregelung und GUI/MIDI; persistente Pfade/Level, kein Autoplay. | Vierfachmix/Headroom, Sampleraten/Frames, Retrigger/Stop/EOF, Cue/Master/Deck-Isolation, Generationen/gleichzeitige Installation, Decodergrenzen, Recovery/SQLite/Neustart/Geraetewechsel und Heap/optimiertes Budget automatisiert; native Hoer-/Timing-Abnahme offen. |
 | S15 Pad-Modus und Gesamtqualifikation | Nur konkret ausgewaehlte App-Modi, S4/S14; weitere Serato-Modi gesondert entscheiden. | Modus/LED/Fokus konsistent, keine verlorenen Releases bei Wechsel; alle Controller-Elemente A/B nach Testmatrix, reale Tracks, Latenz/Langzeit und Recovery messen. |
 
 Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
 autorisierte Fallback: S2-S6 selbst fertigstellen. Separat wurde S7 mit vom
 Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8 folgt als eigener Queue-Slice.
-S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11 ergaenzt Censor, S12 die musikalische Delay-Zeitbasis, S13 drei FX-Slots; S14-S15 bleiben offen. Der
+S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11 ergaenzt Censor, S12 die musikalische Delay-Zeitbasis, S13 drei FX-Slots und S14 den Vier-Slot-Sampler; S15 bleibt offen. Der
 Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits

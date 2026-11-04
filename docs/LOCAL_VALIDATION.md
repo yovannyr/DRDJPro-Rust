@@ -1806,3 +1806,81 @@ Final `cargo build --workspace --release --locked` passed (1m48s).
 inventory with the implemented bounded effect types and remaining acceptance.
 No runtime changes followed the final green full suite/Clippy/optimized checks.
 Unrelated untracked build_output.txt and test_output.txt remain excluded.
+
+## MC4000 S14 four-slot sampler (2026-11-04)
+
+Implemented with the explicitly authorized GPT-6.1 Sol S13-S15 fallback; no
+independent review under the S8-S15 waiver. S13 remains an unpushed parent;
+S14 publication is local-only because the user deferred the S13 push.
+
+Four fixed one-shot voices, retrigger-in-slot, target Stop/Clear and Stop All.
+GUI loading uses the existing audio picker on a preparation thread. Channel16
+notes33-36 start,40-43 stop; releases do not trigger. CC26 level joins the
+coalesced absolute controls. GUI/MIDI voice ownership prevents MIDI recovery
+from stopping unrelated GUI one-shots. Output failure stops all; output
+reconstruction reloads remembered files without autoplay. The sampler bus enters
+the logical master after deck FX and before peak metering/output routing, bypasses
+deck faders/crossfader and does not enter pre-fader cue. Headphone master mix
+includes it, as verified on the real offline engine graph.
+
+The existing bounded codec/recovery/cancellation path was extracted as
+decode_pcm and reused without sample waveform/BPM analysis. Mono/stereo8-192kHz,
+max10s and480000 source frames, finite PCM, attenuation of over-full-scale float
+input only. Four fixed stereo AtomicU32 banks occupy15,360,000 PCM bytes, plus
+metadata/allocator overhead and separately bounded decode/preparation workspaces.
+Four25%-weighted voices fit full scale in the isolated sampler bus at maximum
+level; combined deck/FX master peaks can still clip. Natural-rate interpolation
+and up-to5ms convex start/retrigger/stop/level transitions are bounded; short
+clips adapt the fade, including one-frame input. No general click-free/native
+fidelity guarantee follows from these tests.
+
+One persistent source and fixed voice arrays avoid dynamic callback source
+replacement, allocation or sample-buffer reclamation. Versioned atomic PCM
+reads reject writer overlap and stale generations; PLAY is tagged with its
+asset generation. Clear/cancel tombstones survive failed-loader rollback.
+Overlapping old cancelled/new replacement writers serialize using the odd
+sequence marker with bounded retries on preparation threads only. The audio
+thread never waits/spins. Its buffers live through output shutdown; native
+dialogs/OS I/O remain cooperatively cancellable when they return.
+
+SQLite17 gains only sampler_v1 metadata: version, four paths and gain, bounded
+to16KiB. Existing library-worker commands perform schema-checked transactions,
+snapshot acknowledgements and explicit latest-state flush before close. No PCM
+blob or autoplay state is stored. Malformed/oversized bank data is preserved,
+session-only on error; missing files remain unavailable until Load/Clear repair.
+Library relocation does not silently relink the independent sampler bank.
+
+Eleven new tests cover four-voice headroom/routing/retrigger/Stop/EOF, one-frame
+command scheduling,8/48/192kHz duration and stereo coherence, concurrent PCM
+publication/worker exclusion, generation/rollback/cancel behavior, bounded
+decode/nonfinite float/normalization/length checks, MIDI address/release isolation,
+GUI versus MIDI recovery, master/cue and deck isolation, SQLite/corruption/flush,
+restart/missing-file/output reconstruction, and850x740/1280x860 panel bounds.
+Initial test compilation found fixture/peak API assumptions; corrected these
+without runtime suppression. Clippy's default-initializer/as_chunks findings
+were fixed. The added one-frame test initially read the cached right sample;
+aligned it to the next complete stereo frame, preserving the scheduling contract.
+
+Final `cargo fmt --all -- --check` and strict
+`cargo clippy --workspace --locked --all-targets -- -D warnings` passed.
+`cargo test --workspace --locked --quiet`:490 application plus five DSP tests
+(495 unique passes), zero failures, six hardware qualifications ignored;
+application suite51.46s. Native listening/pad timing/sustained latency and S15
+mode/LED qualification remain open.
+
+`cargo test --workspace --release --locked sampler -- --test-threads=1 --nocapture`
+passed all11 focused tests in0.46s after1m42s optimized compilation. The original
+Instant-Double Keylock/heap/100ms deadline test also passed in Release (0.06s).
+These are repeat checks of already-counted tests. Measured100ms/48kHz/4-channel
+blocks: full engine with four sampler voices, deck playback and headphone master
+mix4.6567ms; sampler core with commands and prebuilt PCM installation0.4741ms.
+All measured allocation/reallocation/deallocation counts were zero; unchanged
+100ms optimized deadlines passed. Installation is worker-side in the application;
+these timings exclude decode/file dialogs and are offline workload measurements,
+not physical device latency or exhaustive/sustained performance qualification.
+
+Final `cargo build --workspace --release --locked` passed (1m24s), as did final
+format/diff checks. Runtime sources were unchanged after the final full suite,
+Clippy and optimized tests. S14 is committed locally only; no independent review
+or push was performed. Existing untracked build_output.txt and test_output.txt
+remain excluded.

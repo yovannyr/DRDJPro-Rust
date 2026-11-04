@@ -36,6 +36,7 @@ mod playback;
 mod playback_speed;
 mod preferences;
 mod render_bus;
+mod sampler;
 mod saved_loops;
 mod sync_control;
 mod table_columns;

@@ -13,6 +13,8 @@ pub enum Command {
     Stutter(usize),
     HeadphoneCue(usize),
     SplitCue(bool),
+    Sampler(usize, bool),
+    SamplerLevel(u8),
     Monitor(usize, u8),
     Fader(usize, u8),
     Crossfader(u8),
@@ -108,6 +110,11 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         (0x90, 0..=1, 27, 1..=127) => Some(Command::HeadphoneCue(channel as usize)),
         (0xb0, 0..=1, 28, value) => Some(Command::Fader(channel as usize, value)),
         (0xb0, 15, 8, value) => Some(Command::Crossfader(value)),
+        (0x90, 15, note @ 33..=36, 1..=127) => Some(Command::Sampler(usize::from(note - 33), true)),
+        (0x90, 15, note @ 40..=43, 1..=127) => {
+            Some(Command::Sampler(usize::from(note - 40), false))
+        }
+        (0xb0, 15, 26, value) => Some(Command::SamplerLevel(value)),
         (0xb0, 15, 12..=13, value) => Some(Command::Monitor(usize::from(bytes[1] - 12), value)),
         // S2 modifier and pitch: SHIFT on channel16 (nibble15), range/bend on deck channels.
         (0x90, 15, 50, value) => Some(Command::Shift(value != 0)),
@@ -376,7 +383,7 @@ pub struct Input {
     feedback: Feedback,
     buttons: Receiver<(std::time::Instant, Command)>,
     accept_buttons_after: std::time::Instant,
-    levels: Arc<[AtomicU8; 5]>,
+    levels: Arc<[AtomicU8; 6]>,
     fx_levels: Arc<[AtomicU8; 6]>,
     eq_levels: Arc<[AtomicU8; 10]>,
     pitch_faders: Arc<[AtomicU16; 2]>,
@@ -445,6 +452,9 @@ impl Input {
                                 values[deck].store(value, Ordering::Release)
                             }
                             Command::Crossfader(value) => values[2].store(value, Ordering::Release),
+                            Command::SamplerLevel(value) => {
+                                values[5].store(value, Ordering::Release)
+                            }
                             Command::Monitor(index, value) => {
                                 values[3 + index].store(value, Ordering::Release)
                             }
@@ -574,10 +584,12 @@ impl Input {
             }
         }
         // Coalesced levels are applied before transport in this UI tick.
-        for i in 0..5 {
+        for i in 0..6 {
             let value = self.levels[i].swap(128, Ordering::AcqRel);
             if value < 128 {
-                apply(if i >= 3 {
+                apply(if i == 5 {
+                    Command::SamplerLevel(value)
+                } else if i >= 3 {
                     Command::Monitor(i - 3, value)
                 } else if i == 2 {
                     Command::Crossfader(value)
@@ -824,6 +836,13 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         return;
     }
     match command {
+        Command::Sampler(slot, play) => {
+            ui.invoke_sampler_action(slot as i32, if play { 0 } else { 1 }, true)
+        }
+        Command::SamplerLevel(value) => {
+            ui.set_sampler_gain(f32::from(value) * 100. / 127.);
+            ui.invoke_sampler_level();
+        }
         Command::SplitCue(enabled) => {
             ui.set_monitor_split(enabled);
             ui.invoke_monitor_changed();
@@ -1216,7 +1235,7 @@ mod tests {
             }
         }
         assert_eq!(decode(&[0xb2, 22, 64]), None);
-        assert_eq!(decode(&[0xbf, 26, 64]), None);
+        assert_eq!(decode(&[0xbf, 26, 64]), Some(Command::SamplerLevel(64)));
         assert_eq!(decode(&[0x90, 22, 64]), None);
         let values = std::array::from_fn(|_| AtomicU8::new(128));
         values[0].store(0, Ordering::Release);
@@ -1843,6 +1862,38 @@ mod tests {
         }
         assert_eq!(decode(&[0x92, 16, 127]), None);
         assert_eq!(decode(&[0x9f, 16, 127]), Some(Command::BrowserAction(16)));
+    }
+    #[test]
+    fn sampler_manufacturer_pads_stop_level_and_release_isolation() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        let last = std::rc::Rc::new(std::cell::Cell::new((-1, -1, false)));
+        let capture = last.clone();
+        ui.on_sampler_action(move |slot, action, hardware| capture.set((slot, action, hardware)));
+        for slot in 0..4u8 {
+            assert_eq!(
+                decode(&[0x9f, 33 + slot, 127]),
+                Some(Command::Sampler(slot as usize, true))
+            );
+            assert_eq!(
+                decode(&[0x9f, 40 + slot, 127]),
+                Some(Command::Sampler(slot as usize, false))
+            );
+            for note in [33 + slot, 40 + slot] {
+                assert_eq!(decode(&[0x9f, note, 0]), None);
+                assert_eq!(decode(&[0x8f, note, 127]), None);
+            }
+            apply(&ui, decode(&[0x9f, 33 + slot, 127]).unwrap());
+            assert_eq!(last.get(), (i32::from(slot), 0, true));
+            apply(&ui, decode(&[0x9f, 40 + slot, 127]).unwrap());
+            assert_eq!(last.get(), (i32::from(slot), 1, true));
+        }
+        assert_eq!(decode(&[0x92, 33, 127]), None);
+        assert_ne!(decode(&[0x90, 33, 127]), Some(Command::Sampler(0, true)));
+        for value in [0, 64, 127] {
+            apply(&ui, decode(&[0xbf, 26, value]).unwrap());
+            assert!((ui.get_sampler_gain() - f32::from(value) * 100. / 127.).abs() < 1e-5);
+        }
     }
     #[test]
     fn manufacturer_messages_ignore_release_shift_and_other_channels() {

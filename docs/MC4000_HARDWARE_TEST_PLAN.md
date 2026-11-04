@@ -13,7 +13,8 @@ S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
 implementiert; S8 ergaenzt die persistente Prep Queue, S9 Navigation/Loop-Jog.
 S10 ergaenzt Split Cue/kontextuelle Hardwaremeter, S11 momentanes Censor.
 S12 ergaenzt musikalische Delay-Zeitbasis/Tap/Reset, S13 drei serielle FX-Slots.
-S14-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S13
+S14 ergaenzt den Vier-Slot-Sampler. S15 bleibt **NOT IMPLEMENTED**.
+Native Abnahmen fuer S2-S14
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -77,8 +78,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S12-02 Tap | Regelmaessig tappen, Ausreisser/Timeout, Taste halten zum Reset | Ab3 kurzen Taps feste40-240BPM, Median bis4 Intervalle, Bounce<250ms ignoriert, Gap>1.5s startet neu. Hold>=1s setzt genau einmal auf Deck-BPM, ohne Grid expliziter Bypass. NoteOn0/NoteOff, GUI/HW-Besitz, Focus/Panel/Recovery und Profil-/Preset-Neustart pruefen. |
 | S13-01 Slots | FX1-3 einzeln aktivieren, Pegel/SHIFT-Auswahl bewegen | Drei serielle Delay/LP/HP-Slots unabhaengig aktivieren. Legacy-Reglermodus pruefen, dann sichtbar auf Slot-Intensitaeten umstellen; SHIFT-Tasten waehlen Typ, SHIFT-Regler Delay-Feedback. LEDs folgen aktivem DSP, GUI zeigt alle Zustaende; anderes Deck unveraendert. |
 | S13-02 Migration | Altes Delayprofil laden, Slots speichern/Neustart, Bypass | Alte Werte in Slot1, andere aus; alte Presets ebenso, neue Presets ganze Kette. Typ-/Bypass-Wechsel mit Musik auf Pegelspruenge testen; Delayhistorie bleibt bei Pause/Trackwechsel erhalten. Einstellungen nach Geraetewechsel erhalten, Historien neu. Speichergrenze64MiB/Deck; native Dauerlast/Feedback-Peaks pruefen. |
-| S14-01 Sampler | Vier verschiedene Slots starten, gemeinsam triggern, SHIFT Stop | Richtiger Slot, begrenzte Polyphonie, Stop nur Zielslot; dokumentierter OneShot/Restart-Vertrag. |
-| S14-02 Level | Samplerpegel0/halb/voll waehrend Deckwiedergabe | Nur Samplebus aendert Pegel; Decktransport unveraendert; kein Clipping bei vorgesehenem Headroom. |
+| S14-01 Sampler | Vier verschiedene Slots starten, gemeinsam triggern, SHIFT Stop | Note33-36 One-Shot/Restart (Release ohne Wirkung), Note40-43 Stop nur Zielslot. Max4 Stimmen, bis5ms Uebergaenge, kein Loop/Tempo-Sync. GUI- und MIDI-Besitz bei Disconnect/Overflow trennen; keine spaeten Starts nach Clear/Restore. Sampler-Pad-LEDs erst S15 qualifizieren. |
+| S14-02 Level | Samplerpegel0/halb/voll waehrend Deckwiedergabe | CC26/GUI beeinflusst nur Samplebus; Decktransport/Crossfader/FX unabhaengig.25% Headroom pro Stimme; Master kann mit Decks/FX weiter clippen. Cue-only ohne Sampler, Master-Mix/Split rechts mit Sampler. Bank-Neustart/fehlende Datei/Geraetewechsel: neu laden, stets gestoppt. Auf Klicks und Dauerlatenz pruefen. |
 | S15-01 PadMode | Alle implementierten Modi wechseln, auch waehrend Hold | Eindeutige GUI-/Pad-/LED-Zuordnung; keine aktive Stimme/Geste bleibt unerwartet eingerastet. |
 | S15-02 Unsupported | Nicht implementierte Sonder-/Shiftvarianten pruefen | Keine success-shaped Platzhalter; klare Anzeige oder nachweislich nicht belegte Funktion. |
 

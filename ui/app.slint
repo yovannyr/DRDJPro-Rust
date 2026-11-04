@@ -7,6 +7,7 @@ export struct BeatLine { position: float, downbeat: bool, first: bool, warp-mark
 export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, prepare-duration: string, bpm: string, key: string, gain: string, analysis-status: string, metadata-error: string, format: string, path: string, available: bool }
 export struct TableColumn { id: int, title: string, sort-label: string, visible: bool, width: float }
 export enum DeckView { training, virtual }
+export struct SamplerRow {name:string,loaded:bool,busy:bool,playing:bool,occupied:bool}
 
 component VirtualPlatter inherits Rectangle {
     in property <string> deck-label;
@@ -1273,7 +1274,7 @@ export component AppWindow inherits Window {
     in property <string> library-performance;
     pure callback external-drop-target(float, float) -> int;
     external-drop-target(px, py) => {
-        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open {
+        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open {
             return -1;
         }
         if px >= left-deck.absolute-position.x / 1px && px < (left-deck.absolute-position.x + left-deck.width) / 1px
@@ -1417,6 +1418,14 @@ export component AppWindow inherits Window {
     in property <bool> fx-time-available-a:true;
     in property <bool> fx-time-available-b:true;
     in property <bool> fx-chain-ready;
+    in-out property <bool> sampler-open:false;
+    in property <bool> sampler-ready;
+    in property <bool> sampler-loading;
+    in property <[SamplerRow]> sampler-slots;
+    in-out property <float> sampler-gain:50;
+    in property <string> sampler-status:"Sampler ready (session only)";
+    callback sampler-action(int,int,bool);
+    callback sampler-level();
     in property <string> fx-summary-a;
     in property <string> fx-summary-b;
     in-out property <int> fx-selected-a;
@@ -1829,10 +1838,11 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding: 4px; spacing: 8px;
                 Text { text: "A"; color: #36c9ef; vertical-alignment: center; }
-                Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.eq-open = !root.eq-open; } }
-                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;}}
-                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.monitor-open=!root.monitor-open;root.audio-device-open=false;}}
-                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
+                Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.sampler-open=false;root.eq-open = !root.eq-open; } }
+                Button {text:"SAMPLER";accessible-label:"Show sampler";enabled:root.audio-enabled;clicked=>{root.sampler-open=!root.sampler-open;root.fx-open=false;root.monitor-open=false;root.audio-device-open=false;}}
+                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;root.sampler-open=false;}}
+                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.monitor-open=!root.monitor-open;root.audio-device-open=false;root.sampler-open=false;}}
+                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.sampler-open=false;root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -2032,6 +2042,25 @@ export component AppWindow inherits Window {
             Text {text:root.monitor-split ? "CUE mono L ← BALANCE " + round(root.monitor-mix) + "% → MASTER mono R" : "CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:#edf2fa;}
             Slider {accessible-label:"Headphone cue master mix";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-mix;changed=>{root.monitor-changed();}}
             Text {text:"Settings follow audio profile status. MC4000 Monitor Level / Pan control these sliders.";color:#a6b4c8;}
+        }
+    }
+    if root.sampler-open : Rectangle {
+        x:16px;y:60px;width:parent.width - 32px;height:340px;
+        background:#0b1119;border-width:1px;border-color:#53657d;
+        accessible-role:groupbox;accessible-label:"Four-slot sampler";
+        VerticalLayout {
+            padding:10px;spacing:8px;
+            HorizontalLayout {Text {text:root.sampler-status;color:#edf2fa;overflow:elide;}Button {text:"STOP ALL";accessible-label:"Stop all sampler slots";clicked=>{root.sampler-action(0,4,false);}}Button {text:"CLOSE";accessible-label:"Close sampler";clicked=>{root.sampler-open=false;}}}
+            for slot[index] in root.sampler-slots : HorizontalLayout {
+                Text {text:(index+1)+" · "+slot.name+(slot.playing ? " · PLAYING" : slot.busy ? " · PREPARING" : "");color:slot.playing ? #ffc15e : #edf2fa;overflow:elide;horizontal-stretch:1;}
+                Button {text:"LOAD";accessible-label:"Sampler slot "+(index+1)+" load";enabled:root.sampler-ready && !root.sampler-loading;clicked=>{root.sampler-action(index,2,false);}}
+                Button {text:"PLAY";accessible-label:"Sampler slot "+(index+1)+" play";enabled:root.sampler-ready && slot.loaded && !slot.busy;clicked=>{root.sampler-action(index,0,false);}}
+                Button {text:"STOP";accessible-label:"Sampler slot "+(index+1)+" stop";clicked=>{root.sampler-action(index,1,false);}}
+                Button {text:"CLEAR";accessible-label:"Sampler slot "+(index+1)+" clear";enabled:slot.occupied || slot.busy;clicked=>{root.sampler-action(index,3,false);}}
+            }
+            Text {text:"SAMPLER LEVEL "+round(root.sampler-gain)+"% · One-shot / retrigger · 4 voices";color:#c8d4e4;}
+            Slider {minimum:0;maximum:100;value <=> root.sampler-gain;enabled:root.sampler-ready;accessible-label:"Sampler master level";changed=>{root.sampler-level();}}
+            Text {text:"Mono/stereo, up to10s /480000 source frames. Restored samples stay stopped.";color:#a6b4c8;}
         }
     }
     if root.fx-open : Rectangle {

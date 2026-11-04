@@ -31,7 +31,9 @@ und besitzgebundener Freigabe. S12 ergaenzt Beat-Unterteilungen, Tap und
 Hold-Reset fuer Delay, Legacy-/Preset-Persistenz und expliziten Bypass bei
 nicht darstellbarer Zeitbasis. S13 liefert drei serielle Delay/LP/HP-Slots
 je Deck, Kettenpresets, getrennte LEDs und einen expliziten Legacy-Reglermodus.
-S14-S15 bleiben offen.
+S14 ergaenzt einen Vier-Slot-One-Shot-Sampler mit begrenztem Masterbus,
+Hintergrundvorbereitung, MIDI/GUI und gespeicherter Bank ohne Autoplay.
+S15 bleibt offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 

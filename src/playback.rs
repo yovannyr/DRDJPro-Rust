@@ -98,56 +98,7 @@ impl PreparedTrack {
         limit: usize,
         cancel: &crate::cancellation::Cancellation,
     ) -> Result<Self, String> {
-        cancel.check()?;
-        if !crate::audio_formats::supported(path) {
-            return Err("Select a supported audio file".into());
-        }
-        let canonical = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
-        let (channels, rate, samples) = if crate::opus_audio::is_opus(&canonical)? {
-            crate::opus_audio::decode(&canonical, limit, cancel)?
-        } else {
-            let decode = |source: crate::media_input::AudioWindow| {
-                let len = source.len();
-                Decoder::builder()
-                    .with_data(std::io::BufReader::new(source))
-                    .with_byte_len(len)
-                    .with_seekable(true)
-                    .build()
-            };
-            let source =
-                crate::media_input::AudioWindow::whole(&canonical).map_err(|e| e.to_string())?;
-            let decoder = decode(source)
-                .map_err(|e| e.to_string())
-                .or_else(|original| {
-                    let source = match crate::media_input::recovery_source(&canonical) {
-                        Ok(source) => source,
-                        Err(symphonia::core::errors::Error::Unsupported(
-                            "original parser accepted source",
-                        )) => return Err(original),
-                        Err(error) => return Err(error.to_string()),
-                    };
-                    decode(source).map_err(|e| e.to_string())
-                })?;
-            let channels = decoder.channels();
-            let rate = decoder.sample_rate();
-            if channels == 0 || rate == 0 {
-                return Err("Invalid audio format".into());
-            }
-            let hint = decoder
-                .total_duration()
-                .and_then(|d| {
-                    d.as_nanos()
-                        .checked_mul(u128::from(rate))?
-                        .checked_mul(u128::from(channels))
-                })
-                .map_or(0, |n| (n / 1_000_000_000).min(limit as u128) as usize);
-            let samples = collect_pcm(decoder, hint, limit, cancel)?;
-            (channels, rate, samples)
-        };
-        if samples.is_empty() || samples.len() % usize::from(channels) != 0 {
-            return Err("No complete audio frames decoded".into());
-        }
-        cancel.check()?;
+        let (canonical, channels, rate, samples) = decode_pcm(path, limit, cancel)?;
         let overview = crate::waveform::peak_overview(&samples, channels).into();
         cancel.check()?;
         let detail = Arc::new(crate::waveform::DetailPeaks::new(&samples, channels, rate));
@@ -173,6 +124,63 @@ impl PreparedTrack {
     }
 }
 
+pub(crate) fn decode_pcm(
+    path: &Path,
+    limit: usize,
+    cancel: &crate::cancellation::Cancellation,
+) -> Result<(std::path::PathBuf, u16, u32, Vec<f32>), String> {
+    cancel.check()?;
+    if !crate::audio_formats::supported(path) {
+        return Err("Select a supported audio file".into());
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let (channels, rate, samples) = if crate::opus_audio::is_opus(&canonical)? {
+        crate::opus_audio::decode(&canonical, limit, cancel)?
+    } else {
+        let decode = |source: crate::media_input::AudioWindow| {
+            let len = source.len();
+            Decoder::builder()
+                .with_data(std::io::BufReader::new(source))
+                .with_byte_len(len)
+                .with_seekable(true)
+                .build()
+        };
+        let source =
+            crate::media_input::AudioWindow::whole(&canonical).map_err(|e| e.to_string())?;
+        let decoder = decode(source)
+            .map_err(|e| e.to_string())
+            .or_else(|original| {
+                let source = match crate::media_input::recovery_source(&canonical) {
+                    Ok(source) => source,
+                    Err(symphonia::core::errors::Error::Unsupported(
+                        "original parser accepted source",
+                    )) => return Err(original),
+                    Err(error) => return Err(error.to_string()),
+                };
+                decode(source).map_err(|e| e.to_string())
+            })?;
+        let channels = decoder.channels();
+        let rate = decoder.sample_rate();
+        if channels == 0 || rate == 0 {
+            return Err("Invalid audio format".into());
+        }
+        let hint = decoder
+            .total_duration()
+            .and_then(|d| {
+                d.as_nanos()
+                    .checked_mul(u128::from(rate))?
+                    .checked_mul(u128::from(channels))
+            })
+            .map_or(0, |n| (n / 1_000_000_000).min(limit as u128) as usize);
+        let samples = collect_pcm(decoder, hint, limit, cancel)?;
+        (channels, rate, samples)
+    };
+    if samples.is_empty() || samples.len() % usize::from(channels) != 0 {
+        return Err("No complete audio frames decoded".into());
+    }
+    cancel.check()?;
+    Ok((canonical, channels, rate, samples))
+}
 fn collect_pcm(
     samples: impl Iterator<Item = f32>,
     hint: usize,
@@ -190,7 +198,9 @@ fn collect_pcm(
             cancel.check()?;
         }
         if data.len() == limit {
-            return Err("Track exceeds the 256 MiB decoded PCM limit".into());
+            return Err(format!(
+                "Decoded audio exceeds the configured limit of {limit} samples"
+            ));
         }
         if !sample.is_finite() {
             return Err("Non-finite audio sample".into());
@@ -341,6 +351,7 @@ impl DeckSnapshot {
 }
 
 pub struct DualDeckEngine {
+    sampler: Arc<crate::sampler::Shared>,
     decks: [RefCell<Deck>; 2],
     levels: Cell<MixerLevels>,
     cue_enabled: [Cell<bool>; 2],
@@ -518,6 +529,12 @@ impl DualDeckEngine {
         );
         // Both deck queues enter one fixed-format bus before the device/injected mixer.
         let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
+        let sampler = crate::sampler::Shared::new()?;
+        deck_mixer.add(crate::sampler::Bus::new(
+            Arc::clone(&sampler),
+            output_channels,
+            output_rate,
+        ));
         let mix_controls: [Arc<crate::cue_bus::DeckMixControl>; 2] =
             std::array::from_fn(|_| crate::cue_bus::DeckMixControl::new());
         let (bus, render_clock) = crate::render_bus::RenderBus::new(deck_output);
@@ -561,6 +578,7 @@ impl DualDeckEngine {
         // Beim Laden installiert replace_source die echte, dauerhaft stille EOF-Quelle.
         let decks = std::array::from_fn(|_| RefCell::new(Deck::empty()));
         let engine = Self {
+            sampler,
             decks,
             levels: Cell::new(MixerLevels::default()),
             cue_enabled: std::array::from_fn(|_| Cell::new(false)),
@@ -1302,6 +1320,9 @@ impl DualDeckEngine {
     }
     pub fn control_now(&self) -> std::time::Instant {
         (self.control_clock)()
+    }
+    pub fn sampler(&self) -> Arc<crate::sampler::Shared> {
+        Arc::clone(&self.sampler)
     }
     pub fn output_rate(&self) -> u32 {
         self.output_rate
@@ -2849,6 +2870,79 @@ mod tests {
     }
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn sampler_engine_bus_master_headphones_level_and_deck_isolation() {
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let deck = wav_file(8192, 48000 * 2);
+        engine.load_a(deck.path()).unwrap();
+        engine.play(DeckId::A);
+        let sample = wav_file(16384, 48000 * 2);
+        let shared = engine.sampler();
+        shared.set_gain(1.).unwrap();
+        for slot in 0..4 {
+            let path = sample.path().to_path_buf();
+            let job = crate::sampler::Load::start(
+                shared.clone(),
+                slot,
+                Arc::new(move || Some(path.clone())),
+            )
+            .unwrap();
+            assert!(job
+                .result
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap()
+                .is_some());
+            shared.play(slot).unwrap();
+        }
+        engine.set_headphone_cue(DeckId::A, true).unwrap();
+        engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                gain: 1.,
+                mix: 0.,
+                split: false,
+            })
+            .unwrap();
+        output.by_ref().take(24000).for_each(drop);
+        let expected = engine.output_volumes().0 * 0.25 + 0.5;
+        let frame: [f32; 4] = std::array::from_fn(|_| output.next().unwrap());
+        assert!((frame[0] - expected).abs() < 1e-5);
+        assert_eq!(frame[0], frame[1]);
+        assert!((frame[2] - 0.25).abs() < 1e-5 && (frame[3] - 0.25).abs() < 1e-5);
+        engine
+            .set_monitor_settings(crate::output_routing::MonitorSettings {
+                gain: 1.,
+                mix: 1.,
+                split: false,
+            })
+            .unwrap();
+        output.by_ref().take(24000).for_each(drop);
+        let frame: [f32; 4] = std::array::from_fn(|_| output.next().unwrap());
+        assert!((frame[2] - expected).abs() < 1e-5 && (frame[3] - expected).abs() < 1e-5);
+        let timer = std::time::Instant::now();
+        let heap = crate::looping::measured_heap(|| {
+            for _ in 0..19200 {
+                assert!(output.next().unwrap().is_finite());
+            }
+        });
+        let elapsed = timer.elapsed();
+        assert_eq!(
+            (heap.allocations, heap.reallocations, heap.deallocations),
+            (0, 0, 0)
+        );
+        if !cfg!(debug_assertions) {
+            assert!(elapsed < Duration::from_millis(100), "{elapsed:?}");
+        }
+        eprintln!("Sampler complete engine4 voices/4ch/48kHz100ms: {elapsed:?}; heap {heap:?}");
+        let gain = engine.output_volumes().0;
+        shared.set_gain(0.).unwrap();
+        output.by_ref().take(24000).for_each(drop);
+        assert!((output.next().unwrap() - gain * 0.25).abs() < 1e-5);
+        assert!(engine.snapshot(DeckId::A).playing);
+        assert!(!engine.snapshot(DeckId::B).loaded);
+        assert!((engine.master_peak().unwrap() - gain * 0.25).abs() < 1e-5);
+    }
     #[test]
     fn fx_chain_full_engine_heap_deadline_isolation_and_handoff() {
         use crate::fx_chain::{Kind, Slot};
