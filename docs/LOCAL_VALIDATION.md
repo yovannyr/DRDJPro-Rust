@@ -1884,3 +1884,54 @@ format/diff checks. Runtime sources were unchanged after the final full suite,
 Clippy and optimized tests. S14 is committed locally only; no independent review
 or push was performed. Existing untracked build_output.txt and test_output.txt
 remain excluded.
+
+
+## MC4000 S15 pad modes and software qualification (2026-11-04)
+
+Implemented directly with the user-authorized GPT-6.1 Sol fallback. The S8-S15
+independent-review waiver applies; no independent review was performed.
+S15 changes the UI control plane, MIDI routing/feedback and sampler voice
+ownership; production DSP/render algorithms are unchanged. There are no new
+callback allocations, locks, worker tasks or audio timing assumptions. The two
+app modes and release/recovery contract are recorded in GUI_COMPONENTS.
+
+Five new tests cover typed per-deck mode edges, repeated/late pad events,
+shifted stops, MIDI addresses and both release forms, authoritative LED frames,
+paused previews with GUI co-ownership, mode switches during play, focus loss,
+last-trigger ownership transfer, disconnect/recovery, output failure, and the
+GUI selector's accessible action/bounds at850x740 and1280x860. The combined
+render regression runs100 successive100ms blocks (10s computed audio) with
+two looped decks, six enabled FX slots, four sampler voices, shared-bank
+retrigger/stop/level changes, and Delay/LP/HP transitions. Every measured render
+block requires zero allocation/reallocation/deallocation; Release also enforces
+the existing100ms per-block offline deadline. These fixtures are synthetic
+WAVs; they establish neither a real music corpus nor physical latency.
+
+Final full `cargo test --workspace --locked --quiet`:495 application + five DSP
+tests passed (500 unique passes), zero failures, six hardware tests ignored;
+application suite46.16s. Strict
+`cargo clippy --workspace --locked --all-targets -- -D warnings` passed.
+
+`cargo test --workspace --release --locked s15_combined -- --test-threads=1 --nocapture`
+passed (0.68s after1m28s optimized compilation). Worst measured100ms block:
+12.8078ms at4ch/48kHz with zero render heap operations across all100 blocks.
+The unchanged100ms deadline applies to each block, not only the average.
+`cargo test --workspace --release --locked pad_mode -- --test-threads=1 --nocapture`
+passed all four focused routing/controller/LED tests (0.14s). The original
+`instant_double_shares_prepared_keylock_and_renders_original_pitch_without_heap_work`
+Release regression passed (0.06s), retaining its strict100ms limit. These repeat
+already-counted tests; they are not additional unique passes.
+
+S15's native qualification remains OPEN: A/B physical controls/colors,
+real-track listening, focus usability, USB/device recovery, minimum30-minute
+sustained run and measured Scratch/Bend/Pad/Censor input-to-output latency.
+The updated MC4000_HARDWARE_TEST_PLAN is the acceptance matrix. No production
+library or physical audio session was used; no hardware listening/end-to-end
+latency or complete product parity is claimed. Like S13/S14, this slice stays
+local because pushing would also publish the previously deferred S13 commit.
+Unrelated build_output.txt and test_output.txt remain excluded.
+
+Final `cargo build --workspace --release --locked` passed (1m19s), as did
+`cargo fmt --all -- --check` and `git diff --check`. Production and test sources
+were unchanged after the final full suite, strict Clippy and Release checks.
+S15 is committed locally only; no push or independent review was performed.

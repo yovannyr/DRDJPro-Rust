@@ -38,6 +38,7 @@ pub enum Command {
     Sync(usize, bool),
     Loop(usize, u8),
     HotCue(usize, usize, bool, bool),
+    PadMode(usize, bool),
     Browse(i32),
     BrowserAction(u8),
     Load(usize),
@@ -48,6 +49,10 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
     }
     let channel = bytes[0] & 15;
     match (bytes[0] & 0xf0, channel, bytes[1], bytes[2]) {
+        (status @ (0x90 | 0x80), 10..=11, 127, value) => Some(Command::PadMode(
+            (channel - 10) as usize,
+            status == 0x90 && value != 0,
+        )),
         (0xb0, 0..=1, 22..=26, value) => Some(Command::EqKnob(
             usize::from(channel),
             usize::from(bytes[1] - 22),
@@ -218,7 +223,7 @@ impl Greeting {
         ])
     }
 }
-const FEEDBACK_MESSAGES: usize = 30;
+const FEEDBACK_MESSAGES: usize = 36;
 #[derive(Default)]
 struct Feedback {
     last: Option<[[u8; 3]; FEEDBACK_MESSAGES]>,
@@ -311,10 +316,21 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             messages[deck * 9 + index] = [status, note, if active { 127 } else { 0 }];
         }
         for slot in 0..4 {
-            let color = cues
-                .row_data(slot)
-                .filter(|cue| cue.occupied)
-                .map_or(0, |cue| pad_color(cue.tint));
+            let color = if [ui.get_left_pad_sampler(), ui.get_right_pad_sampler()][deck] {
+                ui.get_sampler_slots().row_data(slot).map_or(0, |sample| {
+                    if !ui.get_sampler_ready() || sample.busy || !sample.loaded {
+                        0
+                    } else if sample.playing {
+                        2
+                    } else {
+                        3
+                    }
+                })
+            } else {
+                cues.row_data(slot)
+                    .filter(|cue| cue.occupied)
+                    .map_or(0, |cue| pad_color(cue.tint))
+            };
             messages[deck * 9 + 5 + slot] = [0x94 | channel, 0x14 + slot as u8, color];
         }
     }
@@ -341,6 +357,20 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             1 + (i % 2) as u8,
             if active { 127 } else { 0 },
         ];
+    }
+    for (deck, sampler) in [ui.get_left_pad_sampler(), ui.get_right_pad_sampler()]
+        .into_iter()
+        .enumerate()
+    {
+        messages[30 + deck] = [0x9a + deck as u8, 127, if sampler { 3 } else { 1 }];
+    }
+    for slot in 0..4 {
+        let ready = ui.get_sampler_ready()
+            && ui
+                .get_sampler_slots()
+                .row_data(slot)
+                .is_some_and(|s| s.loaded && !s.busy);
+        messages[32 + slot] = [0x9f, 33 + slot as u8, if ready { 127 } else { 0 }];
     }
     messages
 }
@@ -999,6 +1029,7 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         Command::Browse(delta) => ui.invoke_controller_browse(delta),
         Command::BrowserAction(action) => ui.invoke_controller_browser_action(i32::from(action)),
         Command::Load(deck) => ui.invoke_controller_browser_action(100 + deck as i32),
+        Command::PadMode(deck, held) => ui.invoke_pad_mode(deck as i32, held, true),
         Command::HotCue(deck, slot, held, delete) => {
             ui.invoke_controller_hot_cue(deck as i32, slot as i32, held, delete)
         }
@@ -1600,6 +1631,69 @@ mod tests {
         assert_eq!(meter_value(f32::NAN, false, false), 127);
         assert_eq!(meter_value(f32::INFINITY, false, false), 127);
     }
+    #[test]
+    fn pad_mode_manufacturer_channels_releases_and_authoritative_leds() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = crate::AppWindow::new().unwrap();
+        let last = std::rc::Rc::new(std::cell::Cell::new((-1, false, false)));
+        let capture = last.clone();
+        ui.on_pad_mode(move |deck, held, hardware| capture.set((deck, held, hardware)));
+        for deck in 0..2u8 {
+            for (status, value, held) in [(0x9a, 127, true), (0x9a, 0, false), (0x8a, 127, false)] {
+                let command = decode(&[status + deck, 127, value]).unwrap();
+                assert_eq!(command, Command::PadMode(deck as usize, held));
+                apply(&ui, command);
+                assert_eq!(last.get(), (deck as i32, held, true));
+            }
+        }
+        assert_eq!(decode(&[0x99, 127, 127]), None);
+        assert_eq!(decode(&[0x9c, 127, 127]), None);
+        assert_eq!(decode(&[0xba, 127, 127]), None);
+        ui.set_left_pad_sampler(true);
+        ui.set_sampler_ready(true);
+        ui.set_sampler_slots(slint::ModelRc::new(slint::VecModel::from(vec![
+            crate::SamplerRow {
+                loaded: true,
+                ..Default::default()
+            },
+            crate::SamplerRow {
+                loaded: true,
+                playing: true,
+                ..Default::default()
+            },
+            crate::SamplerRow {
+                loaded: true,
+                busy: true,
+                ..Default::default()
+            },
+            crate::SamplerRow::default(),
+        ])));
+        let messages = feedback_messages(&ui);
+        assert_eq!(
+            &messages[5..9],
+            &[[0x94, 20, 3], [0x94, 21, 2], [0x94, 22, 0], [0x94, 23, 0]]
+        );
+        assert_eq!(
+            &messages[14..18],
+            &[[0x95, 20, 0], [0x95, 21, 0], [0x95, 22, 0], [0x95, 23, 0]]
+        );
+        assert_eq!(
+            &messages[30..],
+            &[
+                [0x9a, 127, 3],
+                [0x9b, 127, 1],
+                [0x9f, 33, 127],
+                [0x9f, 34, 127],
+                [0x9f, 35, 0],
+                [0x9f, 36, 0]
+            ]
+        );
+        ui.set_sampler_ready(false);
+        let messages = feedback_messages(&ui);
+        assert!(messages[5..9].iter().all(|m| m[2] == 0));
+        assert!(messages[32..].iter().all(|m| m[2] == 0));
+    }
+
     #[test]
     fn feedback_uses_main_view_states_and_coalesces_unchanged_ticks() {
         use slint::ModelRc;

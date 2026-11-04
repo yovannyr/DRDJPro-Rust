@@ -13,8 +13,9 @@ S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
 implementiert; S8 ergaenzt die persistente Prep Queue, S9 Navigation/Loop-Jog.
 S10 ergaenzt Split Cue/kontextuelle Hardwaremeter, S11 momentanes Censor.
 S12 ergaenzt musikalische Delay-Zeitbasis/Tap/Reset, S13 drei serielle FX-Slots.
-S14 ergaenzt den Vier-Slot-Sampler. S15 bleibt **NOT IMPLEMENTED**.
-Native Abnahmen fuer S2-S14
+S14 ergaenzt den Vier-Slot-Sampler, S15 die zwei App-Padmodi und LED-Zustaende.
+S15 ist softwareseitig implementiert; die native Gesamtqualifikation ist offen.
+Native Abnahmen fuer S2-S15
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -80,8 +81,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S13-02 Migration | Altes Delayprofil laden, Slots speichern/Neustart, Bypass | Alte Werte in Slot1, andere aus; alte Presets ebenso, neue Presets ganze Kette. Typ-/Bypass-Wechsel mit Musik auf Pegelspruenge testen; Delayhistorie bleibt bei Pause/Trackwechsel erhalten. Einstellungen nach Geraetewechsel erhalten, Historien neu. Speichergrenze64MiB/Deck; native Dauerlast/Feedback-Peaks pruefen. |
 | S14-01 Sampler | Vier verschiedene Slots starten, gemeinsam triggern, SHIFT Stop | Note33-36 One-Shot/Restart (Release ohne Wirkung), Note40-43 Stop nur Zielslot. Max4 Stimmen, bis5ms Uebergaenge, kein Loop/Tempo-Sync. GUI- und MIDI-Besitz bei Disconnect/Overflow trennen; keine spaeten Starts nach Clear/Restore. Sampler-Pad-LEDs erst S15 qualifizieren. |
 | S14-02 Level | Samplerpegel0/halb/voll waehrend Deckwiedergabe | CC26/GUI beeinflusst nur Samplebus; Decktransport/Crossfader/FX unabhaengig.25% Headroom pro Stimme; Master kann mit Decks/FX weiter clippen. Cue-only ohne Sampler, Master-Mix/Split rechts mit Sampler. Bank-Neustart/fehlende Datei/Geraetewechsel: neu laden, stets gestoppt. Auf Klicks und Dauerlatenz pruefen. |
-| S15-01 PadMode | Alle implementierten Modi wechseln, auch waehrend Hold | Eindeutige GUI-/Pad-/LED-Zuordnung; keine aktive Stimme/Geste bleibt unerwartet eingerastet. |
-| S15-02 Unsupported | Nicht implementierte Sonder-/Shiftvarianten pruefen | Keine success-shaped Platzhalter; klare Anzeige oder nachweislich nicht belegte Funktion. |
+| S15-01 PadMode | A/B: Note127 Kanal11/12 und GUI MC-Modus wechseln, auch waehrend HotCue-Hold, GUI-Co-Hold und Sampler-Playback; wiederholte NoteOn und spaete Releases | Hot Cues blau1 / Sampler lila3. Hardware-Pads: HotCue1-4 oder Sampler1-4, SHIFT Delete oder Stop. Wechsel gibt nur Hardware-Cue bzw. eigene Pad-Stimmen frei; GUI/anderes Deck bleiben erhalten. Gehaltene Pads erst nach echtem Release wieder aktiv. GUI-/Tastatur-HotCues bleiben unabhaengig. |
+| S15-02 LEDs/Recovery/Unsupported | Sampler-Pads leer/bereit/laufend/ladend, Modes A/B getrennt, Fokus/USB/Overflow/Neustart; weitere Serato-Modi pruefen | Deck-Samplerpads off0/lila3/rot2, dedizierte Note33-36 LEDs ready127/sonst0. Recovery setzt HotCue-Modus, stoppt Hardware-Stimmen, erhaelt GUI-OneShots. Kein Roll/Slicer/Flip-Modus angeboten; keine unbelegten Funktionsbehauptungen. |
 
 ## Gemeinsame Recovery- und Regressionstests
 

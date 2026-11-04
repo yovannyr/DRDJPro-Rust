@@ -394,6 +394,7 @@ pub struct AudioController {
     pending_sync: RefCell<Option<PendingSync>>,
     cue_editors: RefCell<[Option<CueSession>; 2]>,
     hot_cue_holds: RefCell<[Option<HotCueHoldSession>; 2]>,
+    pad_routing: RefCell<crate::pad_mode::Routing>,
     temporary_cues: RefCell<[Option<TemporaryCue>; 2]>,
     grid_editors: RefCell<[Option<GridSession>; 2]>,
     pending_import: RefCell<Option<Receiver<ImportResult>>>,
@@ -567,6 +568,7 @@ impl AudioController {
             pending_sync: RefCell::new(None),
             cue_editors: RefCell::new([None, None]),
             hot_cue_holds: RefCell::new([None, None]),
+            pad_routing: RefCell::new(crate::pad_mode::Routing::default()),
             temporary_cues: RefCell::new([None, None]),
             grid_editors: RefCell::new([None, None]),
             pending_import: RefCell::new(None),
@@ -2781,12 +2783,14 @@ impl AudioController {
     /// controller disconnects, reconnects, or the bounded MIDI queue overflows so no stale
     /// hold persists. GUI-held nudges are left untouched and remain effective.
     pub fn mc4000_release_holds(&self) {
+        *self.pad_routing.borrow_mut() = crate::pad_mode::Routing::default();
+        self.publish_pad_modes();
         {
             let mut s = self.sampler.borrow_mut();
             for i in 0..4 {
-                if s.owners[i] == 2 {
+                if s.owners[i].hardware() {
                     s.shared.stop(i);
-                    s.owners[i] = 0;
+                    s.owners[i] = crate::sampler::Owner::None;
                 }
             }
         }
@@ -3895,6 +3899,7 @@ impl AudioController {
     }
     #[cfg(any(target_os = "windows", test))]
     pub(crate) fn handle_window_deactivated(&self) {
+        self.pad_routing.borrow_mut().cancel_cues();
         for index in 0..2 {
             self.cancel_fx_tap(index);
         }
@@ -4123,16 +4128,79 @@ impl AudioController {
             c.refresh();
         });
     }
+    fn publish_pad_modes(&self) {
+        if let Some(ui) = self.ui.upgrade() {
+            let routing = self.pad_routing.borrow();
+            ui.set_left_pad_sampler(routing.mode(0) == crate::pad_mode::Mode::Sampler);
+            ui.set_right_pad_sampler(routing.mode(1) == crate::pad_mode::Mode::Sampler);
+        }
+    }
+    fn toggle_pad_mode(&self, deck: usize) -> Result<(), String> {
+        let id = if deck == 0 { DeckId::A } else { DeckId::B };
+        // Nur der physische Hold gehoert zum umgeschalteten Pad. GUI/Keyboard
+        // bleiben Hot Cues und behalten ihre eigene Input-Ownership.
+        let slot = self.hot_cue_holds.borrow()[deck].as_ref().map(|s| s.slot);
+        let release = slot.map_or(Ok(()), |slot| self.hold_hot_cue(id, slot as i32, false, 16));
+        {
+            let mut s = self.sampler.borrow_mut();
+            for slot in 0..4 {
+                if s.owners[slot] == crate::sampler::Owner::DeckPads(deck) {
+                    s.shared.stop(slot);
+                    s.owners[slot] = crate::sampler::Owner::None;
+                }
+            }
+        }
+        self.pad_routing.borrow_mut().toggle(deck);
+        self.publish_pad_modes();
+        self.publish_sampler();
+        release
+    }
     fn wire_hot_cues(self: &Rc<Self>, ui: &AppWindow) {
+        let weak = Rc::downgrade(self);
+        ui.on_pad_mode(move |deck, held, hardware| {
+            let Some(c) = weak.upgrade() else { return };
+            let Ok(deck @ 0..=1) = usize::try_from(deck) else {
+                return;
+            };
+            let toggle = !hardware || c.pad_routing.borrow_mut().mode_edge(deck, held);
+            if toggle {
+                if let Err(error) = c.toggle_pad_mode(deck) {
+                    if let Some(ui) = c.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
+                }
+            }
+            c.refresh();
+        });
         let weak = Rc::downgrade(self);
         ui.on_controller_hot_cue(move |deck, slot, held, delete| {
             let Some(c) = weak.upgrade() else { return };
+            let (Ok(deck @ 0..=1), Ok(slot @ 0..=3)) =
+                (usize::try_from(deck), usize::try_from(slot))
+            else {
+                return;
+            };
+            let action = c.pad_routing.borrow_mut().pad(deck, slot, held, delete);
             let id = if deck == 0 { DeckId::A } else { DeckId::B };
-            let result = if delete && held {
-                c.hold_hot_cue(id, slot, false, 16)
-                    .and_then(|()| c.change_hot_cue(id, slot, true))
-            } else {
-                c.hold_hot_cue(id, slot, held, 16)
+            let result = match action {
+                Some(crate::pad_mode::Action::Cue {
+                    held: true,
+                    delete: true,
+                }) => c
+                    .hold_hot_cue(id, slot as i32, false, 16)
+                    .and_then(|()| c.change_hot_cue(id, slot as i32, true)),
+                Some(crate::pad_mode::Action::Cue { held, .. }) => {
+                    c.hold_hot_cue(id, slot as i32, held, 16)
+                }
+                Some(crate::pad_mode::Action::Sample { play }) => {
+                    let result = c.sampler_action(slot as i32, if play { 0 } else { 1 }, true);
+                    if result.is_ok() && play {
+                        c.sampler.borrow_mut().owners[slot] = crate::sampler::Owner::DeckPads(deck);
+                    }
+                    c.publish_sampler();
+                    result
+                }
+                None => Ok(()),
             };
             if let Err(error) = result {
                 if let Some(ui) = c.ui.upgrade() {
@@ -5546,11 +5614,15 @@ impl AudioController {
                     return Err("Sampler unavailable during restore/load/output change".into());
                 }
                 s.shared.play(slot)?;
-                s.owners[slot] = if hardware { 2 } else { 1 };
+                s.owners[slot] = if hardware {
+                    crate::sampler::Owner::Midi
+                } else {
+                    crate::sampler::Owner::Gui
+                };
             }
             1 => {
                 s.shared.stop(slot);
-                s.owners[slot] = 0;
+                s.owners[slot] = crate::sampler::Owner::None;
             }
             2 => {
                 if !self.storage_ready.get()
@@ -5574,11 +5646,11 @@ impl AudioController {
                 s.shared.clear(slot);
                 s.preferences.paths[slot] = None;
                 s.restore.retain(|(i, _)| *i != slot);
-                s.owners[slot] = 0;
+                s.owners[slot] = crate::sampler::Owner::None;
             }
             4 => {
                 s.shared.stop_all();
-                s.owners = [0; 4];
+                s.owners = [crate::sampler::Owner::None; 4];
             }
             _ => return Err("Invalid sampler action".into()),
         }
@@ -5598,12 +5670,12 @@ impl AudioController {
                     s.restore.push_back((i, path));
                 }
             }
-            s.owners = [0; 4];
+            s.owners = [crate::sampler::Owner::None; 4];
             self.sampler_status("Sampler reloading after output change; stopped".into());
         }
         if self.engine.borrow().output_failed() {
             s.shared.stop_all();
-            s.owners = [0; 4];
+            s.owners = [crate::sampler::Owner::None; 4];
         }
         let result = s.job.as_ref().map(|j| j.result.try_recv());
         if let Some(result) =
@@ -9598,6 +9670,138 @@ mod tests {
                 ("BUS INVALID".into(), 0., true)
             );
         }
+    }
+
+    #[test]
+    fn pad_mode_midi_gui_ownership_releases_focus_and_recovery() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let file = wav_file(8192, 48000 * 8);
+        let pick = file.path().to_path_buf();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 4, 48000));
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(
+            &ui,
+            engine.clone(),
+            Arc::new(move || Some(pick.clone())),
+            Arc::new(|| None),
+        );
+        c.restore_library(Ok(dir.path().join("library.sqlite3")), vec![]);
+        finish_storage(&c);
+        for slot in 0..3 {
+            ui.invoke_sampler_action(slot, 2, false);
+            let end = Instant::now() + Duration::from_secs(10);
+            while c.sampler.borrow().job.is_some() {
+                c.tick();
+                assert!(Instant::now() < end);
+                std::thread::yield_now();
+            }
+            assert!(engine.sampler().ready(slot as usize));
+        }
+        let midi =
+            |message: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&message).unwrap());
+        for (deck, id) in [(0, DeckId::A), (1, DeckId::B)] {
+            engine.seek_position(id, Duration::from_secs(1)).unwrap();
+            c.change_hot_cue(id, 0, false).unwrap();
+            midi([0x94 + deck, 20, 127]);
+            assert!(engine.snapshot(id).playing);
+            c.hold_hot_cue(id, 0, true, 1).unwrap();
+            midi([0x9a + deck, 127, 127]);
+            midi([0x9a + deck, 127, 127]); // Repeated NoteOn cannot toggle back.
+            assert_eq!(
+                c.pad_routing.borrow().mode(deck as usize),
+                crate::pad_mode::Mode::Sampler
+            );
+            assert!(engine.snapshot(id).playing); // Independent GUI owner remains.
+            c.hold_hot_cue(id, 0, false, 1).unwrap();
+            assert!(!engine.snapshot(id).playing);
+            midi([0x94 + deck, 20, 127]); // Still-held pad cannot start a sample.
+            output.by_ref().take(128).for_each(drop);
+            assert!(!engine.sampler().active(0));
+            midi([0x84 + deck, 20, 0]); // Late release has no new-mode action.
+            midi([0x94 + deck, 20, 127]);
+            output.by_ref().take(128).for_each(drop);
+            assert!(engine.sampler().active(0));
+            assert!(!engine.snapshot(id).playing);
+            midi([0x8a + deck, 127, 0]);
+            ui.invoke_pad_mode(deck as i32, true, false); // GUI switches same state.
+            assert!(!engine.sampler().active(0));
+            midi([0x94 + deck, 20, 127]); // Still held across second switch.
+            assert!(!engine.snapshot(id).playing);
+            midi([0x94 + deck, 20, 0]);
+            midi([0x94 + deck, 20, 127]);
+            assert!(engine.snapshot(id).playing);
+            c.handle_window_deactivated();
+            assert!(!engine.snapshot(id).playing);
+            midi([0x94 + deck, 20, 127]);
+            assert!(!engine.snapshot(id).playing);
+            midi([0x84 + deck, 20, 0]);
+            midi([0x94 + deck, 20, 127]);
+            assert!(engine.snapshot(id).playing);
+            midi([0x84 + deck, 20, 0]);
+            assert!(!engine.snapshot(id).playing);
+        }
+        // Two decks share the bank, but mode changes stop only that deck's voices.
+        ui.invoke_pad_mode(0, true, false);
+        ui.invoke_pad_mode(1, true, false);
+        midi([0x94, 20, 127]);
+        midi([0x95, 21, 127]);
+        ui.invoke_sampler_action(2, 0, false);
+        output.by_ref().take(128).for_each(drop);
+        assert!((0..3).all(|slot| engine.sampler().active(slot)));
+        ui.invoke_pad_mode(0, true, false);
+        assert!(!engine.sampler().active(0));
+        assert!(engine.sampler().active(1) && engine.sampler().active(2));
+        // Retrigger transfers ownership; switching old deck must preserve GUI.
+        ui.invoke_sampler_action(1, 0, false);
+        output.by_ref().take(128).for_each(drop);
+        ui.invoke_pad_mode(1, true, false);
+        assert!(engine.sampler().active(1));
+        ui.invoke_pad_mode(1, true, false);
+        midi([0x85, 21, 0]);
+        midi([0x95, 21, 127]);
+        output.by_ref().take(128).for_each(drop);
+        c.mc4000_release_holds();
+        assert!(!engine.sampler().active(1));
+        assert!(engine.sampler().active(2));
+        assert!(!ui.get_left_pad_sampler() && !ui.get_right_pad_sampler());
+        // SHIFT stops the sampler slot without deleting its hot cue.
+        midi([0x85, 21, 0]);
+        ui.invoke_pad_mode(0, true, false);
+        midi([0x94, 20, 127]);
+        output.by_ref().take(128).for_each(drop);
+        midi([0x94, 28, 127]);
+        assert!(!engine.sampler().active(0));
+        assert!(ui.get_left_hot_cues().row_data(0).unwrap().occupied);
+        ui.set_audio_enabled(true);
+        ui.show().unwrap();
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for deck in ["A", "B"] {
+                let button = control(&ui, &format!("DECK {deck} hardware pad mode"));
+                let p = button.absolute_position();
+                let size = button.size();
+                assert!(
+                    size.width > 0.
+                        && size.height > 0.
+                        && p.x >= 0.
+                        && p.y >= 0.
+                        && p.x + size.width <= width + 1.
+                        && p.y + size.height <= height + 1.
+                );
+            }
+        }
+        control(&ui, "DECK A hardware pad mode").invoke_accessible_default_action();
+        assert!(!ui.get_left_pad_sampler());
+        engine.inject_output_failure();
+        c.tick();
+        assert!((0..4).all(|slot| !engine.sampler().active(slot)));
+        ui.hide().unwrap();
+        c.close_library().unwrap();
     }
 
     #[test]

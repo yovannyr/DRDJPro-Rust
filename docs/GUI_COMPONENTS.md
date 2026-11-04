@@ -1,5 +1,36 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S15: hardware pad modes
+
+Each deck has exactly two app-defined modes: Hot Cues (default) and Sampler.
+The `MC: HOT CUES` / `MC: SAMPLER` button in each deck header selects and displays
+that deck's physical four-pad mapping. MC4000 channel11/12 Note127 toggles once
+per press; NoteOff and NoteOn-zero release the mode key. These are app modes,
+not a claim of Serato Roll/Slicer/Flip support. The eight GUI/keyboard hot cues
+remain Hot Cues in both modes; the SAMPLER panel remains the explicit GUI bank.
+
+Hot Cue mode routes channel5/6 Note20-23 to held previews/recall/set and
+Note28-31 to delete. Sampler mode routes those presses to bank slots1-4
+(one-shot/restart); shifted pads stop that slot without deleting its hot cue.
+Both decks address the same four-slot bank, with one voice per slot. A mode
+change releases only that deck's physical Hot Cue input, preserving GUI/key
+co-owners. It stops only voices last triggered by that deck's pads; later GUI,
+dedicated sampler or other-deck retriggers transfer ownership and survive.
+Held pads cannot rearm until their own release, even across multiple switches.
+Focus loss cancels cue previews and suppresses repeated held-pad NoteOn until
+release. Sampler one-shots retain their S14 focus behavior. Disconnect,
+reconnect and queue recovery release hardware owners and reset both modes to
+Hot Cues; GUI one-shots survive. Modes are session-only and are not persisted.
+
+Mode LED channel11/12 Note127 is blue1 for Hot Cues, purple3 for Sampler.
+Four deck pads retain cue tint in Hot Cue mode; Sampler mode shows purple3
+ready, red2 playing and off0 for empty/busy/unavailable. Dedicated global
+Note33-36 sampler LEDs show127 when ready, otherwise0. Feedback comes from
+published app state and uses the existing coalescing/greeting/recovery path.
+Actual colors, press/release timing and native focus usability require hardware
+acceptance. Routing and ownership execute on the UI control plane, with fixed
+small state and no new work, allocation, locking or timing logic in audio/DSP.
+
 ## MC4000 S14: four-slot one-shot sampler
 
 SAMPLER opens four independent LOAD/PLAY/STOP/CLEAR rows, STOP ALL and a global

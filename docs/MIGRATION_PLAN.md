@@ -33,7 +33,7 @@ nicht darstellbarer Zeitbasis. S13 liefert drei serielle Delay/LP/HP-Slots
 je Deck, Kettenpresets, getrennte LEDs und einen expliziten Legacy-Reglermodus.
 S14 ergaenzt einen Vier-Slot-One-Shot-Sampler mit begrenztem Masterbus,
 Hintergrundvorbereitung, MIDI/GUI und gespeicherter Bank ohne Autoplay.
-S15 bleibt offen.
+S15 ergaenzt die zwei App-Hardware-Padmodi; native Gesamtqualifikation bleibt offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 
@@ -42,6 +42,12 @@ The target is a complete professional DJ application. Spikes in the historical c
 Release requires a traceable disposition and acceptance evidence for every FEATURE_CATALOG capability and all 59 numbered UI reference items. Core acceptance includes durable library/session data, reliable transport and cue/loop workflows, tempo/sync, mixer DSP, device/output/headphone routing, hardware integration, recovery and measured performance. Optional/provider-dependent features need explicit supported scope rather than hidden stubs. Windows/macOS builds, sustained physical audio/device tests, visual/usability review and representative music-corpus analysis remain release gates.
 
 Deliver in reviewed, bounded slices with working behavior and regression evidence. Keep the existing executable name during development for CI/command compatibility; its historical name does not define the product scope.
+
+MC4000 S15 implementiert zwei Hardware-Padmodi pro Deck (Hot Cues/Sampler)
+mit GUI-Auswahl, Hold-/Ownership-Schutz und zustandsbasiertem LED-Feedback.
+Die GUI-/Keyboard-HotCues bleiben unabhaengig. Automatisierte Regressionen
+ersetzen keine native Gesamtqualifikation: reale Tracks, A/B-Hardwarematrix,
+30-Minuten-Lauf, Hoerprobe und gemessene End-to-End-Latenz bleiben offen.
 
 ## Aktueller verifizierter Stand (2026-11-01)
 

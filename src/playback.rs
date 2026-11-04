@@ -2944,6 +2944,115 @@ mod tests {
         assert!((engine.master_peak().unwrap() - gain * 0.25).abs() < 1e-5);
     }
     #[test]
+    fn s15_combined_two_deck_fx_sampler_offline_qualification() {
+        use crate::fx_chain::{Kind, Slot};
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let file = wav_file(4096, 48000 * 3);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            engine
+                .restore_loop(id, Duration::ZERO, Duration::from_secs(2))
+                .unwrap();
+            engine.activate_loop(id).unwrap();
+            for slot in 0..3 {
+                engine
+                    .set_fx_slot(
+                        id,
+                        slot,
+                        Slot {
+                            delay: crate::delay_fx::DelaySettings {
+                                enabled: true,
+                                time_ms: 20,
+                                feedback: 0.8,
+                                wet: 0.5,
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            engine.set_headphone_cue(id, true).unwrap();
+            engine.play(id);
+        }
+        let shared = engine.sampler();
+        for slot in 0..4 {
+            let path = file.path().to_path_buf();
+            let job = crate::sampler::Load::start(
+                shared.clone(),
+                slot,
+                Arc::new(move || Some(path.clone())),
+            )
+            .unwrap();
+            assert!(job
+                .result
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+                .unwrap()
+                .is_some());
+            shared.play(slot).unwrap();
+        }
+        output.by_ref().take(19200).for_each(drop);
+        let mut worst = Duration::ZERO;
+        for block in 0..100 {
+            // Control-plane changes between blocks; render/atomic sampler commands
+            // inside the measured scope must neither allocate nor free memory.
+            if block % 25 == 0 {
+                let before = engine.fx_slot(DeckId::A, 1);
+                engine
+                    .set_fx_slot(
+                        DeckId::A,
+                        1,
+                        Slot {
+                            kind: match block {
+                                25 => Kind::LowPass,
+                                50 => Kind::HighPass,
+                                _ => Kind::Delay,
+                            },
+                            ..before
+                        },
+                    )
+                    .unwrap();
+            }
+            let start = std::time::Instant::now();
+            let heap = crate::looping::measured_heap(|| {
+                if block % 5 == 0 {
+                    for slot in 0..4 {
+                        shared.play(slot).unwrap();
+                    }
+                }
+                if block % 7 == 0 {
+                    shared.stop(block % 4);
+                }
+                shared
+                    .set_gain(if block % 2 == 0 { 0.5 } else { 1. })
+                    .unwrap();
+                for _ in 0..19200 {
+                    assert!(output.next().unwrap().is_finite());
+                }
+            });
+            let elapsed = start.elapsed();
+            worst = worst.max(elapsed);
+            assert_eq!(
+                (heap.allocations, heap.reallocations, heap.deallocations),
+                (0, 0, 0)
+            );
+            if !cfg!(debug_assertions) {
+                assert!(
+                    elapsed < Duration::from_millis(100),
+                    "block {block}: {elapsed:?}"
+                );
+            }
+        }
+        assert!(engine.snapshot(DeckId::A).playing && engine.snapshot(DeckId::B).playing);
+        shared.stop_all();
+        output.by_ref().take(19200).for_each(drop);
+        assert!((0..4).all(|slot| !shared.active(slot)));
+        eprintln!("S15 offline10s, two looped decks/six FX/four sampler voices/4ch48kHz: worst100ms block {worst:?}; zero render heap operations in all100 blocks");
+    }
+
+    #[test]
     fn fx_chain_full_engine_heap_deadline_isolation_and_handoff() {
         use crate::fx_chain::{Kind, Slot};
         let (mixer, mut output) = rodio::mixer::mixer(4, 48000);

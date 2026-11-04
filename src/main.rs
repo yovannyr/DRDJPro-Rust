@@ -29,6 +29,7 @@ mod mixer_dsp;
 mod opus_audio;
 mod output_preferences;
 mod output_routing;
+mod pad_mode;
 mod peak_meter;
 mod phase_sync;
 mod pitch_control;

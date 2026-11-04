@@ -431,6 +431,21 @@ impl Load {
         })
     }
 }
+/// Last successful trigger owns the single voice of a slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Owner {
+    #[default]
+    None,
+    Gui,
+    Midi,
+    DeckPads(usize),
+}
+impl Owner {
+    pub fn hardware(self) -> bool {
+        matches!(self, Self::Midi | Self::DeckPads(_))
+    }
+}
+
 pub(crate) struct State {
     pub shared: Arc<Shared>,
     pub preferences: Preferences,
@@ -439,7 +454,7 @@ pub(crate) struct State {
     pub saving: bool,
     pub job: Option<Load>,
     pub restore: std::collections::VecDeque<(usize, PathBuf)>,
-    pub owners: [u8; 4],
+    pub owners: [Owner; 4],
 }
 impl State {
     pub fn new(shared: Arc<Shared>) -> Self {
@@ -451,7 +466,7 @@ impl State {
             saving: false,
             job: None,
             restore: Default::default(),
-            owners: [0; 4],
+            owners: [Owner::None; 4],
         }
     }
     pub fn cancel_load(&mut self) {

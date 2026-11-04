@@ -489,6 +489,8 @@ component CompactDeck inherits Rectangle {
     in property <bool> controller-mode: false;
     in property <brush> accent;
     in property <string> track-title;
+    in property <bool> pad-sampler;
+    callback pad-mode();
     in property <string> time-text;
     in property <string> platter-bpm: "—";
     in property <string> platter-time: "—";
@@ -578,6 +580,11 @@ component CompactDeck inherits Rectangle {
         HorizontalLayout {
             height: 20px;
             Text { text: (root.censor ? "CENSOR · " : "") + track-title; color: root.censor ? #ffc15e : #f1f3f7; font-size: 16px; overflow: elide; }
+            Button { height: 20px; text: root.pad-sampler ? "MC: SAMPLER" : "MC: HOT CUES";
+                accessible-label: root.deck-label + " hardware pad mode";
+                accessible-description: "Four MC4000 pads: " + (root.pad-sampler ? "sampler play, SHIFT stop" : "hot cue hold, SHIFT delete") + ". Click to switch. GUI and keyboard hot cues stay independent.";
+                clicked => { root.pad-mode(); }
+            }
             Button { height: 20px; text: "START"; accessible-label: deck-label + " track start"; enabled: !audio-enabled || (loaded && !loading); clicked => { root.cue(); } }
             Button { height: 20px; text: "STUTTER"; accessible-label: deck-label + " stutter"; enabled: loaded && !loading; clicked => { root.stutter(); } }
         }
@@ -1240,6 +1247,9 @@ export component AppWindow inherits Window {
     callback controller-sync(int, bool);
     callback controller-four-bar-loop(int);
     callback controller-hot-cue(int, int, bool, bool);
+    callback pad-mode(int, bool, bool);
+    in property <bool> left-pad-sampler;
+    in property <bool> right-pad-sampler;
     callback temporary-cue(int, bool, bool);
     callback stutter(int);
     callback controller-browse(int);
@@ -1737,6 +1747,7 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             height: root.virtual-decks-visible ? 322px : 260px; spacing: 8px;
             left-deck := CompactDeck {
+                pad-sampler: root.left-pad-sampler; pad-mode => { root.pad-mode(0,true,false); }
                 platter-mouse-owned: root.left-platter-mouse-owned;
                 scratch-pointer(action, x, y) => { root.virtual-platter-pointer(0, action, x, y); }
                 deck-label: "DECK A"; controller-mode: root.virtual-decks-visible; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
@@ -1785,6 +1796,7 @@ export component AppWindow inherits Window {
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } eject => { root.eject-left(); } seek(value) => { root.seek-left(value); }
             }
             right-deck := CompactDeck {
+                pad-sampler: root.right-pad-sampler; pad-mode => { root.pad-mode(1,true,false); }
                 platter-mouse-owned: root.right-platter-mouse-owned;
                 scratch-pointer(action, x, y) => { root.virtual-platter-pointer(1, action, x, y); }
                 deck-label: "DECK B"; controller-mode: root.virtual-decks-visible; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;

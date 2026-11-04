@@ -34,7 +34,7 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 | 24 / 9 | SHIFT+CUE: Track Start | **MIDI fehlt.** Vorhandenen Cue-to-zero-Pfad gezielt mit Shift-Note5 verbinden. |
 | 25 / 10 | SHIFT+PLAY: Stutter | **App fehlt.** Wiederholtes Starten am zuletzt gesetzten temporaeren Cue; Note4 wird ignoriert. |
 | 25 / 11 | Vier Hot-Cue-Pads / SHIFT: loeschen | **MIDI fehlt.** Acht persistente App-Slots und Preview sind vorhanden, physische vier Pads haben bislang nur LED-Feedback. Pad1-4 auf Slots1-4 abbilden; Slots5-8 nicht versteckt erfinden. |
-| 25 / 12 | Pad-Modus | **App/MIDI fehlt.** Kein Moduswechsel fuer die Controller-Pads. Das Handbuch nennt erweiterte Serato-DJ-Modi, aber keine abschliessende Modusliste: Roll/Slicer usw. sind hier keine bereits spezifizierten Anforderungen. |
+| 25 / 12 | Pad-Modus | **Implementiert S15:** pro Deck Hot Cues/Sampler, GUI MC-Modus und Note127 Kanal11/12, Modus-/Pad-/Sampler-LEDs. Acht GUI-/Keyboard-HotCues bleiben unabhaengig; Roll/Slicer/Flip nicht angeboten. Native Abnahme offen. |
 | 25 / 13 | Jog zur Loop-In/Out-Bearbeitung | **S9 implementiert.** AUTO-Panel waehlt Off/In/Out; Hardware In/Out schaltet Edit bei aktivem Loop. 1ms/Einheit, Samplegrenzen und mindestens ein Frame; native Abnahme offen. |
 | 25 / 13 | SHIFT+Jog: schnelle Tracknavigation | **S9 implementiert.** 50ms Quellzeit/Einheit, Grenzen und Play/Pause erhalten; Scratch-Besitz und Modifier-Freigabe gesichert. Native Sensitivitaet offen. |
 | 25 / 14 | SHIFT+VINYL: Censor | **Implementiert S11:** separater Reverse-Kopf mit weiterlaufender normaler Zeitlinie; Release kehrt auf diese zurueck. Manuelles Scratchen bleibt getrennt. |
@@ -134,13 +134,13 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S12 Musikalische FX-Zeitbasis | **Implementiert:** Millisekunden/Deck-/Tap-BPM,1/16 bis4 Beats, Note4 TAP mit1s Hold-Reset, persistente Timing-/Preset-Felder; vorhandener Delay-DSP bleibt. | Gridsegment/Pitch, Tap-Ausreisser/Timeout/Ownership, Bypass/Resume, Legacy/SQLite/Latest-Ack/Neustart, GUI-Grenzen und Stereo-Rampen/Heap/Release-Budget automatisiert. Native Hoer-/Timing-Abnahme offen. |
 | S13 Drei FX-Slots und Auswahl | **Implementiert:** drei serielle Delay/LP/HP-Slots je Deck, FX1-3/SHIFT-Auswahl und Pegel/Feedback, eigener Legacy-Reglermodus, Kettenpresets und Slot1-Migration. | Impulsreihenfolge, Filter/Cue/History, sechs aktive Slots/Heap/Release-Budget, Format-Speichergrenze, MIDI/GUI-Isolation und Preset-/SQLite-/Device-Neustart automatisiert. Native Uebergaenge/Hoer-/Latenzabnahme offen. |
 | S14 Vier-Slot-Sampler | **Implementiert:** vier One-Shot-/Restart-Stimmen, vorbereitete Mono-/Stereo-Clips, fester Stereo-Masterbus, globale Pegelregelung und GUI/MIDI; persistente Pfade/Level, kein Autoplay. | Vierfachmix/Headroom, Sampleraten/Frames, Retrigger/Stop/EOF, Cue/Master/Deck-Isolation, Generationen/gleichzeitige Installation, Decodergrenzen, Recovery/SQLite/Neustart/Geraetewechsel und Heap/optimiertes Budget automatisiert; native Hoer-/Timing-Abnahme offen. |
-| S15 Pad-Modus und Gesamtqualifikation | Nur konkret ausgewaehlte App-Modi, S4/S14; weitere Serato-Modi gesondert entscheiden. | Modus/LED/Fokus konsistent, keine verlorenen Releases bei Wechsel; alle Controller-Elemente A/B nach Testmatrix, reale Tracks, Latenz/Langzeit und Recovery messen. |
+| S15 Pad-Modus und Gesamtqualifikation | **Software implementiert:** pro Deck Hot Cues/Sampler, Note127 Kanal11/12 und GUI-Auswahl, zustandsbasiertes Modus-/Pad-/Sampler-LED-Feedback. Keine weiteren Serato-Modi. | Automatisierte Modus-/Hold-/Ownership-/Fokus-/Recovery-/LED- und Workspace-Regressionen; native Gesamtqualifikation weiterhin **OFFEN**: A/B-Testmatrix, reale Tracks, Latenz/Langzeit und Recovery messen. |
 
 Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
 autorisierte Fallback: S2-S6 selbst fertigstellen. Separat wurde S7 mit vom
 Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8 folgt als eigener Queue-Slice.
-S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11 ergaenzt Censor, S12 die musikalische Delay-Zeitbasis, S13 drei FX-Slots und S14 den Vier-Slot-Sampler; S15 bleibt offen. Der
+S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11 ergaenzt Censor, S12 die musikalische Delay-Zeitbasis, S13 drei FX-Slots und S14 den Vier-Slot-Sampler; S15 ergaenzt die zwei App-Padmodi und LED-Zustaende. Die native Gesamtqualifikation bleibt offen. Der
 Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits
