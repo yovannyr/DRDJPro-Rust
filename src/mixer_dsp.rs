@@ -137,25 +137,30 @@ impl EqControl {
         }
         self.sequence.fetch_add(1, Ordering::SeqCst);
     }
-    fn read(&self) -> Option<[f64; COEFFICIENTS]> {
+    fn read(&self, previous: Option<u64>) -> Option<(u64, [f64; COEFFICIENTS])> {
         let before = self.sequence.load(Ordering::SeqCst);
-        if before & 1 != 0 {
+        if before & 1 != 0 || previous == Some(before) {
             return None;
         }
         let values = self
             .values
             .each_ref()
             .map(|v| f64::from_bits(v.load(Ordering::SeqCst)));
-        (before == self.sequence.load(Ordering::SeqCst)).then_some(values)
+        (before == self.sequence.load(Ordering::SeqCst)).then_some((before, values))
     }
 }
 
 struct Bank {
+    bypass: bool,
     coefficients: [f64; COEFFICIENTS],
     states: [[[f64; 2]; STAGES]; MAX_CHANNELS as usize],
 }
 impl Bank {
     fn sample(&mut self, channel: usize, input: f32) -> f64 {
+        // Exact identity coefficients need no state updates; new banks start cleared.
+        if self.bypass {
+            return f64::from(input);
+        }
         let mut value = f64::from(input);
         for (coefficients, state) in self.coefficients[..STAGES * 5]
             .as_chunks::<5>()
@@ -178,11 +183,15 @@ impl Bank {
 }
 
 pub(crate) struct EqSource<S> {
+    command: u64,
+    cue_controls: Option<([Arc<crate::cue_bus::DeckMixControl>; 2], usize)>,
+    auxiliary_passthrough: bool,
     source: S,
     control: Arc<EqControl>,
     active: Bank,
     next: Bank,
     wanted: [f64; COEFFICIENTS],
+    identity: [f64; COEFFICIENTS],
     channel: usize,
     channels: usize,
     fade: u32,
@@ -191,30 +200,46 @@ pub(crate) struct EqSource<S> {
 impl<S: Source> EqSource<S> {
     pub fn new(source: S, control: Arc<EqControl>) -> Self {
         assert!(source.channels() > 0 && source.channels() <= MAX_CHANNELS);
-        let coefficients = control
-            .read()
+        let (command, coefficients) = control
+            .read(None)
             .expect("source installed on the single control writer");
         let channels = usize::from(source.channels());
+        let identity = EqSettings::default().coefficients(source.sample_rate());
         let states = [[[0.; 2]; STAGES]; MAX_CHANNELS as usize];
         let next = Bank {
+            bypass: coefficients == identity,
             coefficients,
             states,
         };
         let ramp = source.sample_rate().div_ceil(200).max(1);
         Self {
+            command,
+            cue_controls: None,
+            auxiliary_passthrough: false,
             source,
             control,
             active: Bank {
+                bypass: coefficients == identity,
                 coefficients,
                 states,
             },
             next,
             wanted: coefficients,
+            identity,
             channel: 0,
             channels,
             fade: 0,
             ramp,
         }
+    }
+    /// Post-fader FX filters leave the pre-fader headphone bus untouched.
+    pub fn with_cue_controls(
+        mut self,
+        controls: [Arc<crate::cue_bus::DeckMixControl>; 2],
+        deck: usize,
+    ) -> Self {
+        self.cue_controls = Some((controls, deck));
+        self
     }
 }
 impl<S: Source> Iterator for EqSource<S> {
@@ -222,18 +247,33 @@ impl<S: Source> Iterator for EqSource<S> {
     fn next(&mut self) -> Option<f32> {
         let sample = self.source.next()?;
         if self.channel == 0 {
-            if let Some(values) = self.control.read() {
+            self.auxiliary_passthrough = self
+                .cue_controls
+                .as_ref()
+                .is_some_and(|(c, d)| c[*d].rendered_cue() || c.iter().any(|c| c.monitor_mode()));
+            if let Some((command, values)) = self.control.read(Some(self.command)) {
+                self.command = command;
                 self.wanted = values;
             }
             if self.fade == 0 && self.wanted != self.active.coefficients {
                 self.next.coefficients = self.wanted;
+                self.next.bypass = self.wanted == self.identity;
                 self.next.states.fill([[0.; 2]; STAGES]);
                 self.fade = 1;
             }
         }
         let input = if sample.is_finite() { sample } else { 0. };
-        let a = self.active.sample(self.channel, input);
-        let value = if self.fade == 0 {
+        let auxiliary = self.auxiliary_passthrough && self.channel >= 2;
+        if auxiliary {
+            self.active.states[self.channel].fill([0.; 2]);
+            self.next.states[self.channel].fill([0.; 2]);
+        }
+        let a = if auxiliary {
+            f64::from(input)
+        } else {
+            self.active.sample(self.channel, input)
+        };
+        let value = if self.fade == 0 || auxiliary {
             a
         } else {
             let b = self.next.sample(self.channel, input);
@@ -347,14 +387,14 @@ mod tests {
             }
         });
         for _ in 0..10000 {
-            if let Some(values) = control.read() {
+            if let Some((_, values)) = control.read(None) {
                 assert!(expected.contains(&values));
             }
         }
         task.join().unwrap();
         control.sequence.store(1, Ordering::SeqCst);
         assert!(
-            control.read().is_none(),
+            control.read(None).is_none(),
             "busy writer never causes a retry loop"
         );
     }

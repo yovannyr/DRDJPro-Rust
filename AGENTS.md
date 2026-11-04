@@ -11,6 +11,11 @@ acceptance remains separate from automated verification.
 
 ## Project Context
 
+Implementation override (user instruction, 2026-11-04): after another QWEN
+timeout, the user explicitly authorizes GPT-6.1 Sol for S13-S15. Codex may
+implement these slices directly with Sol; the S8-S15 independent-review waiver
+and green-check/publication workflow above remain in force.
+
 DRDJPro-Rust is a professional DJ application focused on:
 
 - audio playback

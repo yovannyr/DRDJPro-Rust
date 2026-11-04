@@ -42,7 +42,7 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 | 25 / 16 | Pitch-Bend -/+ | **MIDI fehlt.** Vorhandenen momentanen Nudge an Note12/11 mit Release anbinden. |
 | 25 / 16 | SHIFT+Pitch-Bend: Rueck-/Vorspulen | **S9 implementiert.** Note32/33 mit Release, globales SHIFT erforderlich, 8s Quellverschiebung pro Sekunde am Steuerthread; Gap ueber100ms beendet ohne Nachholsprung. Kein kontinuierlicher Reverse-DSP. |
 | 25 / 17 | Hochaufloesender Pitch-Fader | **MIDI fehlt.** App-Pitchsteuerung vorhanden; zusammengehoerige CC41 MSB / CC9 LSB noch nicht verarbeitet. Pickup nach GUI-/Bereichswechsel fehlt. |
-| 25 / 18-20 | Drei unabhaengige FX und Auswahl | **Teilweise, derzeit abweichend.** Ein Delay je Deck. Die drei Regler steuern dessen Wet/Feedback/Zeit, nicht drei FX-Pegel. FX2/FX3-Tasten und Shift-Auswahl fehlen. Die historischen Pakete FX1/FX2/FX3 im Migrationsplan sind keine drei Effektslots. |
+| 25 / 18-20 | Drei unabhaengige FX und Auswahl | **Implementiert S13:** drei serielle Slots je Deck, Delay/LP/HP, einzelne Aktivierung/Intensitaet und SHIFT-Auswahl. Bisherige Wet/Feedback/Zeit-Belegung bleibt als sichtbarer Legacy-Modus; neue Slot-Belegung wird explizit gewaehlt. |
 | 25 / 19,21 | FX-Beats, Tap-Tempo, BPM-Reset | **Implementiert S12:** BEATS waehlt Beat-Unterteilungen; TAP Note4 mit Releases, begrenztem Median und Hold-Reset auf Deck-BPM. Fehlende/zu grosse Zeitbasis fuehrt zu sichtbarem Bypass. |
 | 25-26 / 22-25 | Auto-Loop, halbieren, verdoppeln, Reloop, SHIFT In/Out | **MIDI fehlt.** Engine-/GUI-Funktionen vorhanden; Loop-Noten auf Kanaelen5/6 fehlen. |
 | 25 / 22 | SHIFT+AUTO: Auto4 | **Teilweise.** Quelle beschreibt vier Takte. Vorhandene Auto-Loops sind beatbasiert, kein ausdruecklicher Vier-Takte-Aufruf. Nicht als vier Beats implementieren; Umgang mit Taktwechseln festlegen. |
@@ -132,7 +132,7 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S10 Split Cue und Meterpolitik | **Implementiert:** Split in MON/Note28, gemittelte Mono-Signale und5ms Blend, Profilfeld mit Defaultaus; kontextuelle Hardwaremeter mit separatem Stereo-Master-Peak und100ms Produzentenbeobachtung. | Mono/Stereo/6-Kanal-Routing, Frame-/Sync-Kohaerenz, Master-Isolation, Allokationsfreiheit/Release-Zeitbudget, Profil-Neustart4/2/4, Konflikte und Meterumschaltung automatisiert. Native Kopfhoerer-/LED-Abnahme offen. |
 | S11 Censor | **Implementiert:** Note16 Hold/Release, eigener Reverse-Kopf und normale vorlaufende Zeitlinie; CENSOR-Anzeige, Loop-Wrap und vorbereiteter Keylock. | Exakte Samples/Phase bei mehreren Tempi, Stereo-/Frame-Kohaerenz, Anfang/EOF, Pause/Seek, Sync-/Scratch-/Cue-Konflikte, Keylock-Pitch, Focus/SHIFT/Recovery und Quellwechsel automatisiert; Heap/optimiertes Renderbudget geprueft. Native Uebergaenge/Hoer-/Latenzabnahme offen. |
 | S12 Musikalische FX-Zeitbasis | **Implementiert:** Millisekunden/Deck-/Tap-BPM,1/16 bis4 Beats, Note4 TAP mit1s Hold-Reset, persistente Timing-/Preset-Felder; vorhandener Delay-DSP bleibt. | Gridsegment/Pitch, Tap-Ausreisser/Timeout/Ownership, Bypass/Resume, Legacy/SQLite/Latest-Ack/Neustart, GUI-Grenzen und Stereo-Rampen/Heap/Release-Budget automatisiert. Native Hoer-/Timing-Abnahme offen. |
-| S13 Drei FX-Slots und Auswahl | Begrenzte Slots je Deck, serieller/paralleler Signalvertrag, FX1-3/Shift-Pegel/-Auswahl. S12. | Vorab unterstuetzte Effekttypen und Routing festlegen; alten Delayzustand migrieren, Bypass/Fahnen/Parameter und CPU-/Speicherbudget; bisheriges Controller-Mapping nicht still veraendern. |
+| S13 Drei FX-Slots und Auswahl | **Implementiert:** drei serielle Delay/LP/HP-Slots je Deck, FX1-3/SHIFT-Auswahl und Pegel/Feedback, eigener Legacy-Reglermodus, Kettenpresets und Slot1-Migration. | Impulsreihenfolge, Filter/Cue/History, sechs aktive Slots/Heap/Release-Budget, Format-Speichergrenze, MIDI/GUI-Isolation und Preset-/SQLite-/Device-Neustart automatisiert. Native Uebergaenge/Hoer-/Latenzabnahme offen. |
 | S14 Vier-Slot-Sampler | Offline vorbereitete Samples, bounded Mixer, Play/Stop, Gesamtpegel und GUI. | Polyphonie/Restart-/OneShot-Vertrag festlegen; keine Datei-/Speicherarbeit im Callback, Peaks/Routing, Deck-Isolation, Stop/Disconnect und Neustart. |
 | S15 Pad-Modus und Gesamtqualifikation | Nur konkret ausgewaehlte App-Modi, S4/S14; weitere Serato-Modi gesondert entscheiden. | Modus/LED/Fokus konsistent, keine verlorenen Releases bei Wechsel; alle Controller-Elemente A/B nach Testmatrix, reale Tracks, Latenz/Langzeit und Recovery messen. |
 
@@ -140,7 +140,7 @@ Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
 autorisierte Fallback: S2-S6 selbst fertigstellen. Separat wurde S7 mit vom
 Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8 folgt als eigener Queue-Slice.
-S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11 ergaenzt Censor, S12 die musikalische Delay-Zeitbasis; S13-S15 bleiben offen. Der
+S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11 ergaenzt Censor, S12 die musikalische Delay-Zeitbasis, S13 drei FX-Slots; S14-S15 bleiben offen. Der
 Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits

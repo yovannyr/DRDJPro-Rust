@@ -421,6 +421,12 @@ component NudgeHold inherits Rectangle {
 }
 
 component FxStrip inherits Rectangle {
+    in property <string> summary;
+    in-out property <int> selected-slot;
+    in-out property <int> effect-kind;
+    in-out property <bool> legacy:true;
+    callback slot-action(int,int,float);
+    callback legacy-changed(bool);
     in property <string> deck;
     in property <bool> ready;
     in-out property <bool> active;
@@ -439,19 +445,25 @@ component FxStrip inherits Rectangle {
     background:#171d27;
     VerticalLayout {
         padding:8px;spacing:6px;
-        Text {text:"Deck "+root.deck+" DELAY";color:#edf2fa;}
+        Text {text:"Deck "+root.deck+" FX 1 → 2 → 3 (serial)";color:#edf2fa;}
+        Text {text:root.summary;color:#c8d4e4;font-size:11px;overflow:elide;}
+        HorizontalLayout {
+            ComboBox {model:["Slot 1","Slot 2","Slot 3"];current-index <=> root.selected-slot;enabled:root.ready;accessible-label:"Deck "+root.deck+" FX slot";selected(value)=>{root.slot-action(root.selected-slot,4,0);}}
+            ComboBox {model:["Delay","Low-pass","High-pass"];current-index <=> root.effect-kind;enabled:root.ready;accessible-label:"Deck "+root.deck+" effect type";selected(value)=>{root.slot-action(root.selected-slot,5,root.effect-kind);}}
+        }
+        CheckBox {text:"Legacy knobs: Wet / Feedback / Time";checked <=> root.legacy;enabled:root.ready;accessible-label:"Deck "+root.deck+" legacy FX knobs";toggled=>{root.legacy-changed(root.legacy);}}
         CheckBox {text:"Enabled (unchecked = bypass)";checked <=> root.active;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay enabled";toggled=>{root.changed();}}
         HorizontalLayout {
-            ComboBox { model:["Milliseconds", "Deck BPM", "Tap BPM"]; current-index <=> root.time-base; enabled:root.ready; accessible-label:"Deck "+root.deck+" FX time base"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
-            ComboBox { model:["1/16 beat", "1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.division; enabled:root.ready && root.time-base != 0; accessible-label:"Deck "+root.deck+" FX beat division"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
-            NudgeHold { text:"TAP"; label:"Deck "+root.deck+" FX tap tempo; hold one second to reset"; enabled:root.ready; held(value)=>{root.tap(value);} cancel=>{root.tap-cancel();} }
+            ComboBox { model:["Milliseconds", "Deck BPM", "Tap BPM"]; current-index <=> root.time-base; enabled:root.ready && root.effect-kind == 0; accessible-label:"Deck "+root.deck+" FX time base"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
+            ComboBox { model:["1/16 beat", "1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.division; enabled:root.ready && root.effect-kind == 0 && root.time-base != 0; accessible-label:"Deck "+root.deck+" FX beat division"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
+            NudgeHold { text:"TAP"; label:"Deck "+root.deck+" FX tap tempo; hold one second to reset"; enabled:root.ready && root.effect-kind == 0; held(value)=>{root.tap(value);} cancel=>{root.tap-cancel();} }
         }
         Text {text:root.timing;color:#c8d4e4;overflow:elide;}
         Text {text:"Time "+round(root.time)+" ms";color:#c8d4e4;}
-        Slider {minimum:20;maximum:1000;value <=> root.time;enabled:root.ready && root.time-base == 0;accessible-label:"Deck "+root.deck+" delay time";changed=>{root.changed();}}
+        Slider {minimum:20;maximum:1000;value <=> root.time;enabled:root.ready && root.effect-kind == 0 && root.time-base == 0;accessible-label:"Deck "+root.deck+" delay time";changed=>{root.changed();}}
         Text {text:"Feedback "+round(root.feedback)+"%";color:#c8d4e4;}
-        Slider {minimum:0;maximum:85;value <=> root.feedback;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay feedback";changed=>{root.changed();}}
-        Text {text:"Dry/Wet "+round(root.wet)+"%";color:#c8d4e4;}
+        Slider {minimum:0;maximum:85;value <=> root.feedback;enabled:root.ready && root.effect-kind == 0;accessible-label:"Deck "+root.deck+" delay feedback";changed=>{root.changed();}}
+        Text {text:(root.effect-kind == 0 ? "Dry/Wet " : "Filter intensity ")+round(root.wet)+"%";color:#c8d4e4;}
         Slider {minimum:0;maximum:100;value <=> root.wet;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay dry wet";changed=>{root.changed();}}
         HorizontalLayout {
             SpinBox {minimum:1;maximum:8;value <=> root.slot;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay preset slot";}
@@ -1404,6 +1416,23 @@ export component AppWindow inherits Window {
     in property <string> fx-timing-b;
     in property <bool> fx-time-available-a:true;
     in property <bool> fx-time-available-b:true;
+    in property <bool> fx-chain-ready;
+    in property <string> fx-summary-a;
+    in property <string> fx-summary-b;
+    in-out property <int> fx-selected-a;
+    in-out property <int> fx-selected-b;
+    in-out property <int> fx-kind-a;
+    in-out property <int> fx-kind-b;
+    in-out property <bool> fx-legacy-a:true;
+    in-out property <bool> fx-legacy-b:true;
+    in property <bool> fx-slot1-a;
+    in property <bool> fx-slot2-a;
+    in property <bool> fx-slot3-a;
+    in property <bool> fx-slot1-b;
+    in property <bool> fx-slot2-b;
+    in property <bool> fx-slot3-b;
+    callback fx-slot-action(int,int,int,float);
+    callback fx-legacy-changed(int,bool);
     callback fx-timing-changed(int,int,int);
     callback fx-beat-step(int,int);
     callback fx-manual-time(int);
@@ -2006,7 +2035,7 @@ export component AppWindow inherits Window {
         }
     }
     if root.fx-open : Rectangle {
-        x:16px;y:60px;width:parent.width - 32px;height:420px;
+        x:16px;y:60px;width:parent.width - 32px;height:480px;
         background:#0b1119;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Delay effects panel";
         VerticalLayout {
@@ -2014,8 +2043,8 @@ export component AppWindow inherits Window {
             HorizontalLayout {Text {text:root.fx-status;color:#edf2fa;} Button {text:"CLOSE FX";accessible-label:"Close delay effects";clicked=>{root.fx-tap-cancel(0);root.fx-tap-cancel(1);root.fx-open=false;}}}
             HorizontalLayout {
                 spacing:8px;
-                FxStrip {deck:"A";time-base <=> root.fx-base-a;division <=> root.fx-division-a;timing:root.fx-timing-a;timing-changed(base,division)=>{root.fx-timing-changed(0,base,division);}tap(held)=>{root.fx-tap(0,held);}tap-cancel=>{root.fx-tap-cancel(0);}ready:root.quantize-preferences-ready;active <=> root.fx-active-a;time <=> root.fx-time-a;feedback <=> root.fx-feedback-a;wet <=> root.fx-wet-a;slot <=> root.fx-slot-a;changed=>{root.fx-changed(0);}preset(slot,save)=>{root.fx-preset(0,slot,save);}}
-                FxStrip {deck:"B";time-base <=> root.fx-base-b;division <=> root.fx-division-b;timing:root.fx-timing-b;timing-changed(base,division)=>{root.fx-timing-changed(1,base,division);}tap(held)=>{root.fx-tap(1,held);}tap-cancel=>{root.fx-tap-cancel(1);}ready:root.quantize-preferences-ready;active <=> root.fx-active-b;time <=> root.fx-time-b;feedback <=> root.fx-feedback-b;wet <=> root.fx-wet-b;slot <=> root.fx-slot-b;changed=>{root.fx-changed(1);}preset(slot,save)=>{root.fx-preset(1,slot,save);}}
+                FxStrip {deck:"A";summary:root.fx-summary-a;selected-slot <=> root.fx-selected-a;effect-kind <=> root.fx-kind-a;legacy <=> root.fx-legacy-a;slot-action(slot,action,value)=>{root.fx-slot-action(0,slot,action,value);}legacy-changed(value)=>{root.fx-legacy-changed(0,value);}time-base <=> root.fx-base-a;division <=> root.fx-division-a;timing:root.fx-timing-a;timing-changed(base,division)=>{root.fx-timing-changed(0,base,division);}tap(held)=>{root.fx-tap(0,held);}tap-cancel=>{root.fx-tap-cancel(0);}ready:root.quantize-preferences-ready;active <=> root.fx-active-a;time <=> root.fx-time-a;feedback <=> root.fx-feedback-a;wet <=> root.fx-wet-a;slot <=> root.fx-slot-a;changed=>{root.fx-changed(0);}preset(slot,save)=>{root.fx-preset(0,slot,save);}}
+                FxStrip {deck:"B";summary:root.fx-summary-b;selected-slot <=> root.fx-selected-b;effect-kind <=> root.fx-kind-b;legacy <=> root.fx-legacy-b;slot-action(slot,action,value)=>{root.fx-slot-action(1,slot,action,value);}legacy-changed(value)=>{root.fx-legacy-changed(1,value);}time-base <=> root.fx-base-b;division <=> root.fx-division-b;timing:root.fx-timing-b;timing-changed(base,division)=>{root.fx-timing-changed(1,base,division);}tap(held)=>{root.fx-tap(1,held);}tap-cancel=>{root.fx-tap-cancel(1);}ready:root.quantize-preferences-ready;active <=> root.fx-active-b;time <=> root.fx-time-b;feedback <=> root.fx-feedback-b;wet <=> root.fx-wet-b;slot <=> root.fx-slot-b;changed=>{root.fx-changed(1);}preset(slot,save)=>{root.fx-preset(1,slot,save);}}
             }
         }
         }

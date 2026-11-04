@@ -1,5 +1,65 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S13: three fixed serial FX slots
+
+Each deck has a fixed post-fader chain1->2->3. Each slot independently selects
+Delay, Low-pass or High-pass, enable and intensity. Delay intensity is the
+existing Dry/Wet; filters sweep the existing logarithmic Butterworth cutoff
+with intensity0 as neutral, LP towards20Hz and HP towards min20kHz/0.45*rate.
+No additional effect catalogue or parallel routing is implied. The FX panel has
+one selected-slot editor, a three-slot status summary, type selection and
+existing timing/feedback/preset controls. Delay-only controls are disabled for
+filters. Musical timing and TAP follow the selected slot; changing selection,
+type or parameter cancels pending tap holds before they can target another slot.
+
+Legacy MIDI knobs remain the persisted default: CC0/1/2 still edit slot1
+Wet/Feedback/Milliseconds. The visible Legacy knobs checkbox opts each deck
+into the three-slot mode: CC0/1/2 become corresponding slot intensities. Normal
+FX notes0/1/2 toggle the respective slots. SHIFT+FX notes11/12/13 cycle that
+slot's Delay->LP->HP type without implicitly enabling it; shifted CC11/12/13
+control its Delay feedback0-85%, while filters explicitly reject that secondary
+parameter. Releases never toggle twice. Six FX LEDs show actual slot enable,
+including unavailable Delay timing bypass; greeting priority/coalescing remains.
+BEATS/TAP retain S12 on the selected slot, Note65/SHIFT+TAP remain unassigned.
+
+Existing JSON version1 adds defaulted extra/kind/preset_chain/legacy_knobs:
+legacy deck settings/timing become slot1 unchanged, other slots bypassed. New
+presets save the whole chain; old presets restore slot1 and bypass slots2/3.
+The legacy preset snapshot is validated against any full-chain snapshot. SQLite17,
+transactional save/latest-ack/close-flush and invalid-data preservation stay in
+place; the bounded8KiB JSON limit is tested with all presets populated. Selection
+is transient; MIDI mode is persisted per deck, not silently changed by presets.
+Older binaries do not understand the profile extension.
+
+The existing DelaySource and EqSource processors are composed without a new
+DSP dependency. Exact-identity EQ banks bypass filter arithmetic, while active
+and fading banks retain the original filter-state processing. Unchanged EQ
+command versions skip coefficient payload reads; changed/busy writers retain the
+existing coherent bounded snapshot behavior. Three one-second
+delay rings are allocated per deck at engine
+creation; aggregate limit64MiB/deck is checked before allocation. Stereo48kHz
+uses1,152,024 ring bytes/deck, four channels2,304,048. High-channel/rate formats
+exceeding the total are explicitly rejected. Controls/rings remain retained by
+the engine across track retirement; pause/replacement preserves delay histories.
+Bypass and type changes fade the existing processors; Delay history continues
+while inaudible and may be heard again on re-enable. Device changes preserve
+settings for all slots but create fresh histories as before.
+
+The pre-fader cue/monitor auxiliary channels bypass every stage when reserved;
+filter histories for these channels are cleared so headphone audio cannot leak
+when channels change roles. Native auxiliary processing remains supported when
+not reserved. Coefficients are computed on the control plane. Render reads are
+bounded atomic snapshots per processor/frame, without added callback locks,
+heap work or tasks. A type change publishes its Delay and filter controls
+separately and uses existing5ms ramps; there is no simultaneous atomic switch
+of all stages. Cascaded effects can increase peaks; existing meters apply.
+
+Automated checks cover serial impulse delay, filter response, stereo/cue-history
+isolation, six-slot CPU/heap behavior with type switches, device handoff, invalid
+settings, MIDI legacy/new mapping, per-slot ownership/LED state, full-chain
+preset/SQLite/close restore and panel bounds. Native listening/transition quality,
+controller haptics and sustained device timing remain separate acceptance work.
+
 ## MC4000 S12: musical delay timebase
 
 Each deck's FX panel offers Milliseconds, Deck BPM and Tap BPM. Milliseconds

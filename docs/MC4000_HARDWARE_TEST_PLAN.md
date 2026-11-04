@@ -12,8 +12,8 @@ Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
 implementiert; S8 ergaenzt die persistente Prep Queue, S9 Navigation/Loop-Jog.
 S10 ergaenzt Split Cue/kontextuelle Hardwaremeter, S11 momentanes Censor.
-S12 ergaenzt musikalische Delay-Zeitbasis/Tap/Reset. S13-S15 bleiben
-**NOT IMPLEMENTED**. Native Abnahmen fuer S2-S12
+S12 ergaenzt musikalische Delay-Zeitbasis/Tap/Reset, S13 drei serielle FX-Slots.
+S14-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S13
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -75,8 +75,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S11-02 CensorEdges | Bei anderem Pitch, nahe Anfang/EOF, mit Loop/Sync/Keylock | Anfang: Reverse stumm, normale Zeit laeuft; normales EOF stumm. Loop: beide Koepfe innerhalb Grenzen; Keylock: vorbereiteter Pitch bleibt. Controller stoppt Sync, kein automatischer Wiederanlauf. Pause/Seek/Pitch/Quelle beenden Censor, spaetes Release startet nichts. Scratch/Nudge/pending Cue und Jog-Konflikte explizit. Focus/Disconnect/Overflow pruefen. |
 | S12-01 BeatFX | Beatunterteilungen aendern, Tempo/Beatgrid aendern | 1/16 bis4 Beats, gespeicherte lokale Grid-BPM mal effektivem Tempo; Timing folgt Steuer-Ticks. Fehlendes Grid/ausserhalb20-1000ms: erklaerter Bypass/FX-LED aus, spaeter automatische Rampen-Rueckkehr. CC2 waehlt wieder Millisekunden. Stereo/Rampen mit Musik auf Klicks pruefen. |
 | S12-02 Tap | Regelmaessig tappen, Ausreisser/Timeout, Taste halten zum Reset | Ab3 kurzen Taps feste40-240BPM, Median bis4 Intervalle, Bounce<250ms ignoriert, Gap>1.5s startet neu. Hold>=1s setzt genau einmal auf Deck-BPM, ohne Grid expliziter Bypass. NoteOn0/NoteOff, GUI/HW-Besitz, Focus/Panel/Recovery und Profil-/Preset-Neustart pruefen. |
-| S13-01 Slots | FX1-3 einzeln aktivieren, Pegel/SHIFT-Auswahl bewegen | Drei unabhaengige Slots, richtige Auswahl/LEDs; GUI/Controller stimmen ueberein, anderes Deck bleibt unveraendert. |
-| S13-02 Migration | Altes Delayprofil laden, Slots speichern/Neustart, Bypass | Alte Werte nachvollziehbar migriert; Fahnen/BYPASS gemaess Vertrag; keine Dauerfeedbackschleife. |
+| S13-01 Slots | FX1-3 einzeln aktivieren, Pegel/SHIFT-Auswahl bewegen | Drei serielle Delay/LP/HP-Slots unabhaengig aktivieren. Legacy-Reglermodus pruefen, dann sichtbar auf Slot-Intensitaeten umstellen; SHIFT-Tasten waehlen Typ, SHIFT-Regler Delay-Feedback. LEDs folgen aktivem DSP, GUI zeigt alle Zustaende; anderes Deck unveraendert. |
+| S13-02 Migration | Altes Delayprofil laden, Slots speichern/Neustart, Bypass | Alte Werte in Slot1, andere aus; alte Presets ebenso, neue Presets ganze Kette. Typ-/Bypass-Wechsel mit Musik auf Pegelspruenge testen; Delayhistorie bleibt bei Pause/Trackwechsel erhalten. Einstellungen nach Geraetewechsel erhalten, Historien neu. Speichergrenze64MiB/Deck; native Dauerlast/Feedback-Peaks pruefen. |
 | S14-01 Sampler | Vier verschiedene Slots starten, gemeinsam triggern, SHIFT Stop | Richtiger Slot, begrenzte Polyphonie, Stop nur Zielslot; dokumentierter OneShot/Restart-Vertrag. |
 | S14-02 Level | Samplerpegel0/halb/voll waehrend Deckwiedergabe | Nur Samplebus aendert Pegel; Decktransport unveraendert; kein Clipping bei vorgesehenem Headroom. |
 | S15-01 PadMode | Alle implementierten Modi wechseln, auch waehrend Hold | Eindeutige GUI-/Pad-/LED-Zuordnung; keine aktive Stimme/Geste bleibt unerwartet eingerastet. |

@@ -350,9 +350,9 @@ pub struct DualDeckEngine {
     eq_controls: [Arc<crate::mixer_dsp::EqControl>; 2],
     clip_latches: [Arc<crate::peak_meter::ClipLatch>; 2],
     mixers: [Mixer; 2],
-    fx_settings: [Cell<crate::delay_fx::DelaySettings>; 2],
-    fx_controls: [Arc<crate::delay_fx::DelayControl>; 2],
-    _fx_rings: [Arc<crate::delay_fx::DelayRing>; 2],
+    fx_settings: [[Cell<crate::fx_chain::Slot>; 3]; 2],
+    fx_controls: [[Arc<crate::fx_chain::Control>; 3]; 2],
+    _fx_rings: [[Arc<crate::delay_fx::DelayRing>; 3]; 2],
     output_channels: u16,
     output_rate: u32,
     output_routing: Arc<crate::output_routing::RoutingControl>,
@@ -386,7 +386,9 @@ impl DualDeckEngine {
         self.set_levels(old.levels.get());
         for id in [DeckId::A, DeckId::B] {
             self.set_eq(id, old.eq_settings(id))?;
-            self.set_fx(id, old.fx_settings(id))?;
+            for slot in 0..3 {
+                self.set_fx_slot(id, slot, old.fx_slot(id, slot))?;
+            }
             let snapshot = old.snapshot(id);
             let deck = old.decks[id.index()].borrow();
             if let Some(track) = deck.track.clone() {
@@ -522,21 +524,36 @@ impl DualDeckEngine {
         // Meter only the logical post-fader master, before physical output routing.
         let (bus, output_routing) =
             crate::output_routing::PairRouter::new(bus.with_cue_meter(mix_controls.clone()));
-        let fx_controls = std::array::from_fn(|_| crate::delay_fx::DelayControl::new());
+        let fx_controls: [[Arc<crate::fx_chain::Control>; 3]; 2] = std::array::from_fn(|_| {
+            std::array::from_fn(|_| crate::fx_chain::Control::new(output_rate))
+        });
         let fx_rings = [
-            crate::delay_fx::DelayRing::new(output_rate, output_channels)?,
-            crate::delay_fx::DelayRing::new(output_rate, output_channels)?,
+            crate::fx_chain::rings(output_rate, output_channels)?,
+            crate::fx_chain::rings(output_rate, output_channels)?,
         ];
         let mixers = std::array::from_fn(|index| {
             let (input, output) = rodio::mixer::mixer(output_channels, output_rate);
-            deck_mixer.add(
-                crate::delay_fx::DelaySource::new(
-                    output,
-                    Arc::clone(&fx_controls[index]),
-                    Arc::clone(&fx_rings[index]),
-                )
-                .with_cue_controls(mix_controls.clone(), index),
+            let a = crate::fx_chain::source(
+                output,
+                &fx_controls[index][0],
+                Arc::clone(&fx_rings[index][0]),
+                mix_controls.clone(),
+                index,
             );
+            let b = crate::fx_chain::source(
+                a,
+                &fx_controls[index][1],
+                Arc::clone(&fx_rings[index][1]),
+                mix_controls.clone(),
+                index,
+            );
+            deck_mixer.add(crate::fx_chain::source(
+                b,
+                &fx_controls[index][2],
+                Arc::clone(&fx_rings[index][2]),
+                mix_controls.clone(),
+                index,
+            ));
             input
         });
         mixer.add(bus);
@@ -558,7 +575,7 @@ impl DualDeckEngine {
             ),
             mixers,
             fx_settings: std::array::from_fn(|_| {
-                Cell::new(crate::delay_fx::DelaySettings::default())
+                std::array::from_fn(|_| Cell::new(crate::fx_chain::Slot::default()))
             }),
             fx_controls,
             _fx_rings: fx_rings,
@@ -1985,18 +2002,42 @@ impl DualDeckEngine {
     pub fn eq_settings(&self, id: DeckId) -> crate::mixer_dsp::EqSettings {
         self.eq_settings[id.index()].get()
     }
+    #[cfg(test)]
     pub fn fx_settings(&self, id: DeckId) -> crate::delay_fx::DelaySettings {
-        self.fx_settings[id.index()].get()
+        self.fx_slot(id, 0).delay
     }
+    pub fn fx_slot(&self, id: DeckId, slot: usize) -> crate::fx_chain::Slot {
+        self.fx_settings[id.index()][slot].get()
+    }
+    #[cfg(test)]
     pub fn set_fx(
         &self,
         id: DeckId,
         settings: crate::delay_fx::DelaySettings,
     ) -> Result<(), String> {
-        settings.validate()?;
-        if settings != self.fx_settings(id) {
-            self.fx_controls[id.index()].publish(settings);
-            self.fx_settings[id.index()].set(settings);
+        self.set_fx_slot(
+            id,
+            0,
+            crate::fx_chain::Slot {
+                delay: settings,
+                ..Default::default()
+            },
+        )
+    }
+    /// Validate the complete slot before publishing either processor's bounded settings.
+    pub fn set_fx_slot(
+        &self,
+        id: DeckId,
+        slot: usize,
+        value: crate::fx_chain::Slot,
+    ) -> Result<(), String> {
+        if slot >= 3 {
+            return Err("FX slot must be1-3".into());
+        }
+        value.validate()?;
+        if self.fx_slot(id, slot) != value {
+            self.fx_controls[id.index()][slot].publish(value);
+            self.fx_settings[id.index()][slot].set(value);
         }
         Ok(())
     }
@@ -2808,6 +2849,93 @@ mod tests {
     }
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn fx_chain_full_engine_heap_deadline_isolation_and_handoff() {
+        use crate::fx_chain::{Kind, Slot};
+        let (mixer, mut output) = rodio::mixer::mixer(4, 48000);
+        let engine = DualDeckEngine::from_mixer(mixer, 4, 48000);
+        let file = wav_file(4096, 48000 * 3);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            for slot in 0..3 {
+                engine
+                    .set_fx_slot(
+                        id,
+                        slot,
+                        Slot {
+                            delay: crate::delay_fx::DelaySettings {
+                                enabled: true,
+                                time_ms: 20,
+                                feedback: 0.8,
+                                wet: 0.5,
+                            },
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+            engine.play(id);
+        }
+        output.by_ref().take(38400).for_each(drop);
+        let before = engine.fx_slot(DeckId::A, 1);
+        let timer = std::time::Instant::now();
+        let heap = crate::looping::measured_heap(|| {
+            for sample in 0..19200 {
+                if sample == 2400 {
+                    engine
+                        .set_fx_slot(
+                            DeckId::A,
+                            1,
+                            Slot {
+                                kind: Kind::LowPass,
+                                ..before
+                            },
+                        )
+                        .unwrap();
+                }
+                if sample == 7200 {
+                    engine
+                        .set_fx_slot(
+                            DeckId::A,
+                            1,
+                            Slot {
+                                kind: Kind::HighPass,
+                                ..before
+                            },
+                        )
+                        .unwrap();
+                }
+                assert!(output.next().unwrap().is_finite());
+            }
+        });
+        let elapsed = timer.elapsed();
+        assert_eq!(
+            (heap.allocations, heap.reallocations, heap.deallocations),
+            (0, 0, 0)
+        );
+        if !cfg!(debug_assertions) {
+            assert!(elapsed < Duration::from_millis(100), "{elapsed:?}");
+        }
+        eprintln!("FX chain six active slots/4ch/48kHz100ms: {elapsed:?}; heap {heap:?}");
+        assert_eq!(engine.fx_slot(DeckId::B, 1), before);
+        assert!(engine.set_fx_slot(DeckId::A, 3, before).is_err());
+        let mut invalid = before;
+        invalid.delay.wet = f32::NAN;
+        assert!(engine.set_fx_slot(DeckId::A, 1, invalid).is_err());
+        assert_eq!(engine.fx_slot(DeckId::A, 1).kind, Kind::HighPass);
+        for id in [DeckId::A, DeckId::B] {
+            engine.pause(id);
+        }
+        let (mixer2, _output2) = rodio::mixer::mixer(4, 48000);
+        let next = DualDeckEngine::from_mixer(mixer2, 4, 48000);
+        next.inherit_paused_decks(&engine).unwrap();
+        for id in [DeckId::A, DeckId::B] {
+            for slot in 0..3 {
+                assert_eq!(next.fx_slot(id, slot), engine.fx_slot(id, slot));
+            }
+        }
+    }
     #[test]
     fn censor_engine_tempo_loop_transport_conflicts_and_keylock_pitch() {
         let rate = 48000;

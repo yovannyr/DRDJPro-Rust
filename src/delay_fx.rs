@@ -43,6 +43,14 @@ impl DelaySettings {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FxPreferences {
+    #[serde(default)]
+    pub extra: [[crate::fx_chain::Slot; 2]; 2],
+    #[serde(default)]
+    pub kind: [crate::fx_chain::Kind; 2],
+    #[serde(default)]
+    pub preset_chain: [Option<[crate::fx_chain::Slot; 3]>; 8],
+    #[serde(default = "legacy_knobs")]
+    pub legacy_knobs: [bool; 2],
     pub version: u8,
     pub decks: [DelaySettings; 2],
     pub presets: [Option<DelaySettings>; 8],
@@ -54,6 +62,10 @@ pub(crate) struct FxPreferences {
 impl Default for FxPreferences {
     fn default() -> Self {
         Self {
+            extra: Default::default(),
+            kind: Default::default(),
+            preset_chain: [None; 8],
+            legacy_knobs: [true; 2],
             version: 1,
             decks: [DelaySettings::default(); 2],
             presets: [None; 8],
@@ -63,6 +75,29 @@ impl Default for FxPreferences {
     }
 }
 impl FxPreferences {
+    pub fn slot(&self, deck: usize, slot: usize) -> crate::fx_chain::Slot {
+        if slot == 0 {
+            crate::fx_chain::Slot {
+                kind: self.kind[deck],
+                delay: self.decks[deck],
+                timing: self.timing[deck],
+            }
+        } else {
+            self.extra[deck][slot - 1]
+        }
+    }
+    pub fn put_slot(&mut self, deck: usize, slot: usize, value: crate::fx_chain::Slot) {
+        if slot == 0 {
+            self.kind[deck] = value.kind;
+            self.decks[deck] = value.delay;
+            self.timing[deck] = value.timing;
+        } else {
+            self.extra[deck][slot - 1] = value;
+        }
+    }
+    pub fn chain(&self, deck: usize) -> [crate::fx_chain::Slot; 3] {
+        std::array::from_fn(|i| self.slot(deck, i))
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err("Unsupported FX preferences version".into());
@@ -73,8 +108,28 @@ impl FxPreferences {
         for value in self.timing.iter().chain(self.preset_timing.iter()) {
             value.validate()?;
         }
+        for value in self
+            .extra
+            .iter()
+            .flatten()
+            .chain(self.preset_chain.iter().flatten().flatten())
+        {
+            value.validate()?;
+        }
+        for (i, chain) in self.preset_chain.iter().enumerate() {
+            if let Some(chain) = chain {
+                if self.presets[i] != Some(chain[0].delay)
+                    || self.preset_timing[i] != chain[0].timing
+                {
+                    return Err("FX preset chain does not match its legacy slot1 snapshot".into());
+                }
+            }
+        }
         Ok(())
     }
+}
+fn legacy_knobs() -> [bool; 2] {
+    [true; 2]
 }
 
 pub(crate) struct DelayControl {

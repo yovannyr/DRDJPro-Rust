@@ -15,6 +15,7 @@ mod deck_render;
 mod delay_fx;
 #[cfg(any(target_os = "windows", test))]
 mod external_drop;
+mod fx_chain;
 mod fx_timing;
 mod hot_cues;
 mod legacy_catalog;

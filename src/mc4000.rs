@@ -17,6 +17,7 @@ pub enum Command {
     Fader(usize, u8),
     Crossfader(u8),
     FxToggle(usize),
+    FxSlot(usize, usize, u8, u8),
     FxKnob(usize, usize, u8),
     FxTimeStep(usize, i8),
     FxTap(usize, bool),
@@ -66,6 +67,21 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
             status == 0x90 && value != 0,
         )),
         (0x90, 8..=9, 0, 1..=127) => Some(Command::FxToggle((channel - 8) as usize)),
+        (0x90, 8..=9, note @ 1..=2, 1..=127) => {
+            Some(Command::FxSlot((channel - 8) as usize, note as usize, 0, 0))
+        }
+        (0x90, 8..=9, note @ 11..=13, 1..=127) => Some(Command::FxSlot(
+            (channel - 8) as usize,
+            (note - 11) as usize,
+            1,
+            0,
+        )),
+        (0xb0, 8..=9, knob @ 11..=13, value) => Some(Command::FxSlot(
+            (channel - 8) as usize,
+            (knob - 11) as usize,
+            3,
+            value,
+        )),
         (status @ (0x90 | 0x80), 8..=9, 4, value) => Some(Command::FxTap(
             (channel - 8) as usize,
             status == 0x90 && value != 0,
@@ -195,7 +211,7 @@ impl Greeting {
         ])
     }
 }
-const FEEDBACK_MESSAGES: usize = 26;
+const FEEDBACK_MESSAGES: usize = 30;
 #[derive(Default)]
 struct Feedback {
     last: Option<[[u8; 3]; FEEDBACK_MESSAGES]>,
@@ -252,7 +268,11 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             ui.get_left_loaded(),
             ui.get_left_keylock(),
             ui.get_monitor_cue_a(),
-            ui.get_fx_active_a() && ui.get_fx_time_available_a(),
+            if ui.get_fx_chain_ready() {
+                ui.get_fx_slot1_a()
+            } else {
+                ui.get_fx_active_a() && ui.get_fx_time_available_a()
+            },
             ui.get_left_hot_cues(),
         ),
         (
@@ -260,7 +280,11 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             ui.get_right_loaded(),
             ui.get_right_keylock(),
             ui.get_monitor_cue_b(),
-            ui.get_fx_active_b() && ui.get_fx_time_available_b(),
+            if ui.get_fx_chain_ready() {
+                ui.get_fx_slot1_b()
+            } else {
+                ui.get_fx_active_b() && ui.get_fx_time_available_b()
+            },
             ui.get_right_hot_cues(),
         ),
     ];
@@ -296,6 +320,21 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
     messages[23] = [0x91, 2, if ui.get_right_sync_active() { 127 } else { 0 }];
     messages[24] = [0x94, 50, if ui.get_left_loop_active() { 127 } else { 0 }];
     messages[25] = [0x95, 50, if ui.get_right_loop_active() { 127 } else { 0 }];
+    for (i, active) in [
+        ui.get_fx_slot2_a(),
+        ui.get_fx_slot3_a(),
+        ui.get_fx_slot2_b(),
+        ui.get_fx_slot3_b(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        messages[26 + i] = [
+            0x98 + (i / 2) as u8,
+            1 + (i % 2) as u8,
+            if active { 127 } else { 0 },
+        ];
+    }
     messages
 }
 pub fn present() -> Result<bool, String> {
@@ -776,7 +815,10 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
     }
     if matches!(
         &command,
-        Command::FxToggle(_) | Command::FxKnob(_, _, _) | Command::FxTimeStep(_, _)
+        Command::FxToggle(_)
+            | Command::FxKnob(_, _, _)
+            | Command::FxTimeStep(_, _)
+            | Command::FxSlot(_, _, _, _)
     ) && !ui.get_quantize_preferences_ready()
     {
         return;
@@ -834,6 +876,10 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         }
         Command::HeadphoneCue(_) => (),
         Command::FxToggle(deck) => {
+            if ui.get_fx_chain_ready() {
+                ui.invoke_fx_slot_action(deck as i32, 0, 0, 0.);
+                return;
+            }
             if deck == 0 {
                 ui.set_fx_active_a(!ui.get_fx_active_a());
             } else {
@@ -842,6 +888,18 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
             ui.invoke_fx_changed(deck as i32);
         }
         Command::FxKnob(deck, knob, value) => {
+            if ui.get_fx_chain_ready() {
+                let legacy = if deck == 0 {
+                    ui.get_fx_legacy_a()
+                } else {
+                    ui.get_fx_legacy_b()
+                };
+                if !legacy {
+                    ui.invoke_fx_slot_action(deck as i32, knob as i32, 2, f32::from(value) / 127.);
+                    return;
+                }
+                ui.invoke_fx_slot_action(deck as i32, 0, 4, 0.);
+            }
             let value = f32::from(value) / 127.;
             match (deck, knob) {
                 (0, 0) => ui.set_fx_wet_a(value * 100.),
@@ -863,6 +921,12 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
             }
         }
         Command::FxTap(deck, held) => ui.invoke_controller_fx_tap(deck as i32, held),
+        Command::FxSlot(deck, slot, action, value) => ui.invoke_fx_slot_action(
+            deck as i32,
+            slot as i32,
+            i32::from(action),
+            f32::from(value) / 127.,
+        ),
         Command::Keylock(0) => {
             ui.set_left_keylock(!ui.get_left_keylock());
             ui.invoke_keylock_left();
@@ -1407,7 +1471,7 @@ mod tests {
         assert_eq!(decode(&[0xb9, 3, 127]), Some(Command::FxTimeStep(1, -1)));
         assert_eq!(decode(&[0xb8, 3, 2]), Some(Command::FxTimeStep(0, 2)));
         assert_eq!(decode(&[0x98, 0, 0]), None);
-        assert_eq!(decode(&[0x98, 11, 127]), None);
+        assert_eq!(decode(&[0x98, 11, 127]), Some(Command::FxSlot(0, 0, 1, 0)));
         apply(&ui, decode(&[0x98, 0, 127]).unwrap());
         assert!(ui.get_fx_active_a());
         assert!(!ui.get_fx_active_b());

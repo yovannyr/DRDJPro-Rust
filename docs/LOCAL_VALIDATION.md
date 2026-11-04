@@ -1737,3 +1737,72 @@ Final `cargo build --workspace --release --locked` passed (1m44s), as did
 `cargo fmt --all -- --check` and `git diff --check`. Runtime sources were
 unchanged after final Clippy/full tests/optimized tests. S12 is committed
 locally only; no push or independent review was performed.
+
+## MC4000 S13 three serial FX slots (2026-11-04)
+
+S11/S12 were pushed after the user completed GitHub device-code authentication;
+main/origin matched2b449c8 before S13. QWEN timed out again after45s without
+returned implementation. The user explicitly authorized GPT-6.1 Sol for S13-S15;
+recorded in AGENTS.md. No independent review under the S8-S15 waiver.
+
+Implemented three fixed serial slots/deck with Delay/Low-pass/High-pass, separate
+enable/intensity, selected-slot timebase/TAP, full-chain presets and a slot status
+summary. Existing Delay/EQ DSP is reused with control-plane coefficients and
+preallocated rings. Three one-second rings share a64MiB/deck allocation ceiling
+checked before construction; native formats exceeding the aggregate reject.
+Cue/monitor auxiliary channels bypass every stage and filter histories are
+cleared for reserved channels. Settings survive paused-device handoff; delay
+histories remain across track retirement/pause, fresh on device reconstruction.
+
+The persisted default Legacy knobs mode retains CC0/1/2 Wet/Feedback/Time on
+slot1; a visible checkbox opts each deck into corresponding slot intensities.
+FX notes0-2 toggle slots; notes11-13 cycle Delay/LP/HP, CC11-13 set that slot's
+Delay feedback. Filters explicitly reject a nonexistent secondary parameter.
+Six FX LEDs reflect actual DSP activation, including unavailable timing bypass.
+Existing greeting/coalescing/bounded recovery remains. GUI selection is transient;
+MIDI mode and all chain parameters/presets persist in extended FX JSON version1,
+with default migration from legacy delay into slot1 and other slots bypassed.
+Old presets restore slot1 only. Full-chain preset snapshots validate against
+their legacy slot1 snapshot. SQLite17 and the existing8KiB bounded payload remain;
+all presets populated, transactional rollback, close/latest-ack restore tested.
+
+Five new tests cover exact serial impulse delay, measured LP/HP response,
+stereo/cue-history isolation, six active slots with live type changes and measured
+heap/deadline, full-chain device handoff, legacy mapping/opt-in/new controls,
+per-deck/preset isolation and panel bounds at850x740/1280x860. Extended existing
+tests verify typed migration/payload/SQLite and close-flushed full-chain presets.
+Delay/filter commands are frame-coherent individually; a type switch publishes
+separate processor commands using existing5ms fades, not an atomic all-slot
+change. Cascaded effects may increase peaks. Native musical/transition/physical
+controller and sustained latency acceptance remains open.
+
+Initial full Debug runs exceeded the existing Instant-Double100ms render deadline
+despite the isolated test passing. Production performance fixes retain the exact
+test/deadline: identity EQ banks bypass arithmetic, and unchanged EQ command
+versions skip coefficient payload loads. Active/fading bank state processing,
+bounded no-spin writer overlap behavior and coherent snapshots remain. The
+existing concurrency/filter-response suite passes. Legacy single-delay helpers
+are now test-only; Clippy findings and a stale shifted-FX decode expectation were
+fixed before the final gates. No deadline was relaxed and no new test ignored.
+
+Final `cargo clippy --workspace --locked --all-targets -- -D warnings` passed.
+`cargo test --workspace --locked --quiet` passed on the normal parallel runner:
+479 application plus five DSP tests (484 unique passes), zero failures, six
+hardware qualifications ignored; application suite48.36s. Original Instant-Double
+deadline passed as part of this suite. Runtime sources unchanged thereafter.
+
+Optimized `cargo test --workspace --release --locked fx_ -- --test-threads=1
+--nocapture` passed15 tests in0.48s after1m49s compilation. Original Instant-Double
+Keylock/heap/deadline regression passed separately in Release (0.08s), and the
+whole-chain latest-ack/preset/close-restore test passed (0.15s). These are repeats
+of already-counted tests. Six active slots over both decks,4 channels/48kHz,
+100ms offline block with Delay->LP->HP switches took5.8137ms; zero allocations,
+reallocations or deallocations. The100ms optimized deadline passed unchanged.
+The separate delay-only block took0.1245ms. This workload is not an exhaustive
+effect-combination/format benchmark, device latency or sustained qualification.
+
+Final `cargo build --workspace --release --locked` passed (1m48s).
+`cargo fmt --all -- --check` and `git diff --check` passed. Updated the feature
+inventory with the implemented bounded effect types and remaining acceptance.
+No runtime changes followed the final green full suite/Clippy/optimized checks.
+Unrelated untracked build_output.txt and test_output.txt remain excluded.

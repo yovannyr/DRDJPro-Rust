@@ -2211,6 +2211,9 @@ mod tests {
             tapped_bpm: Some(123.),
         };
         fx.preset_timing[7] = fx.timing[0];
+        fx.extra[0][0].kind = crate::fx_chain::Kind::LowPass;
+        fx.extra[0][0].delay.enabled = true;
+        fx.preset_chain[7] = Some(fx.chain(0));
         let empty = crate::library::CatalogDelta {
             prep_queue: None,
             revision: 0,

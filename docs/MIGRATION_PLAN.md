@@ -29,7 +29,9 @@ Kopfhoerer-/LED-/Latenzabnahme bleibt offen. S11 liefert momentanes Censor
 mit separatem Reverse-Kopf und weiterlaufender normaler Zeitlinie, Loop/Keylock
 und besitzgebundener Freigabe. S12 ergaenzt Beat-Unterteilungen, Tap und
 Hold-Reset fuer Delay, Legacy-/Preset-Persistenz und expliziten Bypass bei
-nicht darstellbarer Zeitbasis. S13-S15 bleiben offen.
+nicht darstellbarer Zeitbasis. S13 liefert drei serielle Delay/LP/HP-Slots
+je Deck, Kettenpresets, getrennte LEDs und einen expliziten Legacy-Reglermodus.
+S14-S15 bleiben offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 
