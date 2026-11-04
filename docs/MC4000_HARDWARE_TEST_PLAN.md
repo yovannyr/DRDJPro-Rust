@@ -12,7 +12,8 @@ Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
 implementiert; S8 ergaenzt die persistente Prep Queue, S9 Navigation/Loop-Jog.
 S10 ergaenzt Split Cue/kontextuelle Hardwaremeter, S11 momentanes Censor.
-S12-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S11
+S12 ergaenzt musikalische Delay-Zeitbasis/Tap/Reset. S13-S15 bleiben
+**NOT IMPLEMENTED**. Native Abnahmen fuer S2-S12
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -72,8 +73,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S10-03 Profile | Split speichern, Neustart und Geraetewechsel2/4Kanaele | Profil korrekt wiederhergestellt; Konflikte/fehlendes Cuepaar explizit statt falscher Ausgabe. |
 | S11-01 Censor | Laufend SHIFT+VINYL halten, dann loslassen | Rueckwaerts hoerbar, CENSOR sichtbar; Release/SHIFT-Release kehrt auf normal fortgelaufene Zeitlinie zurueck. Wiederholtes NoteOn startet nicht neu; neue Geste nach Abbruch erst nach Release. Eintritt/Austritt auf musikalisch stoerende Spruenge/Klicks pruefen; keine neue Ueberblendung zugesichert. |
 | S11-02 CensorEdges | Bei anderem Pitch, nahe Anfang/EOF, mit Loop/Sync/Keylock | Anfang: Reverse stumm, normale Zeit laeuft; normales EOF stumm. Loop: beide Koepfe innerhalb Grenzen; Keylock: vorbereiteter Pitch bleibt. Controller stoppt Sync, kein automatischer Wiederanlauf. Pause/Seek/Pitch/Quelle beenden Censor, spaetes Release startet nichts. Scratch/Nudge/pending Cue und Jog-Konflikte explizit. Focus/Disconnect/Overflow pruefen. |
-| S12-01 BeatFX | Beatunterteilungen aendern, Tempo/Beatgrid aendern | Zeitbasierter FX folgt gewaehlter musikalischer Unterteilung ohne laute Klicks. |
-| S12-02 Tap | Regelmaessig tappen, Ausreisser/Timeout, Taste halten zum Reset | Stabile Tap-Zeitbasis; Ausreisser begrenzt; Reset nutzt Deck-BPM, nicht erfundene Standard-BPM. |
+| S12-01 BeatFX | Beatunterteilungen aendern, Tempo/Beatgrid aendern | 1/16 bis4 Beats, gespeicherte lokale Grid-BPM mal effektivem Tempo; Timing folgt Steuer-Ticks. Fehlendes Grid/ausserhalb20-1000ms: erklaerter Bypass/FX-LED aus, spaeter automatische Rampen-Rueckkehr. CC2 waehlt wieder Millisekunden. Stereo/Rampen mit Musik auf Klicks pruefen. |
+| S12-02 Tap | Regelmaessig tappen, Ausreisser/Timeout, Taste halten zum Reset | Ab3 kurzen Taps feste40-240BPM, Median bis4 Intervalle, Bounce<250ms ignoriert, Gap>1.5s startet neu. Hold>=1s setzt genau einmal auf Deck-BPM, ohne Grid expliziter Bypass. NoteOn0/NoteOff, GUI/HW-Besitz, Focus/Panel/Recovery und Profil-/Preset-Neustart pruefen. |
 | S13-01 Slots | FX1-3 einzeln aktivieren, Pegel/SHIFT-Auswahl bewegen | Drei unabhaengige Slots, richtige Auswahl/LEDs; GUI/Controller stimmen ueberein, anderes Deck bleibt unveraendert. |
 | S13-02 Migration | Altes Delayprofil laden, Slots speichern/Neustart, Bypass | Alte Werte nachvollziehbar migriert; Fahnen/BYPASS gemaess Vertrag; keine Dauerfeedbackschleife. |
 | S14-01 Sampler | Vier verschiedene Slots starten, gemeinsam triggern, SHIFT Stop | Richtiger Slot, begrenzte Polyphonie, Stop nur Zielslot; dokumentierter OneShot/Restart-Vertrag. |

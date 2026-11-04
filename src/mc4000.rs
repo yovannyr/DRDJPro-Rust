@@ -19,6 +19,7 @@ pub enum Command {
     FxToggle(usize),
     FxKnob(usize, usize, u8),
     FxTimeStep(usize, i8),
+    FxTap(usize, bool),
     Jog(usize, i8),
     PlatterTouch(usize, bool),
     Vinyl(usize),
@@ -65,6 +66,10 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
             status == 0x90 && value != 0,
         )),
         (0x90, 8..=9, 0, 1..=127) => Some(Command::FxToggle((channel - 8) as usize)),
+        (status @ (0x90 | 0x80), 8..=9, 4, value) => Some(Command::FxTap(
+            (channel - 8) as usize,
+            status == 0x90 && value != 0,
+        )),
         (0xb0, 8..=9, 0..=2, value) => Some(Command::FxKnob(
             (channel - 8) as usize,
             bytes[1] as usize,
@@ -247,7 +252,7 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             ui.get_left_loaded(),
             ui.get_left_keylock(),
             ui.get_monitor_cue_a(),
-            ui.get_fx_active_a(),
+            ui.get_fx_active_a() && ui.get_fx_time_available_a(),
             ui.get_left_hot_cues(),
         ),
         (
@@ -255,7 +260,7 @@ fn feedback_messages(ui: &crate::AppWindow) -> [[u8; 3]; FEEDBACK_MESSAGES] {
             ui.get_right_loaded(),
             ui.get_right_keylock(),
             ui.get_monitor_cue_b(),
-            ui.get_fx_active_b(),
+            ui.get_fx_active_b() && ui.get_fx_time_available_b(),
             ui.get_right_hot_cues(),
         ),
     ];
@@ -847,16 +852,17 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
                 (_, 2) => ui.set_fx_time_b(20. + value * 980.),
                 _ => return,
             }
-            ui.invoke_fx_changed(deck as i32);
-        }
-        Command::FxTimeStep(deck, step) => {
-            if deck == 0 {
-                ui.set_fx_time_a((ui.get_fx_time_a() + f32::from(step) * 10.).clamp(20., 1000.));
-            } else {
-                ui.set_fx_time_b((ui.get_fx_time_b() + f32::from(step) * 10.).clamp(20., 1000.));
+            if knob == 2 {
+                ui.invoke_fx_manual_time(deck as i32);
             }
             ui.invoke_fx_changed(deck as i32);
         }
+        Command::FxTimeStep(deck, step) => {
+            if ui.get_quantize_preferences_ready() {
+                ui.invoke_fx_beat_step(deck as i32, i32::from(step));
+            }
+        }
+        Command::FxTap(deck, held) => ui.invoke_controller_fx_tap(deck as i32, held),
         Command::Keylock(0) => {
             ui.set_left_keylock(!ui.get_left_keylock());
             ui.invoke_keylock_left();
@@ -1405,14 +1411,38 @@ mod tests {
         apply(&ui, decode(&[0x98, 0, 127]).unwrap());
         assert!(ui.get_fx_active_a());
         assert!(!ui.get_fx_active_b());
+        assert_eq!(feedback_messages(&ui)[4], [0x98, 0, 127]);
+        ui.set_fx_time_available_a(false);
+        assert_eq!(feedback_messages(&ui)[4], [0x98, 0, 0]);
+        ui.set_fx_time_available_a(true);
         apply(&ui, decode(&[0xb9, 0, 127]).unwrap());
         assert_eq!(ui.get_fx_wet_b(), 100.);
         apply(&ui, decode(&[0xb8, 1, 127]).unwrap());
         assert_eq!(ui.get_fx_feedback_a(), 85.);
         apply(&ui, decode(&[0xb9, 2, 127]).unwrap());
         assert_eq!(ui.get_fx_time_b(), 1000.);
+        let steps = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
+        let recorded = steps.clone();
+        ui.on_fx_beat_step(move |deck, step| recorded.set((deck, step)));
         apply(&ui, decode(&[0xb9, 3, 127]).unwrap());
-        assert_eq!(ui.get_fx_time_b(), 990.);
+        assert_eq!(steps.get(), (1, -1));
+        assert_eq!(ui.get_fx_time_b(), 1000.);
+        for deck in 0..=1 {
+            assert_eq!(
+                decode(&[0x98 + deck, 4, 127]),
+                Some(Command::FxTap(deck as usize, true))
+            );
+            assert_eq!(
+                decode(&[0x98 + deck, 4, 0]),
+                Some(Command::FxTap(deck as usize, false))
+            );
+            assert_eq!(
+                decode(&[0x88 + deck, 4, 127]),
+                Some(Command::FxTap(deck as usize, false))
+            );
+        }
+        assert_eq!(decode(&[0x90, 4, 127]), Some(Command::Stutter(0)));
+        assert_eq!(decode(&[0x98, 10, 127]), None);
         ui.set_quantize_preferences_ready(false);
         apply(&ui, Command::FxToggle(1));
         assert!(!ui.get_fx_active_b());

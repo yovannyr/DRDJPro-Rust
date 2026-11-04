@@ -2205,6 +2205,12 @@ mod tests {
         fx.decks[0].enabled = true;
         fx.decks[0].time_ms = 500;
         fx.presets[7] = Some(fx.decks[0]);
+        fx.timing[0] = crate::fx_timing::Timing {
+            base: crate::fx_timing::TimeBase::Tap,
+            division: crate::fx_timing::Division::Half,
+            tapped_bpm: Some(123.),
+        };
+        fx.preset_timing[7] = fx.timing[0];
         let empty = crate::library::CatalogDelta {
             prep_queue: None,
             revision: 0,

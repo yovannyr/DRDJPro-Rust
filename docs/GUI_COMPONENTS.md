@@ -1,5 +1,56 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S12: musical delay timebase
+
+Each deck's FX panel offers Milliseconds, Deck BPM and Tap BPM. Milliseconds
+preserves the original20-1000ms slider and legacy profiles. Musical divisions
+are quarter-note beat multiples1/16,1/8,1/4,1/2,1,2,4; resolved milliseconds are
+`60000 * beats / BPM`, rounded only after checking the exact20-1000ms range.
+Deck BPM uses the saved grid's tempo at the current normal source position,
+including tempo segments/warp and effective playback speed (pitch/nudge/Sync).
+It refreshes on control ticks, not sample-accurately at a tempo boundary. Tap
+BPM is an explicit fixed wall-time tempo and does not follow deck pitch.
+
+The MC4000 BEATS relative CC3 on channels9/10 now steps divisions instead of
+the historical10ms increment; from Milliseconds it selects Deck BPM. Tap mode
+keeps its own BPM when divisions change. Note4 on those channels is TAP:
+NoteOn>0 press, NoteOn0/NoteOff release. Three short taps establish tempo from
+press intervals. The median of at most four intervals smooths jitter; intervals
+under250ms are ignored as bounce, gaps over1.5s restart acquisition, one deviation
+over25% from the median is rejected, two consecutive deviations reacquire.
+The accepted range is40-240BPM. Holding at least one second resets once to
+Deck BPM and clears the tapped BPM; release after reset never counts as a tap.
+No default BPM is invented. Timing uses an injected monotonic control clock;
+MIDI transport/UI scheduling and physical hold timing still need native tests.
+
+A missing saved grid or time outside20-1000ms bypasses the effect with a visible
+reason and clears the FX hardware LED. The requested enable state remains set;
+valid timing automatically resumes it through the existing wet/feedback ramp.
+No silent time clamp, enlarged delay ring or stale-time enabled effect. Manual
+CC2 time changes explicitly return to Milliseconds; CC0/1 still control the
+single delay's Wet/Feedback pending S13. FX1 selection/three slots, Note65 and
+SHIFT+TAP Note10 remain outside S12.
+
+GUI TAP is a held pointer/keyboard control. Hardware and GUI holds have separate
+ownership; recovery only cancels hardware holds. Focus loss, GUI cancellation,
+panel close, unavailable storage and manual timebase/preset changes cancel tap
+acquisition without firing a reset. Runtime history/holds are not persisted.
+Optional defaulted timing/preset_timing fields extend existing FX JSON version1
+and SQLite17 without altering legacy millisecond values. Deck settings and
+presets save the selected timebase/division/tapped BPM alongside the existing
+parameters; derived tempo-dependent milliseconds do not cause continuous saves.
+Existing latest-ack, close-flush and malformed-data preservation paths apply.
+Older binaries that reject the added JSON fields are not downgrade-compatible.
+
+DSP code and ring capacity remain unchanged: coherent atomic settings feed the
+existing5ms delay-tap crossfade and parameter ramp, retaining the latest target
+during an active crossfade. Timing/tap work lives entirely on the control plane.
+Tests cover tempo segments/pitch, unavailable/resumed timing, Tap/Reset/ownership,
+legacy/preset/SQLite/close persistence, panel bounds, stereo crossfade continuity,
+latest targets and measured render heap/optimized deadline. Native listening,
+controller timing, sustained device latency and musical grid boundaries remain
+separate acceptance work; no general click-free claim follows from offline tests.
+
 ## MC4000 S11: momentary Censor
 
 SHIFT+VINYL uses deck-channel Note16: NoteOn>0 holds, NoteOn0/NoteOff
@@ -646,9 +697,9 @@ The shared waveform region uses fixed min/preferred/max layout bounds, with deta
 
 ## Delay FX overlay and MC4000 controls (implemented, tests pending 2026-10-29)
 
-FX opens a closable floating A/B delay panel, leaving the underlying workspace layout dimensions unchanged. Each deck has Enabled/bypass, milliseconds, feedback percent, Dry/Wet percent and a 1-8 preset selector with explicit Load/Save. Presets share one bank; empty slots report an error instead of changing parameters. The header reports FX ready/changed/saved/not saved or session-only. Invalid values restore the prior valid settings. Native layout/input validation is deferred; compilation alone is not UI acceptance.
+Historical FX checkpoint, extended by S12 above: FX opens a closable floating A/B delay panel, leaving the underlying workspace layout dimensions unchanged. Each deck has Enabled/bypass, milliseconds, feedback percent, Dry/Wet percent and a 1-8 preset selector with explicit Load/Save. Presets share one bank; empty slots report an error instead of changing parameters. The header reports FX ready/changed/saved/not saved or session-only. Invalid values restore the prior valid settings. Native layout/input validation is deferred; compilation alone is not UI acceptance.
 
-Manufacturer MIDI addresses come from MC4000-User-Guide-v1.2_00.pdf, MIDI Commands pp. 30-31 (https://cdn.inmusicbrands.com/denondj/MC4000/MC4000-User-Guide-v1.2_00.pdf). Zero-based channels 8/9 map to the two FX banks. Note 0 toggles the single delay; CC0/1/2 map to wet, feedback and milliseconds. CC3 is interpreted as signed relative movement and adjusts time in 10-ms increments. These software parameter assignments do not claim the manufacturer's three separate effect slots or Beat Sync/Tap behavior. Six absolute knob slots coalesce before GUI dispatch; relative steps/buttons retain the bounded queue and overflow report. Shift/release addresses are ignored. All-on controller illumination keeps priority over per-effect LED state feedback. Physical movement, relative magnitude interpretation and musical response await tomorrow's test.
+Historical FX MIDI checkpoint (CC3/TAP semantics superseded by S12 above): Manufacturer MIDI addresses come from MC4000-User-Guide-v1.2_00.pdf, MIDI Commands pp. 30-31 (https://cdn.inmusicbrands.com/denondj/MC4000/MC4000-User-Guide-v1.2_00.pdf). Zero-based channels 8/9 map to the two FX banks. Note 0 toggles the single delay; CC0/1/2 map to wet, feedback and milliseconds. CC3 is interpreted as signed relative movement and adjusts time in 10-ms increments. These software parameter assignments do not claim the manufacturer's three separate effect slots or Beat Sync/Tap behavior. Six absolute knob slots coalesce before GUI dispatch; relative steps/buttons retain the bounded queue and overflow report. Shift/release addresses are ignored. All-on controller illumination keeps priority over per-effect LED state feedback. Physical movement, relative magnitude interpretation and musical response await tomorrow's test.
 
 ## Paused in-process device change (2026-10-30)
 

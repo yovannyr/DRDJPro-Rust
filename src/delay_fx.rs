@@ -46,6 +46,10 @@ pub(crate) struct FxPreferences {
     pub version: u8,
     pub decks: [DelaySettings; 2],
     pub presets: [Option<DelaySettings>; 8],
+    #[serde(default)]
+    pub timing: [crate::fx_timing::Timing; 2],
+    #[serde(default)]
+    pub preset_timing: [crate::fx_timing::Timing; 8],
 }
 impl Default for FxPreferences {
     fn default() -> Self {
@@ -53,6 +57,8 @@ impl Default for FxPreferences {
             version: 1,
             decks: [DelaySettings::default(); 2],
             presets: [None; 8],
+            timing: [Default::default(); 2],
+            preset_timing: [Default::default(); 8],
         }
     }
 }
@@ -62,6 +68,9 @@ impl FxPreferences {
             return Err("Unsupported FX preferences version".into());
         }
         for value in self.decks.iter().chain(self.presets.iter().flatten()) {
+            value.validate()?;
+        }
+        for value in self.timing.iter().chain(self.preset_timing.iter()) {
             value.validate()?;
         }
         Ok(())
@@ -306,6 +315,73 @@ impl<S: Source> Source for DelaySource<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fx_musical_time_updates_crossfade_latest_target_and_realtime_budget() {
+        use crate::fx_timing::{Division, TimeBase, Timing};
+        let control = DelayControl::new();
+        let mut settings = DelaySettings {
+            enabled: true,
+            time_ms: 500,
+            feedback: 0.,
+            wet: 1.,
+        };
+        control.publish(settings);
+        let buffer = rodio::buffer::SamplesBuffer::new(
+            2,
+            48000,
+            (0..96000)
+                .flat_map(|i| {
+                    let v = i as f32 / 96000.;
+                    [v, -v]
+                })
+                .collect::<Vec<_>>(),
+        );
+        let mut source =
+            DelaySource::new(buffer, control.clone(), DelayRing::new(48000, 2).unwrap());
+        let mut previous = 0.;
+        for _ in 0..48000 {
+            previous = source.next().unwrap();
+            source.next();
+        }
+        let mut timing = Timing {
+            base: TimeBase::Deck,
+            division: Division::Half,
+            tapped_bpm: None,
+        };
+        let start = std::time::Instant::now();
+        let heap = crate::looping::measured_heap(|| {
+            for frame in 0..4800 {
+                if frame == 0 || frame == 48 || frame == 96 {
+                    timing.division = if frame == 48 {
+                        Division::One
+                    } else {
+                        Division::Half
+                    };
+                    settings.time_ms = timing
+                        .milliseconds(250, Some(if frame == 0 { 150. } else { 120. }))
+                        .unwrap();
+                    control.publish(settings);
+                }
+                let a = source.next().unwrap();
+                let b = source.next().unwrap();
+                assert!((a + b).abs() < 1e-6);
+                assert!((a - previous).abs() < 0.01, "delay-time crossfade jumped");
+                previous = a;
+            }
+        });
+        let elapsed = start.elapsed();
+        assert_eq!(
+            (heap.allocations, heap.reallocations, heap.deallocations),
+            (0, 0, 0)
+        );
+        assert_eq!(source.old_tap, 12000);
+        assert_eq!(source.pending_tap, 12000);
+        assert_eq!(source.tap_fade, 0);
+        if !cfg!(debug_assertions) {
+            assert!(elapsed < Duration::from_millis(100), "{elapsed:?}");
+        }
+        eprintln!("FX musical delay 100ms stereo/48kHz: {elapsed:?}; heap {heap:?}");
+    }
     #[test]
     fn disabling_last_cue_between_source_and_effect_cannot_record_a_cued_frame() {
         struct DisableAfterSample<S> {

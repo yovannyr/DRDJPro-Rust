@@ -27,7 +27,9 @@ native Abnahme im GUI-Inventar/Hardware-Testplan. S10 liefert Split Cue mit
 persistenten Geraeteprofilen und kontextuelle Hardwaremeter; native
 Kopfhoerer-/LED-/Latenzabnahme bleibt offen. S11 liefert momentanes Censor
 mit separatem Reverse-Kopf und weiterlaufender normaler Zeitlinie, Loop/Keylock
-und besitzgebundener Freigabe. S12-S15 bleiben offen.
+und besitzgebundener Freigabe. S12 ergaenzt Beat-Unterteilungen, Tap und
+Hold-Reset fuer Delay, Legacy-/Preset-Persistenz und expliziten Bypass bei
+nicht darstellbarer Zeitbasis. S13-S15 bleiben offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 

@@ -355,6 +355,8 @@ pub struct AudioController {
     inflight_output: RefCell<Option<crate::output_preferences::OutputRoute>>,
     output_profiles_writable: Cell<bool>,
     fx_state: RefCell<crate::delay_fx::FxPreferences>,
+    fx_taps: RefCell<[crate::fx_timing::TapState; 2]>,
+    fx_tap_owner: Cell<[u8; 2]>,
     saved_fx: RefCell<crate::delay_fx::FxPreferences>,
     table_columns: RefCell<crate::table_columns::TableColumns>,
     saved_table_columns: RefCell<Option<crate::table_columns::TableColumns>>,
@@ -524,6 +526,8 @@ impl AudioController {
             inflight_output: RefCell::new(None),
             output_profiles_writable: Cell::new(false),
             fx_state: RefCell::new(Default::default()),
+            fx_taps: RefCell::new(Default::default()),
+            fx_tap_owner: Cell::new([0; 2]),
             saved_fx: RefCell::new(Default::default()),
             table_columns: RefCell::new(Default::default()),
             saved_table_columns: RefCell::new(Some(Default::default())),
@@ -890,6 +894,71 @@ impl AudioController {
                     0 => c.fx_preset(DeckId::A, slot, save),
                     1 => c.fx_preset(DeckId::B, slot, save),
                     _ => (),
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_fx_timing_changed(move |deck, base, division| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(id) = Self::fx_deck(deck) {
+                    c.change_fx_timing(id, base, division);
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_fx_beat_step(move |deck, step| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(id) = Self::fx_deck(deck) {
+                    let old = c.fx_state.borrow().timing[Self::grid_index(id)];
+                    let base = if old.base == crate::fx_timing::TimeBase::Tap {
+                        2
+                    } else {
+                        1
+                    };
+                    c.change_fx_timing(
+                        id,
+                        base,
+                        old.division.stepped(step.clamp(-64, 63)).index() as i32,
+                    );
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_fx_manual_time(move |deck| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(id) = Self::fx_deck(deck) {
+                    if c.storage_ready.get() {
+                        c.cancel_fx_tap(Self::grid_index(id));
+                        c.fx_state.borrow_mut().timing[Self::grid_index(id)].base =
+                            crate::fx_timing::TimeBase::Milliseconds;
+                    }
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_fx_tap(move |deck, held| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(id) = Self::fx_deck(deck) {
+                    c.fx_tap(id, held, 1);
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_controller_fx_tap(move |deck, held| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(id) = Self::fx_deck(deck) {
+                    c.fx_tap(id, held, 2);
+                }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        ui.on_fx_tap_cancel(move |deck| {
+            if let Some(c) = weak.upgrade() {
+                if let Some(id) = Self::fx_deck(deck) {
+                    let index = Self::grid_index(id);
+                    if c.fx_tap_owner.get()[index] == 1 {
+                        c.cancel_fx_tap(index);
+                    }
                 }
             }
         });
@@ -2662,6 +2731,11 @@ impl AudioController {
     /// controller disconnects, reconnects, or the bounded MIDI queue overflows so no stale
     /// hold persists. GUI-held nudges are left untouched and remain effective.
     pub fn mc4000_release_holds(&self) {
+        for index in 0..2 {
+            if self.fx_tap_owner.get()[index] == 2 {
+                self.cancel_fx_tap(index);
+            }
+        }
         for id in [DeckId::A, DeckId::B] {
             self.release_censor(id);
         }
@@ -3762,6 +3836,9 @@ impl AudioController {
     }
     #[cfg(any(target_os = "windows", test))]
     pub(crate) fn handle_window_deactivated(&self) {
+        for index in 0..2 {
+            self.cancel_fx_tap(index);
+        }
         for id in [DeckId::A, DeckId::B] {
             self.release_censor(id);
         }
@@ -4678,13 +4755,13 @@ impl AudioController {
                 (Default::default(), Some(error))
             }
         };
-        for (id, setting) in [DeckId::A, DeckId::B].into_iter().zip(value.decks) {
-            let _ = self.engine.borrow().set_fx(id, setting);
-            self.put_fx_ui(id, setting);
-        }
         *self.fx_state.borrow_mut() = value.clone();
         *self.saved_fx.borrow_mut() = value.clone();
         *self.observed_fx.borrow_mut() = value;
+        for id in [DeckId::A, DeckId::B] {
+            self.cancel_fx_tap(Self::grid_index(id));
+            self.sync_fx_timing(id);
+        }
         if let Some(ui) = self.ui.upgrade() {
             ui.set_fx_status(
                 if warning.is_some() {
@@ -5331,10 +5408,21 @@ impl AudioController {
             ui.set_status(error.into());
         }
     }
+    fn fx_deck(deck: i32) -> Option<DeckId> {
+        match deck {
+            0 => Some(DeckId::A),
+            1 => Some(DeckId::B),
+            _ => None,
+        }
+    }
+    fn fx_deck_bpm(&self, id: DeckId) -> Option<f64> {
+        let snapshot = self.engine.borrow().snapshot(id);
+        snapshot
+            .grid
+            .map(|g| g.bpm_at_position(snapshot.position) * snapshot.effective_speed)
+    }
     fn put_fx_ui(&self, id: DeckId, value: crate::delay_fx::DelaySettings) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
+        let Some(ui) = self.ui.upgrade() else { return };
         match id {
             DeckId::A => {
                 ui.set_fx_active_a(value.enabled);
@@ -5350,13 +5438,171 @@ impl AudioController {
             }
         }
     }
+    fn sync_fx_timing(&self, id: DeckId) {
+        use crate::fx_timing::TimeBase;
+        let index = Self::grid_index(id);
+        let state = self.fx_state.borrow();
+        let mut resolved = state.decks[index];
+        let timing = state.timing[index];
+        drop(state);
+        let bpm = self.fx_deck_bpm(id);
+        let result = timing.milliseconds(resolved.time_ms, bpm);
+        let available = result.is_ok();
+        let caption = match result {
+            Ok(ms) => {
+                resolved.time_ms = ms;
+                match timing.base {
+                    TimeBase::Milliseconds => format!("Manual: {ms} ms"),
+                    _ => format!(
+                        "{} beats / {:.2} BPM / {ms} ms",
+                        timing.division.label(),
+                        if timing.base == TimeBase::Tap {
+                            timing.tapped_bpm.unwrap_or(0.)
+                        } else {
+                            bpm.unwrap_or(0.)
+                        }
+                    ),
+                }
+            }
+            Err(error) => {
+                resolved.enabled = false;
+                format!("Bypassed: {error}")
+            }
+        };
+        if self.engine.borrow().fx_settings(id) != resolved {
+            if let Err(error) = self.engine.borrow().set_fx(id, resolved) {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+                return;
+            }
+        }
+        let Some(ui) = self.ui.upgrade() else { return };
+        // Requested enable state survives an unavailable beat time; only the render bus bypasses.
+        let requested = self.fx_state.borrow().decks[index];
+        self.put_fx_ui(
+            id,
+            crate::delay_fx::DelaySettings {
+                time_ms: resolved.time_ms,
+                ..requested
+            },
+        );
+        let base = match timing.base {
+            TimeBase::Milliseconds => 0,
+            TimeBase::Deck => 1,
+            TimeBase::Tap => 2,
+        };
+        match id {
+            DeckId::A => {
+                ui.set_fx_base_a(base);
+                ui.set_fx_division_a(timing.division.index() as i32);
+                ui.set_fx_timing_a(caption.into());
+                ui.set_fx_time_available_a(available);
+            }
+            DeckId::B => {
+                ui.set_fx_base_b(base);
+                ui.set_fx_division_b(timing.division.index() as i32);
+                ui.set_fx_timing_b(caption.into());
+                ui.set_fx_time_available_b(available);
+            }
+        }
+    }
+    fn change_fx_timing(&self, id: DeckId, base: i32, division: i32) {
+        use crate::fx_timing::{Division, TimeBase};
+        if !self.storage_ready.get() {
+            return;
+        }
+        let index = Self::grid_index(id);
+        let Some(division) = usize::try_from(division)
+            .ok()
+            .and_then(|i| Division::ALL.get(i))
+            .copied()
+        else {
+            return;
+        };
+        let mut timing = self.fx_state.borrow().timing[index];
+        timing.base = match base {
+            0 => TimeBase::Milliseconds,
+            1 => TimeBase::Deck,
+            2 => TimeBase::Tap,
+            _ => return,
+        };
+        timing.division = division;
+        if let Err(error) = timing.validate() {
+            if let Some(ui) = self.ui.upgrade() {
+                ui.set_status(error.into());
+            }
+        } else {
+            self.cancel_fx_tap(index);
+            self.fx_state.borrow_mut().timing[index] = timing;
+        }
+        self.sync_fx_timing(id);
+        self.observe_quantize_preferences();
+    }
+    fn cancel_fx_tap(&self, index: usize) {
+        self.fx_taps.borrow_mut()[index].cancel();
+        let mut owners = self.fx_tap_owner.get();
+        owners[index] = 0;
+        self.fx_tap_owner.set(owners);
+    }
+    fn fx_tap(&self, id: DeckId, held: bool, owner: u8) {
+        if !self.storage_ready.get() {
+            if self.fx_tap_owner.get()[Self::grid_index(id)] == owner {
+                self.cancel_fx_tap(Self::grid_index(id));
+            }
+            return;
+        }
+        let now = self.engine.borrow().control_now();
+        let index = Self::grid_index(id);
+        let mut owners = self.fx_tap_owner.get();
+        if owners[index] != 0 && owners[index] != owner {
+            return;
+        }
+        if held {
+            owners[index] = owner;
+        } else {
+            if owners[index] == 0 {
+                return;
+            }
+            owners[index] = 0;
+        }
+        self.fx_tap_owner.set(owners);
+        let action = {
+            let mut taps = self.fx_taps.borrow_mut();
+            if held {
+                taps[index].press(now);
+                None
+            } else {
+                taps[index].release(now)
+            }
+        };
+        if let Some(action) = action {
+            self.apply_fx_tap(id, action);
+        }
+    }
+    fn apply_fx_tap(&self, id: DeckId, action: crate::fx_timing::TapAction) {
+        use crate::fx_timing::{TapAction, TimeBase};
+        let index = Self::grid_index(id);
+        let mut timing = self.fx_state.borrow().timing[index];
+        match action {
+            TapAction::Tempo(bpm) => {
+                timing.base = TimeBase::Tap;
+                timing.tapped_bpm = Some(bpm);
+            }
+            TapAction::Reset => {
+                timing.base = TimeBase::Deck;
+                timing.tapped_bpm = None;
+            }
+        }
+        self.fx_state.borrow_mut().timing[index] = timing;
+        self.sync_fx_timing(id);
+        self.observe_quantize_preferences();
+    }
     fn apply_fx(&self, id: DeckId) {
         if !self.storage_ready.get() {
             return;
         }
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
+        let Some(ui) = self.ui.upgrade() else { return };
         let (enabled, time, feedback, wet) = match id {
             DeckId::A => (
                 ui.get_fx_active_a(),
@@ -5371,27 +5617,32 @@ impl AudioController {
                 ui.get_fx_wet_b(),
             ),
         };
-        let result = if !time.is_finite() || !(20. ..=1000.).contains(&time) {
-            Err("Invalid delay time".into())
-        } else {
-            self.engine.borrow().set_fx(
-                id,
-                crate::delay_fx::DelaySettings {
-                    enabled,
-                    time_ms: time.round() as u16,
-                    feedback: feedback / 100.,
-                    wet: wet / 100.,
-                },
-            )
+        let index = Self::grid_index(id);
+        let old = self.fx_state.borrow().decks[index];
+        let value = crate::delay_fx::DelaySettings {
+            enabled,
+            time_ms: if self.fx_state.borrow().timing[index].base
+                == crate::fx_timing::TimeBase::Milliseconds
+            {
+                if !time.is_finite() || !(20. ..=1000.).contains(&time) {
+                    ui.set_status("Invalid delay time".into());
+                    self.sync_fx_timing(id);
+                    return;
+                }
+                time.round() as u16
+            } else {
+                old.time_ms
+            },
+            feedback: feedback / 100.,
+            wet: wet / 100.,
         };
-        if let Err(error) = result {
-            self.put_fx_ui(id, self.engine.borrow().fx_settings(id));
+        if let Err(error) = value.validate() {
             ui.set_status(error.into());
         } else {
-            self.fx_state.borrow_mut().decks[Self::grid_index(id)] =
-                self.engine.borrow().fx_settings(id);
-            self.observe_quantize_preferences();
+            self.fx_state.borrow_mut().decks[index] = value;
         }
+        self.sync_fx_timing(id);
+        self.observe_quantize_preferences();
     }
     fn fx_preset(&self, id: DeckId, slot: i32, save: bool) {
         if !self.storage_ready.get() {
@@ -5403,21 +5654,24 @@ impl AudioController {
         if slot >= 8 {
             return;
         }
+        let index = Self::grid_index(id);
+        let mut state = self.fx_state.borrow_mut();
         if save {
-            self.fx_state.borrow_mut().presets[slot] = Some(self.engine.borrow().fx_settings(id));
+            state.presets[slot] = Some(state.decks[index]);
+            state.preset_timing[slot] = state.timing[index];
         } else {
-            let value = self.fx_state.borrow().presets[slot];
-            let Some(value) = value else {
+            let Some(value) = state.presets[slot] else {
                 if let Some(ui) = self.ui.upgrade() {
                     ui.set_status("Delay preset slot is empty".into());
                 }
                 return;
             };
-            if self.engine.borrow().set_fx(id, value).is_ok() {
-                self.put_fx_ui(id, value);
-                self.fx_state.borrow_mut().decks[Self::grid_index(id)] = value;
-            }
+            state.decks[index] = value;
+            state.timing[index] = state.preset_timing[slot];
         }
+        drop(state);
+        self.cancel_fx_tap(index);
+        self.sync_fx_timing(id);
         self.observe_quantize_preferences();
     }
     // Nur Pfade/Status auf dem UI-Thread prüfen; Dateizugriff und Decode bleiben im Worker.
@@ -6087,6 +6341,27 @@ impl AudioController {
         self.poll_device_scan();
         self.engine.borrow().collect_retired();
         self.maintain_navigation();
+        for id in [DeckId::A, DeckId::B] {
+            let index = Self::grid_index(id);
+            if !self.storage_ready.get() {
+                self.cancel_fx_tap(index);
+                continue;
+            }
+            if self.fx_tap_owner.get()[index] == 2
+                && self
+                    .ui
+                    .upgrade()
+                    .is_none_or(|ui| !ui.get_mc4000_connected())
+            {
+                self.cancel_fx_tap(index);
+            }
+            let now = self.engine.borrow().control_now();
+            let action = self.fx_taps.borrow_mut()[index].poll(now);
+            if let Some(action) = action {
+                self.apply_fx_tap(id, action);
+            }
+            self.sync_fx_timing(id);
+        }
         for id in [DeckId::A, DeckId::B] {
             let index = Self::grid_index(id);
             let disconnected = self
@@ -8940,6 +9215,139 @@ mod tests {
     }
 
     #[test]
+    fn fx_musical_controller_grid_pitch_tap_reset_recovery_and_geometry() {
+        use crate::fx_timing::{Division, TimeBase};
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.set_mc4000_connected(true);
+        let clock = Rc::new(Cell::new(Instant::now()));
+        let read = clock.clone();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+            mixer,
+            2,
+            48000,
+            Box::new(move || read.get()),
+        ));
+        let file = wav_file(8192, 48000 * 5);
+        engine.load_a(file.path()).unwrap();
+        let grid = crate::beatgrid::BeatGrid::new(120., Duration::ZERO)
+            .unwrap()
+            .with_tempo_change(4, 60.)
+            .unwrap();
+        engine.set_grid(DeckId::A, Some(grid)).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.set_fx_active_a(true);
+        ui.invoke_fx_changed(0);
+        let dispatch =
+            |bytes: [u8; 3]| crate::mc4000::apply(&ui, crate::mc4000::decode(&bytes).unwrap());
+        dispatch([0xb8, 3, 1]);
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 1000);
+        dispatch([0xb8, 3, 127]);
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 500);
+        engine.set_speed(DeckId::A, 1.25).unwrap();
+        c.tick();
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 400);
+        engine
+            .seek_position(DeckId::A, Duration::from_millis(2500))
+            .unwrap();
+        c.tick();
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 800);
+        ui.invoke_fx_timing_changed(0, 1, Division::Four.index() as i32);
+        assert!(!engine.fx_settings(DeckId::A).enabled);
+        assert!(ui.get_fx_active_a());
+        assert!(ui.get_fx_timing_a().contains("20-1000"));
+        engine
+            .set_grid(
+                DeckId::A,
+                Some(crate::beatgrid::BeatGrid::new(240., Duration::ZERO).unwrap()),
+            )
+            .unwrap();
+        c.tick();
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 800);
+        assert!(engine.fx_settings(DeckId::A).enabled);
+        assert_eq!(c.fx_state.borrow().decks[0].time_ms, 250); // no tempo-driven save churn
+        engine.set_grid(DeckId::A, None).unwrap();
+        c.tick();
+        assert!(!engine.fx_settings(DeckId::A).enabled);
+        ui.invoke_fx_timing_changed(0, 0, 4);
+        assert!(engine.fx_settings(DeckId::A).enabled);
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 250);
+        for _ in 0..3 {
+            dispatch([0x98, 4, 127]);
+            dispatch([0x98, 4, 127]);
+            clock.set(clock.get() + Duration::from_millis(50));
+            dispatch([0x88, 4, 0]);
+            clock.set(clock.get() + Duration::from_millis(450));
+        }
+        assert_eq!(c.fx_state.borrow().timing[0].base, TimeBase::Tap);
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 500);
+        engine.set_speed(DeckId::A, 1.).unwrap();
+        c.tick();
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 500); // explicit Tap BPM ignores deck pitch
+        assert_eq!(engine.fx_settings(DeckId::B).time_ms, 250);
+        ui.invoke_fx_preset(0, 0, true);
+        dispatch([0xb8, 2, 0]);
+        assert_eq!(c.fx_state.borrow().timing[0].base, TimeBase::Milliseconds);
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 20);
+        ui.invoke_fx_preset(0, 0, false);
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 500);
+        dispatch([0x98, 4, 127]);
+        clock.set(clock.get() + Duration::from_millis(999));
+        c.tick();
+        assert_eq!(c.fx_state.borrow().timing[0].base, TimeBase::Tap);
+        clock.set(clock.get() + Duration::from_millis(1));
+        c.tick();
+        assert_eq!(c.fx_state.borrow().timing[0].base, TimeBase::Deck);
+        assert!(!engine.fx_settings(DeckId::A).enabled); // missing grid is explicit, no default BPM
+        dispatch([0x98, 4, 0]);
+        ui.invoke_fx_tap(0, true);
+        dispatch([0x88, 4, 0]); // hardware cannot release GUI hold
+        c.mc4000_release_holds();
+        assert_eq!(c.fx_tap_owner.get()[0], 1);
+        ui.invoke_fx_tap_cancel(0);
+        assert_eq!(c.fx_tap_owner.get()[0], 0);
+        ui.invoke_fx_tap(0, true);
+        c.handle_window_deactivated();
+        assert_eq!(c.fx_tap_owner.get()[0], 0);
+        dispatch([0x98, 4, 127]);
+        ui.set_mc4000_connected(false);
+        clock.set(clock.get() + Duration::from_secs(2));
+        c.tick();
+        assert_eq!(c.fx_tap_owner.get()[0], 0);
+        ui.invoke_fx_timing_changed(0, 0, 4);
+        ui.show().unwrap();
+        ui.set_fx_open(true);
+        for (width, height) in [(850., 740.), (1280., 860.)] {
+            ui.window().set_size(slint::LogicalSize::new(width, height));
+            for deck in ["A", "B"] {
+                for suffix in [
+                    "FX time base",
+                    "FX beat division",
+                    "FX tap tempo; hold one second to reset",
+                    "load delay preset",
+                ] {
+                    let button = control(&ui, &format!("Deck {deck} {suffix}"));
+                    let p = button.absolute_position();
+                    let s = button.size();
+                    assert!(
+                        s.width > 0.
+                            && s.height > 0.
+                            && p.x >= 0.
+                            && p.y >= 0.
+                            && p.x + s.width <= width + 1.
+                            && p.y + s.height <= height + 1.,
+                        "{deck} {suffix}: {p:?} {s:?}"
+                    );
+                }
+            }
+        }
+        ui.invoke_fx_tap(0, true);
+        control(&ui, "Close delay effects").invoke_accessible_default_action();
+        assert_eq!(c.fx_tap_owner.get()[0], 0);
+        ui.hide().unwrap();
+    }
+    #[test]
     fn delay_preferences_presets_latest_ack_and_close_restore() {
         i_slint_backend_testing::init_no_event_loop();
         let dir = tempfile::tempdir().unwrap();
@@ -8956,11 +9364,13 @@ mod tests {
         ui.invoke_fx_preset(0, 7, true);
         c.save_library();
         assert!(c.inflight_fx.borrow().is_some());
+        c.apply_fx_tap(DeckId::A, crate::fx_timing::TapAction::Tempo(120.));
         ui.set_fx_time_b(600.);
         ui.invoke_fx_changed(1);
         finish_storage(&c);
         ui.set_fx_wet_a(80.);
         ui.invoke_fx_changed(0);
+        ui.invoke_fx_preset(0, 6, true);
         c.close_library().unwrap();
         drop(c);
         let ui = AppWindow::new().unwrap();
@@ -8970,11 +9380,26 @@ mod tests {
         c.restore_library(Ok(db), vec![]);
         finish_storage(&c);
         assert_eq!(engine.fx_settings(DeckId::A).wet, 0.8);
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 500);
+        assert_eq!(
+            c.fx_state.borrow().timing[0].base,
+            crate::fx_timing::TimeBase::Tap
+        );
         assert_eq!(engine.fx_settings(DeckId::B).time_ms, 600);
         ui.invoke_fx_preset(0, 7, false);
         assert_eq!(engine.fx_settings(DeckId::A).wet, 0.4);
         assert!(engine.fx_settings(DeckId::A).enabled);
         assert_eq!(engine.fx_settings(DeckId::B).time_ms, 600);
+        assert_eq!(
+            c.fx_state.borrow().timing[0].base,
+            crate::fx_timing::TimeBase::Milliseconds
+        );
+        ui.invoke_fx_preset(0, 6, false);
+        assert_eq!(
+            c.fx_state.borrow().timing[0].base,
+            crate::fx_timing::TimeBase::Tap
+        );
+        assert_eq!(engine.fx_settings(DeckId::A).time_ms, 500);
         c.close_library().unwrap();
     }
     #[test]

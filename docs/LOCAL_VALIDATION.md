@@ -1676,3 +1676,64 @@ Final `cargo build --workspace --release --locked` passed (1m39s),
 were unchanged after the final Clippy, full Debug suite and focused Release
 tests. Implementation continued with GPT-6.1 Sol; no QWEN execution or independent
 review is claimed for this slice.
+
+## MC4000 S12 musical delay timebase (2026-11-04)
+
+QWEN implementation request timed out after45s without returned code. The user
+explicitly selected GPT-6.1 Sol for S12. No independent review under the S8-S15
+waiver. Publication remains local-only under the user's latest instruction;
+S11 commit7f82697 remains the unpushed parent. Unrelated build_output.txt and
+test_output.txt are preserved.
+
+New control-plane fx_timing domain: typed Milliseconds/Deck/Tap and seven beat
+divisions1/16 through4; saved grid's local BPM times effective speed versus
+explicit fixed Tap BPM. Delay requests resolve only within20-1000ms; absent BPM
+or out-of-range timing bypasses with an explicit caption and hardware FX LED off.
+Requested enable state survives and resumes through existing ramps when valid.
+No ring expansion or change to the production delay DSP/atomic settings protocol.
+
+MC4000 CC3 now selects beat divisions instead of10ms steps; Note4 on channels9/10
+handles press and both release forms. GUI exposes the same timebase/division and
+held TAP. A short tap uses press intervals; three taps acquire tempo, a fixed
+four-interval median rejects one >25% outlier and reacquires after two consecutive
+outliers. Bounce<250ms is ignored; gap>1.5s restarts. One-second hold resets once
+to Deck BPM without inventing a fallback. GUI/MIDI ownership, focus, cancellation,
+panel close, storage readiness and recovery prevent orphaned holds/resets.
+Control-clock timing is not device-event timing or a stopped-UI watchdog.
+
+FX JSON version1 gains defaulted timing/preset_timing fields; old JSON retains
+millisecond behavior and SQLite remains17. New timing/presets round-trip through
+the existing transactional worker and latest-ack/close-flush paths. Requested
+manual milliseconds are preserved separately from live derived render time, so
+tempo polling does not continuously dirty storage. Malformed saved FX remains
+preserved/session-only. Older binaries rejecting new fields cannot read the new
+profile extension. Preset/timebase changes cancel pending tap acquisition.
+
+Five new tests plus extended MIDI/persistence regressions cover units/limits,
+legacy JSON, tap bounce/outlier/timeout/reset, local grid tempo segments and pitch,
+unavailable/resumed effect state, explicit fixed Tap BPM, owner isolation/focus/
+disconnect/panel close, preset/SQLite/late-ack/close restoration and panel-control
+bounds at850x740 and1280x860. Stereo ramp input checks bounded delay-time
+crossfade changes, pair coherence and latest pending target without render heap
+events. UI compilation initially required moving FxStrip after NudgeHold's
+declaration; Clippy's is_multiple_of hint was addressed before final gates.
+
+Final `cargo clippy --workspace --locked --all-targets -- -D warnings` passed.
+`cargo test --workspace --locked --quiet` passed:474 application plus five DSP
+tests (479 unique passes), zero failures, six hardware qualifications ignored;
+application suite55.32s. Native controller/listening/hold/tempo-boundary and
+sustained device-latency acceptance remains open. S13-S15 are outside this slice.
+
+Optimized `cargo test --workspace --release --locked fx_ -- --test-threads=1
+--nocapture` passed10 tests in0.36s after1m59s compilation. The explicit optimized
+latest-ack/preset/close-restore regression also passed (0.14s). These repeat tests
+already counted in the479 unique Debug passes. The isolated100ms stereo48kHz
+delay block with successive musical-time updates took0.0903ms and counted zero
+allocations, reallocations and deallocations; its100ms optimized deadline passed.
+This measures offline delay DSP, not the complete engine, device latency or
+sustained real-time scheduling. Production DSP/ring code remains unchanged.
+
+Final `cargo build --workspace --release --locked` passed (1m44s), as did
+`cargo fmt --all -- --check` and `git diff --check`. Runtime sources were
+unchanged after final Clippy/full tests/optimized tests. S12 is committed
+locally only; no push or independent review was performed.
