@@ -37,7 +37,7 @@ Die Nummern beziehen sich auf die Bedienelemente des Handbuchs.
 | 25 / 12 | Pad-Modus | **App/MIDI fehlt.** Kein Moduswechsel fuer die Controller-Pads. Das Handbuch nennt erweiterte Serato-DJ-Modi, aber keine abschliessende Modusliste: Roll/Slicer usw. sind hier keine bereits spezifizierten Anforderungen. |
 | 25 / 13 | Jog zur Loop-In/Out-Bearbeitung | **S9 implementiert.** AUTO-Panel waehlt Off/In/Out; Hardware In/Out schaltet Edit bei aktivem Loop. 1ms/Einheit, Samplegrenzen und mindestens ein Frame; native Abnahme offen. |
 | 25 / 13 | SHIFT+Jog: schnelle Tracknavigation | **S9 implementiert.** 50ms Quellzeit/Einheit, Grenzen und Play/Pause erhalten; Scratch-Besitz und Modifier-Freigabe gesichert. Native Sensitivitaet offen. |
-| 25 / 14 | SHIFT+VINYL: Censor | **App fehlt.** Rueckwaertswiedergabe mit parallel weiterlaufender normaler Zeitlinie und Rueckkehr auf deren Position beim Loslassen. Manuelles Scratchen ist kein Censor. |
+| 25 / 14 | SHIFT+VINYL: Censor | **Implementiert S11:** separater Reverse-Kopf mit weiterlaufender normaler Zeitlinie; Release kehrt auf diese zurueck. Manuelles Scratchen bleibt getrennt. |
 | 25 / 15 | SHIFT+KEY LOCK: Pitch-Bereich | **MIDI fehlt.** App-Pitchbereiche vorhanden; Shift-Note14 fehlt. |
 | 25 / 16 | Pitch-Bend -/+ | **MIDI fehlt.** Vorhandenen momentanen Nudge an Note12/11 mit Release anbinden. |
 | 25 / 16 | SHIFT+Pitch-Bend: Rueck-/Vorspulen | **S9 implementiert.** Note32/33 mit Release, globales SHIFT erforderlich, 8s Quellverschiebung pro Sekunde am Steuerthread; Gap ueber100ms beendet ohne Nachholsprung. Kein kontinuierlicher Reverse-DSP. |
@@ -130,7 +130,7 @@ Vorhandene Callbacks/Engine-APIs werden genutzt, keine parallele zweite Engine.
 | S8 Prepare-Queue | **Implementiert:** eigener Prep-Queue-Tab, Note27/16, Deduplizierung und kuratierte Reihenfolge bis5000IDs; Remove/Up/Down, SQLite17 und Delta-/Retry-Persistenz. | Reihenfolge/Suche, neue Aenderungen nach Save-Ack, Migration16, Rollback/Retry, Missing/Relocation, Neustart und GUI-/MIDI-Isolation automatisiert. Kein Analyse-/Autoplay-Start; native Bedienabnahme offen. |
 | S9 Erweiterte Jog-Navigation | **Implementiert:** SHIFT-Jog50ms/Einheit, gehaltene Suche8s/s, Loop-Jog1ms/Einheit mit explizitem Off/In/Out. | Grenzen/ein Frame, Stereo-PCM, Play/Pause/A-B, Releases/Opposition/100ms-Gap, Quell-/Renderer-/Transportwechsel, GUI-Modus/Geometrie und Maus-Besitz automatisiert. Native Hoer-/Haptik-/Latenzabnahme offen. |
 | S10 Split Cue und Meterpolitik | **Implementiert:** Split in MON/Note28, gemittelte Mono-Signale und5ms Blend, Profilfeld mit Defaultaus; kontextuelle Hardwaremeter mit separatem Stereo-Master-Peak und100ms Produzentenbeobachtung. | Mono/Stereo/6-Kanal-Routing, Frame-/Sync-Kohaerenz, Master-Isolation, Allokationsfreiheit/Release-Zeitbudget, Profil-Neustart4/2/4, Konflikte und Meterumschaltung automatisiert. Native Kopfhoerer-/LED-Abnahme offen. |
-| S11 Censor | Reverse mit separater normaler Zeitlinie, S2/S5/S9. | Samplegenauer Reverse, Rueckkehrzeit bei verschiedenen Tempi, Pause/EOF/Loop/Sync/Keylock, Release/Disconnect; Allokations-/Lockfreiheit und Callback-Frist messen. |
+| S11 Censor | **Implementiert:** Note16 Hold/Release, eigener Reverse-Kopf und normale vorlaufende Zeitlinie; CENSOR-Anzeige, Loop-Wrap und vorbereiteter Keylock. | Exakte Samples/Phase bei mehreren Tempi, Stereo-/Frame-Kohaerenz, Anfang/EOF, Pause/Seek, Sync-/Scratch-/Cue-Konflikte, Keylock-Pitch, Focus/SHIFT/Recovery und Quellwechsel automatisiert; Heap/optimiertes Renderbudget geprueft. Native Uebergaenge/Hoer-/Latenzabnahme offen. |
 | S12 Musikalische FX-Zeitbasis | Beat-Unterteilungen, Tap und Hold-Reset; bestehendes Delay erhalten. | BPM/Tempo- und Gridwechsel, Tap-Ausreisser/Timeout, Rampen, Persistenz; keine Klicks oder unbeschraenkten Echtzeitpuffer. |
 | S13 Drei FX-Slots und Auswahl | Begrenzte Slots je Deck, serieller/paralleler Signalvertrag, FX1-3/Shift-Pegel/-Auswahl. S12. | Vorab unterstuetzte Effekttypen und Routing festlegen; alten Delayzustand migrieren, Bypass/Fahnen/Parameter und CPU-/Speicherbudget; bisheriges Controller-Mapping nicht still veraendern. |
 | S14 Vier-Slot-Sampler | Offline vorbereitete Samples, bounded Mixer, Play/Stop, Gesamtpegel und GUI. | Polyphonie/Restart-/OneShot-Vertrag festlegen; keine Datei-/Speicherarbeit im Callback, Peaks/Routing, Deck-Isolation, Stop/Disconnect und Neustart. |
@@ -140,7 +140,7 @@ Gemeinsamer nativer [Hardware-Testplan S1-S15](MC4000_HARDWARE_TEST_PLAN.md).
 Nach unzuverlaessigen QWEN-/DeepSeek-Implementierungsversuchen gilt der
 autorisierte Fallback: S2-S6 selbst fertigstellen. Separat wurde S7 mit vom
 Nutzer autorisiertem GPT-6.1 Sol umgesetzt. S8 folgt als eigener Queue-Slice.
-S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11-S15 bleiben offen. Der
+S9 ergaenzt Navigation und Loop-Jog, S10 Split Cue/Hardwaremeter. S11 ergaenzt Censor; S12-S15 bleiben offen. Der
 Testplan kennzeichnet offene Funktionen als nicht testbar.
 
 **Empfohlener Start: S1, danach S2-S4.** Damit werden zuerst viele bereits

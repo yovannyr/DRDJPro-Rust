@@ -25,7 +25,9 @@ Tests und finale Checks bleiben erforderlich. S9 ergaenzt SHIFT-Jog, gehaltene
 Suche und explizites Loop-Jog mit Grenzen und Eingabebesitz; Vertrag und
 native Abnahme im GUI-Inventar/Hardware-Testplan. S10 liefert Split Cue mit
 persistenten Geraeteprofilen und kontextuelle Hardwaremeter; native
-Kopfhoerer-/LED-/Latenzabnahme bleibt offen. S11-S15 bleiben offen.
+Kopfhoerer-/LED-/Latenzabnahme bleibt offen. S11 liefert momentanes Censor
+mit separatem Reverse-Kopf und weiterlaufender normaler Zeitlinie, Loop/Keylock
+und besitzgebundener Freigabe. S12-S15 bleiben offen.
 Native Hoer-/Bedien-/Latenzabnahme dieser neuen Slices bleibt dem Abschlusstest
 vorbehalten; Headless-Tests sind kein Ersatz.
 

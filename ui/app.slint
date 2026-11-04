@@ -459,6 +459,7 @@ component CompactDeck inherits Rectangle {
     in property <bool> platter-mouse-owned;
     in property <float> platter-angle;
     in property <bool> platter-touched;
+    in property <bool> censor;
     in property <string> deck-label;
     in property <bool> controller-mode: false;
     in property <brush> accent;
@@ -551,7 +552,7 @@ component CompactDeck inherits Rectangle {
         }
         HorizontalLayout {
             height: 20px;
-            Text { text: track-title; color: #f1f3f7; font-size: 16px; overflow: elide; }
+            Text { text: (root.censor ? "CENSOR · " : "") + track-title; color: root.censor ? #ffc15e : #f1f3f7; font-size: 16px; overflow: elide; }
             Button { height: 20px; text: "START"; accessible-label: deck-label + " track start"; enabled: !audio-enabled || (loaded && !loading); clicked => { root.cue(); } }
             Button { height: 20px; text: "STUTTER"; accessible-label: deck-label + " stutter"; enabled: loaded && !loading; clicked => { root.stutter(); } }
         }
@@ -1203,6 +1204,9 @@ export component AppWindow inherits Window {
     in property <int> right-loop-jog-mode;
     callback controller-platter-touch(int, bool);
     callback controller-vinyl(int);
+    callback controller-censor(int, bool);
+    in property <bool> left-censor;
+    in property <bool> right-censor;
     callback controller-pitch-fader(int, int);
     callback controller-pitch-range-left();
     callback controller-pitch-range-right();
@@ -1673,6 +1677,7 @@ export component AppWindow inherits Window {
                 deck-label: "DECK A"; controller-mode: root.virtual-decks-visible; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
                 platter-bpm: root.left-platter-bpm; platter-time: root.left-platter-time;
                 platter-angle: root.left-platter-angle; platter-touched: root.left-platter-touched;
+                censor: root.left-censor;
                 external-hover: root.external-drop-deck == 0;
                 accepts-drop(data) => { return root.accepts-track-drop(0,data); }
                 drop-track(data) => { return root.drop-track(0,data); }
@@ -1720,6 +1725,7 @@ export component AppWindow inherits Window {
                 deck-label: "DECK B"; controller-mode: root.virtual-decks-visible; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
                 platter-bpm: root.right-platter-bpm; platter-time: root.right-platter-time;
                 platter-angle: root.right-platter-angle; platter-touched: root.right-platter-touched;
+                censor: root.right-censor;
                 external-hover: root.external-drop-deck == 1;
                 accepts-drop(data) => { return root.accepts-track-drop(1,data); }
                 drop-track(data) => { return root.drop-track(1,data); }

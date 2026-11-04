@@ -11,8 +11,8 @@ Die restlichen Abnahmen sind bis zur tatsaechlichen Ausfuehrung offen.
 
 S2-S6 sind implementiert; S7 Instant Doubles ist als eigener Folgeschritt
 implementiert; S8 ergaenzt die persistente Prep Queue, S9 Navigation/Loop-Jog.
-S10 ergaenzt Split Cue/kontextuelle Hardwaremeter. S11-S15 bleiben
-**NOT IMPLEMENTED**. Native Abnahmen fuer S2-S10
+S10 ergaenzt Split Cue/kontextuelle Hardwaremeter, S11 momentanes Censor.
+S12-S15 bleiben **NOT IMPLEMENTED**. Native Abnahmen fuer S2-S11
 bleiben bis zur tatsaechlichen Ausfuehrung offen.
 
 Fuer jeden Fall festhalten: Commit, Datum, Windows-/Treiberstand, Audiogeraet,
@@ -70,8 +70,8 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 | S10-01 Split | CueB/MasterA, Split-Schalter/GUI ein/aus, Mix0/50/100%, Gain und Mono-/Stereo-Tracks | Split: gemitteltes Cue mono links, Master mono rechts; Mix0/100 schaltet jeweils andere Seite stumm, Mitte halbes Gewicht je Seite.5ms Blend, aus vorhandener Stereo-Mix; MASTER unveraendert.3/4 reserviert auch ohne aktive Cue-Auswahl. |
 | S10-02 Meter | Fader beide unten/einer oben, Cue ein/aus, Deck pausiert/laufend/scratch; Audiofortschritt stoppen und fortsetzen | Beide unten: Pre A/B; sonst Master auf beiden ausser laufendem Cue mit eigenem Fader unten. Pausiertes Cue zurueck zu Master. Aktuelles50ms Fenster, kein GUI-Clip-Hold; bei weiterlaufendem UI und >100ms ohne Produzentenfortschritt dunkel, nach neuem Fortschritt wieder aktiv. Kein physischer MASTER-Einfluss. |
 | S10-03 Profile | Split speichern, Neustart und Geraetewechsel2/4Kanaele | Profil korrekt wiederhergestellt; Konflikte/fehlendes Cuepaar explizit statt falscher Ausgabe. |
-| S11-01 Censor | Laufend SHIFT+VINYL halten, dann loslassen | Rueckwaerts hoerbar; Rueckkehr auf parallel fortgelaufene normale Zeitlinie, nicht auf Start des Holds. |
-| S11-02 CensorEdges | Bei anderem Pitch, nahe Anfang/EOF, mit Loop/Sync/Keylock | Dokumentierte Kombinationen korrekt oder explizit abgewiesen; kein Underflow, Haengen oder Tempowechsel. |
+| S11-01 Censor | Laufend SHIFT+VINYL halten, dann loslassen | Rueckwaerts hoerbar, CENSOR sichtbar; Release/SHIFT-Release kehrt auf normal fortgelaufene Zeitlinie zurueck. Wiederholtes NoteOn startet nicht neu; neue Geste nach Abbruch erst nach Release. Eintritt/Austritt auf musikalisch stoerende Spruenge/Klicks pruefen; keine neue Ueberblendung zugesichert. |
+| S11-02 CensorEdges | Bei anderem Pitch, nahe Anfang/EOF, mit Loop/Sync/Keylock | Anfang: Reverse stumm, normale Zeit laeuft; normales EOF stumm. Loop: beide Koepfe innerhalb Grenzen; Keylock: vorbereiteter Pitch bleibt. Controller stoppt Sync, kein automatischer Wiederanlauf. Pause/Seek/Pitch/Quelle beenden Censor, spaetes Release startet nichts. Scratch/Nudge/pending Cue und Jog-Konflikte explizit. Focus/Disconnect/Overflow pruefen. |
 | S12-01 BeatFX | Beatunterteilungen aendern, Tempo/Beatgrid aendern | Zeitbasierter FX folgt gewaehlter musikalischer Unterteilung ohne laute Klicks. |
 | S12-02 Tap | Regelmaessig tappen, Ausreisser/Timeout, Taste halten zum Reset | Stabile Tap-Zeitbasis; Ausreisser begrenzt; Reset nutzt Deck-BPM, nicht erfundene Standard-BPM. |
 | S13-01 Slots | FX1-3 einzeln aktivieren, Pegel/SHIFT-Auswahl bewegen | Drei unabhaengige Slots, richtige Auswahl/LEDs; GUI/Controller stimmen ueberein, anderes Deck bleibt unveraendert. |

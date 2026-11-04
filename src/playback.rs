@@ -696,7 +696,8 @@ impl DualDeckEngine {
         if !snapshot.loaded || snapshot.position >= snapshot.duration {
             return Err("Load the opposite deck and move before EOF for Instant Doubles".into());
         }
-        if self.platter_touched(source_id)
+        if self.censoring(source_id)
+            || self.platter_touched(source_id)
             || snapshot.loop_active
             || snapshot.nudge_direction != 0
             || snapshot.sync_factor != 1.
@@ -942,6 +943,9 @@ impl DualDeckEngine {
     }
     /// Touch overrides forward transport without changing its play/pause intent.
     pub fn platter_touch(&self, id: DeckId, held: bool) -> Result<(), String> {
+        if held && self.censoring(id) {
+            return Err("Release Censor before scratching".into());
+        }
         if held && self.output_failed() {
             return Err("Audio output unavailable".into());
         }
@@ -991,6 +995,39 @@ impl DualDeckEngine {
             .render
             .as_ref()
             .is_some_and(|render| render.scratching())
+    }
+    /// Reverse the audible head while the normal source timeline advances, including loops.
+    /// Release only changes an atomic command; it never seeks or restarts a paused sink.
+    pub fn censor(&self, id: DeckId, held: bool) -> Result<(), String> {
+        let deck = self.decks[id.index()].borrow();
+        let Some(render) = deck.render.as_ref() else {
+            return if held {
+                Err("Load a track before Censor".into())
+            } else {
+                Ok(())
+            };
+        };
+        if held && !render.censoring() {
+            if self.output_failed() || !deck.playing() {
+                return Err("Play the deck with working audio before Censor".into());
+            }
+            if render.scratching()
+                || render.trigger_pending()
+                || deck.nudge != 0
+                || deck.sync_factor != 1.
+            {
+                return Err("Release scratch, pending cue, nudge and Sync before Censor".into());
+            }
+        }
+        render.censor(held);
+        Ok(())
+    }
+    pub fn censoring(&self, id: DeckId) -> bool {
+        self.decks[id.index()]
+            .borrow()
+            .render
+            .as_ref()
+            .is_some_and(|r| r.censoring())
     }
     /// Seek shared PCM on the control plane without waiting for audio feedback.
     pub fn seek_percent(&self, id: DeckId, percent: f32) -> Result<(), String> {
@@ -1042,6 +1079,9 @@ impl DualDeckEngine {
         target: Duration,
         step: crate::beatgrid::QuantizeStep,
     ) -> Result<(), String> {
+        if self.censoring(id) {
+            return Err("Release Censor before scheduling a cue".into());
+        }
         let deck = self.decks[id.index()].borrow();
         let track = deck.track.as_ref().ok_or("No track loaded")?;
         if deck
@@ -1073,6 +1113,15 @@ impl DualDeckEngine {
     }
     /// One-shot tempo matching from confirmed constant grids; no beat-phase alignment.
     pub fn tempo_match_factor(&self, id: DeckId) -> Result<f64, String> {
+        if self.censoring(id)
+            || self.censoring(if id == DeckId::A {
+                DeckId::B
+            } else {
+                DeckId::A
+            })
+        {
+            return Err("Release Censor on both decks before Sync".into());
+        }
         let target = self.decks[id.index()].borrow();
         let reference = self.decks[1 - id.index()].borrow();
         let track = target
@@ -1303,6 +1352,9 @@ impl DualDeckEngine {
         Some((error, self.rendered_frames(), nominal))
     }
     pub fn apply_sync_factor(&self, id: DeckId, factor: f64) -> Result<(), String> {
+        if factor != 1. && self.censoring(id) {
+            return Err("Release Censor before Sync correction".into());
+        }
         if !factor.is_finite() || !(0.98..=1.02).contains(&factor) {
             return Err("Sync correction exceeds two percent".into());
         }
@@ -2756,6 +2808,118 @@ mod tests {
     }
     use super::*;
     use crate::test_support::{fixture, wav_file};
+    #[test]
+    fn censor_engine_tempo_loop_transport_conflicts_and_keylock_pitch() {
+        let rate = 48000;
+        let input: Vec<i16> = (0..rate * 5)
+            .map(|i| ((std::f32::consts::TAU * 440. * i as f32 / rate as f32).sin() * 8000.) as i16)
+            .collect();
+        let file = crate::test_support::wav_samples(&input, rate, 1);
+        for (id, tempo, keylock) in [
+            (DeckId::A, 0.8, false),
+            (DeckId::B, 1.25, false),
+            (DeckId::B, 1.25, true),
+        ] {
+            let (mixer, mut output) = rodio::mixer::mixer(1, rate);
+            let engine = DualDeckEngine::from_mixer(mixer, 1, rate);
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            assert!(engine.censor(id, true).is_err());
+            if keylock {
+                let samples: Vec<f32> = input.iter().map(|v| f32::from(*v) / 32768.).collect();
+                let clip =
+                    drdj_keylock::PreparedKeylock::prepare(&samples, 1, rate, tempo).unwrap();
+                engine.adopt_keylock(id, Some((tempo, clip))).unwrap();
+            } else {
+                engine.set_speed(id, tempo).unwrap();
+            }
+            engine.seek_position(id, Duration::from_secs(2)).unwrap();
+            engine.play(id);
+            output.by_ref().take(4800).for_each(drop);
+            engine.censor(id, true).unwrap();
+            assert!(engine.platter_touch(id, true).is_err());
+            assert!(engine
+                .schedule_cue(id, Duration::ZERO, crate::beatgrid::QuantizeStep::Beat)
+                .is_err());
+            assert!(engine.tempo_match_factor(id).is_err());
+            assert!(engine.apply_sync_factor(id, 1.01).is_err());
+            let start = engine.snapshot(id).position;
+            let reversed: Vec<f32> = output.by_ref().take(24000).collect();
+            let elapsed = engine.snapshot(id).position - start;
+            assert!((elapsed.as_secs_f64() - 0.5 * tempo).abs() < 0.0001);
+            let hz = reversed[2400..21600]
+                .windows(2)
+                .filter(|w| w[0] <= 0. && w[1] > 0.)
+                .count() as f64
+                / 0.4;
+            let expected_hz = if keylock { 440. } else { 440. * tempo };
+            assert!(
+                (hz - expected_hz).abs() < 8.,
+                "{hz}, expected {expected_hz}"
+            );
+            engine.censor(id, false).unwrap();
+            assert_eq!(engine.snapshot(id).position, start + elapsed);
+            assert_eq!(engine.keylock_factor(id).is_some(), keylock);
+            engine.censor(id, true).unwrap();
+            let timer = std::time::Instant::now();
+            let heap = crate::looping::measured_heap(|| {
+                for i in 0..4800 {
+                    if i == 2400 {
+                        engine.censor(id, false).unwrap();
+                    }
+                    assert!(output.next().unwrap().is_finite());
+                }
+            });
+            let elapsed = timer.elapsed();
+            assert_eq!(
+                (heap.allocations, heap.reallocations, heap.deallocations),
+                (0, 0, 0)
+            );
+            if !cfg!(debug_assertions) {
+                assert!(elapsed < Duration::from_millis(100), "{elapsed:?}");
+            }
+            eprintln!("Censor full engine 100ms mono/48kHz, tempo {tempo}, Keylock {keylock}: {elapsed:?}; heap {heap:?}");
+            assert_eq!(
+                engine
+                    .snapshot(if id == DeckId::A {
+                        DeckId::B
+                    } else {
+                        DeckId::A
+                    })
+                    .position,
+                Duration::ZERO
+            );
+            engine.censor(id, true).unwrap();
+            engine.pause(id);
+            let paused = engine.snapshot(id).position;
+            engine.censor(id, false).unwrap();
+            output.by_ref().take(4800).for_each(drop);
+            assert!(!engine.censoring(id));
+            assert!(!engine.snapshot(id).playing);
+            assert_eq!(engine.snapshot(id).position, paused);
+            engine.seek_position(id, Duration::from_secs(1)).unwrap();
+            engine.set_loop_in(id, Duration::from_secs(1)).unwrap();
+            engine
+                .set_loop_out(id, Duration::from_millis(1500))
+                .unwrap();
+            engine.activate_loop(id).unwrap();
+            engine.play(id);
+            output.by_ref().take(4800).for_each(drop);
+            engine.censor(id, true).unwrap();
+            output.by_ref().take(48000).for_each(drop);
+            assert!(engine.snapshot(id).loop_active);
+            assert!((Duration::from_secs(1)..Duration::from_millis(1500))
+                .contains(&engine.snapshot(id).position));
+            engine.censor(id, false).unwrap();
+            engine.censor(id, true).unwrap();
+            engine.seek_position(id, Duration::from_secs(3)).unwrap();
+            engine.censor(id, false).unwrap();
+            assert!(!engine.censoring(id));
+            engine.inject_output_failure();
+            assert!(engine.censor(id, true).is_err());
+            engine.censor(id, false).unwrap();
+        }
+    }
     #[test]
     fn keylock_preserves_pitch_source_position_and_transport_on_both_decks() {
         use std::time::Instant;

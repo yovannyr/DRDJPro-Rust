@@ -1,5 +1,51 @@
 # GUI component inventory and reference baseline
 
+## MC4000 S11: momentary Censor
+
+SHIFT+VINYL uses deck-channel Note16: NoteOn>0 holds, NoteOn0/NoteOff
+releases. Global SHIFT must be held at acquisition; releasing SHIFT also ends
+Censor. Repeated press states do not restart it, and an interrupted/failed
+press must release before rearming. The deck title shows CENSOR while active.
+Normal VINYL remains a separate mode toggle; no undocumented Censor LED added.
+
+The render thread owns a second, audible reverse head. The authoritative source
+position, waveform marker and render stamps continue forwards at the applied
+base tempo. Release resumes that exact timeline at the next complete output
+frame, rather than seeking back to the press position. Stereo channels always
+use one coherent command snapshot. A gesture serial distinguishes a new press
+even if release/repress occurs between render frames. Pause/Seek/pitch change,
+source replacement and published loop/transport changes cancel the overlay;
+a late release cannot seek, restart or mutate a replacement renderer.
+
+Only a playing deck before EOF can acquire Censor. At the source beginning,
+reverse becomes silent rather than repeating the first sample; the normal
+timeline keeps advancing. Normal EOF silences both and ends the session on the
+next controller tick. In an active loop, both heads wrap independently within
+the unchanged bounds. Prepared Keylock is read backwards in original-source
+coordinates, preserving its prepared base pitch without another worker/buffer;
+on release the forward micro-stretcher resets. Scratch, nudge and pending
+quantized cue holds reject acquisition. Controller acquisition stops continuous
+Sync; Sync cannot acquire with either deck censoring and is not automatically
+restored on release. Jog/navigation and scratch reject during Censor. Manual
+transport/tempo commands take precedence and cancel it instead.
+
+Release bypasses busy guards. Controller ownership uses a weak renderer handle;
+focus loss, SHIFT release, disconnect/reconnect/queue recovery, loading and
+output failure release the owned renderer. These are control-loop mechanisms,
+not a render-thread watchdog during a stopped UI. Direct engine acquisition
+also validates play/output/scratch/nudge/Sync/pending-cue conflicts.
+
+The extra head uses fixed integer phase arithmetic and bounded PCM/prepared
+Keylock reads. Atomic commands use the existing bounded snapshot (no spin,
+locks, heap work or task spawning in the callback). No new dependency or stored
+session state. Automated checks cover exact PCM/return phase at three rates,
+nonmatching source/output rates, stereo/mid-frame release, loop interpolation,
+boundaries, Pause/Seek/EOF, independent decks, Keylock pitch and held-input
+recovery. Allocation counters and an optimized 100ms offline render block are
+separate from native musical transitions, device latency and sustained hardware
+acceptance. Entry/exit are frame-boundary head switches; no new crossfade or
+click-free claim is made. The native test plan retains that listening gate.
+
 ## MC4000 S10: Split Cue and contextual hardware meters
 
 MON now has **SPLIT CUE**. Channel16 Note28 is an absolute switch request:
@@ -280,7 +326,7 @@ Every overview number 1–59 appears exactly once in this grouped inventory. “
 | Virtual deck/platter | 12, 16 | Manual p. 25 | Round light-faced software decks show current BPM, pitch, elapsed/remaining source time and progress when MC4000 is connected. Physical platter position, outer progress ring and end warning remain open; these are distinct indicators. |
 | Transport/eject | 17, 55 | Manual pp. 40–41 | Play/Pause and Cue-to-zero exist. Per-deck EJECT now stops/unloads that deck, clears its persisted startup assignment and retains its library track. Shift+Left/Right loads the selected Library track into A/B; headless focus, repeat, busy and playing-target tests do not establish native keyboard/visual/hardware acceptance. Previous/next library navigation remains open. |
 | Tempo/pitch/nudge | 30, 32, 57 | Manual pp. 25, 29, 41 | Coupled pitch/ranges/fine and momentary nudge implemented with offline/headless evidence; native usability, transition quality and physical latency remain open. Editing grid BPM is not playback speed control. |
-| Slip/keylock/sync/censor | 13, 15, 18, 44 | Overview numbered sections | Partial: software Keylock, one-shot matching/phase and bounded continuous Sync exist. A Keylock follower prepares its matched base asynchronously, shows a cancellable preparation state and becomes active only after fresh render frames. Nudge preserves pitch using bounded overlap/add. Musical/transient/hardware qualification remains open; Slip/Censor are open. |
+| Slip/keylock/sync/censor | 13, 15, 18, 44 | Overview numbered sections | Partial: software Keylock, one-shot matching/phase and bounded continuous Sync exist. A Keylock follower prepares its matched base asynchronously, shows a cancellable preparation state and becomes active only after fresh render frames. Nudge preserves pitch using bounded overlap/add. Musical/transient/hardware qualification remains open; Censor is implemented in S11 above; Slip remains open. |
 | Track gain/output meters | 14, 43 | Overview sections 14, 43; practice controls manual p. 29 | Deck trim, channel gain sliders, independent pre-fader A/B sample peaks with manual clip hold and the separate post-fader bus peak exist. Persistent per-track gain, true-peak/loudness metering and physical output qualification remain open. |
 | Time/overview playhead | 41, 42 | Manual pp. 25–27 | Overview/seek exist. Both decks display labeled elapsed/remaining/total original-source times with millisecond precision (truncated). Pitch does not convert these into wall-clock time-to-end. Native readability and metadata time parity remain open. |
 | Detailed waveform/beat matching | 34, 35 | Manual p. 28 | Colored following envelope/zoom/click-seek exist. Focus-scoped keyboard +/- zoom is implemented; hold/drag scrubbing, beat-matching transient strip and pitch scaling remain open. |

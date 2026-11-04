@@ -376,6 +376,8 @@ pub struct AudioController {
     keylock_jobs: RefCell<[Option<KeylockJob>; 2]>,
     nudges: RefCell<[Option<NudgeSession>; 2]>,
     platter_holds: Cell<[bool; 2]>,
+    censor_down: Cell<[bool; 2]>,
+    censor_holds: RefCell<[Option<std::sync::Weak<crate::deck_render::RenderControl>>; 2]>,
     seek_holds: RefCell<[Option<SeekHoldSession>; 2]>,
     loop_jogs: RefCell<[Option<LoopJogSession>; 2]>,
     pitch_pickup: Cell<[bool; 2]>,
@@ -543,6 +545,8 @@ impl AudioController {
             keylock_next: Cell::new([None, None]),
             nudges: RefCell::new([None, None]),
             platter_holds: Cell::new([false; 2]),
+            censor_down: Cell::new([false; 2]),
+            censor_holds: RefCell::new([None, None]),
             seek_holds: RefCell::new([None, None]),
             loop_jogs: RefCell::new([None, None]),
             pitch_pickup: Cell::new([false; 2]),
@@ -2013,6 +2017,9 @@ impl AudioController {
         self.jog_bends.set(bends);
     }
     fn begin_platter(&self, id: DeckId) -> Result<(), String> {
+        if self.engine.borrow().censoring(id) {
+            return Err("Release Censor before using the platter".into());
+        }
         if !self.can_control_deck(id) {
             return Err("Platter unavailable during loading".into());
         }
@@ -2087,6 +2094,9 @@ impl AudioController {
         Ok(())
     }
     fn navigation_ready(&self, id: DeckId) -> Result<(), String> {
+        if self.engine.borrow().censoring(id) {
+            return Err("Release Censor before navigating".into());
+        }
         let index = Self::grid_index(id);
         if !self.can_control_deck(id)
             || self.engine.borrow().output_failed()
@@ -2288,12 +2298,71 @@ impl AudioController {
             }
         }
     }
+    fn release_censor(&self, id: DeckId) {
+        if let Some(render) = self.censor_holds.borrow_mut()[Self::grid_index(id)]
+            .take()
+            .and_then(|r| r.upgrade())
+        {
+            render.censor(false);
+        }
+    }
+    fn hold_censor(&self, id: DeckId, held: bool) -> Result<(), String> {
+        let index = Self::grid_index(id);
+        let mut down = self.censor_down.get();
+        if !held {
+            down[index] = false;
+            self.censor_down.set(down);
+            self.release_censor(id);
+            return Ok(());
+        }
+        if down[index] {
+            return Ok(());
+        }
+        down[index] = true;
+        self.censor_down.set(down);
+        let ui = self.ui.upgrade().ok_or("Window closed")?;
+        if !ui.get_controller_shift() {
+            return Err("Hold SHIFT before Censor".into());
+        }
+        self.navigation_ready(id)?;
+        self.stop_sync();
+        self.seek_holds.borrow_mut()[index] = None;
+        self.loop_jogs.borrow_mut()[index] = None;
+        self.engine.borrow().censor(id, true)?;
+        self.censor_holds.borrow_mut()[index] = self.engine.borrow().renderer_token(id);
+        ui.set_status(
+            format!(
+                "Deck {} CENSOR: release to resume normal timeline",
+                index + 1
+            )
+            .into(),
+        );
+        Ok(())
+    }
     fn wire_platters(self: &Rc<Self>, ui: &AppWindow) {
         let weak = Rc::downgrade(self);
-        ui.on_controller_navigation_shift(move |_| {
+        ui.on_controller_censor(move |deck, held| {
+            let Some(c) = weak.upgrade() else { return };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if let Err(error) = c.hold_censor(id, held) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+            c.refresh();
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_controller_navigation_shift(move |held| {
             if let Some(c) = weak.upgrade() {
                 *c.seek_holds.borrow_mut() = [None, None];
                 for id in [DeckId::A, DeckId::B] {
+                    if !held {
+                        c.release_censor(id);
+                    }
                     let index = Self::grid_index(id);
                     if c.pointer_platters.get()[index].is_none() && c.platter_holds.get()[index] {
                         c.release_platter(id);
@@ -2451,6 +2520,9 @@ impl AudioController {
                 if !(-64..=63).contains(&steps) || steps == 0 {
                     return Err("Invalid jog movement".into());
                 }
+                if c.engine.borrow().censoring(id) {
+                    return Err("Release Censor before using the jog".into());
+                }
                 let index = Self::grid_index(id);
                 let edit = c.loop_jogs.borrow()[index]
                     .as_ref()
@@ -2590,6 +2662,10 @@ impl AudioController {
     /// controller disconnects, reconnects, or the bounded MIDI queue overflows so no stale
     /// hold persists. GUI-held nudges are left untouched and remain effective.
     pub fn mc4000_release_holds(&self) {
+        for id in [DeckId::A, DeckId::B] {
+            self.release_censor(id);
+        }
+        self.censor_down.set([false; 2]);
         if let Some(ui) = self.ui.upgrade() {
             ui.set_controller_shift(false);
         }
@@ -3686,6 +3762,9 @@ impl AudioController {
     }
     #[cfg(any(target_os = "windows", test))]
     pub(crate) fn handle_window_deactivated(&self) {
+        for id in [DeckId::A, DeckId::B] {
+            self.release_censor(id);
+        }
         if let Some(ui) = self.ui.upgrade() {
             ui.set_controller_shift(false);
         }
@@ -6014,6 +6093,13 @@ impl AudioController {
                 .ui
                 .upgrade()
                 .is_none_or(|ui| !ui.get_mc4000_connected());
+            if disconnected
+                || !self.can_control_deck(id)
+                || self.engine.borrow().output_failed()
+                || !self.engine.borrow().snapshot(id).playing
+            {
+                self.release_censor(id);
+            }
             let expired = self.jog_bends.get()[index]
                 .is_some_and(|time| time.elapsed() >= Duration::from_millis(120));
             let pointer_hidden = self.pointer_platters.get()[index].is_some()
@@ -7589,6 +7675,7 @@ impl AudioController {
                         (s.position.as_secs_f64() * 200.).rem_euclid(360.) as f32
                     );
                     ui.set_left_platter_touched(self.engine.borrow().platter_touched(id));
+                    ui.set_left_censor(self.engine.borrow().censoring(id));
                     ui.set_left_platter_mouse_owned(self.pointer_platters.get()[0].is_some());
                     ui.set_left_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_left_pitch_caption(pitch.into());
@@ -7600,6 +7687,7 @@ impl AudioController {
                         (s.position.as_secs_f64() * 200.).rem_euclid(360.) as f32
                     );
                     ui.set_right_platter_touched(self.engine.borrow().platter_touched(id));
+                    ui.set_right_censor(self.engine.borrow().censoring(id));
                     ui.set_right_platter_mouse_owned(self.pointer_platters.get()[1].is_some());
                     ui.set_right_pitch_percent(((desired - 1.) * 100.) as f32);
                     ui.set_right_pitch_caption(pitch.into());
@@ -12011,6 +12099,85 @@ mod tests {
         assert!(!engine.platter_touched(DeckId::A));
     }
 
+    #[test]
+    fn censor_midi_release_focus_recovery_and_replacement_are_owned() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.set_mc4000_connected(true);
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 4);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        engine.play(DeckId::A);
+        engine.play(DeckId::B);
+        output.by_ref().take(4800).for_each(drop);
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let dispatch = |message: [u8; 3]| {
+            crate::mc4000::apply(&ui, crate::mc4000::decode(&message).unwrap());
+        };
+        dispatch([0x90, 16, 127]); // no SHIFT
+        assert!(!engine.censoring(DeckId::A));
+        dispatch([0x80, 16, 0]);
+        dispatch([0x9f, 50, 127]);
+        for deck in 0..=1u8 {
+            let id = if deck == 0 { DeckId::A } else { DeckId::B };
+            dispatch([0x90 + deck, 16, 127]);
+            assert!(engine.censoring(id));
+            assert!(if deck == 0 {
+                ui.get_left_censor()
+            } else {
+                ui.get_right_censor()
+            });
+            let version = engine.command_version(id);
+            dispatch([0x90 + deck, 16, 127]);
+            assert_eq!(engine.command_version(id), version);
+            dispatch([0xb0 + deck, 6, 10]);
+            assert!(engine.censoring(id));
+            assert!(ui.get_status().contains("Release Censor"));
+            output.by_ref().take(4800).for_each(drop);
+            let before = engine.snapshot(id).position;
+            dispatch([0x80 + deck, 16, 127]);
+            assert!(!engine.censoring(id));
+            assert_eq!(engine.snapshot(id).position, before);
+            dispatch([0x90 + deck, 16, 127]);
+            dispatch([0x90 + deck, 16, 0]);
+            assert!(!engine.censoring(id));
+        }
+        dispatch([0x90, 16, 127]);
+        dispatch([0x8f, 50, 0]);
+        assert!(!engine.censoring(DeckId::A));
+        dispatch([0x9f, 50, 127]);
+        dispatch([0x90, 16, 127]); // held button must release before rearming
+        assert!(!engine.censoring(DeckId::A));
+        dispatch([0x80, 16, 0]);
+        dispatch([0x90, 16, 127]);
+        c.handle_window_deactivated();
+        assert!(!engine.censoring(DeckId::A));
+        dispatch([0x80, 16, 0]);
+        dispatch([0x9f, 50, 127]);
+        dispatch([0x90, 16, 127]);
+        c.mc4000_release_holds();
+        assert!(!engine.censoring(DeckId::A));
+        dispatch([0x9f, 50, 127]);
+        dispatch([0x90, 16, 127]);
+        assert!(engine.censoring(DeckId::A));
+        engine.load_a(file.path()).unwrap();
+        dispatch([0x80, 16, 0]); // old release cannot restart replacement
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(engine.snapshot(DeckId::A).position, Duration::ZERO);
+        dispatch([0x90, 16, 127]);
+        assert!(!engine.censoring(DeckId::A));
+        dispatch([0x80, 16, 0]);
+        engine.play(DeckId::A);
+        output.by_ref().take(4800).for_each(drop);
+        dispatch([0x90, 16, 127]);
+        assert!(engine.censoring(DeckId::A));
+        ui.set_mc4000_connected(false);
+        c.tick();
+        assert!(!engine.censoring(DeckId::A));
+        assert!(!ui.get_left_censor());
+    }
     #[test]
     fn controller_platter_midi_moves_audio_and_marker_and_releases_safely() {
         i_slint_backend_testing::init_no_event_loop();

@@ -22,6 +22,7 @@ pub enum Command {
     Jog(usize, i8),
     PlatterTouch(usize, bool),
     Vinyl(usize),
+    Censor(usize, bool),
     EqKnob(usize, usize, u8),
     Shift(bool),
     PitchRange(usize),
@@ -59,6 +60,10 @@ pub fn decode(bytes: &[u8]) -> Option<Command> {
         (0x90, 0..=1, 6, value) => Some(Command::PlatterTouch(channel as usize, value != 0)),
         (0x80, 0..=1, 6, _) => Some(Command::PlatterTouch(channel as usize, false)),
         (0x90, 0..=1, 7, 1..=127) => Some(Command::Vinyl(channel as usize)),
+        (status @ (0x90 | 0x80), 0..=1, 16, value) => Some(Command::Censor(
+            channel as usize,
+            status == 0x90 && value != 0,
+        )),
         (0x90, 8..=9, 0, 1..=127) => Some(Command::FxToggle((channel - 8) as usize)),
         (0xb0, 8..=9, 0..=2, value) => Some(Command::FxKnob(
             (channel - 8) as usize,
@@ -805,6 +810,7 @@ pub fn apply(ui: &crate::AppWindow, command: Command) {
         Command::Jog(deck, steps) => ui.invoke_controller_jog(deck as i32, i32::from(steps)),
         Command::PlatterTouch(deck, held) => ui.invoke_controller_platter_touch(deck as i32, held),
         Command::Vinyl(deck) => ui.invoke_controller_vinyl(deck as i32),
+        Command::Censor(deck, held) => ui.invoke_controller_censor(deck as i32, held),
         Command::Monitor(index, value) => {
             match index {
                 0 => ui.set_monitor_gain(f32::from(value) * 100. / 127.),
@@ -1724,6 +1730,25 @@ mod tests {
         let input = Input::connect().unwrap();
         assert!(input.is_some(), "MC4000 input missing");
         drop(input);
+    }
+    #[test]
+    fn censor_decode_accepts_both_release_forms_on_deck_channels_only() {
+        for deck in 0..=1u8 {
+            assert_eq!(
+                decode(&[0x90 + deck, 16, 127]),
+                Some(Command::Censor(deck as usize, true))
+            );
+            assert_eq!(
+                decode(&[0x90 + deck, 16, 0]),
+                Some(Command::Censor(deck as usize, false))
+            );
+            assert_eq!(
+                decode(&[0x80 + deck, 16, 127]),
+                Some(Command::Censor(deck as usize, false))
+            );
+        }
+        assert_eq!(decode(&[0x92, 16, 127]), None);
+        assert_eq!(decode(&[0x9f, 16, 127]), Some(Command::BrowserAction(16)));
     }
     #[test]
     fn manufacturer_messages_ignore_release_shift_and_other_channels() {

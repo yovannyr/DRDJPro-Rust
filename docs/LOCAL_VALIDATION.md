@@ -1623,3 +1623,56 @@ Final cargo fmt --all -- --check and cargo clippy --workspace --locked --all-tar
 Final optimized check passed: cargo test --workspace --release --locked split_cue -- --test-threads=1 --nocapture. Seven tests passed, zero failures. The100ms audio block took3.6614ms with mono sources and3.6538ms with stereo sources; the unchanged100ms acceptance deadline passed. Allocation/reallocation/deallocation counts were zero in the measured render section. The targeted release test build took1m48s; tests0.19s. This is offline processing time for this workload, not device latency or sustained hardware qualification.
 
 Final cargo build --workspace --release --locked passed (1m24s); git diff --check passed. Runtime source unchanged after final checks. No independent review was performed, as requested. Existing untracked build_output.txt and test_output.txt remain outside the commit.
+
+## MC4000 S11 Censor (2026-11-04)
+
+Bounded S11 implementation: deck-channel Note16 Hold/Release while global SHIFT
+is held, a visible CENSOR deck-title state, and an independent audible reverse
+head in the existing atomic-control PCM renderer. Normal source position and
+render stamps continue forward; release resumes that timeline without seeking.
+Loops wrap both heads independently. Reverse reads prepared Keylock in original
+source coordinates; forward micro-stretch resets on mode changes. No dependency,
+SQLite/profile change, callback lock, allocation or task spawn added.
+
+Pause/Seek/published tempo/loop/transport changes cancel Censor. Scratch, nudge,
+pending quantized cues and unprepared/busy controls reject acquisition. Controller
+acquisition stops continuous Sync; Sync cannot acquire with Censor active on either
+deck and is not automatically restored. Weak renderer ownership prevents old
+releases affecting replaced sources. SHIFT release, focus loss, disconnect/queue
+recovery, loading, output failure and normal EOF release the owned session.
+Repeated or interrupted presses require an actual release before rearming.
+
+Six focused tests passed, including exact stereo PCM and forward phase at three
+tempos with nonmatching source/output rates, mid-frame release, rapid repress,
+loop-seam interpolation, beginning/EOF/Pause/Seek, MIDI release variants,
+focus/recovery/source ownership and Keylock pitch. The initial loop expectation
+incorrectly assumed a continuous ramp across the loop seam; corrected it to
+include the renderer's existing last-to-first linear interpolation. Clippy's
+unnecessary-unwrap and boolean-assert findings were corrected before final gates.
+
+Final `cargo clippy --workspace --locked --all-targets -- -D warnings` passed.
+`cargo test --workspace --locked --quiet` passed: 469 application tests plus five
+DSP tests, zero failures, six hardware qualifications ignored; app suite 43.11s.
+`cargo test --workspace --release --locked censor -- --test-threads=1 --nocapture`
+passed all six focused tests (repeat verification, not six additional unique
+tests), 0.19s after a 2m12s optimized test build. Both render benchmarks require
+the unchanged 100ms deadline in optimized builds; Debug still checks heap events.
+
+Optimized offline 100ms/48kHz blocks: stereo renderer 0.2979ms; complete mono
+engine 0.9860ms at tempo0.8, 0.9022ms at tempo1.25, and 1.0695ms at tempo1.25
+with Keylock. All measured sections, including Censor release/repress, counted
+zero allocations, reallocations and deallocations. These timings measure offline
+CPU processing, not device latency or sustained hardware qualification.
+
+Native MC4000 operation, musical entry/exit transitions, listening and end-to-end
+latency remain open. Entry/exit switch heads at frame boundaries; no new crossfade
+or click-free guarantee is claimed. Release handling depends on the control loop,
+not an audio-thread watchdog while the UI is stopped. S12-S15 remain outside this
+slice. No independent review, per the user's S8-S15 waiver. Existing untracked
+build_output.txt and test_output.txt remain outside this slice.
+
+Final `cargo build --workspace --release --locked` passed (1m39s),
+`cargo fmt --all -- --check` and `git diff --check` passed. Runtime sources
+were unchanged after the final Clippy, full Debug suite and focused Release
+tests. Implementation continued with GPT-6.1 Sol; no QWEN execution or independent
+review is claimed for this slice.

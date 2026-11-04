@@ -27,6 +27,8 @@ impl RenderFormat {
 }
 #[derive(Clone, Copy)]
 struct Settings {
+    censor: bool,
+    censor_serial: u64,
     sequence: u64,
     rate: u32,
     neutral_rate: u32,
@@ -49,6 +51,8 @@ pub(crate) struct RenderStamp {
     pub output_frame: u64,
 }
 pub(crate) struct RenderControl {
+    censor: AtomicBool,
+    censor_serial: AtomicU64,
     scratch: AtomicBool,
     scratch_serial: AtomicU64,
     scratch_target: AtomicU64,
@@ -99,6 +103,8 @@ impl RenderControl {
         assert!(format.source_rate > 0 && format.output_rate > 0);
         assert!(format.frames as u128 * u128::from(format.output_rate) <= u128::from(u64::MAX));
         Arc::new(Self {
+            censor: AtomicBool::new(false),
+            censor_serial: AtomicU64::new(0),
             scratch: AtomicBool::new(false),
             scratch_serial: AtomicU64::new(0),
             scratch_target: AtomicU64::new(0),
@@ -204,6 +210,22 @@ impl RenderControl {
     pub fn scratching(&self) -> bool {
         self.scratch.load(Ordering::SeqCst)
     }
+    /// Momentary reverse overlay; the published source timeline keeps moving forward.
+    pub fn censor(&self, held: bool) {
+        if self.censoring() == held {
+            return;
+        }
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.censor.store(held, Ordering::SeqCst);
+        if held {
+            self.censor_serial.fetch_add(1, Ordering::SeqCst);
+        }
+        self.trigger_at.store(0, Ordering::SeqCst);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
+    pub fn censoring(&self) -> bool {
+        self.censor.load(Ordering::SeqCst)
+    }
     pub fn schedule_trigger(&self, at_frame: usize, target_frame: usize) {
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.trigger_at.store(
@@ -243,6 +265,7 @@ impl RenderControl {
             });
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.scratch.store(false, Ordering::SeqCst);
+        self.censor.store(false, Ordering::SeqCst);
         self.trigger_at.store(0, Ordering::SeqCst);
         self.rate.store(rate, Ordering::SeqCst);
         self.neutral_rate
@@ -268,6 +291,8 @@ impl RenderControl {
         }
         let end = self.end.load(Ordering::SeqCst);
         let settings = Settings {
+            censor: self.censor.load(Ordering::SeqCst),
+            censor_serial: self.censor_serial.load(Ordering::SeqCst),
             sequence: first,
             rate: self.rate.load(Ordering::SeqCst),
             neutral_rate: self.neutral_rate.load(Ordering::SeqCst),
@@ -369,6 +394,10 @@ struct Handoff {
     seek_serial: u64,
 }
 pub(crate) struct DeckRenderer {
+    censor_serial: u64,
+    // Audible reverse head is private to the render thread. `phase` stays authoritative.
+    reverse_phase: u128,
+    reverse_exhausted: bool,
     scratch_serial: u64,
     scratch_remaining: u32,
     handoff: Option<Handoff>,
@@ -398,6 +427,9 @@ impl DeckRenderer {
         assert_eq!(control.format.output_rate, rate);
         assert_eq!(control.format.frames, samples.frames());
         Self {
+            censor_serial: 0,
+            reverse_phase: 0,
+            reverse_exhausted: false,
             scratch_serial: 0,
             scratch_remaining: 0,
             handoff: None,
@@ -469,6 +501,7 @@ impl DeckRenderer {
     fn prepare_frame(&mut self) {
         let prior_seek = self.applied_seek;
         let prior_phase = self.phase;
+        let prior_censor = self.settings.censor;
         if let Some(settings) = self.control.read(Some(self.settings.sequence)) {
             self.settings = settings;
         }
@@ -502,6 +535,12 @@ impl DeckRenderer {
         if !settings.scratch {
             self.phase = self.wrap(self.phase);
         }
+        if settings.censor != prior_censor || settings.censor_serial != self.censor_serial {
+            self.censor_serial = settings.censor_serial;
+            self.reverse_phase = self.phase;
+            self.reverse_exhausted = false;
+            self.micro.reset();
+        }
         if self.phase != prior_phase || self.applied_seek != prior_seek {
             self.micro.reset();
             self.publish_position();
@@ -528,6 +567,12 @@ impl Iterator for DeckRenderer {
         };
         let end = self.samples.frames() as u128 * u128::from(self.output_rate);
         let scratch = self.settings.scratch;
+        let censor = self.settings.censor && !scratch;
+        let audible_phase = if censor {
+            self.reverse_phase
+        } else {
+            self.phase
+        };
         let scratch_moving = scratch
             && self.scratch_remaining > 0
             && self.phase != u128::from(self.settings.scratch_target);
@@ -537,7 +582,7 @@ impl Iterator for DeckRenderer {
             self.settings.paused
         };
         let finished = (scratch || self.settings.region.is_none()) && self.phase >= end;
-        if self.channel == 0 && !paused && !finished && !scratch {
+        if self.channel == 0 && !paused && !finished && !scratch && !censor {
             if let Some(clip) = &self.keylock {
                 let region = self.settings.region;
                 self.keylock_frame = self.micro.frame(
@@ -555,7 +600,7 @@ impl Iterator for DeckRenderer {
                 );
             }
         }
-        let value = if paused || finished {
+        let value = if paused || finished || (censor && self.reverse_exhausted) {
             0.
         } else {
             // Match Rodio's channel mapping: discard surplus inputs, duplicate mono to stereo,
@@ -568,10 +613,16 @@ impl Iterator for DeckRenderer {
                 None
             };
             input_channel.map_or(0., |channel| {
-                if self.keylock.is_some() && !scratch {
+                if let Some(clip) = self.keylock.as_ref().filter(|_| !scratch) {
+                    if censor {
+                        return clip.sample_at_source(
+                            audible_phase as f64 / f64::from(self.output_rate),
+                            channel,
+                        );
+                    }
                     return self.keylock_frame[usize::from(channel)];
                 }
-                let frame = (self.phase / u128::from(self.output_rate)) as usize;
+                let frame = (audible_phase / u128::from(self.output_rate)) as usize;
                 let next = self.settings.region.filter(|_| !scratch).map_or(
                     (frame + 1).min(self.samples.frames() - 1),
                     |r| {
@@ -582,7 +633,7 @@ impl Iterator for DeckRenderer {
                         }
                     },
                 );
-                let fraction = (self.phase % u128::from(self.output_rate)) as f64
+                let fraction = (audible_phase % u128::from(self.output_rate)) as f64
                     / f64::from(self.output_rate);
                 let a = f64::from(self.samples.sample_at(frame, channel));
                 let b = f64::from(self.samples.sample_at(next, channel));
@@ -630,6 +681,21 @@ impl Iterator for DeckRenderer {
                     self.publish_position();
                 }
             } else if !self.settings.paused && !finished {
+                if censor {
+                    let step = u128::from(applied_rate);
+                    if let Some(region) = self.settings.region {
+                        let start = region.start as u128 * u128::from(self.output_rate);
+                        let length =
+                            (region.end - region.start) as u128 * u128::from(self.output_rate);
+                        self.reverse_phase =
+                            start + (self.reverse_phase - start + length - step % length) % length;
+                    } else if self.reverse_phase >= step {
+                        self.reverse_phase -= step;
+                    } else {
+                        self.reverse_phase = 0;
+                        self.reverse_exhausted = true;
+                    }
+                }
                 self.phase = self.wrap(self.phase + u128::from(applied_rate));
                 self.publish_position();
             }
@@ -657,6 +723,182 @@ impl Source for DeckRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn censor_renderer(
+        rate: u32,
+        step: u32,
+        region: Option<FrameLoop>,
+        start: usize,
+    ) -> (Arc<RenderControl>, DeckRenderer) {
+        let pcm = PcmSource::new(
+            2,
+            rate,
+            (0..12000)
+                .flat_map(|i| {
+                    let v = i as f32 / 12000.;
+                    [v, -v]
+                })
+                .collect(),
+        );
+        let control = RenderControl::new(
+            step,
+            true,
+            region,
+            SeekFrame {
+                time: Duration::from_secs_f64(start as f64 / f64::from(rate)),
+                frame: start,
+            },
+            RenderFormat {
+                source_rate: rate,
+                output_rate: 4800,
+                frames: 12000,
+            },
+        );
+        let renderer = DeckRenderer::new(pcm, control.clone(), 2, 4800);
+        (control, renderer)
+    }
+    #[test]
+    fn censor_exact_reverse_forward_timeline_and_frame_coherent_release() {
+        for step in [2400, 3000, 3750] {
+            let (control, mut renderer) = censor_renderer(3000, step, None, 4000);
+            renderer.by_ref().take(2).for_each(drop);
+            let start = control.current_units();
+            control.censor(true);
+            control.censor(true); // repeated NoteOn must not restart the reverse head
+            for i in 0..64u128 {
+                let expected = (start - u128::from(step) * i) as f64 / 4800. / 12000.;
+                let a = renderer.next().unwrap();
+                if i == 63 {
+                    control.censor(false);
+                } // mid-frame release keeps L/R coherent
+                let b = renderer.next().unwrap();
+                assert!((f64::from(a) - expected).abs() < 1e-7);
+                assert_eq!(a, -b);
+                assert_eq!(control.current_units(), start + u128::from(step) * (i + 1));
+            }
+            let resumed = control.current_units();
+            let a = renderer.next().unwrap();
+            renderer.next();
+            assert!((f64::from(a) - resumed as f64 / 4800. / 12000.).abs() < 1e-7);
+            control.censor(true);
+            renderer.by_ref().take(10).for_each(drop);
+            control.censor(false);
+            control.censor(true); // new gesture between frames must start at the current timeline
+            let restart = control.current_units();
+            assert!(
+                (f64::from(renderer.next().unwrap()) - restart as f64 / 4800. / 12000.).abs()
+                    < 1e-7
+            );
+        }
+    }
+    #[test]
+    fn censor_loop_boundaries_pause_seek_and_eof_are_authoritative() {
+        let region = FrameLoop {
+            start: 2000,
+            end: 2010,
+        };
+        let (control, mut renderer) = censor_renderer(3000, 3750, Some(region), 2003);
+        renderer.by_ref().take(2).for_each(drop);
+        let start = control.current_units();
+        control.censor(true);
+        let base = 2000 * 4800u128;
+        let length = 10 * 4800u128;
+        for i in 0..80u128 {
+            let reverse = base + (start - base + length - (i * 3750) % length) % length;
+            let frame = reverse / 4800;
+            let next = if frame == 2009 { 2000 } else { frame + 1 };
+            let expected = (frame as f64
+                + (next as f64 - frame as f64) * (reverse % 4800) as f64 / 4800.)
+                / 12000.;
+            assert!((f64::from(renderer.next().unwrap()) - expected).abs() < 1e-7);
+            renderer.next();
+            assert_eq!(
+                control.current_units(),
+                base + (start - base + (i + 1) * 3750) % length
+            );
+        }
+        control.publish(3750, false, Some(region), None);
+        let paused = control.current_units();
+        assert!(!control.censoring());
+        assert!(renderer.by_ref().take(40).all(|v| v == 0.));
+        control.censor(false);
+        assert_eq!(control.current_units(), paused);
+        control.publish(
+            4800,
+            true,
+            None,
+            Some(SeekFrame {
+                time: Duration::from_secs(1),
+                frame: 3000,
+            }),
+        );
+        renderer.by_ref().take(2).for_each(drop);
+        assert_eq!(control.frame(), 3001);
+
+        for (start, frames) in [(11995, 5), (1, 12)] {
+            let (control, mut renderer) = censor_renderer(3000, 4800, None, start);
+            control.censor(true);
+            for _ in 0..frames {
+                renderer.next();
+                renderer.next();
+            }
+            if start == 11995 {
+                assert_eq!(control.frame(), 12000);
+            }
+            assert!(renderer.by_ref().take(16).all(|v| v == 0.));
+            control.censor(false);
+            let normal = control.frame();
+            assert_eq!(
+                renderer.next().unwrap(),
+                if normal == 12000 {
+                    0.
+                } else {
+                    normal as f32 / 12000.
+                }
+            );
+        }
+    }
+    #[test]
+    fn censor_realtime_heap_and_optimized_deadline() {
+        let pcm = PcmSource::new(2, 48000, vec![0.25; 48000 * 8]);
+        let control = RenderControl::new(
+            48000,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::from_secs(2),
+                frame: 96000,
+            },
+            RenderFormat {
+                source_rate: 48000,
+                output_rate: 48000,
+                frames: 48000 * 4,
+            },
+        );
+        let mut renderer = DeckRenderer::new(pcm, control.clone(), 2, 48000);
+        renderer.by_ref().take(2).for_each(drop);
+        control.censor(true);
+        let start = std::time::Instant::now();
+        let heap = crate::looping::measured_heap(|| {
+            for i in 0..9600 {
+                if i == 4000 {
+                    control.censor(false);
+                }
+                if i == 6000 {
+                    control.censor(true);
+                }
+                assert_eq!(renderer.next(), Some(0.25));
+            }
+        });
+        let elapsed = start.elapsed();
+        assert_eq!(
+            (heap.allocations, heap.reallocations, heap.deallocations),
+            (0, 0, 0)
+        );
+        if !cfg!(debug_assertions) {
+            assert!(elapsed < Duration::from_millis(100), "{elapsed:?}");
+        }
+        eprintln!("Censor 100ms stereo/48kHz offline block: {elapsed:?}; heap {heap:?}");
+    }
     #[test]
     fn platter_reverse_forward_boundaries_and_idle_are_allocation_free() {
         let rate = 3000;
