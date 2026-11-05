@@ -60,8 +60,13 @@ Finite float samples above full scale are attenuated to peak1; quieter samples
 keep their gain. Each voice gets fixed25% headroom, global level defaults50%.
 Thus the isolated sampler sum fits full scale at maximum level; the combined
 master can still clip when decks/FX are added, and existing master meters apply.
-Native-rate linear interpolation preserves natural playback duration across
-output rates; it is not an independently qualified mastering resampler.
+Source rates must not exceed the actual output sample rate: for example, a
+96kHz sample is rejected on a48kHz output before replacing the previous bank.
+The load/restore error identifies both rates. Matching high-rate outputs remain
+supported; switching to a lower-rate device can leave a saved high-rate slot
+unavailable until a compatible sample or output is selected, without autoplay.
+Linear interpolation preserves duration for matching rates and upsampling;
+bandlimited downsampling is not implemented, so it is explicitly rejected.
 
 Start/retrigger/stop and global level changes use bounded fades up to5ms. Short
 clips shorten their fades, including a valid single-frame clip. Natural EOF

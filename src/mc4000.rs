@@ -732,10 +732,17 @@ fn poll_pitch_faders(values: &[AtomicU16; 2], mut apply: impl FnMut(Command)) {
     }
 }
 
-/// Map a 14-bit fader value to a pitch percent across a range. Provisional pending a
-/// native MIDI recording: 0 maps to min, 16383 to max, the midpoint to the centre.
+/// Map a 14-bit fader to pitch, with both central values at neutral tempo.
+/// Each half covers its own bound, including asymmetric ranges such as Wide.
+/// Physical direction and resolution still require a native MIDI recording.
 pub fn pitch_fader_percent(value: u16, min: f32, max: f32) -> f32 {
-    min + (max - min) * f32::from(value) / 16383.
+    if value < 8191 {
+        min * f32::from(8191 - value) / 8191.
+    } else if value > 8192 {
+        max * f32::from(value - 8192) / 8191.
+    } else {
+        0.
+    }
 }
 
 fn centered_knob(value: u8, minimum: f32, maximum: f32) -> f32 {
@@ -1134,12 +1141,19 @@ mod tests {
     }
     #[test]
     fn pitch_fader_percent_maps_endpoints_and_midpoint() {
-        for (min, max) in [(-8., 8.), (-50., 100.)] {
+        for (min, max) in [(-8., 8.), (-16., 16.), (-50., 50.), (-50., 100.)] {
             assert_eq!(pitch_fader_percent(0, min, max), min);
             assert_eq!(pitch_fader_percent(16383, min, max), max);
-            let mid = (min + max) / 2.;
-            assert!((pitch_fader_percent(8191, min, max) - mid).abs() < 0.01);
-            assert!((pitch_fader_percent(8192, min, max) - mid).abs() < 0.01);
+            assert_eq!(pitch_fader_percent(8191, min, max), 0.);
+            assert_eq!(pitch_fader_percent(8192, min, max), 0.);
+            assert!(pitch_fader_percent(4096, min, max) < 0.);
+            assert!(pitch_fader_percent(12288, min, max) > 0.);
+            for value in 1..=16383 {
+                let previous = pitch_fader_percent(value - 1, min, max);
+                let current = pitch_fader_percent(value, min, max);
+                assert!(current >= previous);
+                assert!(current - previous <= max.abs().max(min.abs()) / 8191. + 0.0001);
+            }
         }
     }
 

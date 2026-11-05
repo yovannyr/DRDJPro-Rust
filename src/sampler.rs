@@ -125,12 +125,17 @@ impl Bank {
 pub(crate) struct Shared {
     banks: [Bank; 4],
     gain: AtomicU32,
+    output_rate: u32,
 }
 impl Shared {
-    pub fn new() -> Result<Arc<Self>, String> {
+    pub fn new(output_rate: u32) -> Result<Arc<Self>, String> {
+        if output_rate == 0 {
+            return Err("Sampler output sample rate must be positive".into());
+        }
         Ok(Arc::new(Self {
             banks: [Bank::new()?, Bank::new()?, Bank::new()?, Bank::new()?],
             gain: AtomicU32::new(0.5f32.to_bits()),
+            output_rate,
         }))
     }
     pub fn set_gain(&self, gain: f32) -> Result<(), String> {
@@ -195,6 +200,15 @@ impl Shared {
     }
     /// One background writer. Odd sequence silences readers; a changed generation rejects stale jobs.
     fn install(&self, slot: usize, token: u64, sample: &Prepared) -> Result<(), String> {
+        // Linear interpolation cannot remove frequencies above the output Nyquist
+        // limit. Reject downsampling before modifying a bank; a future bandlimited
+        // worker resampler can lift this restriction without adding callback work.
+        if sample.rate > self.output_rate {
+            return Err(format!(
+                "Sampler sample rate {} Hz exceeds output {} Hz; use a sample at or below the output rate",
+                sample.rate, self.output_rate
+            ));
+        }
         let b = &self.banks[slot];
         if b.requested.load(Ordering::SeqCst) != token {
             return Err("Sampler load cancelled".into());
@@ -327,6 +341,7 @@ pub(crate) struct Bus {
 }
 impl Bus {
     pub fn new(shared: Arc<Shared>, channels: u16, rate: u32) -> Self {
+        assert_eq!(shared.output_rate, rate);
         let gain = shared.gain();
         Self {
             shared,
@@ -499,7 +514,7 @@ mod tests {
     }
     #[test]
     fn sampler_four_voices_headroom_routes_retrigger_stop_eof_and_level() {
-        let shared = Shared::new().unwrap();
+        let shared = Shared::new(48000).unwrap();
         let prepared = sample(1., 4800);
         for slot in 0..4 {
             install(&shared, slot, &prepared);
@@ -541,7 +556,7 @@ mod tests {
     }
     #[test]
     fn sampler_generations_errors_clear_and_worker_publication_never_autoplay() {
-        let shared = Shared::new().unwrap();
+        let shared = Shared::new(48000).unwrap();
         let prepared = sample(0.5, 4800);
         install(&shared, 0, &prepared);
         let (token, previous) = shared.begin_load(0).unwrap();
@@ -582,10 +597,10 @@ mod tests {
     }
     #[test]
     fn sampler_rates_stereo_and_concurrent_install_are_coherent() {
-        let shared = Shared::new().unwrap();
+        let shared = Shared::new(48000).unwrap();
         shared.set_gain(1.).unwrap();
         let mut bus = Bus::new(shared.clone(), 2, 48000);
-        for rate in [8000, 48000, 192000] {
+        for rate in [8000, 44100, 48000] {
             let prepared = Prepared {
                 path: PathBuf::from("sample.wav"),
                 rate,
@@ -633,8 +648,60 @@ mod tests {
         assert!(!shared.active(0));
     }
     #[test]
+    fn sampler_downsampling_rejects_before_publication_and_keeps_native_high_rates() {
+        assert!(Shared::new(0).is_err());
+        // This ultrasonic source aliases to 18 kHz if read every second frame.
+        let pcm: Vec<i16> = (0..9600)
+            .map(|frame| {
+                (20000. * (std::f64::consts::TAU * 30000. * frame as f64 / 96000.).sin()) as i16
+            })
+            .collect();
+        let file = crate::test_support::wav_samples(&pcm, 96000, 1);
+        let shared = Shared::new(48000).unwrap();
+        install(&shared, 0, &sample(-0.5, 4800));
+        let before = shared.banks[0].sequence.load(Ordering::SeqCst);
+        let path = file.path().to_owned();
+        let job = Load::start(shared.clone(), 0, Arc::new(move || Some(path.clone()))).unwrap();
+        let error = job
+            .result
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error.contains("96000 Hz exceeds output 48000 Hz"),
+            "{error}"
+        );
+        assert_eq!(shared.banks[0].sequence.load(Ordering::SeqCst), before);
+        assert!(shared.ready(0)); // Failed replacement retains the old clip.
+        assert!(!shared.active(0));
+        let mut bus = Bus::new(shared.clone(), 2, 48000);
+        assert!(bus.by_ref().take(1000).all(|v| v == 0.));
+        shared.play(0).unwrap();
+        bus.by_ref().take(1000).for_each(drop);
+        assert_eq!(bus.next(), Some(-0.0625));
+
+        // Restoring the same file on a matching physical output remains supported,
+        // and publishes the bank without starting a voice.
+        let high_rate = Shared::new(96000).unwrap();
+        high_rate.set_gain(1.).unwrap();
+        let path = file.path().to_owned();
+        let job = Load::start(high_rate.clone(), 0, Arc::new(move || Some(path.clone()))).unwrap();
+        assert!(job
+            .result
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .is_some());
+        let mut bus = Bus::new(high_rate.clone(), 2, 96000);
+        assert!(bus.by_ref().take(1000).all(|v| v == 0.));
+        high_rate.play(0).unwrap();
+        bus.by_ref().take(2000).for_each(drop);
+        let expected = f32::from(pcm[1000]) / 32768. * 0.25;
+        assert!((bus.next().unwrap() - expected).abs() < 1e-6);
+    }
+    #[test]
     fn sampler_replacement_writers_serialize_outside_audio() {
-        let shared = Shared::new().unwrap();
+        let shared = Shared::new(48000).unwrap();
         install(&shared, 0, &sample(0.5, 4800));
         let (token, _) = shared.begin_load(0).unwrap();
         let before = shared.banks[0].sequence.fetch_add(1, Ordering::SeqCst);
@@ -663,7 +730,7 @@ mod tests {
     }
     #[test]
     fn sampler_render_commands_and_replacement_heap_and_optimized_budget() {
-        let shared = Shared::new().unwrap();
+        let shared = Shared::new(48000).unwrap();
         let prepared = sample(0.5, 48000);
         for slot in 0..4 {
             install(&shared, slot, &prepared);

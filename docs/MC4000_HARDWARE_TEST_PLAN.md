@@ -86,6 +86,12 @@ sich ohne ausdrueckliche Sync-/Klon-/Masteraktion nicht aendern.
 
 ## Gemeinsame Recovery- und Regressionstests
 
+Sampler-Sampleraten: Eine96kHz-Datei auf48kHz-Ausgabe laden bzw. als gespeicherte
+Bank nach Geraetewechsel wiederherstellen: sichtbarer Fehler mit Quell-/Ausgaberate,
+kein neuer Clip und kein Autoplay. Bei fehlgeschlagenem Ersatz bleibt der vorherige
+Clip erhalten. Auf96kHz-Ausgabe muss dieselbe Datei ladbar und zunaechst gestoppt
+sein. Downsampling ist bis zu einem bandbegrenzten Worker-Resampler nicht erlaubt.
+
 Fuer **jede gehaltene Funktion** (Bend, Cue, HotCue, Scratch, Search, Censor)
 separat ausfuehren:
 

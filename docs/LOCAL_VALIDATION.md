@@ -1935,3 +1935,53 @@ Final `cargo build --workspace --release --locked` passed (1m19s), as did
 `cargo fmt --all -- --check` and `git diff --check`. Production and test sources
 were unchanged after the final full suite, strict Clippy and Release checks.
 S15 is committed locally only; no push or independent review was performed.
+
+
+## MC4000 S1-S15: Review und Korrekturen (2026-11-05)
+
+Die angeforderte Gesamtsichtung erfolgte auf Basis von `962061d..85ddb2b`
+mit drei unabhaengigen GPT-6.1-Sol-Instanzen fuer MIDI/Controller, Audio/DSP
+und Persistenz/GUI. Konkrete Befunde wurden im Arbeitsstand korrigiert:
+
+- Wide-Pitch bildet beide mittleren Rohwerte auf0% statt auf25% ab; alle vier
+  Bereiche sind monoton und behalten ihre Endpunkte. Sync und GUI-PHASE loesen
+  die Hardware-Pickup-Kopplung nach erfolgreicher Tempoaenderung.
+- Ein ausstehender Sampler-Save wird beim Beenden mit dem letzten Zustand
+  ueberschrieben; ein Sampler-Speicherfehler blockiert den getrennten finalen
+  Bibliotheks-/Queue-/FX-/Deck-Flush nicht mehr. Beide Fehler bleiben sichtbar.
+- Lineares Downsampling hochaufgeloester Samples kann hoerbare Aliase erzeugen.
+  Bis ein bandbegrenzter Resampler implementiert ist, lehnt der Sampler Dateien
+  oberhalb der tatsaechlichen Ausgaberate mit expliziter Meldung ab; der zuvor
+  geladene Slot bleibt erhalten. Keine neuen DSP-Operationen im Audio-Callback.
+
+Eine unabhaengige Nachsicht der beiden Pitch-Korrekturen fand den zusaetzlichen
+GUI-PHASE-Pfad; dieser wurde ebenfalls korrigiert. Die Sol-Instanzen fielen
+anschliessend wegen fehlender Workspace-Guthaben aus. Mit Nutzerfreigabe
+setzte GPT-6.1 Terra die Fehlersuche und die Abschlusschecks fort. Ein
+unabhaengiges GPT-6.1-Terra-Nachreview (Denkaufwand mittel) des finalen
+Korrektur-Diffs fand keine konkreten Blocker; Tests fuehrte der Hauptagent aus.
+Der zuerst fehlgeschlagene neue Sync-Test wurde durch Initialisierung seiner
+Renderuhr korrigiert und danach erfolgreich erneut ausgefuehrt.
+
+Offen bleibt die echte MC4000-Aufzeichnung: Die MIDI-Paarbildung hat keine
+Generationskennung und kann bei fehlender oder versetzt eintreffender Haelfte
+zwei Zeitpunkte kombinieren. Ein isoliertes synthetisches Gegenbeispiel belegt
+die Luecke; ob dies das beobachtete Springen verursacht oder welche Reihenfolge
+der Controller bei realer Bewegung sendet, ist nicht belegt. Das Verhalten des
+physischen Faders und die native Hoer-/Latenzabnahme sind nicht bestanden.
+
+Finale Nachpruefung: `cargo fmt --all -- --check` und
+`cargo clippy --workspace --locked --all-targets -- -D warnings` bestanden.
+`cargo test --workspace --locked --quiet` bestand mit499 Anwendungs- und fuenf
+DSP-Tests (504 unterschiedliche Erfolge), sechs Hardwaretests ignoriert.
+Die optimierten MC4000-Pitch-Regressionen bestanden4/4. Im kombinierten
+10-Sekunden-Offline-Audiotest mit zwei Decks, sechs FX-Slots und vier Samples
+betrug der langsamste100-ms-Block12,4397ms; alle100 Bloecke ohne Heap-Zugriffe.
+Diese Werte sind keine gemessene Latenz oder Hoerabnahme am echten Geraet.
+
+Der normale Release-Build konnte die laufende `target/release`-Programmdatei
+nicht ersetzen (Windows Zugriff verweigert). Der vollstaendige isolierte
+Release-Build mit `CARGO_TARGET_DIR=target/review-isolated` bestand in5m44s.
+Die bereits laufende Anwendung wurde nicht beendet und verwendet weiterhin den
+alten Stand; fuer einen nativen Test muss der neue Build separat gestartet oder
+das normale Release nach Schliessen der Anwendung erneut gebaut werden.

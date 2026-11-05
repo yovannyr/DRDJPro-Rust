@@ -529,7 +529,7 @@ impl DualDeckEngine {
         );
         // Both deck queues enter one fixed-format bus before the device/injected mixer.
         let (deck_mixer, deck_output) = rodio::mixer::mixer(output_channels, output_rate);
-        let sampler = crate::sampler::Shared::new()?;
+        let sampler = crate::sampler::Shared::new(output_rate)?;
         deck_mixer.add(crate::sampler::Bus::new(
             Arc::clone(&sampler),
             output_channels,

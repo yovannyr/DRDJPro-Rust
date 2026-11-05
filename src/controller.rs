@@ -1792,6 +1792,8 @@ impl AudioController {
             .sync_observation(id, alignment)
             .ok_or("Wait for fresh playing deck frames before Sync")?;
         self.engine.borrow().phase_sync_once(id, alignment)?;
+        // Sync changes the permanent base tempo, so hardware must acquire it again.
+        self.reset_pitch_pickup(id);
         *self.sync_session.borrow_mut() = Some(self.capture_sync(id, frame));
         Ok(())
     }
@@ -2980,7 +2982,7 @@ impl AudioController {
             let target = crate::mc4000::pitch_fader_percent(raw as u16, min as f32, max as f32);
             // Track the most recent hardware fader position so a fast sweep crossing
             // the target engages pickup even when no single sample lands within the
-            // tolerance band (e.g. raw 5400 -> 5500 crossing 0%).
+            // tolerance band (e.g. raw 8100 -> 8300 crossing 0%).
             let prior = c.pitch_last_raw.get()[index];
             let mut positions = c.pitch_last_raw.get();
             positions[index] = Some(raw as u16);
@@ -3156,6 +3158,9 @@ impl AudioController {
                             .borrow()
                             .phase_sync_once(id, c.alignments.get()[Self::grid_index(id)])
                     });
+                    if result.is_ok() {
+                        c.reset_pitch_pickup(id);
+                    }
                     if let Some(ui) = c.ui.upgrade() {
                         ui.set_status(
                             result
@@ -5423,6 +5428,7 @@ impl AudioController {
         }
     }
     pub fn close_library(&self) -> Result<(), String> {
+        let mut sampler_error = None;
         {
             let mut s = self.sampler.borrow_mut();
             s.shared.stop_all();
@@ -5431,9 +5437,11 @@ impl AudioController {
         }
         if self.storage_ready.get() {
             let s = self.sampler.borrow();
-            if s.writable && s.preferences != s.saved {
+            // An unacknowledged save may contain an older value even when the
+            // current preferences have returned to the last acknowledged state.
+            if s.writable && (s.preferences != s.saved || s.saving) {
                 if let Some(worker) = self.persistence.borrow().as_ref() {
-                    worker.flush_sampler(s.preferences.clone())?;
+                    sampler_error = worker.flush_sampler(s.preferences.clone()).err();
                 }
             }
         }
@@ -5485,7 +5493,7 @@ impl AudioController {
                     || self.library.borrow().has_changes()))
             .then(|| self.library.borrow().changes());
             let revision = final_delta.as_ref().map(|d| d.revision);
-            worker.close_session_state_with_columns(
+            let closed = worker.close_session_state_with_columns(
                 final_delta,
                 preferences,
                 output,
@@ -5496,7 +5504,15 @@ impl AudioController {
                 } else {
                     None
                 },
-            )?;
+            );
+            if let Err(error) = closed {
+                return Err(match sampler_error {
+                    Some(sampler) => format!(
+                        "Sampler bank not saved: {sampler}; library final save failed: {error}"
+                    ),
+                    None => error,
+                });
+            }
             if let Some(revision) = revision {
                 self.library.borrow_mut().acknowledge(revision);
             }
@@ -5509,7 +5525,9 @@ impl AudioController {
             self.saving.set(false);
             self.dirty.set(false);
         }
-        Ok(())
+        sampler_error.map_or(Ok(()), |error| {
+            Err(format!("Sampler bank not saved: {error}"))
+        })
     }
     fn apply_levels(&self) {
         if let Some(ui) = self.ui.upgrade() {
@@ -9911,6 +9929,68 @@ mod tests {
         c.close_library().unwrap();
     }
     #[test]
+    fn sampler_close_flushes_latest_state_after_unacknowledged_save_is_reverted() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), vec![]);
+        finish_storage(&c);
+        let original = c.sampler.borrow().saved.clone();
+        ui.set_sampler_gain(25.);
+        ui.invoke_sampler_level();
+        c.poll_sampler();
+        assert!(c.sampler.borrow().saving);
+        // Leave the acknowledgement unread, then undo the edit before shutdown.
+        ui.set_sampler_gain(original.gain * 100.);
+        ui.invoke_sampler_level();
+        assert_eq!(c.sampler.borrow().preferences, original);
+        c.close_library().unwrap();
+        let worker = crate::library_store::Worker::start(db).unwrap();
+        let crate::library_store::Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+            panic!("library restored")
+        };
+        assert_eq!(loaded.sampler_preferences.unwrap(), original);
+        worker.close_delta(None).unwrap();
+    }
+
+    #[test]
+    fn sampler_close_failure_still_flushes_independent_library_and_prep_edits() {
+        i_slint_backend_testing::init_no_event_loop();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let c = AudioController::wire(&ui, engine, Arc::new(|| None), Arc::new(|| None));
+        c.restore_library(Ok(db.clone()), vec![]);
+        finish_storage(&c);
+        let sql = rusqlite::Connection::open(&db).unwrap();
+        sql.execute_batch("CREATE TRIGGER reject_sampler_close BEFORE INSERT ON library_meta WHEN NEW.key='sampler_v1' BEGIN SELECT RAISE(ABORT,'injected sampler-only close failure'); END;").unwrap();
+        ui.set_sampler_gain(25.);
+        ui.invoke_sampler_level();
+        c.library
+            .borrow_mut()
+            .insert([dir.path().join("pending.wav")]);
+        c.library.borrow_mut().prep_add(1).unwrap();
+        let error = c.close_library().unwrap_err();
+        assert!(error.contains("injected sampler-only close failure"));
+        assert!(c.persistence.borrow().is_none());
+        assert!(!c.library.borrow().has_changes());
+        drop(sql);
+        let worker = crate::library_store::Worker::start(db).unwrap();
+        let crate::library_store::Event::Loaded(Ok(loaded)) = worker.events.recv().unwrap() else {
+            panic!("library restored")
+        };
+        assert_eq!(loaded.library.len(), 1);
+        assert_eq!(loaded.library.prep_queue(), &[1]);
+        worker.close_delta(None).unwrap();
+    }
+
+    #[test]
     fn sampler_cancelled_late_loader_cannot_resurrect_cleared_slot() {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
@@ -13540,6 +13620,89 @@ mod tests {
     }
 
     #[test]
+    fn mc4000_pitch_pickup_reacquires_sync_tempo_on_both_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        for (target, phase_only) in [
+            (DeckId::A, false),
+            (DeckId::B, false),
+            (DeckId::A, true),
+            (DeckId::B, true),
+        ] {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+            let clock = Rc::new(Cell::new(Instant::now()));
+            let source_clock = Rc::clone(&clock);
+            let engine = Rc::new(DualDeckEngine::from_mixer_with_clock(
+                mixer,
+                1,
+                48000,
+                Box::new(move || source_clock.get()),
+            ));
+            let file = wav_file(4096, 384000);
+            engine.load_a(file.path()).unwrap();
+            engine.load_b(file.path()).unwrap();
+            let c =
+                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            for deck in 0..2 {
+                ui.invoke_controller_pitch_fader(deck, 8192);
+            }
+            c.apply_pending_pitch();
+            assert_eq!(c.pitch_pickup.get(), [true; 2]);
+            let index = AudioController::grid_index(target);
+            let sync = || {
+                if phase_only {
+                    match target {
+                        DeckId::A => ui.invoke_phase_sync_left(),
+                        DeckId::B => ui.invoke_phase_sync_right(),
+                    }
+                } else {
+                    ui.invoke_controller_sync(index as i32, true);
+                }
+            };
+            // A rejected Sync must leave the current hardware acquisition intact.
+            sync();
+            assert_eq!(c.pitch_pickup.get(), [true; 2]);
+            for (id, bpm) in [(DeckId::A, 120.), (DeckId::B, 128.)] {
+                engine
+                    .set_grid(
+                        id,
+                        Some(crate::beatgrid::BeatGrid::new(bpm, Duration::ZERO).unwrap()),
+                    )
+                    .unwrap();
+                engine.play(id);
+            }
+            // Establish a clock baseline before rendering so freshness can observe progress.
+            c.refresh();
+            for _ in 0..1000 {
+                output.next();
+            }
+            clock.set(clock.get() + Duration::from_millis(1));
+            c.refresh();
+            sync();
+            assert_eq!(
+                c.sync_session.borrow().is_some(),
+                !phase_only,
+                "{}",
+                ui.get_status()
+            );
+            let matched = engine.snapshot(target).requested_speed;
+            assert!((matched - 1.).abs() > 0.05);
+            assert!(!c.pitch_pickup.get()[index]);
+            assert!(c.pitch_pickup.get()[1 - index]);
+            // Small movement at the old physical position cannot overwrite Sync's base.
+            ui.invoke_controller_pitch_fader(index as i32, 8193);
+            assert!(c.pending_pitch.borrow()[index].is_none());
+            c.apply_pending_pitch();
+            assert_eq!(engine.snapshot(target).requested_speed, matched);
+            assert_eq!(c.sync_session.borrow().is_some(), !phase_only);
+            // Sweeping through the new tempo gives the fader control again.
+            ui.invoke_controller_pitch_fader(index as i32, if matched > 1. { 16383 } else { 0 });
+            assert!(c.pitch_pickup.get()[index]);
+            assert!(c.pending_pitch.borrow()[index].is_some());
+        }
+    }
+
+    #[test]
     fn mc4000_pitch_fader_pickup_and_range_redarm() {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
@@ -13551,15 +13714,18 @@ mod tests {
         let pitch = |raw| {
             crate::mc4000::apply(&ui, crate::mc4000::Command::PitchFader(0, raw));
         };
-        // Default range index 3 maps 0..16383 to -50%..+100%. A fader far from the current
+        // Default Wide range keeps the physical midpoint at 0% between -50% and +100%.
+        // A fader far from the current
         // 0% pitch is ignored until pickup is armed, so a GUI/range change cannot yank tempo.
         pitch(16000); // ~+96%
         assert!(!c.pitch_pickup.get()[0]);
         assert!(c.pending_pitch.borrow()[0].is_none());
         // Matching the current pitch arms pickup and starts following the fader.
-        pitch(5461); // ~0%
+        pitch(8192); // physical centre is neutral even in Wide
         assert!(c.pitch_pickup.get()[0]);
         assert!(c.pending_pitch.borrow()[0].is_some());
+        c.apply_pending_pitch();
+        assert_eq!(engine.snapshot(DeckId::A).requested_speed, 1.);
         pitch(16000); // ~+96%
         assert!(c.pitch_pickup.get()[0]);
         // A range change (Note14) disarms pickup; a far fader is ignored again.
@@ -13594,7 +13760,7 @@ mod tests {
         // Deck A arms and follows; deck B keeps its own independent pickup state.
         pitch(0, 16000); // ~+96%, far from current 0% -> ignored
         assert!(!c.pitch_pickup.get()[0]);
-        pitch(0, 5461); // ~0% -> arms deck A
+        pitch(0, 8192); // physical centre -> arms deck A
         assert!(c.pitch_pickup.get()[0]);
         pitch(0, 16000); // armed -> follows to ~+96%
         assert!(c.pending_pitch.borrow()[0].is_some());
@@ -13609,7 +13775,7 @@ mod tests {
         // Lifecycle release disarms both decks and blocks a subsequent stale far fader.
         c.mc4000_release_holds();
         assert_eq!(c.pitch_pickup.get(), [false, false]);
-        pitch(0, 5461); // ~0%, far from deck A's +96% current pitch -> still rejected
+        pitch(0, 8192); // 0%, far from deck A's current pitch -> still rejected
         assert!(!c.pitch_pickup.get()[0]);
         assert!(c.pending_pitch.borrow()[0].is_none());
     }
@@ -13622,9 +13788,9 @@ mod tests {
         let file = wav_file(4096, 192000);
         engine.load_a(file.path()).unwrap();
         let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
-        ui.invoke_controller_pitch_fader(0, 5400);
+        ui.invoke_controller_pitch_fader(0, 8100);
         assert!(!c.pitch_pickup.get()[0]);
-        ui.invoke_controller_pitch_fader(0, 5500);
+        ui.invoke_controller_pitch_fader(0, 8300);
         assert!(c.pitch_pickup.get()[0]);
         c.apply_pending_pitch();
         let old_range = ui.get_left_pitch_range_index();
