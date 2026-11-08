@@ -23,3 +23,5 @@ Quellstand `7928de5`, statischer Abgleich am 08.11.2026. [Spec 19](19-sampler-se
 | FR-017 | Teilweise | LOAD erlaubt lokale Dateien; Format-, Größen- und Sampleratenbeschränkungen sowie die Spec-Bedienung bleiben zu prüfen. |
 
 Alle acht Erfolgskriterien **SC-001–008 bleiben offen**: echte Trigger-/Stop-Latenz, Lade-/Pegel- und GUI-Reaktionszeiten, acht gleichzeitige Samples und Last mit 500+ Bibliothekseinträgen sind nicht mit passenden Daten und Zielhardware belegt. Die bisherigen Tests ersetzen die Messungen nicht.
+
+Der [Messplan](G01_SPEC19_20_21_MEASUREMENT_PLAN.md) konkretisiert die acht Sampler-Kriterien.

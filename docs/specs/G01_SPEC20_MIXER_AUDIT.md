@@ -23,3 +23,5 @@ Quellstand `01b3eb1`, statischer Abgleich am 08.11.2026. [Spec 20](20-multi-deck
 | FR-017 | Offen | Persistenz sämtlicher geforderter Mixerparameter über Neustart und Migration ist nicht vollständig nachgewiesen. |
 
 SC-001–008 bleiben offen, bis Umschalt-/Reglerzeiten, Meterrate, Vierdeck-CPU, Limiter und Crossfader mit dem definierten Aufbau gemessen und subjektive Übergänge abgehört sind. Bestehende DSP- und GUI-Tests sind ein Teilnachweis, kein Vierdeck- oder End-to-End-Latenznachweis.
+
+Der [Messplan](G01_SPEC19_20_21_MEASUREMENT_PLAN.md) konkretisiert die acht Mixer-Kriterien.
