@@ -10,23 +10,23 @@ Deck-EQ und Peakmeter existieren. Die integrierte Track-Lautheits-/True-Peak-Ana
 
 | ID | Anforderung / Originalüberschrift | Status |
 |---|---|---|
-| FR-001 | System MUST provide master channel compressor with threshold, ratio, attack, release, knee, makeup gain | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-002 | System MUST provide master channel limiter with threshold, release, ceiling, look-ahead | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-003 | System MUST provide multiband compressor with 3 bands: Low (20-250Hz), Mid (250-4kHz), High (4-20kHz) | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-004 | System MUST allow independent threshold, ratio, attack, release per band | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-005 | System MUST provide stereo enhancer with width control (0-200%), side gain, mid-side processing | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-006 | System MUST provide master EQ with 3-band parametric: Low, Mid, High shelves with gain and frequency controls | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-007 | System MUST provide harmonic exciter for adding warmth/brightness | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-008 | System MUST include venue presets: Club, Festival, Radio, Streaming, Lounge, Outdoor | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-009 | System MUST display real-time gain reduction meters for compressor and limiter | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-010 | System MUST display LUFS loudness metering (-23 LUFS to 0 LUFS range) | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-011 | System MUST display real-time frequency spectrum analyzer (20Hz-20kHz) | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-012 | System MUST display true peak metering with overload indicators | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-013 | System MUST allow saving and loading custom mastering presets | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-014 | System MUST support bypass toggle for A/B comparison | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-015 | System MUST provide input/output level meters | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-016 | System MUST implement proper gain staging to prevent clipping between stages | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-017 | System MUST support processing chain reordering (compressor → EQ → limiter, etc.) | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
+| FR-001 | System MUST provide master channel compressor with threshold, ratio, attack, release, knee, makeup gain | Offen: Master-Kompressor mit allen Parametern nicht nachgewiesen. |
+| FR-002 | System MUST provide master channel limiter with threshold, release, ceiling, look-ahead | Offen: Master-Limiter inklusive Look-ahead nicht nachgewiesen. |
+| FR-003 | System MUST provide multiband compressor with 3 bands: Low (20-250Hz), Mid (250-4kHz), High (4-20kHz) | Offen: dreibandiger Master-Kompressor nicht nachgewiesen. |
+| FR-004 | System MUST allow independent threshold, ratio, attack, release per band | Offen: unabhängige Dynamikparameter pro Band nicht nachgewiesen. |
+| FR-005 | System MUST provide stereo enhancer with width control (0-200%), side gain, mid-side processing | Offen: M/S-Stereo-Enhancer mit Width/Side-Gain nicht nachgewiesen. |
+| FR-006 | System MUST provide master EQ with 3-band parametric: Low, Mid, High shelves with gain and frequency controls | Teilweise: Deck-EQ vorhanden; parametrierbarer Master-EQ nicht nachgewiesen. |
+| FR-007 | System MUST provide harmonic exciter for adding warmth/brightness | Offen: Master-Exciter nicht nachgewiesen. |
+| FR-008 | System MUST include venue presets: Club, Festival, Radio, Streaming, Lounge, Outdoor | Offen: sechs Venue-Mastering-Presets nicht nachgewiesen. |
+| FR-009 | System MUST display real-time gain reduction meters for compressor and limiter | Offen: Gain-Reduction-Anzeigen für Master-Kompressor und -Limiter nicht nachgewiesen. |
+| FR-010 | System MUST display LUFS loudness metering (-23 LUFS to 0 LUFS range) | Teilweise: Offline-Track-LUFS in audio_analyzer.rs; Live-Master-LUFS nicht nachgewiesen. |
+| FR-011 | System MUST display real-time frequency spectrum analyzer (20Hz-20kHz) | Offen: Live-Master-Spektrumanzeige nicht nachgewiesen. |
+| FR-012 | System MUST display true peak metering with overload indicators | Teilweise: Offline-Track-True-Peak für Gain; vorhandenes Live-Peakmeter beansprucht ausdrücklich keinen True-Peak-Nachweis. |
+| FR-013 | System MUST allow saving and loading custom mastering presets | Offen: benutzerdefinierte Mastering-Presets nicht nachgewiesen. |
+| FR-014 | System MUST support bypass toggle for A/B comparison | Offen: Bypass einer Mastering-Kette nicht nachgewiesen. |
+| FR-015 | System MUST provide input/output level meters | Teilweise: Kanal-/Master-Sample-Peakmeter vorhanden; vollständige Mastering-Eingangs-/Ausgangsmeter fehlen als Nachweis. |
+| FR-016 | System MUST implement proper gain staging to prevent clipping between stages | Teilweise: einzelne Gain-/Headroom-Maßnahmen vorhanden; Clippingfreiheit zwischen allen Masteringstufen nicht belegt. |
+| FR-017 | System MUST support processing chain reordering (compressor → EQ → limiter, etc.) | Offen: veränderbare Reihenfolge einer Mastering-Kette nicht nachgewiesen. |
 
 SC-001–008: offen; Originalkriterien und Unterpunkte im [Register](SPEC_REQUIREMENTS_MATRIX.md).
 
