@@ -36,21 +36,21 @@ Beat-/Bar-Sync und manuell angelegte Grid-Daten sind vorhandene Grundlagen; erka
 
 | ID | Anforderung / Originalüberschrift | Status |
 |---|---|---|
-| FR-022-001 | Track Analysis | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-022-002 | Phrase Detection | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-003 | Sync Suggestion Generation | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-004 | Suggestion Ranking | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-005 | Visual Phrase Display | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-022-006 | Auto Sync Application | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-022-007 | Sync Modes | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-022-008 | Real-Time Phrase Tracking | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-009 | Energy Matching | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-010 | Key Sync Integration | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-011 | Phrase Alignment Scoring | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-012 | Sync Tolerance Settings | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-013 | Performance Metrics | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-022-014 | Waveform Rendering | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-022-015 | Settings Persistence | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
+| FR-022-001 | Track Analysis | Teilweise: BPM/Key und manuelles Grid vorhanden; Phrasen, Energiewerte und Confidence nicht belegt. |
+| FR-022-002 | Phrase Detection | Offen: automatische Phrase-Klassifikation aus Energie, Spektren und Wiederholung fehlt als Nachweis. |
+| FR-022-003 | Sync Suggestion Generation | Offen: Syncvorschläge mit exakten Positionen und Einzelbewertungen nicht nachgewiesen. |
+| FR-022-004 | Suggestion Ranking | Offen: Ranking nach Phrase, Energie, Key und Nähe nicht nachgewiesen. |
+| FR-022-005 | Visual Phrase Display | Teilweise: Wellenform und Gridmarker vorhanden; erkannte Phrasenregionen und Beschriftung nicht belegt. |
+| FR-022-006 | Auto Sync Application | Teilweise: konventioneller Sync vorhanden; Anwendung eines höchstbewerteten Phrasenvorschlags nicht belegt. |
+| FR-022-007 | Sync Modes | Teilweise: Beat-/Bar-Modus vorhanden; Phrase und Smart fehlen als Nachweis. |
+| FR-022-008 | Real-Time Phrase Tracking | Offen: aktueller Phrasentyp, Bar und Restzeit nicht nachgewiesen. |
+| FR-022-009 | Energy Matching | Offen: Energietoleranz, Kurven und Warnungen nicht nachgewiesen. |
+| FR-022-010 | Key Sync Integration | Offen: Key-Kompatibilität als Vorschlagsgewichtung nicht nachgewiesen. |
+| FR-022-011 | Phrase Alignment Scoring | Offen: Phrasen-/Übergangs-Scoring nicht nachgewiesen. |
+| FR-022-012 | Sync Tolerance Settings | Offen: getrennte und globale Toleranzen nicht nachgewiesen. |
+| FR-022-013 | Performance Metrics | Offen: Phrasenanalyse- und Vorschlagsmetriken nicht nachgewiesen. |
+| FR-022-014 | Waveform Rendering | Teilweise: Wellenform vorhanden; geforderte Phrasenannotation und Darstellung nicht belegt. |
+| FR-022-015 | Settings Persistence | Offen: Persistenz der Neural-Sync-Einstellungen nicht nachgewiesen. |
 
 SC-001–008: offen; Originalkriterien und Unterpunkte im [Register](SPEC_REQUIREMENTS_MATRIX.md).
 
@@ -60,21 +60,21 @@ Die trackbezogene History speichert Zähler und letzten Zeitpunkt, jedoch nicht 
 
 | ID | Anforderung / Originalüberschrift | Status |
 |---|---|---|
-| FR-023-001 | Session Creation | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-002 | Session Metadata | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-003 | Transition Recording | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-004 | Quality Scoring Algorithm | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-005 | Session Statistics | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-006 | Session List Display | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-007 | Session Filtering | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-008 | Session Sorting | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-009 | Detailed Transition View | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-010 | Session Deletion | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-011 | Overall Statistics | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-012 | Data Export | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-013 | Session Replay | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-023-014 | Data Persistence | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-023-015 | Performance Tracking | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
+| FR-023-001 | Session Creation | Offen: automatische/manuelle Mix-Sessionerstellung ist nicht nachgewiesen. |
+| FR-023-002 | Session Metadata | Offen: Session-ID, Name, Start/Ende, Venue, Hörer und Aufnahmeverknüpfung fehlen als nachgewiesener Sessionvertrag. |
+| FR-023-003 | Transition Recording | Offen: Übergangsereignis mit Quell-/Zieltrack, Timing, Fader und Score nicht nachgewiesen. |
+| FR-023-004 | Quality Scoring Algorithm | Offen: heuristische Qualitätsbewertung mit den geforderten Eingaben nicht nachgewiesen. |
+| FR-023-005 | Session Statistics | Offen: sessionbezogene BPM-, Genre-, Energie- und Übergangsstatistik nicht nachgewiesen. |
+| FR-023-006 | Session List Display | Offen: Sitzungsliste mit Spec-Anzeigen nicht nachgewiesen. |
+| FR-023-007 | Session Filtering | Offen: Filter auf Sessionmetadaten und Qualität nicht nachgewiesen. |
+| FR-023-008 | Session Sorting | Offen: Sortierung der Sessions nach den vier Kriterien nicht nachgewiesen. |
+| FR-023-009 | Detailed Transition View | Offen: detaillierte Übergangsansicht nicht nachgewiesen. |
+| FR-023-010 | Session Deletion | Offen: Sessionlöschung mit Aufnahme-Erhaltungsoption nicht nachgewiesen. |
+| FR-023-011 | Overall Statistics | Offen: spezifizierte sessionübergreifende Statistik nicht nachgewiesen. |
+| FR-023-012 | Data Export | Offen: JSON-/CSV-/PDF-Sessionexport nicht nachgewiesen. |
+| FR-023-013 | Session Replay | Offen: visuelles Session-Replay und Laden aus History nicht als gesamter Vertrag nachgewiesen. |
+| FR-023-014 | Data Persistence | Teilweise: lokale trackbezogene History wird persistiert; sie speichert pro Track letzten Zeitpunkt/Zähler/Deck, keine chronologische Folge aller Sessionübergänge. Session-Retention und Backup/Restore gesondert. |
+| FR-023-015 | Performance Tracking | Offen: langfristige Qualitäts-, Genre- und Techniktrends nicht nachgewiesen. |
 
 SC-001–008: offen; Originalkriterien und Unterpunkte im [Register](SPEC_REQUIREMENTS_MATRIX.md).
 
@@ -84,21 +84,21 @@ Smart Crates mit Textsuche und persistente Crates existieren; automatische seque
 
 | ID | Anforderung / Originalüberschrift | Status |
 |---|---|---|
-| FR-024-001 | Playlist Types | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-002 | Playlist Criteria | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-003 | Track Filtering | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-024-004 | Track Sequencing | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-005 | Energy Flow Patterns | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-006 | Track Recommendations | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-007 | Match Indicators | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-008 | Playlist Generation | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-009 | Playlist Storage | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-024-010 | Playlist Display | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-024-011 | Track List View | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-024-012 | Playlist Regeneration | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-013 | Playlist Analysis | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-014 | Transition Quality Prediction | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-024-015 | Playlist Deletion | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
+| FR-024-001 | Playlist Types | Offen: fünf spezifizierte generierte Playlisttypen nicht nachgewiesen. |
+| FR-024-002 | Playlist Criteria | Teilweise: Crate-Suchtext vorhanden; kombinierte BPM-/Key-/Genre-/Rating-/Energiekriterien nicht belegt. |
+| FR-024-003 | Track Filtering | Teilweise: Textsuche und Verfügbarkeitsdaten vorhanden; geforderte kombinierte Kriterien nicht vollständig belegt. |
+| FR-024-004 | Track Sequencing | Offen: spezifizierte Sequenzierung nach Energie, Key, BPM, Genre und Mood nicht nachgewiesen. |
+| FR-024-005 | Energy Flow Patterns | Offen: vier Energieverlaufsmuster nicht nachgewiesen. |
+| FR-024-006 | Track Recommendations | Offen: Top-10-Empfehlungen mit gewichteten Einzelgründen nicht nachgewiesen. |
+| FR-024-007 | Match Indicators | Offen: Match-Badges und Gesamtscore nicht nachgewiesen. |
+| FR-024-008 | Playlist Generation | Offen: Generierung persistenter geordneter Playlists aus Kriterien nicht nachgewiesen. |
+| FR-024-009 | Playlist Storage | Teilweise: Crates persistieren; Typ, Kriterien, geordnete Track-IDs und Analysedaten nicht vollständig belegt. |
+| FR-024-010 | Playlist Display | Teilweise: Crate-Namen/-Anzahl vorhanden; generierte Playlist-Metadaten und Energiegraph nicht belegt. |
+| FR-024-011 | Track List View | Teilweise: Library-Trackliste und Deckladen vorhanden; geforderte Empfehlungsliste mit Bewertungs- und Übergangsdaten nicht belegt. |
+| FR-024-012 | Playlist Regeneration | Offen: Regeneration mit gespeicherten Kriterien nicht nachgewiesen. |
+| FR-024-013 | Playlist Analysis | Offen: Playlist-Energie-/BPM-Profil und Übergangsqualität nicht nachgewiesen. |
+| FR-024-014 | Transition Quality Prediction | Offen: mehrdimensionale Übergangsprognose nicht nachgewiesen. |
+| FR-024-015 | Playlist Deletion | Teilweise: Crates können gelöscht werden; Löschung einer generierten Smart Playlist mit Spec-Vertrag nicht belegt. |
 
 SC-001–008: offen; Originalkriterien und Unterpunkte im [Register](SPEC_REQUIREMENTS_MATRIX.md).
 
@@ -108,20 +108,20 @@ Die Audioanalyse erzeugt Camelot-Codes, aber Wheel, Finder und vollständige Bez
 
 | ID | Anforderung / Originalüberschrift | Status |
 |---|---|---|
-| FR-025-001 | Camelot Wheel Data Model | Teilweise: Grundlage vorhanden, vollständiger Vertrag offen. |
-| FR-025-002 | Wheel Visualization | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-003 | Key Compatibility Rules | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-004 | Transition Classification | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-005 | Compatible Keys List | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-006 | Track Finder | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-007 | Track Finder Display | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-008 | Deck Integration | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-009 | Key Distribution Analytics | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-010 | Key Analyzer View | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-011 | Mixing Strategy Tips | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-012 | View Modes | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-013 | Interactive Elements | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-014 | Color Coding | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
-| FR-025-015 | Performance Optimization | Offen: vollständiger Funktions- und Abnahmenachweis fehlt. |
+| FR-025-001 | Camelot Wheel Data Model | Teilweise: Camelot-Codes für Dur/Moll vorhanden; vollständiges Wheel-Modell mit Namen, Farben und Koordinaten nicht belegt. |
+| FR-025-002 | Wheel Visualization | Offen: interaktives Camelot-Wheel und Deckmarkierung nicht nachgewiesen. |
+| FR-025-003 | Key Compatibility Rules | Offen: vollständige Kompatibilitätsregeln nicht nachgewiesen; widersprüchliches Halbtonbeispiel in D1 klären. |
+| FR-025-004 | Transition Classification | Offen: Typ, Schwierigkeit, Beziehung und Beschreibung für Tonartpaare nicht nachgewiesen. |
+| FR-025-005 | Compatible Keys List | Offen: sortierte Liste kompatibler Tonarten nicht nachgewiesen. |
+| FR-025-006 | Track Finder | Offen: Key-basierter Bibliotheksfinder nicht nachgewiesen. |
+| FR-025-007 | Track Finder Display | Offen: Finderanzeige mit Metadaten, Schwierigkeit und Laden nicht nachgewiesen. |
+| FR-025-008 | Deck Integration | Teilweise: Decks und Key-Metadaten existieren; geforderte Wheel-/Finder-Integration nicht belegt. |
+| FR-025-009 | Key Distribution Analytics | Offen: Verteilung und Top-5-Statistik aller 24 Tonarten nicht nachgewiesen. |
+| FR-025-010 | Key Analyzer View | Offen: interaktive Key-Analyzer-Ansicht nicht nachgewiesen. |
+| FR-025-011 | Mixing Strategy Tips | Offen: vier Strategiekategorien und Tipps nicht nachgewiesen. |
+| FR-025-012 | View Modes | Offen: Wheel-, Finder- und Analyzer-Modi nicht nachgewiesen. |
+| FR-025-013 | Interactive Elements | Offen: geforderte Wheel-/Finder-Interaktionen nicht nachgewiesen. |
+| FR-025-014 | Color Coding | Offen: vollständige semantische Farbzuordnung nicht nachgewiesen. |
+| FR-025-015 | Performance Optimization | Offen: spezifizierte Finder-/Analyzer-Caches und Reaktionszeiten nicht nachgewiesen. |
 
 SC-001–008: offen; Originalkriterien und Unterpunkte im [Register](SPEC_REQUIREMENTS_MATRIX.md).
