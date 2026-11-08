@@ -58,7 +58,7 @@ Stand: 08.11.2026; statischer Quellcodeabgleich gegen Git-HEAD `72ecf5e` und den
 
 **Vorhanden:** Offline-BPM-Analyse und gespeicherte Werte sowie manuell bearbeitbares Grid. Hauptanalyse sucht 70–180 BPM; separater Tempovorschlag 40–240 BPM. Oktavfehler sind weiterhin möglich.
 
-**Lücken und Prüfbedarf:** FR-001, 007–008, 010, 012–013 nur teilweise. Offen/nicht belegt: FR-002–006, 009, 011, 014–017: individuelle Beats, Confidence, Taktarterkennung, Track-Tap, detaillierter Fortschritt, Varianz und spezifizierte Filter-/Histogrammverfahren. FX-Tap ist kein Track-Tap. Synthetische Tests belegen keine Musikgenauigkeit.
+**Lücken und Prüfbedarf:** FR-001, 007–008, 010–013 und 015 nur teilweise. Batch-Fortschritt als Anzahl verarbeiteter Tracks und eine Onset-Stärke sind vorhanden; Prozent-/Einzeltrackfortschritt und vollständige Beatfindung sind damit nicht belegt. Offen/nicht belegt: FR-002–006, 009, 014, 016–017: individuelle Beats, Confidence, Taktarterkennung, Track-Tap, Varianz und spezifizierte Filter-/Histogrammverfahren. FX-Tap ist kein Track-Tap. Synthetische Tests belegen keine Musikgenauigkeit. Der [Einzelabgleich](G01_SPEC03_BPM_AUDIT.md) enthält Befunde für alle 17 FR und acht SC.
 
 **Quellnachweise:** [src/audio_analyzer.rs](../../src/audio_analyzer.rs), [src/tempo.rs](../../src/tempo.rs), [src/beatgrid.rs](../../src/beatgrid.rs), [src/fx_timing.rs](../../src/fx_timing.rs).
 
