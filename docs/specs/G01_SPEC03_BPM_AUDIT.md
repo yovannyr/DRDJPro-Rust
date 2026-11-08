@@ -27,3 +27,5 @@ Quellstand `9bd35f45452934297194f5bd00c77f4c9937bb9e`, statische Nachprüfung am
 ## Erfolgskriterien
 
 Alle acht SC sind **offen**. SC-001/003–005 benötigen annotiertes Musik-Corpus und definierte Auswertung; SC-002/006 reproduzierbare Zeitmessung auf dokumentierter Hardware; SC-007 einen getesteten Track-Tap; SC-008 ein breites Genre-/Fehlercorpus und Hängeerkennung. Synthetische `detects_120_bpm`/`detects_128_bpm` und ein bestandener Workspace-Test belegen keine der geforderten Prozentquoten oder Zeitgrenzen. Das [Messkonzept](G01_DECISIONS_AND_MEASUREMENT.md) hält Messstrecken und noch fehlende Voraussetzungen fest.
+
+Der [BPM-Messplan](G01_SPEC03_MEASUREMENT_PLAN.md) konkretisiert alle acht Messungen und ihre Voraussetzungen.
