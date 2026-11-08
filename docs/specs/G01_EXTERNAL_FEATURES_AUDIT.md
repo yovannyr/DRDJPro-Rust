@@ -4,6 +4,8 @@ Quellstand `cd2261e`, statischer Abgleich am 08.11.2026. Grundlage sind die 25 O
 
 **Status „offen“:** kein vollständiger End-to-End-Nachweis für diese konkrete Anforderung; dies ist keine Behauptung, dass jeder Teilbaustein fehlt. Original-User-Stories und Edge Cases bleiben zusätzlich verbindlich. Alle acht SC pro Bereich sind ohne die jeweiligen Laufzeit-, Provider-, Nutzer-, Hardware- oder Langzeitmessungen offen. Der letzte dokumentierte Workspace-Test auf `b783a98` bestand mit 504 Tests und sechs ignorierten Tests; danach wurden Dokumente geändert.
 
+Der [Messplan für Specs 1, 2 und 5](G01_SPEC01_02_05_MEASUREMENT_PLAN.md) konkretisiert deren 24 Erfolgskriterien und Voraussetzungen.
+
 
 ## Spec 1: Auto-Updates
 
