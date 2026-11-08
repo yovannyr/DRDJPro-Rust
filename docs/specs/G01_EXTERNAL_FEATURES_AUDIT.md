@@ -37,6 +37,8 @@ Kein Release-Prüf-/Installerpfad in den untersuchten Einstiegspunkten und Abhä
 
 SC-001–008: offen; Originalgrenzwerte und benötigte Messungen im [Anforderungsregister](SPEC_REQUIREMENTS_MATRIX.md).
 
+**Vertiefung zu Spec 1:** Ein Entwurf von `deepseek-v4-flash-sovereign` ordnet die noch offenen Nachweise in drei ausführbare Gruppen ein. (1) FR-001, FR-002, FR-005, FR-006, FR-009, FR-013: automatischer Check nach drei Sekunden, manueller Check, Versions-/Release-Notes-Anzeige, GitHub-Releases-Abfrage und Auswahl von Stable/Beta; Netzwerkfehler, leere Releases und falsche Kanalzuordnung prüfen. (2) FR-003, FR-004, FR-007, FR-010, FR-011: Download im Hintergrund mit Fortschritt, Installation beim Beenden, Integritätsprüfung und Erhalt von Nutzerdaten; Unterbrechung, Speicherplatzmangel, beschädigte Datei und fehlende Schreibrechte prüfen. (3) FR-008, FR-012: verständliche Fehlermeldungen und Update-Ereignisprotokoll, einschließlich fehlgeschlagenem Download und Installation prüfen. Die Zuordnung und die Fehlerfälle wurden gegen die Originalspec abgeglichen; sie sind Testvorbereitung und kein Nachweis einer bereits vorhandenen Implementierung.
+
 ## Spec 2: Cloud-Sync
 
 Lokale SQLite-Daten und History existieren; ein kontobezogener geräteübergreifender Sync ist damit nicht belegt. Quellen: [library_store.rs](../../src/library_store.rs), [library.rs](../../src/library.rs); vollständiger Solltext: [Spec](2-cloud-sync/spec.md).
