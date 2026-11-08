@@ -8,6 +8,8 @@ Der [Messplan für Specs 9, 22, 24 und 25](G01_SPEC09_22_24_25_MEASUREMENT_PLAN.
 
 Der [Messplan für Specs 10, 11 und 12](G01_SPEC10_11_12_MEASUREMENT_PLAN.md) konkretisiert unter anderem die Mastering-Kriterien.
 
+Der [Messplan für Specs 18 und 23](G01_SPEC18_23_MEASUREMENT_PLAN.md) konkretisiert unter anderem Session-History-Kriterien.
+
 ## Spec 10: Audio Mastering
 
 Deck-EQ und Peakmeter existieren. Die integrierte Track-Lautheits-/True-Peak-Analyse ist kein Live-Master-LUFS- oder True-Peak-Meter und keine Mastering-Kette. Quellen: [mixer_dsp.rs](../../src/mixer_dsp.rs), [peak_meter.rs](../../src/peak_meter.rs); [Originalspec](10-audio-mastering/spec.md).

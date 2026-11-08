@@ -12,6 +12,8 @@ Der [Messplan für Specs 9, 22, 24 und 25](G01_SPEC09_22_24_25_MEASUREMENT_PLAN.
 
 Der [Messplan für Specs 10, 11 und 12](G01_SPEC10_11_12_MEASUREMENT_PLAN.md) konkretisiert Mastering-, DVS- und Stem-Kriterien.
 
+Der [Messplan für Specs 18 und 23](G01_SPEC18_23_MEASUREMENT_PLAN.md) konkretisiert Live-Remix- und Session-History-Kriterien.
+
 
 ## Spec 1: Auto-Updates
 

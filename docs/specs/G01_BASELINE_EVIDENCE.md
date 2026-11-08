@@ -34,6 +34,8 @@ Die verbleibenden fünf Bereiche Mastering, Neural Sync, Mix History, Smart Play
 
 Die maschinenlesbare Ersteinstufung jeder einzelnen FR und SC samt Verweis auf den zugehörigen Befund steht in [G01_AUDIT_STATUS.json](G01_AUDIT_STATUS.json). Sie ist eine Momentaufnahme, keine automatische Abschlussbestätigung; den Factory-Status G01 ändert sie nicht.
 
+Für alle 25 Specs sind ergänzend einzelne Messstrecken für die jeweils acht Erfolgskriterien in den `G01_SPEC*_MEASUREMENT_PLAN.md`-Dateien beschrieben. Die Zuordnung wurde auf vollständige SC-IDs und gültige Links geprüft. Dies sind Messpläne, keine ausgeführten Messungen oder erfüllten Erfolgskriterien; Definitionen und konkrete Testdaten müssen teils noch festgelegt werden.
+
 - Camelot: Wheel-Nachbarschaft und tatsächliche Halbtonintervalle getrennt modellieren. Der Nutzer hat die Korrektur der Beispiele sowie den Vorrang von Perfect vor Dramatic und die zusätzliche Anzeige des Halbtonintervalls bestätigt. Die Implementierung und vollständige Akzeptanzfälle bleiben offen.
 - Cloud: Last-write-wins mit Änderungen an verschiedenen Feldern sowie konkurrierenden Änderungen am selben Feld getrennt testen. Ein garantierter Erhalt aller gleichzeitigen Änderungen folgt daraus nicht; das 95-%-Ziel benötigt ein vorher definiertes Szenario und bleibt offen.
 - FPS: UI-Playhead, Video-Ausgabe, Effektlatenz und Stream-Overlay getrennt messen; unterschiedliche Zielwerte nicht gegeneinander verrechnen.
