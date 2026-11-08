@@ -23,3 +23,5 @@ Quellstand `7928de5`, statische Nachprüfung am 08.11.2026. [Spec 6](6-key-detec
 | FR-017 | Offen | Ein intern berechnetes Chroma-Profil ist keine nachgewiesene Visualisierung für Nutzer. |
 
 Alle acht Erfolgskriterien **SC-001–008 bleiben offen**: Corpus und Messung für Erkennungsquote/Laufzeit/Confidence, Theorie- und UI-Messung für Wheel/Kompatibilität, verfügbare passende Tracks für den Assistenten, Override ohne Neuanalyse sowie geeigneter Nutzertest. Synthetische Profiltests ersetzen diese Abnahme nicht.
+
+Der [Key-Messplan](G01_SPEC06_MEASUREMENT_PLAN.md) konkretisiert alle acht Messungen und ihre Voraussetzungen.
