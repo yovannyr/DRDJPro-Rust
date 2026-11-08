@@ -23,3 +23,5 @@ Quellstand `6b7d8b0`, statischer Abgleich am 08.11.2026. [Spec 17](17-beat-grid-
 | FR-017 | Offen | 30 Minuten reale Wiedergabe mit Driftmessung und Audiointerface erforderlich; synthetische mathematische Tests sind kein Ersatz. |
 
 Alle SC-001–008 bleiben offen, bis die spezifizierten Zeit-, Genauigkeits-, Anzeige- und Tap-Ziele im jeweiligen Messaufbau belegt sind. Der [Messvertrag](G01_DECISIONS_AND_MEASUREMENT.md) trennt interne Timingwerte von tatsächlicher Audio-End-to-End-Latenz.
+
+Der [gemeinsame Messplan](G01_SPEC04_17_MEASUREMENT_PLAN.md) konkretisiert alle acht Sync- und acht MIDI-Messungen.

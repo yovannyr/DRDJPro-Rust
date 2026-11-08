@@ -24,3 +24,5 @@ Quellstand `c83d173`, statischer Abgleich am 08.11.2026. [Spec 4](4-midi-control
 | FR-018 | Offen | 1000 Nachrichten pro Sekunde je Gerät ohne Verlust/Lag benötigen einen reproduzierbaren Lasttest. |
 
 SC-001–008 bleiben bis zu physischer Geräte-/Presetmatrix, Input- und LED-Latenz, Mehrgeräte- und Lastmessungen sowie Learn-Persistenz und Nutzertest offen. Das Laufzeitverhalten des vorhandenen MC4000 ist nicht allein aus Decodertests abgenommen.
+
+Der [gemeinsame Messplan](G01_SPEC04_17_MEASUREMENT_PLAN.md) beschreibt die MIDI- und Sync-Messungen.
