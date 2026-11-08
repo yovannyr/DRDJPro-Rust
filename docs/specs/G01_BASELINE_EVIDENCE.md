@@ -30,6 +30,8 @@ Der fortgeschriebene Arbeitsvertrag und die Messstrecken stehen in [G01_DECISION
 
 Für zehn weitere Bereiche dokumentiert [G01_EXTERNAL_FEATURES_AUDIT.md](G01_EXTERNAL_FEATURES_AUDIT.md) die einzelnen Anforderungen, für die bislang kein vollständiger End-to-End-Pfad belegt ist; mögliche bereits vorhandene Teilbausteine sind dort ausdrücklich benannt. Diese Ersteinstufung ersetzt keine spätere Detailprüfung jedes Teilpunkts.
 
+Die verbleibenden fünf Bereiche Mastering, Neural Sync, Mix History, Smart Playlists und harmonisches Mixing sind in [G01_ADVANCED_FEATURES_AUDIT.md](G01_ADVANCED_FEATURES_AUDIT.md) einzeln anhand ihrer FR-IDs eingeordnet. Auch dort bleiben Unterpunkte und Messungen ohne vollständigen Nachweis offen.
+
 - Camelot: Wheel-Nachbarschaft und tatsächliche Halbtonintervalle getrennt modellieren; die widersprüchlichen Beispiele aus Spec 25 nicht als musikalischen Nachweis übernehmen. Endgültige Klassifikation und Akzeptanzfälle bleiben zur fachlichen Entscheidung offen.
 - Cloud: Last-write-wins mit Änderungen an verschiedenen Feldern sowie konkurrierenden Änderungen am selben Feld getrennt testen. Ein garantierter Erhalt aller gleichzeitigen Änderungen folgt daraus nicht; das 95-%-Ziel benötigt ein vorher definiertes Szenario und bleibt offen.
 - FPS: UI-Playhead, Video-Ausgabe, Effektlatenz und Stream-Overlay getrennt messen; unterschiedliche Zielwerte nicht gegeneinander verrechnen.
@@ -37,4 +39,4 @@ Für zehn weitere Bereiche dokumentiert [G01_EXTERNAL_FEATURES_AUDIT.md](G01_EXT
 
 ## Noch offen
 
-Die übrigen FR/SC einschließlich aller Unterpunkte und User Stories sind noch einzeln mit Quellcode, konkreten Tests und gegebenenfalls Laufzeit-/Hardwareevidenz abzugleichen. Corpus, Hardwarematrix, Kohortendesign und Ergebnisse der Entscheidungstore sind nicht vollständig. G01 bleibt daher **in Arbeit**; das Factory-Register darf abhängige Pakete nicht als abgeschlossen freigeben.
+Alle 25 Specs besitzen eine erste FR-Einstufung; insbesondere bei den zusammengefassten externen und fortgeschrittenen Bereichen sind Unterpunkte und User Stories noch tiefer mit Quellcode, konkreten Tests und gegebenenfalls Laufzeit-/Hardwareevidenz abzugleichen. Corpus, Hardwarematrix, Kohortendesign und Ergebnisse der Entscheidungstore sind nicht vollständig. G01 bleibt daher **in Arbeit**; das Factory-Register darf abhängige Pakete nicht als abgeschlossen freigeben.
