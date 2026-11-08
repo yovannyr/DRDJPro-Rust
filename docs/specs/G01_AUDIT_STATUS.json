@@ -1,0 +1,4952 @@
+{
+  "version": 1,
+  "scope": "G01-Ersteinstufung; zusammengefasste Bereiche und SC bedürfen weiterer Einzelprüfung",
+  "basis_head": "6765b8e",
+  "status": "in_progress",
+  "eintraege": [
+    {
+      "spec": 1,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 1,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 2,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "`AudioAnalyzer::analyze_file` und `estimate_bpm_cancellable` in [audio_analyzer.rs](../../src/audio_analyzer.rs); Realmusik-Qualität und alle Eingangsfälle offen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Das Ergebnis `TrackAnalysisResult` enthält keine Liste detektierter Beats; [beatgrid.rs](../../src/beatgrid.rs) erzeugt ein benutzerdefiniertes Raster. Einzelbeat-Erkennung und Musiktest fehlen als Nachweis.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "`TrackAnalysisResult` enthält kein BPM-Confidence-Feld; Bewertung und Kalibrierung fehlen als nachgewiesener Benutzervertrag.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Keine Tempoklassifikation im Ergebnisvertrag nachgewiesen; Grenzen und Darstellung umsetzen und testen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Die manuell konfigurierbare Taktart im Grid ist keine automatische Taktarterkennung. Testcorpus für 4/4, 3/4 und 6/8 erforderlich.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-006",
+      "status": "teilweise",
+      "befund": "Hauptanalyse `MIN_BPM=70`, `MAX_BPM=180`; separater Schätzer in [tempo.rs](../../src/tempo.rs) deckt rechnerisch 40–240 ab. Einheitlichen Analyse-/UI-Vertrag und Ausgabe über 200 BPM nachweisen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-007",
+      "status": "teilweise",
+      "befund": "Die Hauptanalyse bewertet Autokorrelation und Harmonische mit Tempoprior; das garantiert keine korrekte Oktavwahl. Spezifizierte Korrektur an annotierten Half-/Double-Time-Fällen messen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-008",
+      "status": "teilweise",
+      "befund": "`set_bpm` im [Grid](../../src/beatgrid.rs) erlaubt manuelle BPM; prüfen, ob ein Track-Metadaten-Override unabhängig vom Grid gefordert und verfügbar ist.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Der gefundene Tap in [controller.rs](../../src/controller.rs) steuert FX-Timing; ein Track-Tap mit mindestens vier Taps ist nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-010",
+      "status": "teilweise",
+      "befund": "`start_analysis`/`start_next_analysis` in [controller.rs](../../src/controller.rs) analysieren Bibliotheksziele; Test `whole_library_analysis_publishes_each_result_and_continues_after_failure`. Auswahlumfang und Bedienvertrag prüfen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-011",
+      "status": "teilweise",
+      "befund": "`update_analysis_progress` zeigt verarbeitete Tracks, Gesamtzahl und Fehler; der genannte Batch-Test prüft u. a. `1/3 processed`. Prozentanzeige oder Fortschritt innerhalb eines Tracks ist hier nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-012",
+      "status": "teilweise",
+      "befund": "Ergebnis enthält BPM; `write_analysis` und `track_analysis_upgrade_delta_restart_clear_and_rollback` in [library_store.rs](../../src/library_store.rs) belegen den vorgesehenen Persistenzpfad als Quell- und Testbefund. Alle Dateiformate und Migrationsfälle nicht pauschal abgenommen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-013",
+      "status": "teilweise",
+      "befund": "Manuelles Grid-BPM vorhanden; `estimated_bpm_is_a_track_suggestion_and_never_automatically_applies_a_grid` in [controller.rs](../../src/controller.rs) testet bewusste Übernahme. Dauerhafter Override des gespeicherten Analysewerts ist gesondert nachzuweisen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Keine Beatintervall-Varianz im Analyseergebnis nachgewiesen; Berechnung und Behandlung unregelmäßiger Tracks erforderlich.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "`estimate_bpm_cancellable` bildet positive Differenzen der komprimierten Energiehüllkurve als Onset-Stärke; ein daraus abgeleiteter einzelner Beatfinder gemäß FR-002 ist damit nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Die geforderte 0–200-Hz-Tiefpassfilterung ist im untersuchten BPM-Pfad nicht nachgewiesen; ein 200-Hz-Abtastraster der Hüllkurve ist kein 200-Hz-Audiofilter.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Die Hauptanalyse verwendet normalisierte Autokorrelation und Tempoprior; das spezifizierte Histogramm-Clustering ist im untersuchten Pfad nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 3,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC03_BPM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "`present`, `unique_port`, `Input::connect` in [mc4000.rs](../../src/mc4000.rs) erkennen einen MC4000; alle MIDI-Geräte sind damit nicht abgedeckt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-002",
+      "status": "teilweise",
+      "befund": "[main.rs](../../src/main.rs) prüft periodisch MC4000-Verfügbarkeit und Wiederverbindung; echte Hotplug-Latenz und andere Geräte prüfen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-003",
+      "status": "teilweise",
+      "befund": "MC4000-Decoder behandelt Note On/Off und Control Change. `Command::PitchBend` wird hier durch Noten ausgelöst und belegt keine allgemeine Verarbeitung des MIDI-Pitch-Bend-Status `0xE0`.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-004",
+      "status": "teilweise",
+      "befund": "`MidiInputConnection`, optionaler `MidiOutputConnection` und LED-Ausgabe sind für MC4000 vorhanden; bidirektionales generisches MIDI ist nicht vollständig nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Presets DDJ-400, DDJ-SB3 und Party Mix sind im untersuchten Controllerpfad nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-006",
+      "status": "teilweise",
+      "befund": "`unique_port` wählt anhand des MC4000-Namens; allgemeine Modellerkennung und automatische Zuordnung aller geforderten Presets fehlen als Nachweis.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Ein generischer Mapping-Fallback ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Interaktives MIDI-Learn mit Zuweisung ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Ohne nachgewiesenes Learn kein belegter Zehnsekunden-Timeout.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Editor für benutzerdefinierte Mappings ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Speicherung frei erstellter Controller-Mappings ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Beliebige Zuordnung jedes MIDI-Controls zu jeder DJ-Funktion ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-013",
+      "status": "teilweise",
+      "befund": "Der feste MC4000-Pfad behandelt gehaltene und absolute/relative Eingaben; ein generisch konfigurierbarer Vertrag für alle vier Modi ist nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Konfigurierbare lineare, logarithmische und exponentielle Antwortkurven sind nicht als Mappingfunktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "Zustandsabhängiges LED-Feedback und `feedback_failure_does_not_acknowledge_frame_and_reconnect_replays_state` in `mc4000.rs`; tatsächliche Farben und Latenz physisch prüfen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Allgemeine MIDI-Aktivitätsanzeige ist nicht als UI-Funktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "`unique_port` verwirft mehrere gleichnamige MC4000-Ports als mehrdeutig; gleichzeitiger Betrieb mehrerer beliebiger Geräte ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "FR-018",
+      "status": "offen",
+      "befund": "1000 Nachrichten pro Sekunde je Gerät ohne Verlust/Lag benötigen einen reproduzierbaren Lasttest.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 4,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC04_MIDI_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 5,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "[audio_analyzer.rs](../../src/audio_analyzer.rs): Chroma-Aufbau und `estimate_key` im Analysepfad; Genauigkeit für Musik und Eingabegrenzen sind gesondert zu messen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-002",
+      "status": "teilweise",
+      "befund": "`camelot` in `audio_analyzer.rs`, Bibliothekszeile und Analysezusammenfassung in [controller.rs](../../src/controller.rs) zeigen Camelot-Schätzungen; vollständige Darstellung aller Fälle und Bedienwege prüfen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Traditionelle Anzeige wie C-Dur nicht als einstellbarer Anzeigevertrag gefunden.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Alternative Open-Key-Anzeige nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Pearson-Korrelation und ein interner Mindestschwellwert existieren; `TrackAnalysisResult` enthält keinen ausgegebenen Confidence-Prozentwert. Kalibrierung und Anzeige fehlen als Nachweis.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Kein interaktives 24-Positionen-Camelot-Rad nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Ohne nachgewiesenes Wheel keine belegte interaktive Hervorhebung kompatibler Tonarten.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Live-Kompatibilitätsanzeige zwischen Deck-Tonarten nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Die geforderten vier Kompatibilitätsstufen sind nicht als vollständige Regelmatrix nachgewiesen; Regelkonflikte in [D1](G01_DECISIONS_AND_MEASUREMENT.md) klären.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Harmonischer Assistent mit Bibliotheksvorschlägen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Anzeigen musikalischer Beziehungen sind nicht als Bedienfunktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Manuelle Key-Eingabe und dauerhafter Override gegenüber der Analyse sind nicht als kompletter Pfad nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-013",
+      "status": "teilweise",
+      "befund": "`ChromaBuilder` in `audio_analyzer.rs` sammelt ein zwölfteiliges Pitch-Class-Profil; `chroma_builder_finds_c_major_triad` prüft ein synthetisches Signal. Genreabdeckung und Visualisierung gesondert prüfen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "`estimate_key` vergleicht das Chroma per Pearson-Korrelation mit 24 rotierten Krumhansl-Kessler-Profilen. Die Gleichwertigkeit zum konkret geforderten Krumhansl-Schmuckler-Verfahren und dessen Genauigkeit sind gesondert zu belegen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "Im Analysepfad werden Dur- und Mollprofile verglichen; `detects_key_from_profile` testet synthetische Profile. Reale Dur-/Moll-Erkennungsraten sind nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-016",
+      "status": "teilweise",
+      "befund": "`TrackAnalysisResult.musical_key` und der Analyse-Persistenzpfad in [library_store.rs](../../src/library_store.rs) speichern den Camelot-Wert; Format- und Migrationsfälle umfassend prüfen.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Ein intern berechnetes Chroma-Profil ist keine nachgewiesene Visualisierung für Nutzer.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 6,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC06_KEY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "`DetailPeaks` in [waveform.rs](../../src/waveform.rs) berechnet Maximalwerte; ein zusätzlich angezeigter RMS-Wellenformwert ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Ein STFT-Spektrogramm ist im untersuchten Wellenformpfad nicht nachgewiesen. Key-Analyse mit FFT ist kein Spektrogramm.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "[waveform_color.rs](../../src/waveform_color.rs) dokumentiert drei approximative Bänder; gefordert sind sieben explizite Bänder.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-004",
+      "status": "teilweise",
+      "befund": "`BandEnergy::color` färbt nach relativer Tief-/Mittel-/Hochenergie; Genauigkeit und die spezifizierten Bänder bleiben offen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Die acht auswählbaren Farbschemata sind nicht als UI-Vertrag nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-006",
+      "status": "teilweise",
+      "befund": "Gridmarker im Wellenformpfad vorhanden; das Grid ist manuell und keine automatische Beatdetektion.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-007",
+      "status": "teilweise",
+      "befund": "Taktlinien/Downbeats aus [beatgrid.rs](../../src/beatgrid.rs) vorhanden; spezifizierte Phrasenmarker und alle Taktfälle prüfen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "`OVERVIEW_BINS` ist 256; frei konfigurierbare Auflösung 256–2048 ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Spektrogramm mit vier FFT-Größen ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Frequenzachsen eines Spektrogramms sind nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Spektrogramm-Normalisierung auf −90 bis 0 dB ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Interaktives Zeit-/Frequenz-Fadenkreuz ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Live-Frequenzspektrum während der Wiedergabe ist nicht als Spec-Funktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "Overview und positionsbezogene Detailansicht sind vorhanden; separater Live-Spektrummodus ist nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "`DetailPeaks::range` folgt der Position; visuelle Framerate und Synchronität sind separat zu prüfen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-016",
+      "status": "teilweise",
+      "befund": "Wellenform-/Positionsnavigation in [app.slint](../../ui/app.slint) und [controller.rs](../../src/controller.rs); Klickgenauigkeit und alle Ansichten testen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Zeit- und Energie-Tooltips beim Hover sind nicht vollständig nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "FR-018",
+      "status": "offen",
+      "befund": "PNG-Export von Wellenform und Spektrogramm ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 7,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC07_WAVEFORM_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-018",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-019",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "FR-020",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 8,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 9,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: Master-Kompressor mit allen Parametern nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: Master-Limiter inklusive Look-ahead nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: dreibandiger Master-Kompressor nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: unabhängige Dynamikparameter pro Band nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: M/S-Stereo-Enhancer mit Width/Side-Gain nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-006",
+      "status": "teilweise",
+      "befund": "Teilweise: Deck-EQ vorhanden; parametrierbarer Master-EQ nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: Master-Exciter nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: sechs Venue-Mastering-Presets nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: Gain-Reduction-Anzeigen für Master-Kompressor und -Limiter nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-010",
+      "status": "teilweise",
+      "befund": "Teilweise: Offline-Track-LUFS in audio_analyzer.rs; Live-Master-LUFS nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: Live-Master-Spektrumanzeige nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-012",
+      "status": "teilweise",
+      "befund": "Teilweise: Offline-Track-True-Peak für Gain; vorhandenes Live-Peakmeter beansprucht ausdrücklich keinen True-Peak-Nachweis.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: benutzerdefinierte Mastering-Presets nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: Bypass einer Mastering-Kette nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "Teilweise: Kanal-/Master-Sample-Peakmeter vorhanden; vollständige Mastering-Eingangs-/Ausgangsmeter fehlen als Nachweis.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-016",
+      "status": "teilweise",
+      "befund": "Teilweise: einzelne Gain-/Headroom-Maßnahmen vorhanden; Clippingfreiheit zwischen allen Masteringstufen nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: veränderbare Reihenfolge einer Mastering-Kette nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 10,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 11,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 12,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "[crates.rs](../../src/crates.rs) besitzt Erstellen, Umbenennen und Löschen von Crates; ein vollständig gleichwertiger Playlistvertrag mit eigener Reihenfolge ist gesondert nachzuweisen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-002",
+      "status": "teilweise",
+      "befund": "`add`, `add_many`, `remove` in `crates.rs` und GUI-Aktionen in [app.slint](../../ui/app.slint); Crate-Mitgliedschaft ist nicht automatisch vollständige Playlistsemantik.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Crate-Mitgliedschaften sind Mengen; frei bearbeitbare Trackreihenfolge einer Playlist ist darin nicht nachgewiesen. Prep Queue und Crate nicht gleichsetzen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-004",
+      "status": "teilweise",
+      "befund": "`TrackSearch` in [library.rs](../../src/library.rs) sucht Titel, Artist, Album, Namen und Pfad; alle geforderten Metadatenfelder sind damit nicht abgedeckt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Kombinierbare Filter für BPM-Bereich, Key, Genre, Jahr und Rating sind nicht vollständig nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-006",
+      "status": "teilweise",
+      "befund": "`create_smart` speichert eine Textsuche; eine allgemeine regelbasierte Smart Playlist ist nicht vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Allgemeine AND-/OR-Regelgruppen und Feldoperatoren fehlen als nachgewiesener Vertrag; Smart-Crate-Textsuche ist dafür kein Nachweis.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-008",
+      "status": "teilweise",
+      "befund": "Verschachtelte Crates mit `create_under`, `ordered_with_depth` und Test `nested_crates_validate_order_and_promote_children_on_delete` vorhanden; Ordner mit vollwertigen Playlists gesondert prüfen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Vollständiger Editor für alle aufgeführten Metadaten und dauerhafte Overrides ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Benutzerdefinierte Track-Farbmarkierung ist nicht als Bibliotheksfunktion nachgewiesen; Cue-Farbe nicht gleich Trackfarbe.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-011",
+      "status": "teilweise",
+      "befund": "`record_play` in `library.rs` erhöht `play_count` und speichert `last_played_ms`; `playback_history_delta_survives_restart` in [library_store.rs](../../src/library_store.rs) belegt Persistenz als Testpfad. UI, Zählzeitpunkt und Grenzen prüfen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Listenansicht vorhanden; Umschaltung auf eine eigenständige Grid-Ansicht nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-013",
+      "status": "teilweise",
+      "befund": "Sortierung vorhandener Spalten in `library.rs`; beliebige Metadatenfelder und beide Richtungen sind nicht pauschal nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "`add_many` und Import-/Mehrfachpfade sind vorhanden; konsistente Mehrfachauswahl für alle Batchoperationen ist nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "Cratezeilen besitzen `count` in `app.slint`; Gesamtdauer einer Playlist ist nicht als vollständiger Anzeigevertrag nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "M3U-/PLS-Export von Playlists ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Import-Deduplikation identischer Pfade ist kein Nachweis einer umfassenden Track-Duplikaterkennung.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 13,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC13_LIBRARY_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 14,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 15,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "Acht GUI-/Keyboard-Hot-Cues je Deck sind vorhanden; [pad_mode.rs](../../src/pad_mode.rs) routet vier physische MC4000-Pads pro Deck. Acht Pads mit dem vollständigen Modusumfang sind nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-002",
+      "status": "teilweise",
+      "befund": "`Mode` in `pad_mode.rs` enthält `HotCue` und `Sampler`; Roll, Slicer, Beat Jump und Saved Loop sind nicht als Padmodi nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-003",
+      "status": "teilweise",
+      "befund": "Hot-Cue-Setzen und -Recall in [controller.rs](../../src/controller.rs); Positionsgrenzen und Quantisierungszustand beachten.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-004",
+      "status": "teilweise",
+      "befund": "Recallpfad und synthetische Tests sind vorhanden; physische Triggerlatenz unter 10 ms ist nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-005",
+      "status": "teilweise",
+      "befund": "Löschen und modifizierte Hardwarepads existieren; die spezifizierten Rechtsklick-/Long-Press-Bedienwege gesondert testen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Acht spezifizierte Roll-Längen sind nicht als Roll-Padmodus nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Klickfreier Rollmodus muss an Schleifenübergängen mit Signalen und Hörprobe geprüft werden.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Kontinuierliche Hintergrundposition und korrekter Release eines Rollmodus sind nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Acht gleich große Slicer-Teile pro Takt sind nicht als Padmodus nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Instant-Slicer-Trigger und Timing sind nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-011",
+      "status": "teilweise",
+      "befund": "MC4000-Sampler-Modus routet vier Slots; acht spezifizierte Pads und vollständige Sampleranforderungen siehe [Spec 19](G01_SPEC19_SAMPLER_AUDIT.md).",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-012",
+      "status": "teilweise",
+      "befund": "Navigation-/Beat-Jump-Bausteine existieren; die acht vorgeschriebenen Distanzen als Padmodus sind nicht vollständig nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Syncgenauigkeit über Beat-Jump-Aktionen benötigt einen gezielten Timing-/Audio-Nachweis.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "Gespeicherte Loops mit GUI-Bedienung existieren; Saved-Loop-Padmodus ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "Cue-Farben und zustandsbezogenes MC4000-LED-Feedback sind implementiert; alle sechs Modi und tatsächliche Hardwarefarben sind nicht abgenommen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Velocity-abhängige Auslösung kompatibler MIDI-Geräte ist nicht als allgemeiner Vertrag nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Reaktionsverhalten bei hoher CPU-Last ist mit realem Audio und Controller zu messen.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 16,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC16_PADS_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "MATCH, PHASE und kontinuierliches SYNC in [app.slint](../../ui/app.slint), Steuerung in [controller.rs](../../src/controller.rs); Funktionsumfang und Timing mit echten Decks prüfen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-002",
+      "status": "teilweise",
+      "befund": "Kontinuierlicher Sync folgt laut GUI-Vertrag dem jeweils anderen Deck; eine allgemeine explizite Master-Auswahl für mehrere Decks ist damit nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-003",
+      "status": "teilweise",
+      "befund": "`toggle_sync`/`begin_sync_now` und `maintain_sync` in `controller.rs` steuern einen Follower. Grenzen und Verhalten bei Änderungen separat validieren.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-004",
+      "status": "teilweise",
+      "befund": "`phase_sync_once`, `phase_sync` und [phase_sync.rs](../../src/phase_sync.rs) bieten Ausrichtung; variable Tempo-Grids werden in `phase_sync_rejects_variable_tempo_grids_until_local_tempo_matching_exists` explizit abgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-005",
+      "status": "teilweise",
+      "befund": "`nudge` im [beatgrid.rs](../../src/beatgrid.rs) und Grid-Editor existieren; Bediengrenzen und gesamte ±0,5-s-Strecke mit 0,01-s-Schritten nachweisen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-006",
+      "status": "teilweise",
+      "befund": "`anchor_here` und Test `downbeat_anchor_is_bar_one_with_numbered_bars_before_and_after_it` bilden einen manuellen Anker ab; GUI-/Persistenzpfad vollständig prüfen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Ein persistenter Grid-Lock gegen unbeabsichtigte Änderungen ist nicht als vollständige Funktion nachgewiesen; Editierzustand ist nicht automatisch Grid-Lock.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-008",
+      "status": "teilweise",
+      "befund": "Globale Quantisierung und Snap-/Trigger-Einstellungen sind in `app.slint` vorhanden; alle betroffenen Aktionen und Grenzfälle gesondert prüfen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Spezifizierte laufende Anzeige des Beats 1–4 ist nicht vollständig nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Ein durchgängiger Phasenindikator zwischen synchronisierten Decks ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-011",
+      "status": "teilweise",
+      "befund": "BPM-Schätzung in [audio_analyzer.rs](../../src/audio_analyzer.rs) und Anzeige in `app.slint`; Nutzerübernahme, Grenzen und Musikgenauigkeit siehe [Spec-3-Abgleich](G01_SPEC03_BPM_AUDIT.md).",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-012",
+      "status": "teilweise",
+      "befund": "Text-Eingabe `grid-draft-bpm` und `set_bpm` existieren; explizite 0,01-BPM-Schritte und Anzeige-/Persistenzgenauigkeit testen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Gefundener Tap steuert FX-Zeitbasis; Track-Tap für Grid-BPM nicht als Funktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "`track_grids` und Test `fractional_grid_and_nanosecond_anchor_survive_restart_and_explicit_clear` in [library_store.rs](../../src/library_store.rs); vollständige GUI-Roundtrips mit allen Gridvarianten prüfen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Echtzeit-BPM-Differenz zwischen den Decks ist nicht als Spec-Anzeige nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Expliziter Re-Analyze-Bedienvertrag für erneute BPM-Erkennung ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "30 Minuten reale Wiedergabe mit Driftmessung und Audiointerface erforderlich; synthetische mathematische Tests sind kein Ersatz.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 17,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC17_SYNC_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-001",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-005",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-008",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-014",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 18,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_EXTERNAL_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "[sampler.rs](../../src/sampler.rs) enthält vier Banken, [app.slint](../../ui/app.slint) beschreibt einen Vier-Slot-Sampler; acht Pads fehlen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-002",
+      "status": "teilweise",
+      "befund": "One-Shot und Retrigger sind in GUI/Engine vorhanden; ein Loopmodus pro Pad ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-003",
+      "status": "offen",
+      "befund": "`set_gain` und GUI-Slider steuern den gemeinsamen Samplerpegel; Einzelpegel je Slot sind nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-004",
+      "status": "offen",
+      "befund": "Die spezifizierte Trigger-Latenz unter 10 ms ist mit realer Eingabe, Audioausgang und dokumentiertem Buffer zu messen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-005",
+      "status": "teilweise",
+      "befund": "`sampler_four_voices_headroom_routes_retrigger_stop_eof_and_level` prüft vier Stimmen; acht gleichzeitige Stimmen sind nicht vorhanden.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Die Ladeaktion ist kein nachgewiesener Samplebibliotheks-Browser mit den Funktionen der Spec.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-007",
+      "status": "teilweise",
+      "befund": "Slotdarstellung und Ladepfade sind vorhanden; die vollständige Anzeige von Sample-Namen und Dauer für jedes Pad ist nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-008",
+      "status": "teilweise",
+      "befund": "`stop_all` und GUI-Button STOP ALL existieren; Verhalten und Verzögerung auf echter Ausgabe separat messen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-009",
+      "status": "offen",
+      "befund": "Loop All ist nicht als Funktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-010",
+      "status": "offen",
+      "befund": "Farbzuordnung nach Sampleeigenschaften ist nicht als vollständiger Padvertrag nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Ein Trigger-Animations-/Glow-Vertrag und dessen Reaktionszeit sind nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-012",
+      "status": "teilweise",
+      "befund": "`restore_sampler`, Speicherpfad und Test `sampler_gui_midi_recovery_persistence_missing_and_geometry` in [controller.rs](../../src/controller.rs) zeigen Persistenzpfade für die bestehende Viererbank. Fehlende Dateien und Neustartfälle gesondert abnehmen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-013",
+      "status": "offen",
+      "befund": "Kategorien für Samples sind nicht als Bibliotheksfunktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "`clear` und GUI CLEAR existieren für die bestehende Bank; alle acht geforderten Pads sind noch nicht vorhanden.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "Fester Headroom je Stimme ist im bestehenden Bus vorgesehen; damit ist Clippingfreiheit des gesamten Masters unter beliebiger gleichzeitiger Deck-/Samplerlast nicht bewiesen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Acht Sampler-Shortcuts 1–8 sind nicht als Funktion nachgewiesen; bestehende Hot-Cue-Shortcuts nicht damit gleichsetzen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "FR-017",
+      "status": "teilweise",
+      "befund": "LOAD erlaubt lokale Dateien; Format-, Größen- und Sampleratenbeschränkungen sowie die Spec-Bedienung bleiben zu prüfen.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 19,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC19_SAMPLER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "Vorhandenes Programm verwendet Deck A/B; Vierdeckmodus und Umschaltung sind nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-002",
+      "status": "teilweise",
+      "befund": "Faderpfade für zwei Decks in [controller.rs](../../src/controller.rs) und [app.slint](../../ui/app.slint); vier unabhängige Kanäle fehlen als Nachweis.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-003",
+      "status": "teilweise",
+      "befund": "`EqSettings`, DSP und `eq_frequency_response_trim_and_neutral_are_measured` in [mixer_dsp.rs](../../src/mixer_dsp.rs); GUI-Test `eq_gui_routes_both_decks_resets_and_preserves_transport_and_faders`. Vier Kanäle und vollständige Spec-Skalierung prüfen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-004",
+      "status": "teilweise",
+      "befund": "Gainsteuerung und [cue_bus.rs](../../src/cue_bus.rs) sind für bestehende Decks vorhanden; vier unabhängige Kanäle und geforderte Skalierung nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-005",
+      "status": "teilweise",
+      "befund": "Crossfader für bestehende Decks vorhanden; frei zuweisbares Left/Center/Right-Routing pro Deck ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-006",
+      "status": "offen",
+      "befund": "Separater Mute-Button je Kanal ist nicht als vollständige Funktion nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-007",
+      "status": "offen",
+      "befund": "Separater Solo-Button je Kanal ist nicht als vollständige Funktion nachgewiesen; Kopfhörer-Cue ist nicht automatisch Solo.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-008",
+      "status": "teilweise",
+      "befund": "Masterpegelsteuerung ist im bestehenden Zweideckmixer vorhanden; exakte Skalierung und Persistenz gesondert prüfen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-009",
+      "status": "teilweise",
+      "befund": "[output_routing.rs](../../src/output_routing.rs) enthält Cue/Master-Mix und Test `headphone_gain_mix_ramp_is_stereo_coherent_and_leaves_master_untouched`; reale vierkanalige Kopfhörerabnahme offen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-010",
+      "status": "teilweise",
+      "befund": "Deck-Meter und MC4000-Feedback sind für bestehende Decks vorgesehen; Vierkanalabdeckung und Hardwareverhalten prüfen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-011",
+      "status": "teilweise",
+      "befund": "Master-Meterpfad existiert; Genauigkeit, Aktualisierungsrate und tatsächliche Hardwareanzeige gesondert messen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Ein spezifizierter Master-Limiter mit Clippingverhinderung ist nicht nachgewiesen; Headroom und Meter sind kein Limiter.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-013",
+      "status": "teilweise",
+      "befund": "Bestehende Decks speisen den Mixer; frei zuordenbares Vierdeck-Kanalrouting ist nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "Der Test `eq_gui_routes_both_decks_resets_and_preserves_transport_and_faders` betrifft EQ-Reset; vollständiger Kanalreset aller Spec-Parameter ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-015",
+      "status": "offen",
+      "befund": "Eine Solozustandsverwaltung samt Clear Solos ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-016",
+      "status": "offen",
+      "befund": "Die spezifizierte kombinierte Anzeige für spielend, nicht stumm und hörbar ist nicht vollständig nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Persistenz sämtlicher geforderter Mixerparameter über Neustart und Migration ist nicht vollständig nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 20,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC20_MIXER_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-001",
+      "status": "teilweise",
+      "befund": "[audio_analyzer.rs](../../src/audio_analyzer.rs) ermittelt BPM und Key; Energie- und Danceability-Werte sind im Ergebnisvertrag nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-002",
+      "status": "offen",
+      "befund": "Manuelle Gridlinien sind keine erkannten Beatmarker mit Stärkewerten; siehe [BPM-Abgleich](G01_SPEC03_BPM_AUDIT.md).",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-003",
+      "status": "teilweise",
+      "befund": "`update_analysis_progress` in [controller.rs](../../src/controller.rs) zeigt verarbeitete Tracks und Fehler; kontinuierliche 0–100-%-Anzeige ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-004",
+      "status": "teilweise",
+      "befund": "Grid-BPM-Texteditor und `set_bpm` in [beatgrid.rs](../../src/beatgrid.rs) existieren; die vollständige 0,01-BPM-Bedienung und Persistenz messen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-005",
+      "status": "teilweise",
+      "befund": "Grid-Nudge ist vorhanden; UI-Vertrag und 0,01-s-Schritte über den gesamten Bereich testen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-006",
+      "status": "teilweise",
+      "befund": "`anchor_here` erlaubt manuellen Grid-Anker; vollständigen Downbeat- und Neustartpfad prüfen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-007",
+      "status": "teilweise",
+      "befund": "`begin_cue_editor`, `save_cue_editor`, Hot-Cue-Aktionen und `cue_editor_cancel_conflict_source_lifetime_markers_and_restart` in `controller.rs`; alle Cue-Typen und Fälle nicht pauschal abgenommen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-008",
+      "status": "teilweise",
+      "befund": "Hot-Cue-Editor und Persistenz enthalten Name und Farbe; alle Spec-Bedienfälle und Farbeingaben prüfen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-009",
+      "status": "teilweise",
+      "befund": "Hot-Cue-Recall und Tests für beide Decks existieren; echte End-to-End-Latenz nicht gemessen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-010",
+      "status": "teilweise",
+      "befund": "Key-Schätzung vorhanden; ausgewiesener Confidence-Wert fehlt als Nachweis, siehe [Key-Abgleich](G01_SPEC06_KEY_AUDIT.md).",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-011",
+      "status": "offen",
+      "befund": "Manuelles Key-Override ist nicht als vollständiger persistenter Bedienpfad nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-012",
+      "status": "offen",
+      "befund": "Editor für alle aufgeführten Metadaten ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-013",
+      "status": "teilweise",
+      "befund": "Cue- und Grid-Overlays in [app.slint](../../ui/app.slint); automatisch erkannte Einzelbeats und deren Stärke sind damit nicht belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-014",
+      "status": "teilweise",
+      "befund": "[library_store.rs](../../src/library_store.rs) persistiert Analyse, Grid und Hot Cues; alle geforderten Analysefelder existieren noch nicht.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-015",
+      "status": "teilweise",
+      "befund": "Bibliotheksstatus zeigt analysiert; vollständiger Status einschließlich gesetzter Cues und Grid-Lock ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-016",
+      "status": "teilweise",
+      "befund": "`whole_library_analysis_publishes_each_result_and_continues_after_failure` testet Batchpfad; 20+ Tracks ohne UI-Blockade separat messen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "FR-017",
+      "status": "offen",
+      "befund": "Ein expliziter Re-Analyze-Button mit definiertem Umgang mit manuellen Overrides ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 21,
+      "id": "SC-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_SPEC21_PREPARATION_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-001",
+      "status": "teilweise",
+      "befund": "Teilweise: BPM/Key und manuelles Grid vorhanden; Phrasen, Energiewerte und Confidence nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-002",
+      "status": "offen",
+      "befund": "Offen: automatische Phrase-Klassifikation aus Energie, Spektren und Wiederholung fehlt als Nachweis.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-003",
+      "status": "offen",
+      "befund": "Offen: Syncvorschläge mit exakten Positionen und Einzelbewertungen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-004",
+      "status": "offen",
+      "befund": "Offen: Ranking nach Phrase, Energie, Key und Nähe nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-005",
+      "status": "teilweise",
+      "befund": "Teilweise: Wellenform und Gridmarker vorhanden; erkannte Phrasenregionen und Beschriftung nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-006",
+      "status": "teilweise",
+      "befund": "Teilweise: konventioneller Sync vorhanden; Anwendung eines höchstbewerteten Phrasenvorschlags nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-007",
+      "status": "teilweise",
+      "befund": "Teilweise: Beat-/Bar-Modus vorhanden; Phrase und Smart fehlen als Nachweis.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-008",
+      "status": "offen",
+      "befund": "Offen: aktueller Phrasentyp, Bar und Restzeit nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-009",
+      "status": "offen",
+      "befund": "Offen: Energietoleranz, Kurven und Warnungen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-010",
+      "status": "offen",
+      "befund": "Offen: Key-Kompatibilität als Vorschlagsgewichtung nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-011",
+      "status": "offen",
+      "befund": "Offen: Phrasen-/Übergangs-Scoring nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-012",
+      "status": "offen",
+      "befund": "Offen: getrennte und globale Toleranzen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-013",
+      "status": "offen",
+      "befund": "Offen: Phrasenanalyse- und Vorschlagsmetriken nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-014",
+      "status": "teilweise",
+      "befund": "Teilweise: Wellenform vorhanden; geforderte Phrasenannotation und Darstellung nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "FR-022-015",
+      "status": "offen",
+      "befund": "Offen: Persistenz der Neural-Sync-Einstellungen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 22,
+      "id": "SC-022-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-001",
+      "status": "offen",
+      "befund": "Offen: automatische/manuelle Mix-Sessionerstellung ist nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-002",
+      "status": "offen",
+      "befund": "Offen: Session-ID, Name, Start/Ende, Venue, Hörer und Aufnahmeverknüpfung fehlen als nachgewiesener Sessionvertrag.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-003",
+      "status": "offen",
+      "befund": "Offen: Übergangsereignis mit Quell-/Zieltrack, Timing, Fader und Score nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-004",
+      "status": "offen",
+      "befund": "Offen: heuristische Qualitätsbewertung mit den geforderten Eingaben nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-005",
+      "status": "offen",
+      "befund": "Offen: sessionbezogene BPM-, Genre-, Energie- und Übergangsstatistik nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-006",
+      "status": "offen",
+      "befund": "Offen: Sitzungsliste mit Spec-Anzeigen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-007",
+      "status": "offen",
+      "befund": "Offen: Filter auf Sessionmetadaten und Qualität nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-008",
+      "status": "offen",
+      "befund": "Offen: Sortierung der Sessions nach den vier Kriterien nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-009",
+      "status": "offen",
+      "befund": "Offen: detaillierte Übergangsansicht nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-010",
+      "status": "offen",
+      "befund": "Offen: Sessionlöschung mit Aufnahme-Erhaltungsoption nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-011",
+      "status": "offen",
+      "befund": "Offen: spezifizierte sessionübergreifende Statistik nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-012",
+      "status": "offen",
+      "befund": "Offen: JSON-/CSV-/PDF-Sessionexport nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-013",
+      "status": "offen",
+      "befund": "Offen: visuelles Session-Replay und Laden aus History nicht als gesamter Vertrag nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-014",
+      "status": "teilweise",
+      "befund": "Teilweise: lokale trackbezogene History wird persistiert; sie speichert pro Track letzten Zeitpunkt/Zähler/Deck, keine chronologische Folge aller Sessionübergänge. Session-Retention und Backup/Restore gesondert.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "FR-023-015",
+      "status": "offen",
+      "befund": "Offen: langfristige Qualitäts-, Genre- und Techniktrends nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 23,
+      "id": "SC-023-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-001",
+      "status": "offen",
+      "befund": "Offen: fünf spezifizierte generierte Playlisttypen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-002",
+      "status": "teilweise",
+      "befund": "Teilweise: Crate-Suchtext vorhanden; kombinierte BPM-/Key-/Genre-/Rating-/Energiekriterien nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-003",
+      "status": "teilweise",
+      "befund": "Teilweise: Textsuche und Verfügbarkeitsdaten vorhanden; geforderte kombinierte Kriterien nicht vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-004",
+      "status": "offen",
+      "befund": "Offen: spezifizierte Sequenzierung nach Energie, Key, BPM, Genre und Mood nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-005",
+      "status": "offen",
+      "befund": "Offen: vier Energieverlaufsmuster nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-006",
+      "status": "offen",
+      "befund": "Offen: Top-10-Empfehlungen mit gewichteten Einzelgründen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-007",
+      "status": "offen",
+      "befund": "Offen: Match-Badges und Gesamtscore nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-008",
+      "status": "offen",
+      "befund": "Offen: Generierung persistenter geordneter Playlists aus Kriterien nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-009",
+      "status": "teilweise",
+      "befund": "Teilweise: Crates persistieren; Typ, Kriterien, geordnete Track-IDs und Analysedaten nicht vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-010",
+      "status": "teilweise",
+      "befund": "Teilweise: Crate-Namen/-Anzahl vorhanden; generierte Playlist-Metadaten und Energiegraph nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-011",
+      "status": "teilweise",
+      "befund": "Teilweise: Library-Trackliste und Deckladen vorhanden; geforderte Empfehlungsliste mit Bewertungs- und Übergangsdaten nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-012",
+      "status": "offen",
+      "befund": "Offen: Regeneration mit gespeicherten Kriterien nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-013",
+      "status": "offen",
+      "befund": "Offen: Playlist-Energie-/BPM-Profil und Übergangsqualität nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-014",
+      "status": "offen",
+      "befund": "Offen: mehrdimensionale Übergangsprognose nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "FR-024-015",
+      "status": "teilweise",
+      "befund": "Teilweise: Crates können gelöscht werden; Löschung einer generierten Smart Playlist mit Spec-Vertrag nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 24,
+      "id": "SC-024-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-001",
+      "status": "teilweise",
+      "befund": "Teilweise: Camelot-Codes für Dur/Moll vorhanden; vollständiges Wheel-Modell mit Namen, Farben und Koordinaten nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-002",
+      "status": "offen",
+      "befund": "Offen: interaktives Camelot-Wheel und Deckmarkierung nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-003",
+      "status": "offen",
+      "befund": "Offen: vollständige Kompatibilitätsregeln nicht nachgewiesen; widersprüchliches Halbtonbeispiel in D1 klären.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-004",
+      "status": "offen",
+      "befund": "Offen: Typ, Schwierigkeit, Beziehung und Beschreibung für Tonartpaare nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-005",
+      "status": "offen",
+      "befund": "Offen: sortierte Liste kompatibler Tonarten nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-006",
+      "status": "offen",
+      "befund": "Offen: Key-basierter Bibliotheksfinder nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-007",
+      "status": "offen",
+      "befund": "Offen: Finderanzeige mit Metadaten, Schwierigkeit und Laden nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-008",
+      "status": "teilweise",
+      "befund": "Teilweise: Decks und Key-Metadaten existieren; geforderte Wheel-/Finder-Integration nicht belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-009",
+      "status": "offen",
+      "befund": "Offen: Verteilung und Top-5-Statistik aller 24 Tonarten nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-010",
+      "status": "offen",
+      "befund": "Offen: interaktive Key-Analyzer-Ansicht nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-011",
+      "status": "offen",
+      "befund": "Offen: vier Strategiekategorien und Tipps nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-012",
+      "status": "offen",
+      "befund": "Offen: Wheel-, Finder- und Analyzer-Modi nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-013",
+      "status": "offen",
+      "befund": "Offen: geforderte Wheel-/Finder-Interaktionen nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-014",
+      "status": "offen",
+      "befund": "Offen: vollständige semantische Farbzuordnung nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "FR-025-015",
+      "status": "offen",
+      "befund": "Offen: spezifizierte Finder-/Analyzer-Caches und Reaktionszeiten nicht nachgewiesen.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-001",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-002",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-003",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-004",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-005",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-006",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-007",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    },
+    {
+      "spec": 25,
+      "id": "SC-025-008",
+      "status": "offen",
+      "befund": "Spezifischer Mess-, Laufzeit-, Hardware- oder Nutzernachweis noch nicht als vollständig belegt.",
+      "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
+      "vollstaendige_abnahme": false
+    }
+  ]
+}

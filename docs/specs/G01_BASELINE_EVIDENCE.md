@@ -32,6 +32,8 @@ Für zehn weitere Bereiche dokumentiert [G01_EXTERNAL_FEATURES_AUDIT.md](G01_EXT
 
 Die verbleibenden fünf Bereiche Mastering, Neural Sync, Mix History, Smart Playlists und harmonisches Mixing sind in [G01_ADVANCED_FEATURES_AUDIT.md](G01_ADVANCED_FEATURES_AUDIT.md) einzeln anhand ihrer FR-IDs eingeordnet. Auch dort bleiben Unterpunkte und Messungen ohne vollständigen Nachweis offen.
 
+Die maschinenlesbare Ersteinstufung jeder einzelnen FR und SC samt Verweis auf den zugehörigen Befund steht in [G01_AUDIT_STATUS.json](G01_AUDIT_STATUS.json). Sie ist eine Momentaufnahme, keine automatische Abschlussbestätigung; den Factory-Status G01 ändert sie nicht.
+
 - Camelot: Wheel-Nachbarschaft und tatsächliche Halbtonintervalle getrennt modellieren; die widersprüchlichen Beispiele aus Spec 25 nicht als musikalischen Nachweis übernehmen. Endgültige Klassifikation und Akzeptanzfälle bleiben zur fachlichen Entscheidung offen.
 - Cloud: Last-write-wins mit Änderungen an verschiedenen Feldern sowie konkurrierenden Änderungen am selben Feld getrennt testen. Ein garantierter Erhalt aller gleichzeitigen Änderungen folgt daraus nicht; das 95-%-Ziel benötigt ein vorher definiertes Szenario und bleibt offen.
 - FPS: UI-Playhead, Video-Ausgabe, Effektlatenz und Stream-Overlay getrennt messen; unterschiedliche Zielwerte nicht gegeneinander verrechnen.
