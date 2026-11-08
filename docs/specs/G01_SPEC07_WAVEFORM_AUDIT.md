@@ -24,3 +24,5 @@ Quellstand `df4966f`, statischer Abgleich am 08.11.2026. [Spec 7](7-advanced-wav
 | FR-018 | Offen | PNG-Export von Wellenform und Spektrogramm ist nicht nachgewiesen. |
 
 SC-001–008 bleiben offen: Lade-/Renderzeit, 60-FPS-Playhead, Klickgenauigkeit, Farbklassifizierung, Grid-Ausrichtung und Hover-/Moduswechsel benötigen die spezifizierten Daten und Messungen. Drei Filterbänder sind eine Darstellungsheuristik und kein Beleg für sieben STFT-Bänder.
+
+Der [gemeinsame Messplan](G01_SPEC07_16_MEASUREMENT_PLAN.md) beschreibt alle acht Wellenform- und acht Padmessungen.

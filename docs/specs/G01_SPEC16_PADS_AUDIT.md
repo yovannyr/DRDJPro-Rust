@@ -23,3 +23,5 @@ Quellstand `df4966f`, statischer Abgleich am 08.11.2026. [Spec 16](16-performanc
 | FR-017 | Offen | Reaktionsverhalten bei hoher CPU-Last ist mit realem Audio und Controller zu messen. |
 
 SC-001–008 bleiben offen: Trigger- und GUI-Latenz, klickfreie Rollübergänge, ±5-ms-Beat-Jump, Slicer-Quantisierung, Last und Moduswechsel brauchen gezielte Tests und reale Geräte-/Hörmessungen. Persistenz vorhandener Hot Cues allein belegt nicht die gesamte Spec.
+
+Der [gemeinsame Messplan](G01_SPEC07_16_MEASUREMENT_PLAN.md) beschreibt alle acht Wellenform- und acht Padmessungen.
