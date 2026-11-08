@@ -23,3 +23,5 @@ Quellstand `0f979e3`, statischer Abgleich am 08.11.2026. [Spec 13](13-library-ma
 | FR-017 | Offen | Import-Deduplikation identischer Pfade ist kein Nachweis einer umfassenden Track-Duplikaterkennung. |
 
 SC-001–008 bleiben offen: definierte Messungen für Suche, Erstellen, Regeln, Ansichtswechsel, Batch und Filter mit 10.000+ Tracks sowie der vollständige Cloud-Sync-Pfad für SC-007 fehlen. Vorhandene Performance-Tests ersetzen keine dokumentierte Messung genau dieser Szenarien.
+
+Der [Messplan für Spec 13](G01_SPEC13_MEASUREMENT_PLAN.md) beschreibt die acht Messstrecken und offenen Voraussetzungen.
