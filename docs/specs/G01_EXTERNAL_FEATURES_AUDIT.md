@@ -8,6 +8,8 @@ Der [Messplan für Specs 1, 2 und 5](G01_SPEC01_02_05_MEASUREMENT_PLAN.md) konkr
 
 Der [Messplan für Specs 8, 14 und 15](G01_SPEC08_14_15_MEASUREMENT_PLAN.md) konkretisiert die Ziele für Video, Aufnahme und Livestream.
 
+Der [Messplan für Specs 9, 22, 24 und 25](G01_SPEC09_22_24_25_MEASUREMENT_PLAN.md) konkretisiert die Ziele für Empfehlungen und intelligente Übergänge.
+
 
 ## Spec 1: Auto-Updates
 

@@ -4,6 +4,8 @@ Quellstand `1d39d7a`, statischer Abgleich am 08.11.2026. Die einzelnen FR sind a
 
 Alle Erfolgskriterien SC-001–008 der jeweiligen Spec bleiben ohne passende Messung und Nutzer-/Hör-/Geräteabnahme offen. Der dokumentierte Workspace-Test auf `b783a98` ergab 504 bestandene und sechs ignorierte Tests; danach wurden Dokumente geändert.
 
+Der [Messplan für Specs 9, 22, 24 und 25](G01_SPEC09_22_24_25_MEASUREMENT_PLAN.md) konkretisiert Empfehlungs- und Übergangskriterien.
+
 ## Spec 10: Audio Mastering
 
 Deck-EQ und Peakmeter existieren. Die integrierte Track-Lautheits-/True-Peak-Analyse ist kein Live-Master-LUFS- oder True-Peak-Meter und keine Mastering-Kette. Quellen: [mixer_dsp.rs](../../src/mixer_dsp.rs), [peak_meter.rs](../../src/peak_meter.rs); [Originalspec](10-audio-mastering/spec.md).
