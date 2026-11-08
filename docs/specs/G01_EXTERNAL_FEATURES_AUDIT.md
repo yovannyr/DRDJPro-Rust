@@ -93,6 +93,8 @@ Lokale Mediaeingabe und Audio-Decoder existieren; Provider-OAuth und lizenzierte
 
 SC-001–008: offen; Originalgrenzwerte und benötigte Messungen im [Anforderungsregister](SPEC_REQUIREMENTS_MATRIX.md).
 
+**Vertiefung zu Spec 5:** Entwurf von `deepseek-v4-flash-sovereign`, gegen die Spec abgeglichen: (1) FR-001, FR-002, FR-003, FR-004, FR-012, FR-017: Provider-Authentifizierung, sichere Tokenverwaltung, Refresh, Trennung und parallele Verbindungen; abgelaufene Tokens und falschen Verbindungsstatus prüfen. (2) FR-005, FR-006, FR-008, FR-015: dienstübergreifende Suche, Herkunft, Metadaten und Filter; fehlende Providerantworten und fehlende Metadaten prüfen. (3) FR-007, FR-010, FR-011, FR-014: Deckwiedergabe, Qualität, Preview-Beschränkung und regionale Verfügbarkeit; nicht verfügbare Tracks und Fehleranzeige prüfen. (4) FR-009, FR-013, FR-016: Providerplaylists, Rate-Limits und Cache; veraltete Daten und verständliche Rückmeldung prüfen. Rechte und tatsächlicher Zugriff sind vor realen Tests zu klären.
+
 ## Spec 8: Video Mixing
 
 Audio-Decoder bzw. Audio-Crossfader sind kein Nachweis einer Video-Deck-/Compositing-Pipeline. Quellen: [audio_formats.rs](../../src/audio_formats.rs), [render_bus.rs](../../src/render_bus.rs); vollständiger Solltext: [Spec](8-video-mixing/spec.md).
@@ -122,6 +124,8 @@ Audio-Decoder bzw. Audio-Crossfader sind kein Nachweis einer Video-Deck-/Composi
 
 SC-001–008: offen; Originalgrenzwerte und benötigte Messungen im [Anforderungsregister](SPEC_REQUIREMENTS_MATRIX.md).
 
+**Vertiefung zu Spec 8:** Entwurf von `deepseek-v4-flash-sovereign`, gegen die Spec abgeglichen: (1) FR-001, FR-002, FR-003, FR-004, FR-005: Dateiformate, zwei Decks, Wiedergabesteuerung, Thumbnail und Metadaten; beschädigte und nicht unterstützte Dateien prüfen. (2) FR-008, FR-009, FR-010: Deck-/Mastereffekte und Chroma Key; Parametergrenzen und falsch entfernte Farben prüfen. (3) FR-006, FR-007, FR-011, FR-012, FR-013, FR-014, FR-015: Crossfader, Übergänge und Layouts; Positions- und Bildfehler prüfen. (4) FR-016, FR-017, FR-018, FR-019, FR-020: Ausgabeauflösung, Framerate, Audio-Sync, Capture und Preview; Framedrops und Desynchronisation prüfen.
+
 ## Spec 9: AI Auto-Mix
 
 BPM-/Key-Analyse und manueller Deck-Sync sind Grundlagen; Planung und automatische Übergänge sind dadurch nicht belegt. Quellen: [audio_analyzer.rs](../../src/audio_analyzer.rs), [sync_control.rs](../../src/sync_control.rs); vollständiger Solltext: [Spec](9-ai-automix/spec.md).
@@ -148,6 +152,8 @@ BPM-/Key-Analyse und manueller Deck-Sync sind Grundlagen; Planung und automatisc
 
 SC-001–008: offen; Originalgrenzwerte und benötigte Messungen im [Anforderungsregister](SPEC_REQUIREMENTS_MATRIX.md).
 
+**Vertiefung zu Spec 9:** Entwurf von `deepseek-v4-flash-sovereign`, gegen die Spec abgeglichen: (1) FR-001, FR-002, FR-003, FR-004, FR-005, FR-014: Analyse und Kompatibilität samt fehlenden Metadaten; unbestimmte BPM/Key und Scoregrenzen prüfen. (2) FR-006, FR-007, FR-011, FR-013, FR-015: Mixplanung, Energieverlauf, Scoreerklärung, Genre und Persistenz. (3) FR-008, FR-009, FR-010, FR-017: automatische Übergänge, BPM-Sync, Auswahl-Override und manueller Übergang; insbesondere sichere Übernahme während laufender Wiedergabe prüfen. (4) FR-012, FR-016: Vorschau/Editor und Lernen aus Overrides; leere oder geänderte Pläne prüfen.
+
 ## Spec 11: DVS
 
 MC4000-Jog und Pitch-Bedienung existieren; Audio-Timecode-Eingang und -Decoder sind dadurch nicht belegt. Quellen: [mc4000.rs](../../src/mc4000.rs), [audio_devices.rs](../../src/audio_devices.rs); vollständiger Solltext: [Spec](11-dvs-control/spec.md).
@@ -173,6 +179,8 @@ MC4000-Jog und Pitch-Bedienung existieren; Audio-Timecode-Eingang und -Decoder s
 | FR-017 | System MUST support pitch range adjustment (±8%, ±16%, ±50%) | Offen: vollständiger Pfad und spezifikationsbezogener Nachweis fehlen. |
 
 SC-001–008: offen; Originalgrenzwerte und benötigte Messungen im [Anforderungsregister](SPEC_REQUIREMENTS_MATRIX.md).
+
+**Vertiefung zu Spec 11:** Entwurf von `deepseek-v4-flash-sovereign`, gegen die Spec abgeglichen: (1) FR-001, FR-002, FR-003, FR-004, FR-005, FR-015: Timecode-Dekodierung, vier genannte Formatanforderungen, Positionslatenz und Richtung; Signalausfall und ungültigen Timecode prüfen. (2) FR-007, FR-008, FR-009, FR-010, FR-011: automatische/manuelle Kalibrierung, Qualitäts-/Genauigkeitsanzeigen und Recovery. (3) FR-006, FR-012, FR-013, FR-014: Scratch, Relative-/Absolute-Modus, Platteranzeige und CDJ-Modus. (4) FR-016, FR-017: RPM und Pitchbereiche. Die rechtmäßige Formatunterstützung und reale Hardwareabnahme bleiben Voraussetzungen.
 
 ## Spec 12: Stem Control
 
