@@ -22,4 +22,4 @@ Quellstand `c83d173`, statischer Abgleich am 08.11.2026. [Spec 21](21-track-prep
 | FR-016 | Teilweise | `whole_library_analysis_publishes_each_result_and_continues_after_failure` testet Batchpfad; 20+ Tracks ohne UI-Blockade separat messen. |
 | FR-017 | Offen | Ein expliziter Re-Analyze-Button mit definiertem Umgang mit manuellen Overrides ist nicht nachgewiesen. |
 
-SC-001–008 bleiben bis zu dokumentierten Messungen von Analysezeit/-genauigkeit, Grid-/Cue-Reaktionszeit, UI-Framerate, Batchverhalten und Persistenz offen. Konflikt der Zeitformulierungen mit Spec 3 siehe [Messkonzept](G01_DECISIONS_AND_MEASUREMENT.md).
+SC-001–008 bleiben bis zu dokumentierten Messungen von Analysezeit/-genauigkeit, Grid-/Cue-Reaktionszeit, UI-Framerate, Batchverhalten und Persistenz offen. Das gemeinsame Zeitziel mit Spec 3 wurde nach Nutzerentscheidung auf innerhalb von 10 Sekunden festgelegt; siehe [Messkonzept](G01_DECISIONS_AND_MEASUREMENT.md).

@@ -30,7 +30,7 @@ Für jede Messung den Originalwert und die Original-ID aus dem [Register](SPEC_R
 | Mastering / Ressourcen | Eingangs- und Ausgangssignal; Callback-Anfang bis Ende | Signalpegel, True Peak, LUFS, Artefakte, CPU, Deadline-Verfehlungen und zusätzliche Latenz je Konfiguration; Look-ahead separat ausweisen. |
 | Adoption / Quoten | definierte Nutzerkohorte und Beobachtungszeitraum | Stichprobengröße, Ein-/Ausschlüsse, Nenner und Rohdaten vorab festlegen; automatisierte Tests ersetzen keine Nutzerbefragung oder mehrmonatige Beobachtung. |
 
-Bei widersprüchlich wirkenden Grenzen zunächst gleiche Messbedingungen definieren; sind zwei Werte für dasselbe Szenario anwendbar, beide unverändert prüfen. Beispiele: Spec 3 fordert für den typischen Track unter 10 Sekunden; Spec 21 nennt 10–30 Sekunden. Diese Formulierungen sind vor endgültiger Annahme der Zeitmessung zu klären, statt automatisch eine zu streichen. Zielwerte und experimentelle Daten müssen separat ausgewiesen werden.
+Bei widersprüchlich wirkenden Grenzen zunächst gleiche Messbedingungen definieren; sind zwei Werte für dasselbe Szenario anwendbar, beide unverändert prüfen. **Entscheidung vom 08.11.2026:** Der Nutzer hat für Spec 3 und Spec 21 ein gemeinsames Ziel innerhalb von 10 Sekunden für typische vierminütige Tracks bestätigt. Die frühere Angabe 10–30 Sekunden in Spec 21 wurde entsprechend berichtigt. Messbeginn, Cache-Zustand und Hardware müssen für die Abnahme dokumentiert werden; Zielwerte und experimentelle Daten bleiben getrennt ausgewiesen.
 
 ## D5: Architekturentscheidung – native Adaption
 

@@ -696,7 +696,7 @@ Quelle und zusätzliche Abnahmeszenarien: [21-track-preparation/spec.md](21-trac
 | FR-015 | System MUST display track preparation status (analyzed, cues set, grid locked) | P21b.3 | Offen |
 | FR-016 | System MUST support batch analysis of multiple tracks | P21b.3 | Offen |
 | FR-017 | System MUST re-analyze tracks with "Re-Analyze" button | P21b.3 | Offen |
-| SC-001 | Track analysis completes within 10-30 seconds for typical 4-minute tracks | Q21 | Offen |
+| SC-001 | Track analysis completes within 10 seconds for typical 4-minute tracks | Q21 | Offen |
 | SC-002 | BPM detection accuracy of 95%+ for electronic/dance music | Q21 | Offen |
 | SC-003 | Key detection accuracy of 85%+ with confidence scores | Q21 | Offen |
 | SC-004 | Beat grid adjustment responds within 50ms to slider changes | Q21 | Offen |

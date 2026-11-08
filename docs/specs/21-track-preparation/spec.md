@@ -151,7 +151,7 @@ As a DJ preparing multiple tracks, I want to see preparation status and batch an
 
 ### Measurable Outcomes
 
-- **SC-001**: Track analysis completes within 10-30 seconds for typical 4-minute tracks
+- **SC-001**: Track analysis completes within 10 seconds for typical 4-minute tracks
 - **SC-002**: BPM detection accuracy of 95%+ for electronic/dance music
 - **SC-003**: Key detection accuracy of 85%+ with confidence scores
 - **SC-004**: Beat grid adjustment responds within 50ms to slider changes
