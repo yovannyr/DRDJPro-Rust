@@ -65,6 +65,8 @@ Lokale SQLite-Daten und History existieren; ein kontobezogener geräteübergreif
 
 SC-001–008: offen; Originalgrenzwerte und benötigte Messungen im [Anforderungsregister](SPEC_REQUIREMENTS_MATRIX.md).
 
+**Vertiefung zu Spec 2:** Ein Entwurf von `deepseek-v4-flash-sovereign` und der Abgleich mit der Originalspec ergeben vier Prüfgruppen. (1) FR-001, FR-002, FR-003, FR-004, FR-012: Bibliothek, Playlists, Cues und Beatgrids über zwei Geräte; unabhängige Änderungen und Last-write-wins sowie den spezifizierten Vorrang konkurrierender Löschungen getrennt prüfen. (2) FR-006, FR-007, FR-008, FR-013, FR-016, FR-017: sichtbarer Status, manueller und periodischer Sync, persistente Offline-Warteschlange, verständliche Fehler und korrekte Erfolgszahlen; Netzabbrüche, Wiederholungen und doppelte Zustellung prüfen. (3) FR-010, FR-011, FR-014, FR-015: Geräteidentität, letzter Sync, Authentifizierung und serverseitige Nutzerisolation vor Datenzugriff; unauthentifizierte und fremde Zugriffe müssen abgewiesen werden. (4) FR-005, FR-009: Einstellungen und selektive Kategorien; prüfen, dass nicht gewählte Kategorien unverändert bleiben und keine Zugangsdaten unbeabsichtigt synchronisiert werden. Die Details sind Testvorbereitung, kein Nachweis einer vorhandenen Cloud-Implementierung; die Konfliktsemantik und offene Fragen stehen in [D2](G01_DECISIONS_AND_MEASUREMENT.md).
+
 ## Spec 5: Streaming-Integration
 
 Lokale Mediaeingabe und Audio-Decoder existieren; Provider-OAuth und lizenzierte Deckwiedergabe sind damit nicht belegt. Quellen: [media_input.rs](../../src/media_input.rs), [Cargo.toml](../../Cargo.toml); vollständiger Solltext: [Spec](5-streaming-integration/spec.md).
