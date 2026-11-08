@@ -1,5 +1,10 @@
 # AGENTS.md
 
+## Review-Zeitpunkt – Nutzeranweisung (2026-11-08)
+
+Für den Implementierungsplan `docs/specs/IMPLEMENTATION_PLAN.md` erfolgt das unabhängige Code-Review einmal nach Abschluss der gesamten Implementierung aller 25 Specs, statt vor jedem Slice. Dies ersetzt für diesen Plan die früheren Review-Zeitpunkte; die Auswahl des Reviewmodells bleibt unverändert. Angemessene Tests und finale Checks je Slice sowie die bestehende Autorisierung für Commit und Push bleiben bestehen. Ungeprüfte Hardware- und Nutzungsabnahmen weiterhin ausdrücklich offen ausweisen. Das Abschlussreview muss den gesamten Implementierungsumfang erfassen; Befunde sind zu beheben und die betroffenen Prüfungen zu wiederholen.
+
+
 ## Review workflow override (user instruction, 2026-11-03)
 
 For the remaining MC4000 slices S8-S15, the user explicitly removes the

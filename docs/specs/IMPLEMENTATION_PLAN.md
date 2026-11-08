@@ -1,0 +1,337 @@
+# Implementierungsplan für Specs 1–25
+
+Stand 08.11.2026. Grundlage ist der statische Abgleich [MISSING_FEATURES_ANALYSIS.md](MISSING_FEATURES_ANALYSIS.md) zum HEAD `72ecf5e` und dem damaligen Arbeitsbaum. Dieser ist kein Laufzeit- oder Vollständigkeitsnachweis; vor jedem Slice tatsächlichen Stand und Änderungen erneut prüfen. Ziel sind **alle** 418 funktionalen Anforderungen, sämtliche Unterpunkte und User Stories sowie alle 200 Erfolgskriterien der 25 Original-Specs. Die Originale bleiben maßgebend; das [Anforderungsregister](SPEC_REQUIREMENTS_MATRIX.md) enthält die einzelnen FR und SC samt Zuständigkeit. Bereits vorhandenes Verhalten ist wiederzuverwenden und gegen die vollständige Anforderung zu prüfen, nicht pauschal als erledigt anzusehen.
+
+Die 83 nachfolgenden Einheiten sind **geplante Arbeitspakete**, keine einzelnen Commits. Jedes P-Paket wird in drei unten nummerierte Ausführungsslices geteilt; G- und Q-Pakete werden vor Beginn ebenfalls anhand der DoD in ausführungsreife, einzeln prüfbare Schritte zerlegt. Die Pakete gelten erst nach allen zugeordneten Teilschritten als abgeschlossen. Innerhalb eines Pakets gilt .1 vor .2 vor .3; Paketabhängigkeiten gelten für den Beginn von .1. Falls ein Teilschritt bei der Bestandsprüfung noch zu groß ist, wird er vor Umsetzung mit eigener ID, Abnahme und aktualisiertem Register weiter geteilt. Keine Zeitversprechen.
+
+## Priorisierte Reihenfolge nach Abhängigkeiten
+
+Die Wellen sind topologisch sortiert: Ein Paket startet erst, wenn alle angegebenen Abhängigkeiten abgeschlossen und seine Entscheidungstore geklärt sind. Innerhalb einer Welle sind Pakete unabhängig; Ressourcen, Gerätezugang und Nutzerprioritäten bestimmen ihre Reihenfolge. Q-Pakete können nach ihren jeweiligen Voraussetzungen unabhängig starten, die Gesamtfreigabe bleibt bis zu allen 25 offen. Neue Abhängigkeiten bei der Feinplanung erneut auf Zyklen prüfen.
+
+- **Welle 1:** `G01`.
+- **Welle 2:** `G02`, `G03`, `G06`.
+- **Welle 3:** `G04`, `G07`, `P01a`, `P02a`, `P04a`, `P11a`, `P13a`.
+- **Welle 4:** `G05`, `G08`, `P01b`, `P02b`, `P04b`, `P11b`, `P13b`.
+- **Welle 5:** `P03a`, `P05a`, `P06a`, `P07a`, `P08a`, `P10a`, `P12a`, `P14a`, `P19a`, `P20a`, `Q01`, `Q02`, `Q04`, `Q11`, `Q13`.
+- **Welle 6:** `P03b`, `P05b`, `P06b`, `P07b`, `P08b`, `P10b`, `P12b`, `P14b`, `P19b`, `P20b`.
+- **Welle 7:** `P09a`, `P15a`, `P17a`, `P21a`, `P23a`, `P24a`, `P25a`, `Q03`, `Q05`, `Q06`, `Q07`, `Q08`, `Q10`, `Q12`, `Q14`, `Q19`, `Q20`.
+- **Welle 8:** `P15b`, `P16a`, `P17b`, `P18a`, `P23b`, `P25b`.
+- **Welle 9:** `P09b`, `P16b`, `P18b`, `P21b`, `P22a`, `P24b`, `Q15`, `Q17`, `Q23`, `Q25`.
+- **Welle 10:** `P22b`, `Q09`, `Q16`, `Q18`, `Q21`, `Q24`.
+- **Welle 11:** `Q22`.
+
+## Entscheidungstore vor abhängiger Umsetzung
+
+- **Gates D1–D3 (G01):** Original-Specs und User Stories auf Widersprüche prüfen und schriftlich entscheiden: Spec 7 verlangt 60 FPS für Playhead und mindestens 30 FPS für Tooltips, Spec 8 mindestens 30 FPS und <16 ms Effektlatenz als 60-FPS-Ziel, Spec 15 bis 1080p60 und 60-FPS-Overlays; unterschiedliche Messgrößen/Lastszenarien erhalten, Unvereinbares nicht still reduzieren. Spec 3 und 21 haben unterschiedliche Analysefristen; Messbeginn, Cache und gemeinsam strengste anwendbare Grenzen klären. Spec 6 und 25 widersprechen sich bei Camelot-Positionen versus Halbtonschritten; nach musikalischer Korrektheit und dokumentierter Nutzerentscheidung auflösen. Weitere Konflikte inklusive Sync-Last-write-wins versus 95 % Änderungserhalt, 100 % Transition-Erfassung versus Speichergrenzen, Spezifikationsbeispiele und externe Qualitäts-/Verfügbarkeitsziele einzeln dokumentieren. Bis zur Entscheidung sind betroffene Anforderungen offen.
+- **D4 (G02):** Vor Produktanbindung tatsächliche Zugänge, Plattformbedingungen, Berechtigungen, SDKs, kommerzielle Lizenzen, Verteilung und rechtliche Nutzbarkeit für GitHub Releases/Installer, Cloud-Backend und Identität, Spotify/SoundCloud/TIDAL, Twitch/YouTube/Facebook/RTMP/Chat, DVS-Timecode, Stem-Modelle/Runtime und Encoder/Codecs sowie Video prüfen. Keine hier behauptete aktuelle API-Verfügbarkeit. Fehlende Verträge, Rechte, Credentials, Hardware oder für DJs nicht nutzbare APIs blockieren die betroffenen Anforderungen; Adapterattrappen oder Tests gegen Mocks gelten nicht als Provider-Abnahme. Konkrete Ergebnisse und benötigte Nutzerentscheidungen im Entscheidungsprotokoll festhalten.
+- **D5 (G01):** Rust/Slint, bestehende Architektur und Constructor Injection sind Grundlage; Web Audio, React, SVG/Canvas, IndexedDB und Browser-Download-Vorgaben der älteren Specs in einem ADR technisch äquivalent auf native APIs abbilden. Sichtbares Verhalten und messbare Ziele erhalten; echte Widersprüche explizit entscheiden. Keine pauschale Streichung und kein großer Rewrite. Original-Referenzrepository bleibt read-only.
+- **D6 (G01/G02):** Messumgebungen, typische und Midrange-Hardware, OS-/Audiogerät-/Controller-Matrix, Nutzertests, genrediverses lizenziertes Corpus mit unabhängigen Beat-/Key-/Phrase-Annotationen und statistische Stichproben vorab festlegen. Bevölkerungs-, Adoptions- und Langzeitziele benötigen reale Kohorten und Beobachtungszeiten; fehlende Daten bedeuten offen, nicht bestanden.
+
+## Gemeinsame Regeln und Definition of Done
+
+Alle Änderungen folgen AGENTS.md: kleine Slices, vorhandene Arbeit erhalten, Constructor Injection an sinnvollen Grenzen, keine unbegründeten neuen Frameworks. Vor jedem Slice Scope, betroffene Dateien, Abnahme und Tests konkretisieren; Quellmodule unten sind geplante Anknüpfungspunkte, keine Zusage ihres aktuellen Inhalts. Querschnittliche Slices vermeiden doppelte Implementierungen von Analyse, Metadaten, Tonart, zeitgenauem Scheduler, vier Decks und Audio-Taps.
+
+Neue oder teilweise implementierte Audio- und Netzwerkfunktionen dürfen erst für Nutzer freigeschaltet werden, wenn ihre sicheren Invarianten implementiert und geprüft sind: insbesondere Authentifizierung und serverseitige Nutzerisolation, Stem-Synchronität, sofortiger manueller AutoMix-Override, Signalbegrenzung und Fehler-/Geräte-Recovery. Bis dahin bleiben die Modi deaktiviert; isolierte ausführbare Tests dürfen sie gezielt prüfen. Paketübergreifende FR sind erst nach allen erforderlichen Beiträgen vollständig.
+
+Echtzeit-Audiocallbacks führen keine Datei-/Netzwerk-I/O, keine Heap-Allokation und keine blockierenden Locks aus. Vorbereitete, begrenzte Puffer und nichtblockierende Übergaben nutzen; Überlauf, Ressourcenfreigabe und Fehler explizit behandeln. Messungen umfassen Callback-Zeitverteilung und Deadline-Verfehlungen unter kombinierter Last, Latenz, Speicher/CPU, Rennen und Thread-Zuständigkeiten; DSP-Prüfungen umfassen Signalgenauigkeit, Headroom, Clipping, hörbare Artefakte und Langzeitdrift. Kein synthetischer Test ersetzt Hör-, Geräte- oder UX-Abnahme.
+
+Pro Slice: den jeweils festgelegten Teil der zugewiesenen FR und der zugehörigen User Stories gegen reale Benutzungswege und Randfälle prüfen; eine über mehrere Slices reichende FR bleibt bis zum Nachweis sämtlicher Unterpunkte offen; Tests für Norm-, Fehler-, Recovery-, Neustart- und relevante Lastfälle sowie Migration/Kompatibilität ausführen. Betroffene Workspace-Tests, Formatierung, striktes Clippy und Release-Build sowie relevante Plattform-CI nach finalem Diff ausführen. Ergebnisse, Daten/Hardware, ungeprüfte Fälle und Risiken dokumentieren. Nach grünen Checks je Slice committen und pushen. Das unabhängige Code-Review mit **GPT-6.1 Sol, medium**, erfolgt auf Nutzerwunsch erst nach Abschluss der gesamten Implementierung aller 25 Specs; es umfasst den gesamten Implementierungsumfang. Befunde beheben und betroffene Prüfungen wiederholen. Die frühere Reviewpflicht vor jedem Slice ist für diesen Plan aufgehoben. Ein blockiertes Gate bleibt offen; keine stillschweigende Optionalisierung und keine Veröffentlichung mit ungelöstem Blocker. Native Tests können bei nicht vorhandener Hardware separat offen bleiben, aber nicht als bestanden gemeldet werden.
+
+Q-Slices prüfen jeweils sämtliche acht SC der zugeordneten Spec anhand der unveränderten Originalwerte und zusätzlich die zugehörigen FR, Unterpunkte und User Stories End-to-End. Sie erstellen reproduzierbare Messprotokolle mit Datensatz, Plattform, Methodik, Stichprobe, Grenzwert, Ergebnis und offenen Abweichungen. Akzeptanz ist nicht mit Implementierung gleichzusetzen. Sicherheits-/Datenschutz-, Zugriffsisolations-, Offline-/Fehler- und Lizenzprüfungen sind für betroffene Dienste Bestandteil der Abnahme.
+
+## Grundlagen
+
+| ID | Abhängigkeiten | Scope, geplante Module und prüfbare Abnahme / Tests |
+|---|---|---|
+| G01 | — | Entscheidungstore D1–D3/D5/D6 und reproduzierbare Ist-Baseline; `docs/` ADR, Mess-, Konflikt- und Bestandsregister neu. Tatsächlichen HEAD/Arbeitsbaum, bestehende Implementierung und Tests gegen alle FR/SC nachvalidieren und vorhandene Funktionen präzise belegen; statische Teilbewertungen nicht als Nachweis übernehmen. Jede Abweichung samt Eigentümer und unveränderten Zielwerten erfassen; ADR-Review und Rückverfolgung gegen alle Specs. |
+| G02 | G01 | D4: Zugänge, SDK-/Lizenz-/Plattform- und Hardware-Machbarkeit mit Belegen je Anbieter; `docs/` Nachweis neu. Positiver Nachweis oder konkreter blocker je Dienst, kein vorgetäuschter Erfolg. |
+| G03 | G01 | Metadaten, migrationssichere Identität und generischer sicherer Credential-Speicher: `src/track_metadata.rs`, `src/library_store.rs`, neues `src/credentials.rs`, neue versionierte Verträge. Geheimnisse OS-geschützt speichern und Zugriff/Fehler testen; Migrations-, Neustart-, Verlust-/Deduplizierungs- und Parallelzugriffstests. Dieser gemeinsame Speicher steht vor jedem Providerzugriff bereit. |
+| G04 | G03 | Gemeinsamer begrenzter Analyse-Scheduler: `src/audio_analyzer.rs`, `src/library.rs`, neues `src/analysis_scheduler.rs`; Fortschritt, Abbruch, Prioritäten, Schutz aktiver Wiedergabe; Last-/Recovery-/Queue-Tests. |
+| G05 | G03,G04 | Gemeinsame Beat-/Phrase-/Energie-/Tonartmodelle inklusive Confidence und manuellen Overrides: `src/tempo.rs`, `src/beatgrid.rs`, `src/audio_analyzer.rs`, neue Analyse- und Harmonie-Module. Versionierte Fixtures, Randfälle und Erhalt manueller Korrekturen. |
+| G06 | G01 | Sample-genauer nichtblockierender Befehls-Scheduler: `src/controller.rs`, `src/deck_render.rs`, `src/sync_control.rs`; feste Grenzen, Ownership, Überlauf und Clock-Vertrag. Deterministische Timing-, Stress- und Threadtests. |
+| G07 | G01,G06 | Vier-Deck-Grundmodell und Routing schrittweise: `src/deck_render.rs`, `src/mixer_dsp.rs`, `src/output_routing.rs`, `src/controller.rs`; zwei/vier Decks isoliert, kein Abbruch spielender Decks, Routing- und Lasttests. |
+| G08 | G01,G06,G07 | Audio-Taps für Deck/Master/Cue sowie begrenzte Übergabe an Encoder/Analyse: `src/render_bus.rs`, `src/cue_bus.rs`, neue Tap-Module. Signalpositions-, Queue-Überlauf-, Dropout- und Callback-Allokationsmessungen. |
+
+## Spec-Zuordnung
+
+Jeder Bereich umfasst ausdrücklich auch alle Unterpunkte der genannten FR. Die Umsetzungspakete einer Zeile bilden zusammen die vollständige FR-Menge; die zugehörigen User Stories werden in denselben Slices und im Abnahmeslice geprüft.
+
+| Nr. | Spec | Umsetzungspakete | Abnahmepaket |
+|---:|---|---|---|
+| 1 | Auto-Updates | P01a, P01b | Q01 |
+| 2 | Cloud-Sync | P02a, P02b | Q02 |
+| 3 | BPM Detection | P03a, P03b | Q03 |
+| 4 | MIDI Controller | P04a, P04b | Q04 |
+| 5 | Streaming Integration | P05a, P05b | Q05 |
+| 6 | Key Detection | P06a, P06b | Q06 |
+| 7 | Advanced Waveform | P07a, P07b | Q07 |
+| 8 | Video Mixing | P08a, P08b | Q08 |
+| 9 | AI Auto-Mix | P09a, P09b | Q09 |
+| 10 | Audio Mastering | P10a, P10b | Q10 |
+| 11 | DVS Control | P11a, P11b | Q11 |
+| 12 | Stem Control | P12a, P12b | Q12 |
+| 13 | Library Management | P13a, P13b | Q13 |
+| 14 | Recording System | P14a, P14b | Q14 |
+| 15 | Live Streaming | P15a, P15b | Q15 |
+| 16 | Performance Pads | P16a, P16b | Q16 |
+| 17 | Beat Grid & Sync | P17a, P17b | Q17 |
+| 18 | Live Remix Engine | P18a, P18b | Q18 |
+| 19 | Sampler Section | P19a, P19b | Q19 |
+| 20 | Multi-Deck Control | P20a, P20b | Q20 |
+| 21 | Track Preparation | P21a, P21b | Q21 |
+| 22 | Neural Sync Engine | P22a, P22b | Q22 |
+| 23 | Mix History Analytics | P23a, P23b | Q23 |
+| 24 | Smart Playlist Manager | P24a, P24b | Q24 |
+| 25 | Enhanced Harmonic Mixing | P25a, P25b | Q25 |
+
+## Umsetzungsarbeitspakete
+
+In jeder Zeile gilt der aufgeführte Test als zusätzlich zur Definition of Done; FR-Nummern sind innerhalb der jeweiligen Spec zu lesen (bei 22–25 inklusive Spec-Präfix). „Neu“ bezeichnet ein geplantes Modul; Name/Ort können nach Bestandsprüfung begründet angepasst werden.
+
+| ID | Abhängigkeiten | Vollständiger FR-Bereich; Scope / Module; konkrete Abnahme und Tests |
+|---|---|---|
+| P01a | G01,G02 | FR-001, 002, 005, 006, 009, 013: Prüfung über GitHub Releases, Versionsanzeige, Benachrichtigung, Kanäle und manueller Check; `src/main.rs, neues src/update.rs`. Abnahme/Tests: Startdelay, Version und manuelle Prüfung gegen Test-Releases. |
+| P01b | P01a,G02 | FR-003, 004, 007, 008, 010, 011, 012: Fortschritt/Downloads, Fehler, Integrität und Installation mit Datenerhalt und Protokoll; `src/update.rs, Installer/Packaging neu`. Abnahme/Tests: Manipulation, Abbruch, Rollback, Neustart und Datenmigration. |
+| P02a | G02,G03 | FR-001–008, 014–015: Authentifizierung und serverseitige Nutzerisolation vor echten Sync-Operationen, anschließend Konto, Gerätestatus, Kategorien und periodischer/manueller Sync; `src/library_store.rs, neues src/cloud_sync.rs`. Abnahme/Tests: isolierte Konten, Offline und Statusübergänge. |
+| P02b | P02a | FR-009–013, 016–017: Selektionsregeln, Offline-Queue, Konflikte und Fehler; `src/cloud_sync.rs, neues src/credentials.rs`. Abnahme/Tests: Mehrgeräte-Konflikte, Isolation, Reconnect, Zählung und Crash-Recovery. |
+| P03a | G04,G05 | FR-001–008: BPM, Beatpositionen, Confidence, Taktart und Oktavkorrektur; `src/audio_analyzer.rs, src/tempo.rs`. Abnahme/Tests: annotiertes Corpus, 40–200+ BPM und Oktavfälle. |
+| P03b | P03a | FR-009–017: Track-Tap, Batch, Varianz, Onset, 0–200-Hz-Filter und Histogramm; `src/tempo.rs, src/analysis_scheduler.rs, ui/app.slint`. Abnahme/Tests: Tap-, Filter-/Histogramm- und Batch-Fortschrittstests. |
+| P04a | G01,G06 | FR-001–008: Geräteerkennung, MIDI-Parser, Presets, generisches Mapping und Learn; `src/controller.rs, src/mc4000.rs, neues src/midi_mapping.rs`. Abnahme/Tests: Hotplug, Pitch-Bend, Learn-Timeout und Presetfixtures. |
+| P04b | P04a | FR-009–018: Learn-Timeout, Mappingeditor, Modi/Kurven, Persistenz, LEDs und mehrere Geräte; `src/midi_mapping.rs, ui/app.slint`. Abnahme/Tests: Neustart, Isolation, LED-Feedback und 1000 Nachrichten/s pro Gerät. |
+| P05a | G02,G03,G08 | FR-001–008: OAuth, sichere Tokens, Suche und echter Provider-Audiopfad; `neue src/providers/ und src/credentials.rs, src/media_input.rs`. Abnahme/Tests: pro Dienst echte Anmeldung, Suche und Deckwiedergabe. |
+| P05b | P05a | FR-009–017: Playlists, Qualität, Preview, Fehler, Filter, Cache und parallele Dienste; `src/providers/, ui/app.slint`. Abnahme/Tests: pro Dienst Rechte, Qualität, Verfügbarkeit, Rate-Limit und Tokenrefresh. |
+| P06a | G04,G05 | FR-001–008: Tonartanalyse, Notationen, Confidence, Wheel und Deckprüfung; `src/audio_analyzer.rs, src/track_metadata.rs, neues src/harmony.rs`. Abnahme/Tests: 24 Tonarten, Umrechnung, Confidence und Deckisolation. |
+| P06b | P06a | FR-009–017: Kompatibilitätsstufen, Assistent, Korrektur und Chromagramm; `src/harmony.rs, ui/app.slint`. Abnahme/Tests: vollständige 24×24-Regeltabelle, Override und Anzeige. |
+| P07a | G04,G05 | FR-001–009: Peak/RMS, STFT, sieben Bänder, Farben, Marker und Auflösung; `src/waveform.rs, src/waveform_color.rs, neues src/spectrogram.rs`. Abnahme/Tests: synthetische Frequenzsignale und FFT-/Band-/Farbtests. |
+| P07b | P07a,G08 | FR-010–018: Skalen, Spektrum, Interaktion, Playhead und PNG-Export; `src/spectrogram.rs, src/render_bus.rs, ui/app.slint`. Abnahme/Tests: Seek- und Exportprüfung, Live-Spektrum unter Last. |
+| P08a | G02,G08 | FR-001–009: Videoformate, zwei Decks sowie Deck- und Mastereffekte; `neue src/video/, ui/app.slint`. Abnahme/Tests: Codecfixtures, A/V-Sync, Effekt- und Key-Bildvergleiche. |
+| P08b | P08a | FR-010–020: Chroma-Key, Übergänge, Layout, 1080p, synchrones Audio und Capture; `src/video/, src/render_bus.rs, ui/app.slint`. Abnahme/Tests: alle Übergänge/Seitenverhältnisse, Frametiming und Capture. |
+| P09a | G05,G06,P06b,P13b | FR-001–008: Energie/Genre, Scoring, Ablaufplanung und Übergänge; `neues src/automix.rs, src/audio_analyzer.rs`. Abnahme/Tests: deterministische Reihenfolge und Energiemodifälle. |
+| P09b | P09a,G06,P17b | FR-009–017: Sync, Override, Editor, Persistenz und Lernen; `src/automix.rs, src/sync_control.rs, ui/app.slint`. Abnahme/Tests: Override während Wiedergabe, Planneustart und Lernfixtures. |
+| P10a | G08 | FR-001–008: Master-Kompressor, Limiter, Multiband, Stereo-Bearbeitung, EQ, Exciter und Venue-Presets; `src/mixer_dsp.rs, neues src/mastering.rs`. Abnahme/Tests: Impulse, Frequenzgang, Dynamik und Übersteuerung. |
+| P10b | P10a | FR-009–017: Gain-Reduction/LUFS/Spektrum/True-Peak-Messungen, eigene Presets, Gain-Staging und Kettensteuerung; `src/mastering.rs, src/peak_meter.rs, ui/app.slint`. Abnahme/Tests: LUFS/True-Peak-Referenzen, Bypass, Reihenfolge und Persistenz. |
+| P11a | G02,G06 | FR-001–008: Timecode-Eingang, Formate, Position, Geschwindigkeit und Auto-/manuelle Kalibrierung; `neues src/dvs/, src/controller.rs`. Abnahme/Tests: lizenzierte Signale, Drehrichtung, Scratch und Geräteverlust. |
+| P11b | P11a | FR-009–017: Kalibrierung, Qualität, Modi, Recovery und RPM; `src/dvs/, ui/app.slint`. Abnahme/Tests: Rausch-/Dropout-Fixtures und echte Vinyl-/Interface-Matrix. |
+| P12a | G02,G04,G08 | FR-001–008: lizenzierte Separation, Fortschritt/Abbruch, Cache, vier Stem-Stimmen, Einzel-FX und Presets; `neues src/stems/, src/deck_render.rs`. Abnahme/Tests: modellgebundene Trennung, Synchronität und Ressourcenbegrenzung. |
+| P12b | P12a | FR-009–017: Stem-Cue, Wellenformen, Synchronität, Export, Batch und Cachegrenzen; `src/stems/, ui/app.slint`. Abnahme/Tests: Export-/Cache-Invalidierung, Neustart und simultane Wiedergabe. |
+| P13a | G03 | FR-001–008: geordnete Playlists, Suche, Filter und Smart-Regeln; `src/library.rs, src/crates.rs, src/library_store.rs`. Abnahme/Tests: Sortierung, AND/OR-Regeln, große Bibliotheken und Persistenz. |
+| P13b | P13a | FR-009–017: Metadateneditor, Farben, Ansichten, Batch, Export und Duplikate; `src/library.rs, src/library_store.rs, ui/app.slint`. Abnahme/Tests: Roundtrip, M3U/PLS-Fixtures, Duplikate und Mehrfachauswahl. |
+| P14a | G02,G08 | FR-001–008: WAV/MP3/FLAC-Aufnahme, Quellen, Pause und Split; `neues src/recording.rs, src/render_bus.rs`. Abnahme/Tests: dekodierter Signalvergleich, Pausen- und Splitgrenzen. |
+| P14b | P14a | FR-009–017: Katalog, Tags, Umbenennung, Löschung und Speicherwarnung; `src/recording.rs, src/library_store.rs, ui/app.slint`. Abnahme/Tests: Datei-/DB-Konsistenz, Platzmangel und Wiederherstellung. |
+| P15a | G02,G08,P08b | FR-001–008: Plattformen, RTMP, Qualitätsstufen, Kennzahlen und Chat; `neues src/livestream/, src/video/`. Abnahme/Tests: je Plattform echte Testsession, Verbindungsfehler und Schlüsselablage. |
+| P15b | P15a | FR-009–017: Chat-Senden, Overlays, Pause, Historie und Reconnect; `src/livestream/, ui/app.slint`. Abnahme/Tests: explizite Chat-Aktion, Overlay-Geometrie und Netzausfall. |
+| P16a | G06,P17a | FR-001–008: acht Pads, Cue und Roll mit Release-Semantik; FR-002 ist paketübergreifend und erst nach allen sechs Modi in P16b vollständig; `src/pad_mode.rs, src/hot_cues.rs, src/looping.rs`. Abnahme/Tests: samplegenaue Trigger, Release und Loop-Naht. |
+| P16b | P16a,P19a,P04b | FR-009–017: Slicer, Sampler, Beat Jump, Saved Loop, Velocity und Feedback; `src/pad_mode.rs, src/saved_loops.rs, ui/app.slint`. Abnahme/Tests: alle Modi und vollständige FR-002, Last, Quantisierung und physische Eingabegeräte einschließlich Einbindung in MIDI-Mappings von P04b. |
+| P17a | G05,G06,P03b | FR-001–008: Master/Follower, Phasenabgleich, Grid und Quantisierung; `src/beatgrid.rs, src/phase_sync.rs, src/sync_control.rs`. Abnahme/Tests: mehrere Decks, Drift, Grid-Lock und Einrastgrenzen. |
+| P17b | P17a | FR-009–017: Beat-/Phasenanzeige, BPM/Tap, Reanalyse und Dauerstabilität; `src/sync_control.rs, src/tempo.rs, ui/app.slint`. Abnahme/Tests: 0,01-Schritte, Neustart und mindestens 30 Minuten Driftmessung. |
+| P18a | G05,G06,P17a | FR-001–008: Slicing, Mehrfachauswahl, Arrangement und Pattern; `neues src/remix.rs, src/looping.rs, ui/app.slint`. Abnahme/Tests: Slice-Grenzen, lückenfreie Übergänge und Pattern-Roundtrip. |
+| P18b | P18a | FR-009–017: Performance-Aufnahme, Slice-FX, Editieren, Presets und JSON; `src/remix.rs, src/fx_chain.rs, ui/app.slint`. Abnahme/Tests: Zeitstempel-Wiedergabe, FX-Isolation und Import/Export. |
+| P19a | G06,G08 | FR-001–008: acht polyphone Slots, Loop, Einzelpegel und Browser; `src/sampler.rs, ui/app.slint`. Abnahme/Tests: acht gleichzeitige Stimmen, Loopgrenzen und Stop All. |
+| P19b | P19a | FR-009–017: Loop All, Kategorien, Feedback, Persistenz und Shortcuts; `src/sampler.rs, src/library_store.rs, ui/app.slint`. Abnahme/Tests: alle acht Tasten, Neustart, Upload und Clipping-Messung. |
+| P20a | G07,G08 | FR-001–008: 2/4-Deck-Mixer, EQ, Gain, Zuweisung, Mute/Solo; `src/mixer_dsp.rs, src/controller.rs, ui/app.slint`. Abnahme/Tests: Routingmatrix, Isolation, Umschalten und Parameterglättung. |
+| P20b | P20a,P10a | FR-009–017: Cue, Meter, Limiter, Reset und Mixer-Persistenz; `src/cue_bus.rs, src/output_routing.rs, src/mastering.rs`. Abnahme/Tests: Ausgangskanäle, Reset/Solo, Limiter- und Neustarttests. |
+| P21a | G03,G04,G05,P03b,P06b | FR-001–008: Analyse, Fortschritt, Grid und farbige Cue-Bearbeitung; `src/audio_analyzer.rs, src/beatgrid.rs, src/hot_cues.rs`. Abnahme/Tests: Beatstärken, 0,01-Schritte und Cue-Roundtrip. |
+| P21b | P21a,P13b,P17b | FR-009–017: Cue-Jump, Tonart, Metadaten, Overlays und Reanalyse; `src/library_store.rs, ui/app.slint`. Abnahme/Tests: kompletter Vorbereitungsablauf und manuelle Overrides. |
+| P22a | G05,G06,P06b,P07b,P17b | FR-001–007: Phrasenanalyse, Vorschläge, Ranking, Anzeige und Auto-Sync; `neues src/phrase_analysis.rs, src/sync_control.rs`. Abnahme/Tests: annotiertes Phrase-Corpus, Ranking und zeitgenauer Sync. |
+| P22b | P22a | FR-008–015: Live-Tracking, Energie/Key, Scoring, Einstellungen und Darstellung; `src/phrase_analysis.rs, src/harmony.rs, ui/app.slint`. Abnahme/Tests: Toleranzen, 800×100-Ansicht, Metriken und Neustart. |
+| P23a | G03,G05,P06b | FR-001–007: Sessionereignisse, Transitionen, Bewertung, Statistik und Filter; `neues src/mix_history.rs, src/library_store.rs`. Abnahme/Tests: Event-Vollständigkeit, Score-Fixtures und Neustart. |
+| P23b | P23a,P14b | FR-008–015: Sortierung, Details, Löschung, globale Statistik, Export, Replay und Trends; `src/mix_history.rs, ui/app.slint, PDF-Export neu`. Abnahme/Tests: JSON/CSV/PDF, Datenschutz, Restore und Erhalt von Aufnahmen. |
+| P24a | G03,G05,P06b,P13b | FR-001–007: Playlisttypen, Kriterien, Sequenzierung und Empfehlungen; `neues src/smart_playlist.rs, src/library.rs`. Abnahme/Tests: Regel-/Gewichtungsfixtures, Ausschlüsse und Energiemuster. |
+| P24b | P24a,P23b | FR-008–015: Generierung, Speicherung, Ansichten, Regeneration und Analyse; `src/smart_playlist.rs, src/library_store.rs, ui/app.slint`. Abnahme/Tests: vollständiger Generator-Roundtrip, Löschschutz und Vorhersagen. |
+| P25a | G05,P06b,P13b | FR-001–007: 24er Wheel, Regeln, Klassifikation und Trackfinder; `src/harmony.rs, ui/app.slint`. Abnahme/Tests: 24×24-Regeln, interaktives Wheel und Finder. |
+| P25b | P25a | FR-008–015: Deckanzeige, Verteilung, Tipps, Ansichten, Farben und Cache; `src/harmony.rs, src/library.rs, ui/app.slint`. Abnahme/Tests: alle 24 Zählwerte, Cache-Invalidierung und UI-Interaktionen. |
+
+## Ausführungsslices der Umsetzungspakete
+
+Alle unten genannten Schritte sind **geplant**. Je Schritt gelten Paketmodule und Paketabhängigkeiten; .2 hängt von .1 ab, .3 von .2. Die jeweilige Zeile nennt FR-Teilmenge und konkreten Prüfgegenstand. Ein Schritt ist abgeschlossen, wenn sein vor Beginn konkret festgelegter Beitrag im betroffenen Benutzerweg mit Norm-/Fehler-/Persistenz- und bei Echtzeitbezug Timingtests nach DoD geprüft ist; vollständige FR mit allen Unterpunkten und User Stories gelten erst nach sämtlichen zugehörigen Schritten und der jeweiligen Q-Abnahme als erfüllt; externe echte Integration bleibt bis G02 und realem Nachweis offen. Weitere notwendige technische Vorleistungen werden beim Slice-Zuschnitt aufgeführt, ohne bereits fertiggestellte FR vorzutäuschen. Die Originaltexte und User Stories bleiben bindend.
+
+| Slice | FR und prüfbarer Gegenstand |
+|---|---|
+| P01a.1 | FR-001: System MUST check for updates automatically on application startup after a 3-second delay; FR-002: System MUST display update notifications with version number and release notes. |
+| P01a.2 | FR-005: System MUST allow users to manually trigger update checks by clicking the version display; FR-006: System MUST show current version number in the UI at all times. |
+| P01a.3 | FR-009: System MUST integrate with GitHub Releases for update hosting; FR-013: System MUST support multiple update channels (stable, beta). |
+| P01b.1 | FR-007: System MUST support background downloads without blocking the UI; FR-008: System MUST handle download failures with appropriate error messages. |
+| P01b.2 | FR-010: System MUST verify update file integrity before installation; FR-011: System MUST preserve user data during update installation; FR-012: System MUST log all update-related events for debugging. |
+| P01b.3 | FR-003: System MUST allow users to download updates with real-time progress display; FR-004: System MUST install downloaded updates when the application quits. |
+| P02a.1 | FR-014: System MUST authenticate users before allowing sync operations; FR-015: System MUST isolate data per user (no cross-user data access); Abnahme: serverseitige Zugriffe ohne gültige Identität und auf fremde Nutzerdaten werden nachweislich abgewiesen. |
+| P02a.2 | FR-001: System MUST sync track library metadata (title, artist, album, BPM, key, duration, file path); FR-002: System MUST sync all user playlists and playlist contents; FR-003: System MUST sync cue points for each track (hot cues with positions, colors, labels); FR-004: System MUST sync beat grid analysis data for each track. |
+| P02a.3 | FR-005: System MUST sync all application settings and preferences; FR-006: System MUST display real-time sync status (syncing, synced, error, offline); FR-007: System MUST support manual sync trigger via UI button; FR-008: System MUST support automatic sync on a configurable interval. |
+| P02b.1 | FR-009: System MUST allow selective sync by category (library, playlists, settings, cue points, beat grids); FR-010: System MUST track last sync timestamp per device; FR-011: System MUST identify each device uniquely for conflict resolution. |
+| P02b.2 | FR-012: System MUST implement last-write-wins conflict resolution strategy; FR-013: System MUST work offline and queue changes for next sync. |
+| P02b.3 | FR-016: System MUST handle sync errors gracefully with user-friendly messages; FR-017: System MUST report item counts after successful sync (e.g., "Synced 1,234 tracks"). |
+| P03a.1 | FR-001: System MUST analyze audio files to detect beats per minute (BPM); FR-002: System MUST detect individual beat positions throughout tracks. |
+| P03a.2 | FR-003: System MUST calculate confidence scores for BPM detection (0-100%); FR-004: System MUST classify tempo ranges (slow: 60-90, medium: 90-120, fast: 120-160, very fast: 160+); FR-005: System MUST detect time signatures (4/4, 3/4, 6/8, etc.). |
+| P03a.3 | FR-006: System MUST handle tracks from 40 BPM to 200+ BPM; FR-007: System MUST correct half-time and double-time octave errors; FR-008: System MUST provide manual BPM entry option. |
+| P03b.1 | FR-009: System MUST implement tap tempo functionality (minimum 4 taps); FR-010: System MUST support batch analysis of multiple tracks; FR-011: System MUST display analysis progress for batch operations. |
+| P03b.2 | FR-012: System MUST store BPM data with track metadata; FR-013: System MUST allow manual override of detected BPM; FR-014: System MUST calculate beat interval variance for consistency measurement. |
+| P03b.3 | FR-015: System MUST use onset strength detection for beat finding; FR-016: System MUST apply low-pass filtering (0-200Hz) to focus on kick drums; FR-017: System MUST use histogram clustering to identify dominant tempo. |
+| P04a.1 | FR-001: System MUST detect all connected MIDI devices automatically on startup; FR-002: System MUST detect MIDI device connect/disconnect in real-time (hot-plug support). |
+| P04a.2 | FR-003: System MUST parse MIDI messages (Note On, Note Off, Control Change, Pitch Bend); FR-004: System MUST support bidirectional MIDI (input and output); FR-005: System MUST include preset mappings for: Pioneer DDJ-400, Pioneer DDJ-SB3, Numark Party Mix. |
+| P04a.3 | FR-006: System MUST auto-detect device models and apply appropriate preset mappings; FR-007: System MUST provide generic MIDI mapping as fallback for unsupported devices; FR-008: System MUST implement MIDI learn with one-click assignment. |
+| P04b.1 | FR-009: System MUST timeout MIDI learn after 10 seconds of inactivity; FR-010: System MUST support custom mapping creation and editing; FR-011: System MUST save custom mappings to persistent storage. |
+| P04b.2 | FR-012: System MUST allow mapping any MIDI control to any DJ function; FR-013: System MUST support multiple control modes (toggle, momentary, absolute, relative); FR-014: System MUST support response curves (linear, logarithmic, exponential). |
+| P04b.3 | FR-015: System MUST send LED feedback to controllers for active states; FR-016: System MUST show visual activity indicators for incoming MIDI messages; FR-017: System MUST support multiple simultaneous MIDI devices; FR-018: System MUST handle MIDI message rates up to 1000 messages/second per device. |
+| P05a.1 | FR-001: System MUST support OAuth 2.0 authentication for Spotify, SoundCloud, and TIDAL; FR-002: System MUST securely store and encrypt authentication tokens. |
+| P05a.2 | FR-003: System MUST automatically refresh expired authentication tokens; FR-004: System MUST allow users to disconnect from any service; FR-005: System MUST provide unified search across all connected services. |
+| P05a.3 | FR-006: System MUST display search results with service source indicators; FR-007: System MUST load streaming tracks directly to decks for playback; FR-008: System MUST extract and display track metadata (BPM, key, duration, genre, artwork). |
+| P05b.1 | FR-009: System MUST browse user's personal playlists from each service; FR-010: System MUST stream audio at highest quality available per service (Spotify 320kbps, TIDAL HiFi/Master, Soun…; FR-011: System MUST handle preview-only tracks (30-second Spotify previews) and indicate limitations. |
+| P05b.2 | FR-012: System MUST show connection status for each service (connected, disconnected, error); FR-013: System MUST handle API rate limiting gracefully with user feedback; FR-014: System MUST handle region-locked and unavailable tracks with clear messages. |
+| P05b.3 | FR-015: System MUST support searching with filters (genre, BPM range, key); FR-016: System MUST cache frequently accessed data (playlists, metadata) for performance; FR-017: System MUST support multiple services connected simultaneously. |
+| P06a.1 | FR-001: System MUST analyze audio files to detect musical key; FR-002: System MUST display keys in Camelot notation (1A-12B for minor/major keys). |
+| P06a.2 | FR-003: System MUST display keys in traditional notation (e.g., "C Major", "A Minor"); FR-004: System MUST support Open Key notation as alternative display format; FR-005: System MUST calculate confidence scores for key detection (0-100%). |
+| P06a.3 | FR-006: System MUST display interactive Camelot wheel with all 24 keys; FR-007: System MUST highlight compatible keys on Camelot wheel when key is selected; FR-008: System MUST provide real-time compatibility checking between deck keys. |
+| P06b.1 | FR-009: System MUST calculate compatibility ratings: Perfect (same key, ±1 number, relative major/minor), Good (±2 …; FR-010: System MUST implement mixing assistant with compatible track suggestions; FR-011: System MUST show mixing relationship descriptions (e.g., "Perfect Fifth", "Relative Minor"). |
+| P06b.2 | FR-012: System MUST allow manual key entry and override of detected keys; FR-013: System MUST use chromagram analysis (12-bin pitch class profiling); FR-014: System MUST implement Krumhansl-Schmuckler key finding algorithm. |
+| P06b.3 | FR-015: System MUST detect both major and minor keys; FR-016: System MUST store key data with track metadata; FR-017: System MUST visualize chromagram (pitch class distribution) for advanced users. |
+| P07a.1 | FR-001: System MUST generate waveforms showing peak and RMS amplitude values; FR-002: System MUST analyze tracks using Short-Time Fourier Transform (STFT) for spectrograms; FR-003: System MUST calculate frequency band energy across 7 bands: Sub Bass (20-60Hz), Bass (60-250Hz), Low Mid (2…. |
+| P07a.2 | FR-004: System MUST color-map waveforms based on dominant frequency content; FR-005: System MUST support multiple color schemes: Default, Frequency, Energy, Rainbow, Classic (Rekordbox-style),…; FR-006: System MUST overlay beat grid markers from BPM detection. |
+| P07a.3 | FR-007: System MUST display bar markers (every 4 beats) and phrase markers (every 16 beats); FR-008: System MUST provide configurable waveform resolution (256 to 2048 pixels); FR-009: System MUST render spectrograms with configurable FFT sizes (1024, 2048, 4096, 8192 samples). |
+| P07b.1 | FR-010: System MUST display frequency axis labels on spectrograms (20Hz, 100Hz, 1kHz, 10kHz, 20kHz); FR-011: System MUST normalize spectrogram amplitude to -90dB to 0dB range; FR-012: System MUST show interactive crosshair on spectrogram hover with time/frequency values. |
+| P07b.2 | FR-013: System MUST display real-time frequency spectrum during playback; FR-014: System MUST support overview mode (full track), zoom mode (playback region), and spectrum mode (real-time a…; FR-015: System MUST track playhead position on waveform during playback. |
+| P07b.3 | FR-016: System MUST allow click-to-seek on waveform; FR-017: System MUST show time and energy tooltips on waveform hover; FR-018: System MUST export waveforms and spectrograms as PNG images. |
+| P08a.1 | FR-001: System MUST support loading MP4, WebM, and MOV video files; FR-002: System MUST provide two independent video decks (A and B); FR-003: System MUST support playback controls per deck (play, pause, seek, skip ±5 seconds). |
+| P08a.2 | FR-004: System MUST display video thumbnails for loaded videos; FR-005: System MUST show video metadata (resolution, FPS, duration, format); FR-006: System MUST implement video crossfader for mixing between decks. |
+| P08a.3 | FR-007: System MUST display crossfader position as percentage (0-100%); FR-008: System MUST support per-deck effects: Brightness (0-200%), Contrast (0-200%), Saturation (0-200%), Hue Rota…; FR-009: System MUST support master effects applied to final output. |
+| P08b.1 | FR-010: System MUST implement chroma key (green screen) with color picker, tolerance (0-100%), and edge smoothing (…; FR-011: System MUST provide pre-programmed transitions: Fade, Wipe, Slide, Zoom, Dissolve; FR-012: System MUST support configurable transition duration (0.5s to 5s). |
+| P08b.2 | FR-013: System MUST support transition easing functions (linear, ease-in, ease-out, ease-in-out); FR-014: System MUST implement video layouts: Single (crossfader-controlled), Split Screen (50/50), Picture-in-Pictu…; FR-015: System MUST support aspect ratios: 16:9, 4:3, 1:1, Auto; FR-016: System MUST render output at 1920×1080 resolution (Full HD). |
+| P08b.3 | FR-017: System MUST render at 30 FPS minimum for smooth playback; FR-018: System MUST extract and sync audio from video files with DJ audio engine; FR-019: System MUST support frame capture (screenshot current output); FR-020: System MUST provide real-time preview of final output. |
+| P09a.1 | FR-001: System MUST analyze tracks for BPM, key, energy level, and genre; FR-002: System MUST calculate compatibility scores between track pairs (0-100%). |
+| P09a.2 | FR-003: System MUST consider BPM compatibility (±6 BPM preferred, ±10 maximum); FR-004: System MUST consider key compatibility using Camelot wheel rules; FR-005: System MUST analyze energy levels (low/medium/high) from amplitude and frequency analysis. |
+| P09a.3 | FR-006: System MUST generate mix plans with track sequencing and transition points; FR-007: System MUST support multiple energy flow modes: Build Up, Build Down, Peak & Valley, Steady; FR-008: System MUST execute automated transitions with configurable lengths (15-60 seconds). |
+| P09b.1 | FR-009: System MUST support automatic BPM syncing during transitions; FR-010: System MUST allow manual track selection override during auto-mix; FR-011: System MUST provide detailed compatibility breakdowns (BPM %, Key %, Energy %, Genre %). |
+| P09b.2 | FR-012: System MUST allow mix plan preview and manual editing before execution; FR-013: System MUST support genre-aware mixing (stay within genre or allow cross-genre); FR-014: System MUST handle tracks with missing metadata gracefully. |
+| P09b.3 | FR-015: System MUST save and load mix plans for later execution; FR-016: System MUST learn from user overrides to improve future suggestions; FR-017: System MUST support manual transition triggering during auto-mix. |
+| P10a.1 | FR-001: System MUST provide master channel compressor with threshold, ratio, attack, release, knee, makeup gain; FR-002: System MUST provide master channel limiter with threshold, release, ceiling, look-ahead. |
+| P10a.2 | FR-003: System MUST provide multiband compressor with 3 bands: Low (20-250Hz), Mid (250-4kHz), High (4-20kHz); FR-004: System MUST allow independent threshold, ratio, attack, release per band; FR-005: System MUST provide stereo enhancer with width control (0-200%), side gain, mid-side processing. |
+| P10a.3 | FR-006: System MUST provide master EQ with 3-band parametric: Low, Mid, High shelves with gain and frequency controls; FR-007: System MUST provide harmonic exciter for adding warmth/brightness; FR-008: System MUST include venue presets: Club, Festival, Radio, Streaming, Lounge, Outdoor. |
+| P10b.1 | FR-009: System MUST display real-time gain reduction meters for compressor and limiter; FR-010: System MUST display LUFS loudness metering (-23 LUFS to 0 LUFS range); FR-011: System MUST display real-time frequency spectrum analyzer (20Hz-20kHz). |
+| P10b.2 | FR-012: System MUST display true peak metering with overload indicators; FR-013: System MUST allow saving and loading custom mastering presets; FR-014: System MUST support bypass toggle for A/B comparison. |
+| P10b.3 | FR-015: System MUST provide input/output level meters; FR-016: System MUST implement proper gain staging to prevent clipping between stages; FR-017: System MUST support processing chain reordering (compressor → EQ → limiter, etc.). |
+| P11a.1 | FR-001: System MUST decode timecode audio signals to extract position and velocity; FR-002: System MUST support Serato CV02.5 timecode format. |
+| P11a.2 | FR-003: System MUST support Traktor MK2/MK3 timecode formats; FR-004: System MUST support Rekordbox Control Vinyl timecode; FR-005: System MUST track vinyl position with <5ms latency. |
+| P11a.3 | FR-006: System MUST detect and respond to scratches, backspins, and speed changes; FR-007: System MUST implement automatic calibration on startup; FR-008: System MUST allow manual calibration adjustments (gain, offset, phase). |
+| P11b.1 | FR-009: System MUST display signal quality meter (0-100%); FR-010: System MUST display tracking accuracy score; FR-011: System MUST auto-recover from temporary signal loss (<500ms). |
+| P11b.2 | FR-012: System MUST support relative mode (scratch like vinyl) and absolute mode (scratch and seek); FR-013: System MUST provide visual platter simulation with rotation and cue points; FR-014: System MUST support CDJ mode (jog wheel emulation). |
+| P11b.3 | FR-015: System MUST track playback direction (forward/reverse/stopped); FR-016: System MUST calculate and display vinyl RPM; FR-017: System MUST support pitch range adjustment (±8%, ±16%, ±50%). |
+| P12a.1 | FR-001: System MUST separate tracks into 4 stems: Vocals, Drums, Bass, Other (melodic instruments); FR-002: System MUST provide progress indication during stem extraction (0-100%). |
+| P12a.2 | FR-003: System MUST support stem extraction cancellation mid-process; FR-004: System MUST cache separated stems for instant reloading; FR-005: System MUST provide independent volume control per stem (0-100%). |
+| P12a.3 | FR-006: System MUST provide mute/solo buttons per stem; FR-007: System MUST apply effects independently to each stem; FR-008: System MUST support stem preset combinations (save/recall). |
+| P12b.1 | FR-009: System MUST display waveforms for each individual stem; FR-010: System MUST support headphone cueing individual stems; FR-011: System MUST maintain stem synchronization during playback. |
+| P12b.2 | FR-012: System MUST handle cache storage limits gracefully; FR-013: System MUST support stem export to individual audio files; FR-014: System MUST provide stem quality indicators. |
+| P12b.3 | FR-015: System MUST support batch stem extraction for multiple tracks; FR-016: System MUST estimate separation time before starting; FR-017: System MUST use AI/ML-based separation algorithms (Spleeter, Demucs, or similar). |
+| P13a.1 | FR-001: System MUST support creating, renaming, and deleting playlists; FR-002: System MUST support adding/removing tracks from playlists. |
+| P13a.2 | FR-003: System MUST support reordering tracks within playlists; FR-004: System MUST provide full-text search across all metadata fields; FR-005: System MUST support filtering by BPM range, key, genre, year, rating. |
+| P13a.3 | FR-006: System MUST support smart playlists with auto-population rules; FR-007: System MUST support AND/OR logic in smart playlist rules; FR-008: System MUST support crates (folders) containing multiple playlists. |
+| P13b.1 | FR-009: System MUST support track metadata editing (title, artist, album, BPM, key, genre, year, rating, comments); FR-010: System MUST support custom color tagging per track; FR-011: System MUST support play count and last played tracking. |
+| P13b.2 | FR-012: System MUST provide list view and grid view modes; FR-013: System MUST support sorting by any metadata field (ascending/descending); FR-014: System MUST support multi-select for batch operations. |
+| P13b.3 | FR-015: System MUST display total track count and duration for playlists; FR-016: System MUST support playlist export to M3U/PLS formats; FR-017: System MUST support duplicate track detection. |
+| P14a.1 | FR-001: System MUST record audio in WAV, MP3, and FLAC formats; FR-002: System MUST provide quality settings: Low (128kbps), Medium (256kbps), High (320kbps), Lossless (WAV/FLAC). |
+| P14a.2 | FR-003: System MUST support recording from master output, Deck A, or Deck B; FR-004: System MUST display real-time recording duration (hours:minutes:seconds); FR-005: System MUST calculate and display estimated file size during recording. |
+| P14a.3 | FR-006: System MUST pause and resume recording without audio gaps; FR-007: System MUST support auto-split recording at configurable intervals (15-120 minutes); FR-008: System MUST save recordings with metadata: name, duration, file size, date, source. |
+| P14b.1 | FR-009: System MUST display list of all recordings with sortable columns; FR-010: System MUST allow renaming recordings; FR-011: System MUST allow deleting recordings with confirmation prompt. |
+| P14b.2 | FR-012: System MUST calculate and display total storage used by recordings; FR-013: System MUST tag audio files with ID3 tags (for MP3) or metadata (for WAV/FLAC); FR-014: System MUST prevent source changes during active recording. |
+| P14b.3 | FR-015: System MUST warn when disk space is low (< 500MB remaining); FR-016: System MUST provide "Stop and Save" button to end recording; FR-017: System MUST allow downloading recordings to local file system. |
+| P15a.1 | FR-001: System MUST support Twitch, YouTube Live, Facebook Live, and Custom RTMP streaming; FR-002: System MUST provide quality presets: Low (480p, 1.5Mbps), Medium (720p, 3Mbps), High (1080p, 6Mbps), Ultra …. |
+| P15a.2 | FR-003: System MUST accept stream keys from platform dashboards; FR-004: System MUST accept custom RTMP server URLs for non-standard platforms; FR-005: System MUST display real-time viewer count. |
+| P15a.3 | FR-006: System MUST display real-time connection stats: bitrate, FPS, frames dropped, connection quality; FR-007: System MUST test connection before going live; FR-008: System MUST integrate platform chat (Twitch, YouTube) with in-app chat panel. |
+| P15b.1 | FR-009: System MUST allow sending chat messages as broadcaster; FR-010: System MUST support stream overlays: Now Playing, Logo, Social Media Links, Viewer Count, Chat Messages; FR-011: System MUST allow positioning and resizing overlays. |
+| P15b.2 | FR-012: System MUST allow pausing and resuming stream; FR-013: System MUST save stream sessions with metadata: platform, duration, peak viewers, average bitrate, dropped …; FR-014: System MUST provide stream session history with analytics. |
+| P15b.3 | FR-015: System MUST set stream title, description, category/game, and tags; FR-016: System MUST warn when connection quality degrades; FR-017: System MUST automatically attempt reconnection on temporary disconnects. |
+| P16a.1 | FR-001: System MUST provide 8 performance pads per deck; FR-002: System MUST support 6 pad modes: Hot Cue, Roll, Slicer, Sampler, Beat Jump, Saved Loop. |
+| P16a.2 | FR-003: System MUST allow setting hot cues at any playback position; FR-004: System MUST instantly jump to hot cue position when triggered (<10ms latency); FR-005: System MUST support right-click or long-press to clear hot cues. |
+| P16a.3 | FR-006: System MUST provide 8 roll lengths: 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 bars; FR-007: System MUST create seamless roll loops without audio clicks; FR-008: System MUST continue playback position correctly when roll is released. |
+| P16b.1 | FR-009: System MUST divide slicer into 8 equal slices per bar; FR-010: System MUST trigger slicer slices with instant response; FR-011: System MUST support sampler mode with assigned sound effects. |
+| P16b.2 | FR-012: System MUST provide beat jump distances: -32, -16, -8, -4, +4, +8, +16, +32 beats; FR-013: System MUST maintain beat sync accuracy during beat jumps; FR-014: System MUST save and recall loop positions for saved loop mode. |
+| P16b.3 | Abschluss FR-002 nach Nachweis aller sechs Padmodi; FR-015: System MUST visually indicate active pads with color coding; FR-016: System MUST support velocity-sensitive triggering (if MIDI controller supports); FR-017: System MUST prevent pad triggering lag during high CPU load. |
+| P17a.1 | FR-001: System MUST synchronize BPM between multiple decks; FR-002: System MUST designate master deck that controls sync tempo. |
+| P17a.2 | FR-003: System MUST automatically adjust follower deck tempo to match master; FR-004: System MUST align phase so beats hit simultaneously; FR-005: System MUST provide beat grid offset adjustment (±0.5 seconds, 0.01s increments). |
+| P17a.3 | FR-006: System MUST allow setting downbeat (bar 1, beat 1) position; FR-007: System MUST lock beat grid to prevent accidental changes; FR-008: System MUST provide quantize toggle for beat-snapped actions. |
+| P17b.1 | FR-009: System MUST display current beat position (1, 2, 3, 4 of bar); FR-010: System MUST show beat phase indicator between synced decks; FR-011: System MUST detect and display BPM automatically. |
+| P17b.2 | FR-012: System MUST allow manual BPM adjustment (0.01 BPM precision); FR-013: System MUST provide tap tempo for manual BPM determination; FR-014: System MUST save beat grid adjustments per track. |
+| P17b.3 | FR-015: System MUST display BPM difference between decks; FR-016: System MUST provide "Re-Analyze" function to re-detect BPM; FR-017: System MUST maintain sync accuracy over long playback durations (30+ minutes). |
+| P18a.1 | FR-001: System MUST slice tracks into audio segments based on beat grid; FR-002: System MUST provide 4 slicing modes: Beats (4/8/16), Bars (4/8/16), Phrases (16/32), Custom. |
+| P18a.2 | FR-003: System MUST allow selecting multiple slices simultaneously; FR-004: System MUST support drag-and-drop slice reordering; FR-005: System MUST play arrangements seamlessly without audio gaps. |
+| P18a.3 | FR-006: System MUST maintain slice timing accuracy within ±5ms; FR-007: System MUST save slice arrangements as named patterns; FR-008: System MUST allow loading and applying saved patterns. |
+| P18b.1 | FR-009: System MUST record live slice triggering with timestamps; FR-010: System MUST playback recorded performances exactly; FR-011: System MUST apply effects independently to each slice. |
+| P18b.2 | FR-012: System MUST support slice effects: Reverb, Delay, Filter, Pitch Shift, Reverse; FR-013: System MUST clone, merge, and delete slices; FR-014: System MUST display waveform with slice boundaries. |
+| P18b.3 | FR-015: System MUST save complete remix setups as presets; FR-016: System MUST export/import remix data as JSON; FR-017: System MUST visualize playback position across slices. |
+| P19a.1 | FR-001: System MUST provide 8 sample pads; FR-002: System MUST support one-shot and loop playback modes per pad. |
+| P19a.2 | FR-003: System MUST allow independent volume control per pad (0-100%); FR-004: System MUST trigger samples with <10ms latency; FR-005: System MUST support polyphonic sample playback (all 8 pads simultaneously). |
+| P19a.3 | FR-006: System MUST provide sample library browser modal; FR-007: System MUST display sample name and duration on each pad; FR-008: System MUST support "Stop All" button to silence all playing samples. |
+| P19b.1 | FR-009: System MUST support "Loop All" button to enable loop mode on all pads; FR-010: System MUST color-code pads based on sample properties; FR-011: System MUST show visual feedback when pad is triggered (animation/glow). |
+| P19b.2 | FR-012: System MUST persist loaded samples across sessions; FR-013: System MUST support sample categorization (drums, vocals, FX, percussion, etc.); FR-014: System MUST allow clearing/unloading samples from pads. |
+| P19b.3 | FR-015: System MUST prevent audio clipping when multiple samples play; FR-016: System MUST provide keyboard shortcuts for triggering pads (1-8 keys); FR-017: System MUST support custom sample upload. |
+| P20a.1 | FR-001: System MUST support 2-deck and 4-deck mixer modes; FR-002: System MUST provide independent volume faders per channel (0-100%). |
+| P20a.2 | FR-003: System MUST provide 3-band EQ per channel: High, Mid, Low (0-100%, center = 50%); FR-004: System MUST provide independent gain control per channel (0-100%); FR-005: System MUST support crossfader with assignable routing (Left/Center/Right per deck). |
+| P20a.3 | FR-006: System MUST provide mute button per channel; FR-007: System MUST provide solo button per channel; FR-008: System MUST provide master volume control (0-100%). |
+| P20b.1 | FR-009: System MUST provide headphone cue system with cue/master mix control; FR-010: System MUST display level meters per channel; FR-011: System MUST display master output level meter. |
+| P20b.2 | FR-012: System MUST prevent audio clipping with master limiter; FR-013: System MUST route deck audio to assigned mixer channels; FR-014: System MUST allow resetting channel to default settings. |
+| P20b.3 | FR-015: System MUST clear all solo states with "Clear Solos" button; FR-016: System MUST visually indicate active channels (playing, not muted, audible); FR-017: System MUST persist mixer settings across sessions. |
+| P21a.1 | FR-001: System MUST analyze tracks for BPM, key, energy level, and danceability; FR-002: System MUST generate beat markers at every beat with strength indicators. |
+| P21a.2 | FR-003: System MUST display analysis progress (0-100%); FR-004: System MUST allow manual BPM adjustment with 0.01 BPM precision; FR-005: System MUST allow beat grid offset adjustment with 0.01 second precision. |
+| P21a.3 | FR-006: System MUST allow setting downbeat (first beat) position; FR-007: System MUST create, edit, and delete cue points; FR-008: System MUST assign colors and labels to cue points. |
+| P21b.1 | FR-009: System MUST jump playback to cue point positions; FR-010: System MUST detect musical key with confidence score; FR-011: System MUST allow manual key override selection. |
+| P21b.2 | FR-012: System MUST edit metadata: title, artist, album, genre, year, comments; FR-013: System MUST display waveform with overlaid cue points and beat markers; FR-014: System MUST save all analysis data and cue points persistently. |
+| P21b.3 | FR-015: System MUST display track preparation status (analyzed, cues set, grid locked); FR-016: System MUST support batch analysis of multiple tracks; FR-017: System MUST re-analyze tracks with "Re-Analyze" button. |
+| P22a.1 | FR-022-001: Track Analysis — The system SHALL analyze loaded tracks to detect:; FR-022-002: Phrase Detection — The system SHALL classify phrases based on:. |
+| P22a.2 | FR-022-003: Sync Suggestion Generation — The system SHALL generate sync suggestions containing:; FR-022-004: Suggestion Ranking — The system SHALL rank sync suggestions by:. |
+| P22a.3 | FR-022-005: Visual Phrase Display — The system SHALL provide waveform visualizations showing:; FR-022-006: Auto Sync Application — The system SHALL support one-click auto sync that:; FR-022-007: Sync Modes — The system SHALL support multiple sync modes:. |
+| P22b.1 | FR-022-008: Real-Time Phrase Tracking — The system SHALL display for each deck:; FR-022-009: Energy Matching — When energy matching is enabled, the system SHALL:. |
+| P22b.2 | FR-022-010: Key Sync Integration — When key sync is enabled, the system SHALL:; FR-022-011: Phrase Alignment Scoring — The system SHALL score phrase alignment based on:; FR-022-012: Sync Tolerance Settings — The system SHALL allow users to configure:. |
+| P22b.3 | FR-022-013: Performance Metrics — The system SHALL track and display:; FR-022-014: Waveform Rendering — The system SHALL render phrase-annotated waveforms with:; FR-022-015: Settings Persistence — The system SHALL persist user preferences:. |
+| P23a.1 | FR-023-001: Session Creation — The system SHALL automatically create a mix session when:; FR-023-002: Session Metadata — The system SHALL capture for each session:. |
+| P23a.2 | FR-023-003: Transition Recording — The system SHALL record transitions containing:; FR-023-004: Quality Scoring Algorithm — The system SHALL calculate transition quality based on:. |
+| P23a.3 | FR-023-005: Session Statistics — The system SHALL calculate per-session:; FR-023-006: Session List Display — The system SHALL display sessions with:; FR-023-007: Session Filtering — The system SHALL support filtering by:. |
+| P23b.1 | FR-023-008: Session Sorting — The system SHALL support sorting by:; FR-023-009: Detailed Transition View — For each transition, the system SHALL display:. |
+| P23b.2 | FR-023-010: Session Deletion — The system SHALL allow users to:; FR-023-011: Overall Statistics — The system SHALL display aggregate statistics:; FR-023-012: Data Export — The system SHALL support exporting:. |
+| P23b.3 | FR-023-013: Session Replay — The system SHALL provide session replay showing:; FR-023-014: Data Persistence — The system SHALL:; FR-023-015: Performance Tracking — The system SHALL track over time:. |
+| P24a.1 | FR-024-001: Playlist Types — The system SHALL support five playlist types:; FR-024-002: Playlist Criteria — The system SHALL support criteria configuration:. |
+| P24a.2 | FR-024-003: Track Filtering — The system SHALL filter tracks based on:; FR-024-004: Track Sequencing — The system SHALL sequence tracks using algorithms for:. |
+| P24a.3 | FR-024-005: Energy Flow Patterns — The system SHALL implement four energy patterns:; FR-024-006: Track Recommendations — The system SHALL generate recommendations by:; FR-024-007: Match Indicators — The system SHALL flag recommendations with:. |
+| P24b.1 | FR-024-008: Playlist Generation — The system SHALL generate playlists by:; FR-024-009: Playlist Storage — The system SHALL store for each playlist:. |
+| P24b.2 | FR-024-010: Playlist Display — The system SHALL display playlists with:; FR-024-011: Track List View — For selected playlist, the system SHALL display:; FR-024-012: Playlist Regeneration — The system SHALL allow users to:. |
+| P24b.3 | FR-024-013: Playlist Analysis — The system SHALL analyze playlists for:; FR-024-014: Transition Quality Prediction — The system SHALL predict transition quality based on:; FR-024-015: Playlist Deletion — The system SHALL support:. |
+| P25a.1 | FR-025-001: Camelot Wheel Data Model — The system SHALL maintain Camelot wheel mapping with:; FR-025-002: Wheel Visualization — The system SHALL render interactive Camelot wheel with:. |
+| P25a.2 | FR-025-003: Key Compatibility Rules — The system SHALL implement Camelot key compatibility rules:; FR-025-004: Transition Classification — For each key pair, the system SHALL determine:. |
+| P25a.3 | FR-025-005: Compatible Keys List — When a key is selected, the system SHALL generate list of:; FR-025-006: Track Finder — The system SHALL provide track finder functionality:; FR-025-007: Track Finder Display — For each found track, the system SHALL display:. |
+| P25b.1 | FR-025-008: Deck Integration — The system SHALL integrate with deck state:; FR-025-009: Key Distribution Analytics — The system SHALL analyze library and display:. |
+| P25b.2 | FR-025-010: Key Analyzer View — The system SHALL provide key analyzer view with:; FR-025-011: Mixing Strategy Tips — The system SHALL display four recommendation categories:; FR-025-012: View Modes — The system SHALL support three view modes:. |
+| P25b.3 | FR-025-013: Interactive Elements — The system SHALL support user interactions:; FR-025-014: Color Coding — The system SHALL use consistent color coding:; FR-025-015: Performance Optimization — The system SHALL optimize performance by:. |
+
+## Spezifische Abnahme und integrativer Abschluss
+
+Für jede Zeile gelten zusätzlich die gemeinsamen Q-Regeln oben. Die konkreten SC-Werte und vollständigen Formulierungen sind im Original und im Register festgehalten; es gelten alle acht, auch wenn Beispiele hier nur die Art der Nachweise nennen.
+
+| ID | Abhängigkeiten | Geplante specweite Abnahme (alle SC-001–008 bzw. SC-0NN-001–008) |
+|---|---|---|
+| Q01 | P01a,P01b | Update-Timing, echte Release-Installation, Integrität und Datenerhalt auf Zielplattformen. |
+| Q02 | P02a,P02b | Mehrgeräte-/Mehrnutzer-, Offline-, Konflikt-, 10k/100k-Last- und Verlustmessungen. |
+| Q03 | P03a,P03b | annotiertes Genre-Corpus, ±2 BPM, Beatgenauigkeit, Oktavfehler, Batch und Analysezeit. |
+| Q04 | P04a,P04b | echte Controller-Matrix inklusive MC4000 und genannter Geräte; Latenz, LEDs und Nachrichtenrate. |
+| Q05 | P05a,P05b | echte Providerkonten, Wiedergabequalität, Suche, Zugänglichkeit und Fehlerszenarien je Anbieter. |
+| Q06 | P06a,P06b | annotiertes tonales Corpus, 85 % Genauigkeit, Theorie- und Nutzertests. |
+| Q07 | P07a,P07b | Frequenzfixtures, PNG, Suchgenauigkeit und getrennte 60-/30-FPS-Messungen. |
+| Q08 | P08a,P08b | 1080p-Frametiming, Effektlatenz, A/V-Synchronität und Bildqualität auf definierter Hardware. |
+| Q09 | P09a,P09b | Blindhörtest, Override, Planung und reale Bewertung der Lern- und Akzeptanzziele. |
+| Q10 | P10a,P10b | Referenzsignale und Hörtests für Dynamik, Loudness, Peak, Last und Latenz. |
+| Q11 | P11a,P11b | lizenzierte Timecode-Medien, Interfaces, Scratch-/Kalibrierung und Latenz auf Hardware. |
+| Q12 | P12a,P12b | lizenzierte Modelle, Trennqualität, Timing, Ressourcen und Export mit echtem Musik-Corpus. |
+| Q13 | P13a,P13b,P02b | 10k-Bibliothek, Such-/Filter-/Batchzeiten, Datenmigration und Cloud-Zusammenspiel. |
+| Q14 | P14a,P14b | Aufnahmeformate, Referenz-Audio, Split, Blindhörtest und Speicherwarnung. |
+| Q15 | P15a,P15b | Teststreams je Plattform, Chat, Overlays, Reconnect, Bitrate und Dropped Frames. |
+| Q16 | P16a,P16b | reale Pads, <10 ms, Timing, Loop-Naht, Last und Persistenz. |
+| Q17 | P17a,P17b | Phase ±5 ms, Quantisierung ±1 ms und 30-Minuten-Drift unter realer Wiedergabe. |
+| Q18 | P18a,P18b | 100+ Slices, samplegenaue Übergänge, Performance-Replay und FX-Latenz. |
+| Q19 | P19a,P19b | acht gleichzeitige Stimmen, <10 ms Trigger/Stop, Clipping und 500+ Samples. |
+| Q20 | P20a,P20b | 2/4-Deck-Umschaltung, Mixerreaktion, Limiter und CPU auf definierter Hardware. |
+| Q21 | P21a,P21b | vollständiger Vorbereitungsablauf, annotiertes Corpus, Batch und persistente Daten. |
+| Q22 | P22a,P22b | Phrase-Corpus, <10 ms Sync, Vorschläge, 30 FPS und reale Adoption. |
+| Q23 | P23a,P23b | Transition-Erfassung, Speicher/CPU, Export, sechsmonatige Retention und Kohortenbewertung. |
+| Q24 | P24a,P24b | Generierung, Relevanz, Energie-/Harmonieziele und reale Nutzungsstudie. |
+| Q25 | P25a,P25b | Wheel-Nutzertest, 24-Key-Statistik, Latenz, Hörbewertung und Adoption. |
+
+**Gesamtfreigabe:** Nach Q01–Q25 alle 618 Registereinträge einschließlich Unterpunkten und User Stories mit Nachweisen durchgehen und offene Konflikt-/Zugangstore prüfen. Kombinierte Szenarien über vier Decks, Controller, Analyse, Video, Aufnahme und Stream, Wiederanlauf nach Geräte-/Netz-/Stromausfall sowie Windows/macOS und weitere tatsächlich unterstützte Plattformen im Release-Build messen. Sicherheit, Migration, Datenschutz, Lizenzkonformität, Hardware-/Hör- und Usability-Prüfung sind Teil der integrierten Freigabe. Bei nicht erfüllten oder nicht messbaren Zielen bleibt die entsprechende FR/SC und damit Gesamtfreigabe offen; ein Teilrelease braucht explizite getrennte Entscheidung und darf nicht als vollständige Erfüllung bezeichnet werden.
+
+**Nächster konkreter Slice:** G01 — Konflikt- und Messregister sowie native Architektur-ADR erstellen, alle Originalanforderungen mit dem Register abgleichen und ungelöste Entscheidungen kenntlich machen. Zuvor den aktuellen Arbeitsbaum und HEAD erneut prüfen; noch keine Produktimplementierung.
+
+**Herkunft dieses Plans:** GPT-6.1 Sol koordinierte die Aufgabe; QWEN und DeepSeek liefen zuvor in Timeouts. GPT-6.1 Terra, medium, verfasste den Plan als ausdrücklich gewählter Fallback. Unabhängiges Dokumentationsreview: GPT-6.1 Sol, medium; wesentliche Befunde zur Reihenfolge, FR-Zuordnung und Freischaltung wurden behoben und nachgeprüft. Der ergänzte Abschlussslice für FR16-002 und die vollständige Registerzuordnung wurden anschließend mechanisch geprüft. Dies ist keine Laufzeit- oder Hardwareabnahme.
