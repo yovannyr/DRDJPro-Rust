@@ -10,6 +10,8 @@ Der [Messplan für Specs 8, 14 und 15](G01_SPEC08_14_15_MEASUREMENT_PLAN.md) kon
 
 Der [Messplan für Specs 9, 22, 24 und 25](G01_SPEC09_22_24_25_MEASUREMENT_PLAN.md) konkretisiert die Ziele für Empfehlungen und intelligente Übergänge.
 
+Der [Messplan für Specs 10, 11 und 12](G01_SPEC10_11_12_MEASUREMENT_PLAN.md) konkretisiert Mastering-, DVS- und Stem-Kriterien.
+
 
 ## Spec 1: Auto-Updates
 
