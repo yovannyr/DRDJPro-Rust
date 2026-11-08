@@ -136,7 +136,7 @@ Stand: 08.11.2026; statischer Quellcodeabgleich gegen Git-HEAD `72ecf5e` und den
 
 ### 13. [Library Management](13-library-management/spec.md) — Teilweise
 
-**Vorhanden:** Persistente Bibliothek, verschachtelte Crates, Mitgliedschaften, textbasierte Smart Crates, Suche/Sortierung und einfache Historie vorhanden.
+**Vorhanden:** Persistente Bibliothek, verschachtelte Crates, Mitgliedschaften, textbasierte Smart Crates, Suche/Sortierung und einfache Historie vorhanden. Die Historie führt bereits Wiedergabezähler und letzten Wiedergabezeitpunkt; siehe [G01-Bestandsnachweis](G01_BASELINE_EVIDENCE.md).
 
 **Lücken und Prüfbedarf:** FR-001–004, 006, 008, 011–014 nur teilweise: Crates sind keine nachgewiesenen vollständig geordneten Playlists; Smart Crates nutzen Textsuche statt allgemeiner AND/OR-Regeln. Suche erfasst Titel, Artist, Album, Namen und Pfad, nicht alle Felder. Offen/nicht belegt FR-005, 007, 009–010, 015–017: Filter, vollständiger Metadateneditor, Farben, Gesamtdauer, M3U/PLS und Duplikaterkennung; Grid-Ansicht und vollständige Sortierung prüfen.
 
