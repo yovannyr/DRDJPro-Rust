@@ -26,7 +26,7 @@ Für jede Messung festhalten: Datum, Commit und Arbeitsbaum, Betriebssystem, CPU
 
 ## Entscheidungen für die Fortsetzung
 
-Der fortgeschriebene Arbeitsvertrag und die Messstrecken stehen in [G01_DECISIONS_AND_MEASUREMENT.md](G01_DECISIONS_AND_MEASUREMENT.md); der [Einzelabgleich für Spec 3](G01_SPEC03_BPM_AUDIT.md) enthält alle BPM-FR und SC. Dort ausdrücklich als offen bezeichnete Akzeptanzfragen sind weiterhin nicht entschieden.
+Der fortgeschriebene Arbeitsvertrag und die Messstrecken stehen in [G01_DECISIONS_AND_MEASUREMENT.md](G01_DECISIONS_AND_MEASUREMENT.md); die Einzelabgleiche für [Spec 3](G01_SPEC03_BPM_AUDIT.md), [Spec 6](G01_SPEC06_KEY_AUDIT.md) und [Spec 19](G01_SPEC19_SAMPLER_AUDIT.md) enthalten alle jeweiligen FR und SC. Dort ausdrücklich als offen bezeichnete Akzeptanzfragen sind weiterhin nicht entschieden.
 
 - Camelot: Wheel-Nachbarschaft und tatsächliche Halbtonintervalle getrennt modellieren; die widersprüchlichen Beispiele aus Spec 25 nicht als musikalischen Nachweis übernehmen. Endgültige Klassifikation und Akzeptanzfälle bleiben zur fachlichen Entscheidung offen.
 - Cloud: Last-write-wins mit Änderungen an verschiedenen Feldern sowie konkurrierenden Änderungen am selben Feld getrennt testen. Ein garantierter Erhalt aller gleichzeitigen Änderungen folgt daraus nicht; das 95-%-Ziel benötigt ein vorher definiertes Szenario und bleibt offen.
