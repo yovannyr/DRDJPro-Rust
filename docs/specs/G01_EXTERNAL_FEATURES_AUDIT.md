@@ -6,6 +6,8 @@ Quellstand `cd2261e`, statischer Abgleich am 08.11.2026. Grundlage sind die 25 O
 
 Der [Messplan für Specs 1, 2 und 5](G01_SPEC01_02_05_MEASUREMENT_PLAN.md) konkretisiert deren 24 Erfolgskriterien und Voraussetzungen.
 
+Der [Messplan für Specs 8, 14 und 15](G01_SPEC08_14_15_MEASUREMENT_PLAN.md) konkretisiert die Ziele für Video, Aufnahme und Livestream.
+
 
 ## Spec 1: Auto-Updates
 
