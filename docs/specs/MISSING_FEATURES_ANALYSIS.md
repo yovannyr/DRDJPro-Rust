@@ -234,7 +234,7 @@ Stand: 08.11.2026; statischer Quellcodeabgleich gegen Git-HEAD `72ecf5e` und den
 
 **Vorhanden:** Tonartanalyse erzeugt Camelot-Codes als Datenbaustein von FR-025-001.
 
-**Lücken und Prüfbedarf:** Rest von 001 und 002–015: Wheel, Beziehungsmodell, Track-Finder, Deck-Kompatibilität, Verteilungsanalyse, Tipps, Ansichten und Performance. Überschneidung mit Spec 6. Spec 25 nennt 8B→9B sowohl benachbarte Wheel-Position als auch Halbton-Energiesprung; Regeln und Beispiele vor Umsetzung musikalisch klären.
+**Lücken und Prüfbedarf:** Rest von 001 und 002–015: Wheel, Beziehungsmodell, Track-Finder, Deck-Kompatibilität, Verteilungsanalyse, Tipps, Ansichten und Performance. Überschneidung mit Spec 6. Die Halbtonbeispiele wurden berichtigt; bei Überlappung von Perfect und Dramatic hat nach Nutzerentscheidung Perfect Vorrang, das Halbtonintervall wird zusätzlich angezeigt.
 
 **Quellnachweise:** [src/audio_analyzer.rs](../../src/audio_analyzer.rs), [src/library.rs](../../src/library.rs).
 

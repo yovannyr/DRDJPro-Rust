@@ -4784,7 +4784,7 @@
       "spec": 25,
       "id": "FR-025-003",
       "status": "offen",
-      "befund": "Offen: vollständige Kompatibilitätsregeln nicht nachgewiesen; widersprüchliches Halbtonbeispiel in D1 klären.",
+      "befund": "Offen: Halbtonbeispiele und Vorrangregel sind nach Nutzerentscheidung berichtigt; die vollständige Implementierung der Kompatibilitätsregeln ist nicht nachgewiesen.",
       "nachweis": "docs/specs/G01_ADVANCED_FEATURES_AUDIT.md",
       "vollstaendige_abnahme": false
     },

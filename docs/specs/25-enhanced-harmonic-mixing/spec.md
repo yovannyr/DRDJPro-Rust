@@ -116,10 +116,11 @@ The system SHALL render interactive Camelot wheel with:
 ### FR-025-003: Key Compatibility Rules
 The system SHALL implement Camelot key compatibility rules:
 - **Perfect (Easy)**: Same key, ±1 position on wheel, relative major/minor
-- **Energy Boost (Medium)**: +1 semitone (e.g., 8B → 9B)
-- **Energy Drop (Medium)**: -1 semitone (e.g., 8B → 7B)
+- **Energy Boost (Medium)**: +1 semitone (e.g., 8B / C major → 3B / C♯ major)
+- **Energy Drop (Medium)**: -1 semitone (e.g., 8B / C major → 1B / B major)
 - **Dramatic (Hard)**: ±2+ semitones or opposite wheel positions
 - Major/minor switches within same Camelot number
+- When classifications overlap, **Perfect (Easy)** takes precedence over **Dramatic (Hard)**. Display the actual semitone interval as additional information; a Camelot wheel step is not a semitone step.
 
 ### FR-025-004: Transition Classification
 For each key pair, the system SHALL determine:

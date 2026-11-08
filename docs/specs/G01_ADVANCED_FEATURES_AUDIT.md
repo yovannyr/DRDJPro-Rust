@@ -110,7 +110,7 @@ Die Audioanalyse erzeugt Camelot-Codes, aber Wheel, Finder und vollständige Bez
 |---|---|---|
 | FR-025-001 | Camelot Wheel Data Model | Teilweise: Camelot-Codes für Dur/Moll vorhanden; vollständiges Wheel-Modell mit Namen, Farben und Koordinaten nicht belegt. |
 | FR-025-002 | Wheel Visualization | Offen: interaktives Camelot-Wheel und Deckmarkierung nicht nachgewiesen. |
-| FR-025-003 | Key Compatibility Rules | Offen: vollständige Kompatibilitätsregeln nicht nachgewiesen; widersprüchliches Halbtonbeispiel in D1 klären. |
+| FR-025-003 | Key Compatibility Rules | Offen: Halbtonbeispiele und Vorrangregel sind nach Nutzerentscheidung berichtigt; die vollständige Implementierung der Kompatibilitätsregeln ist nicht nachgewiesen. |
 | FR-025-004 | Transition Classification | Offen: Typ, Schwierigkeit, Beziehung und Beschreibung für Tonartpaare nicht nachgewiesen. |
 | FR-025-005 | Compatible Keys List | Offen: sortierte Liste kompatibler Tonarten nicht nachgewiesen. |
 | FR-025-006 | Track Finder | Offen: Key-basierter Bibliotheksfinder nicht nachgewiesen. |
