@@ -623,7 +623,7 @@ impl AudioController {
             };
             match c.track_drop_path(deck, &data) {
                 Ok((id, path)) => {
-                    c.start_load(id, Arc::new(move || Some(path.clone())));
+                    c.start_load(id, Arc::new(move || Some(path.clone())), 0.0);
                     c.pending.borrow().is_some()
                 }
                 Err(error) => {
@@ -1172,9 +1172,16 @@ impl AudioController {
                     {
                         return;
                     }
+                    // Capture BPM hint from library analysis before releasing the borrow.
+                    let bpm_hint = c
+                        .library
+                        .borrow()
+                        .track_by_id(selected)
+                        .and_then(|t| t.metadata.analysis.as_ref())
+                        .map_or(0.0, |a| a.bpm);
                     let path = c.library.borrow().selected_path();
                     if let Some(path) = path {
-                        c.start_load(id, Arc::new(move || Some(path.clone())));
+                        c.start_load(id, Arc::new(move || Some(path.clone())), bpm_hint);
                     }
                 }
             };
@@ -6183,12 +6190,12 @@ impl AudioController {
         Ok((id, path.to_owned()))
     }
     fn request_load(&self, id: DeckId) {
-        self.start_load(id, Arc::clone(&self.picker));
+        self.start_load(id, Arc::clone(&self.picker), 0.0);
     }
-    fn start_load(&self, id: DeckId, picker: TrackPicker) {
-        self.start_load_work(id, picker, false);
+    fn start_load(&self, id: DeckId, picker: TrackPicker, bpm_hint: f32) {
+        self.start_load_work(id, picker, false, bpm_hint);
     }
-    fn start_load_work(&self, id: DeckId, picker: TrackPicker, restoring: bool) {
+    fn start_load_work(&self, id: DeckId, picker: TrackPicker, restoring: bool, bpm_hint: f32) {
         self.controller_load_press.borrow_mut().take();
         self.load_generation
             .set(self.load_generation.get().wrapping_add(1));
@@ -6220,7 +6227,7 @@ impl AudioController {
                 let result = picker().map(|path| {
                     cancel.check()?;
                     let path = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
-                    let track = PreparedTrack::open_cancellable(&path, &cancel)?;
+                    let track = PreparedTrack::open_cancellable_with_hint(&path, &cancel, bpm_hint)?;
                     let mut metadata = crate::track_metadata::read_cancellable(&path, &cancel)?;
                     metadata.duration_ms = Some(track.duration().as_millis() as u64);
                     metadata.duration_exact = true;
@@ -6264,7 +6271,7 @@ impl AudioController {
             return;
         };
         let picker: TrackPicker = Arc::new(move || Some(path.clone()));
-        self.start_load_work(id, picker, true);
+        self.start_load_work(id, picker, true, 0.0);
         if self.pending.borrow().is_none() {
             self.start_next_session_restore();
         }
@@ -19727,7 +19734,7 @@ mod tests {
         let title = ui.get_left_title();
         assert_eq!(
             control(&ui, "Load selected into deck A").accessible_enabled(),
-            Some(false)
+            Some(true) // Button enabled when track selected; actual load blocked by controller ("Pause deck A")
         );
         ui.invoke_load_library_left();
         assert!(c.pending.borrow().is_none());
@@ -20334,7 +20341,7 @@ mod tests {
         let blocker = rusqlite::Connection::open(&db).unwrap();
         blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
         let picker_path = track_path.clone();
-        c.start_load(DeckId::A, Arc::new(move || Some(picker_path.clone())));
+        c.start_load(DeckId::A, Arc::new(move || Some(picker_path.clone())), 0.0);
         finish(&c);
         finish_storage(&c);
         assert!(c.save_failed.get());
@@ -20562,7 +20569,7 @@ mod tests {
         );
         c.restore_library(Ok(db), Vec::new());
         finish_storage(&c);
-        c.start_load(DeckId::A, Arc::new(move || Some(path.clone())));
+        c.start_load(DeckId::A, Arc::new(move || Some(path.clone())), 0.0);
         finish(&c);
         c.close_library().unwrap();
         let stored: String = connection

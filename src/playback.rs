@@ -83,7 +83,16 @@ impl PreparedTrack {
         path: &Path,
         cancel: &crate::cancellation::Cancellation,
     ) -> Result<Self, String> {
-        Self::open_cancellable_with_limit(path, 64 * 1024 * 1024, cancel)
+        Self::open_cancellable_with_limit(path, 64 * 1024 * 1024, cancel, 0.0)
+    }
+    /// Variant that accepts a BPM hint from the library analysis.
+    /// If `bpm_hint > 0` the expensive `tempo::estimate()` call is skipped.
+    pub(crate) fn open_cancellable_with_hint(
+        path: &Path,
+        cancel: &crate::cancellation::Cancellation,
+        bpm_hint: f32,
+    ) -> Result<Self, String> {
+        Self::open_cancellable_with_limit(path, 64 * 1024 * 1024, cancel, bpm_hint)
     }
     #[cfg(test)]
     fn open_with_limit(path: &Path, limit: usize) -> Result<Self, String> {
@@ -91,19 +100,26 @@ impl PreparedTrack {
             path,
             limit,
             &crate::cancellation::Cancellation::default(),
+            0.0,
         )
     }
     fn open_cancellable_with_limit(
         path: &Path,
         limit: usize,
         cancel: &crate::cancellation::Cancellation,
+        bpm_hint: f32,
     ) -> Result<Self, String> {
         let (canonical, channels, rate, samples) = decode_pcm(path, limit, cancel)?;
         let overview = crate::waveform::peak_overview(&samples, channels).into();
         cancel.check()?;
         let detail = Arc::new(crate::waveform::DetailPeaks::new(&samples, channels, rate));
         cancel.check()?;
-        let tempo = crate::tempo::estimate(&samples, channels, rate);
+        // Reuse library analysis BPM when available; fall back to real-time estimate only if hint is absent.
+        let tempo = if bpm_hint > 0.0 {
+            Some(crate::tempo::TempoEstimate { bpm: bpm_hint as f64 })
+        } else {
+            crate::tempo::estimate(&samples, channels, rate)
+        };
         cancel.check()?;
         Ok(Self {
             keylock: None,
