@@ -64,14 +64,11 @@ impl std::fmt::Display for TokenEvent {
             } => {
                 write!(
                     f,
-                    "Token refreshed for {}: expires at {}",
+                    "Token refreshed for {}: expires in {} seconds",
                     provider,
-                    format!(
-                        "in {} seconds",
-                        new_expiry
-                            .saturating_duration_since(Instant::now())
-                            .as_secs()
-                    )
+                    new_expiry
+                        .saturating_duration_since(Instant::now())
+                        .as_secs()
                 )
             }
             Self::RefreshFailed { provider, reason } => {
@@ -104,8 +101,6 @@ pub struct TokenManager {
     refresh_buffer_seconds: u64,
     /// Last refresh time per provider (prevents rapid refresh loops).
     last_refresh: HashMap<String, Instant>,
-    /// Minimum refresh interval (1 minute).
-    min_refresh_interval: Duration,
 }
 
 impl TokenManager {
@@ -117,7 +112,6 @@ impl TokenManager {
             max_log_size: 100,
             refresh_buffer_seconds: 60, // Refresh 60s before expiry.
             last_refresh: HashMap::new(),
-            min_refresh_interval: Duration::from_secs(60),
         }
     }
 
@@ -363,8 +357,8 @@ impl OfflineManager {
 
     /// Get total offline duration.
     pub fn total_offline_duration(&self) -> Duration {
-        let current = if self.offline_start.is_some() {
-            self.offline_start.unwrap().elapsed()
+        let current = if let Some(start) = self.offline_start {
+            start.elapsed()
         } else {
             Duration::ZERO
         };
@@ -442,7 +436,11 @@ impl ProviderQualityMetrics {
     /// Update average buffer level.
     pub fn update_buffer_level(&mut self, level: f64) {
         self.avg_buffer_level = (self.avg_buffer_level + level) / 2.0;
-        self.avg_buffer_level = self.avg_buffer_level.max(0.0).min(1.0);
+        self.avg_buffer_level = if self.avg_buffer_level.is_nan() {
+            0.0
+        } else {
+            self.avg_buffer_level.clamp(0.0, 1.0)
+        };
     }
 
     /// Record latency measurement.

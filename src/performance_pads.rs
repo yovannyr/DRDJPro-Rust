@@ -1073,7 +1073,7 @@ mod tests {
         let mut engine = PerformancePadEngine::new();
         let _ = engine.trigger_pad(0, None);
         let latency = engine.trigger_latency();
-        assert!(latency.as_micros() >= 0);
+        assert!(latency <= Duration::from_millis(10));
     }
 
     #[test]

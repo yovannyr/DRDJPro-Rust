@@ -230,26 +230,6 @@ pub struct TrackScore {
 }
 
 impl TrackScore {
-    fn format_reason(&self, label: &str, threshold: f32) -> Option<String> {
-        if self.match_reasons.iter().any(|r| r.starts_with(label)) {
-            return None; // already recorded
-        }
-        if threshold > 0.0 && self.bpm_score >= threshold {
-            let reason = format!("{} (score {:.0}%)", label, self.bpm_score * 100.0);
-            self.clone_match_reasons_with_addition(reason)
-        } else {
-            None
-        }
-    }
-
-    fn clone_match_reasons_with_addition(&self, addition: String) -> Option<String> {
-        if self.match_reasons.is_empty() {
-            return Some(addition);
-        }
-        // Only return unique reasons; simplified here.
-        Some(addition)
-    }
-
     /// Build top-N match reasons for UI display.
     pub fn top_reasons(&self, limit: usize) -> Vec<String> {
         let mut scored: Vec<(&str, f32)> = vec![
@@ -915,6 +895,19 @@ mod tests {
 
     use super::*;
 
+    // Historical formatting example, not a threshold in production top_reasons().
+    fn example_format_reason(score: &TrackScore, label: &str, threshold: f32) -> Option<String> {
+        if score
+            .match_reasons
+            .iter()
+            .any(|reason| reason.starts_with(label))
+        {
+            return None;
+        }
+        (threshold > 0.0 && score.bpm_score >= threshold)
+            .then(|| format!("{} (score {:.0}%)", label, score.bpm_score * 100.0))
+    }
+
     // ===== PlaylistType tests =====
 
     #[test]
@@ -1202,8 +1195,11 @@ mod tests {
             PlaylistType::MixPrep,
             PlaylistCriteria::default(),
         );
-        let mut invalid = PlaylistCriteria::default();
-        invalid.max_tracks = 0;
+        let invalid = PlaylistCriteria {
+            max_tracks: 0,
+            ..Default::default()
+        };
+
         let tracks: Vec<MockTrack> = Vec::new();
         let result = engine.regenerate_playlist(&mut pl, &invalid, &tracks);
         assert!(result.is_err());
@@ -1437,9 +1433,12 @@ mod tests {
         assert_eq!(track.calculate_bpm_score(&criteria), 1.0);
 
         // Outside range
-        let mut criteria_out = PlaylistCriteria::default();
-        criteria_out.bpm_min = 140.0;
-        criteria_out.bpm_max = 150.0;
+        let criteria_out = PlaylistCriteria {
+            bpm_min: 140.0,
+            bpm_max: 150.0,
+            ..Default::default()
+        };
+
         assert_eq!(track.calculate_bpm_score(&criteria_out), 0.0);
     }
 
@@ -1658,22 +1657,31 @@ mod tests {
 
     #[test]
     fn test_playlist_criteria_max_tracks_zero() {
-        let mut c = PlaylistCriteria::default();
-        c.max_tracks = 0;
+        let c = PlaylistCriteria {
+            max_tracks: 0,
+            ..Default::default()
+        };
+
         assert_eq!(c.max_tracks, 0);
     }
 
     #[test]
     fn test_playlist_criteria_with_search_text() {
-        let mut c = PlaylistCriteria::default();
-        c.search_text = Some("test".into());
+        let c = PlaylistCriteria {
+            search_text: Some("test".into()),
+            ..Default::default()
+        };
+
         assert_eq!(c.search_text.as_deref(), Some("test"));
     }
 
     #[test]
     fn test_playlist_criteria_with_analysis_window() {
-        let mut c = PlaylistCriteria::default();
-        c.analysis_window_days = Some(30);
+        let c = PlaylistCriteria {
+            analysis_window_days: Some(30),
+            ..Default::default()
+        };
+
         assert_eq!(c.analysis_window_days, Some(30));
     }
 
@@ -1692,7 +1700,7 @@ mod tests {
             match_reasons: vec!["BPM match".into()],
         };
         // No new reasons below threshold
-        assert!(score.format_reason("Low BPM", 0.5).is_none());
+        assert!(example_format_reason(&score, "Low BPM", 0.5).is_none());
     }
 
     #[test]

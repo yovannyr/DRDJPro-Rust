@@ -136,7 +136,7 @@ impl LUFSReading {
     }
 
     /// Convert to bar level (0.0-1.0).
-    pub fn to_bar_level(&self) -> f64 {
+    pub fn to_bar_level(self) -> f64 {
         ((self.integrated - LUFS_MIN) / (LUFS_MAX - LUFS_MIN)).clamp(0.0, 1.0)
     }
 

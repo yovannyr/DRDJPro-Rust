@@ -643,6 +643,12 @@ impl Clone for StemStreamingSession {
 // Tests
 // ---------------------------------------------------------------------------
 
+impl Default for StemStreamingManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

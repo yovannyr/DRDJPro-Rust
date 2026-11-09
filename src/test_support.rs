@@ -99,3 +99,32 @@ pub fn tagged_wav(title: &str, artist: &str, album: &str) -> TempFile {
     bytes[4..8].copy_from_slice(&len.to_le_bytes());
     TempFile::new("wav", &bytes)
 }
+
+/// Optional benchmark paths; absent or empty lists use the self-contained fixture.
+pub(crate) fn benchmark_paths(value: Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let paths = value
+        .map(|value| {
+            std::env::split_paths(&value)
+                .filter(|path| !path.as_os_str().is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if paths.is_empty() {
+        vec![fixture()]
+    } else {
+        paths
+    }
+}
+
+#[test]
+fn benchmark_paths_handle_absent_empty_and_explicit_lists() {
+    assert_eq!(benchmark_paths(None), vec![fixture()]);
+    assert_eq!(benchmark_paths(Some("".into())), vec![fixture()]);
+    let empty = std::env::join_paths([PathBuf::new(), PathBuf::new()]).unwrap();
+    assert_eq!(benchmark_paths(Some(empty)), vec![fixture()]);
+    let paths = vec![fixture(), fixture()];
+    assert_eq!(
+        benchmark_paths(Some(std::env::join_paths(&paths).unwrap())),
+        paths
+    );
+}

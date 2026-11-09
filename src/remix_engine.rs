@@ -676,6 +676,12 @@ impl Default for RemixEngine {
 // Tests
 // ---------------------------------------------------------------------------
 
+impl Default for PerformanceRecording {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

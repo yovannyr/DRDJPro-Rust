@@ -16,6 +16,7 @@ pub mod mix_history_analytics {
         SessionReplay, SessionReplayBuilder, SortDirection, SortKey, TrackInfo, TransitionRecord,
         TransitionType,
     };
+    pub use crate::mix_history_analytics::{TrackIdentity, TransitionDetails};
 }
 /// Contracts from the session_analytics implementation.
 pub mod session_analytics {
@@ -23,6 +24,7 @@ pub mod session_analytics {
         EnergyFlow, GenreStats, KeyCompatibilityAnalysis, MixingPattern, SessionAnalytics,
         SessionAnalyticsEngine, TrackUsage, TransitionAnalysis,
     };
+    pub use crate::session_analytics::{TrackPlay, TransitionMeasurement};
 }
 /// Contracts from the recording_catalog implementation.
 pub mod recording_catalog {

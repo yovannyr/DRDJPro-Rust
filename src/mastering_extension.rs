@@ -283,7 +283,7 @@ impl PresetManager {
             }
         }
 
-        files.sort_by(|a, b| b.modified.cmp(&a.modified));
+        files.sort_by_key(|value| std::cmp::Reverse(value.modified));
         Ok(files)
     }
 
@@ -502,14 +502,11 @@ impl std::fmt::Display for PresetError {
 impl std::error::Error for PresetError {}
 
 /// Chain visualiser.
-pub struct ChainVisualiser {
-    /// Maximum history entries per node.
-    max_history: usize,
-}
+pub struct ChainVisualiser {}
 
 impl ChainVisualiser {
     pub fn new() -> Self {
-        Self { max_history: 1000 }
+        Self {}
     }
 
     /// Build chain node graph from a chain.

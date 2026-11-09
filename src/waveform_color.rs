@@ -94,7 +94,7 @@ pub fn analyze(
         }
         2 => {
             let mut states = [[0.0_f32; 3]; 2];
-            for (index, frame) in samples.chunks_exact(2).enumerate() {
+            for (index, frame) in samples.as_chunks::<2>().0.iter().enumerate() {
                 let mut energy = BandEnergy::default();
                 // Unrolled for ch0
                 let sample0 = frame[0];
@@ -102,14 +102,22 @@ pub fn analyze(
                 s[1] = low.0 * (sample0 + s[0]) + low.1 * s[1];
                 s[2] = high.0 * (sample0 + s[0]) + high.1 * s[2];
                 let bands0 = [s[1], s[2] - s[1], sample0 - s[2]];
-                energy.add(BandEnergy([bands0[0] * bands0[0], bands0[1] * bands0[1], bands0[2] * bands0[2]]));
+                energy.add(BandEnergy([
+                    bands0[0] * bands0[0],
+                    bands0[1] * bands0[1],
+                    bands0[2] * bands0[2],
+                ]));
                 // Unrolled for ch1
                 let sample1 = frame[1];
                 let s = &mut states[1];
                 s[1] = low.0 * (sample1 + s[0]) + low.1 * s[1];
                 s[2] = high.0 * (sample1 + s[0]) + high.1 * s[2];
                 let bands1 = [s[1], s[2] - s[1], sample1 - s[2]];
-                energy.add(BandEnergy([bands1[0] * bands1[0], bands1[1] * bands1[1], bands1[2] * bands1[2]]));
+                energy.add(BandEnergy([
+                    bands1[0] * bands1[0],
+                    bands1[1] * bands1[1],
+                    bands1[2] * bands1[2],
+                ]));
                 detail[index / frames_per_peak].add(energy);
                 if bins > 0 {
                     overview[index * bins / frames].add(energy);
@@ -129,7 +137,11 @@ pub fn analyze(
                 s[1] = low.0 * (sample + s[0]) + low.1 * s[1];
                 s[2] = high.0 * (sample + s[0]) + high.1 * s[2];
                 let bands = [s[1], s[2] - s[1], sample - s[2]];
-                let energy = BandEnergy([bands[0] * bands[0], bands[1] * bands[1], bands[2] * bands[2]]);
+                let energy = BandEnergy([
+                    bands[0] * bands[0],
+                    bands[1] * bands[1],
+                    bands[2] * bands[2],
+                ]);
                 detail[index / channels / frames_per_peak].add(energy);
                 if bins > 0 {
                     overview[index / channels * bins / frames].add(energy);

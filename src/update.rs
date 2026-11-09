@@ -68,7 +68,7 @@ pub struct Release {
 impl Release {
     /// Check if this release is newer than the current version.
     pub fn is_newer_than(&self, current: &str) -> bool {
-        parse_version(&self.version) > parse_version(current)
+        version_gt(parse_version(&self.version), parse_version(current))
     }
 
     /// Format a user-readable version string.
@@ -294,8 +294,8 @@ impl UpdateChecker {
             latest_release: Some(Release {
                 version: APP_VERSION.to_string(),
                 name: format!("Version {}", APP_VERSION),
-                pre_release: false,
-                body: Some("Current stable release.".to_string()),
+                pre_release: self.config.channel == ReleaseChannel::Beta,
+                body: Some("Simulated current release; no network request performed.".to_string()),
                 download_urls: Vec::new(),
                 published_at: None,
             }),

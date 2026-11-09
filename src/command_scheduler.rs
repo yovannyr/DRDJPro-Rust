@@ -194,7 +194,6 @@ impl std::fmt::Display for ScheduleResult {
 pub struct Scheduler {
     queue: Arc<ArrayQueue<TimestampedCommand>>,
     next_id: AtomicUsize,
-    sample_rate: u32,
     latency_frames: u64,
     last_command_frame: AtomicU64,
     pending: AtomicUsize,
@@ -218,7 +217,6 @@ impl Scheduler {
         Self {
             queue: Arc::new(ArrayQueue::new(config.queue_capacity)),
             next_id: AtomicUsize::new(1),
-            sample_rate: config.sample_rate,
             latency_frames,
             last_command_frame: AtomicU64::new(u64::MAX),
             pending: AtomicUsize::new(0),

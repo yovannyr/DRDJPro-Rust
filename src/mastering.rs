@@ -193,8 +193,6 @@ pub struct MasteringState {
     pub compressor_prev_rms: f64,
     /// Limiter: previous output level.
     pub limiter_prev_level: f64,
-    /// EQ: biquad filter states (2 coefficients per band, per channel).
-    pub eq_state: [f64; 3 * 2 * 2], // 3 bands × 2 coeffs × 2 channels
 }
 
 impl Default for MasteringState {
@@ -204,7 +202,6 @@ impl Default for MasteringState {
             compressor_reduction_db: 0.0,
             compressor_prev_rms: 0.0,
             limiter_prev_level: 0.0,
-            eq_state: [0.0; 12],
         }
     }
 }
@@ -451,15 +448,6 @@ impl Default for MasteringEngine {
 /// Convert dB to linear gain.
 fn db_to_linear(db: f64) -> f64 {
     10.0_f64.powf(db / 20.0)
-}
-
-/// Convert linear gain to dB.
-fn linear_to_db(linear: f64) -> f64 {
-    if linear <= 0.0 {
-        f64::NEG_INFINITY
-    } else {
-        20.0 * linear.log10()
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -605,17 +605,8 @@ pub struct StreamingEngine {
     tokens: HashMap<String, OAuthToken>,
     /// Last search results.
     last_search: Option<SearchResult>,
-    /// Rate limit tracking.
-    rate_limits: HashMap<String, RateLimitInfo>,
     /// Connection status.
     status: StreamStatus,
-}
-
-/// Rate limit info.
-#[derive(Debug, Clone)]
-struct RateLimitInfo {
-    requests_remaining: u32,
-    resets_at: Instant,
 }
 
 /// Streaming engine status.
@@ -642,7 +633,6 @@ impl StreamingEngine {
             connected: HashMap::new(),
             tokens: HashMap::new(),
             last_search: None,
-            rate_limits: HashMap::new(),
             status: StreamStatus::Disconnected,
         }
     }
@@ -839,6 +829,12 @@ impl Default for StreamingEngine {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+impl Default for MockStreamProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(test)]
 mod tests {

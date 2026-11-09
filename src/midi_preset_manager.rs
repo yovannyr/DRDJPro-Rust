@@ -587,8 +587,8 @@ impl Default for MidiPresetManager {
 
 /// Helper to create a manager with an active preset.
 #[cfg(test)]
-fn manager_with_preset(name: String) -> MidiPresetManager {
-    let mut manager = MidiPresetManager::default();
+fn manager_with_preset(name: String, path: PathBuf) -> MidiPresetManager {
+    let mut manager = MidiPresetManager::new(path);
     let id = manager.create_preset(name, TargetType::DeckA);
     assert!(manager.set_active_preset(id));
     manager
@@ -685,7 +685,8 @@ mod tests {
 
     #[test]
     fn preset_manager_create_preset() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         let id = manager.create_preset("Deck A Preset".to_string(), TargetType::DeckA);
         assert!(id > 0);
         assert_eq!(manager.preset_count(), 1);
@@ -693,7 +694,8 @@ mod tests {
 
     #[test]
     fn preset_manager_multiple_presets() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         manager.create_preset("Deck A".to_string(), TargetType::DeckA);
         manager.create_preset("Deck B".to_string(), TargetType::DeckB);
         manager.create_preset("Master".to_string(), TargetType::Master);
@@ -706,7 +708,8 @@ mod tests {
 
     #[test]
     fn preset_manager_activate_preset() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         let id1 = manager.create_preset("Preset 1".to_string(), TargetType::DeckA);
         let id2 = manager.create_preset("Preset 2".to_string(), TargetType::DeckA);
 
@@ -727,7 +730,8 @@ mod tests {
 
     #[test]
     fn preset_manager_activate_by_name() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         manager.create_preset("Special".to_string(), TargetType::DeckA);
 
         assert!(manager.activate_by_name("Special"));
@@ -736,7 +740,8 @@ mod tests {
 
     #[test]
     fn preset_manager_delete_preset() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         let id = manager.create_preset("ToDelete".to_string(), TargetType::DeckA);
         assert_eq!(manager.preset_count(), 1);
 
@@ -747,13 +752,18 @@ mod tests {
 
     #[test]
     fn preset_manager_delete_nonexistent() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         assert!(!manager.delete_preset(999));
     }
 
     #[test]
     fn preset_manager_add_mapping() {
-        let mut manager = manager_with_preset("Test".to_string());
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = manager_with_preset(
+            "Test".to_string(),
+            directory.path().join("midi_presets.json"),
+        );
 
         assert!(manager.add_mapping("Volume".to_string(), MidiControllerType::Fader));
         assert_eq!(manager.active_mapping_count(), 1);
@@ -761,13 +771,18 @@ mod tests {
 
     #[test]
     fn preset_manager_add_mapping_no_active() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         assert!(!manager.add_mapping("Volume".to_string(), MidiControllerType::Fader));
     }
 
     #[test]
     fn preset_manager_add_duplicate_mapping() {
-        let mut manager = manager_with_preset("Test".to_string());
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = manager_with_preset(
+            "Test".to_string(),
+            directory.path().join("midi_presets.json"),
+        );
         manager.set_active_preset(1);
 
         assert!(manager.add_mapping("Volume".to_string(), MidiControllerType::Fader));
@@ -777,7 +792,11 @@ mod tests {
 
     #[test]
     fn preset_manager_mapping_sensitivity() {
-        let mut manager = manager_with_preset("Test".to_string());
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = manager_with_preset(
+            "Test".to_string(),
+            directory.path().join("midi_presets.json"),
+        );
         manager.set_active_preset(1);
         assert!(manager.add_mapping("EQ Low".to_string(), MidiControllerType::Knob(1)));
 
@@ -788,7 +807,8 @@ mod tests {
 
     #[test]
     fn preset_manager_controller_recording() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
 
         assert!(!manager.is_recording_automation());
 
@@ -805,7 +825,8 @@ mod tests {
 
     #[test]
     fn preset_manager_controller_state() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         manager.record_controller_change(10, 64);
 
         let state = manager.get_controller_state(10);
@@ -815,7 +836,8 @@ mod tests {
 
     #[test]
     fn preset_manager_mapping_locked() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         assert!(!manager.is_mapping_locked());
 
         manager.set_mapping_locked(true);
@@ -827,7 +849,8 @@ mod tests {
 
     #[test]
     fn preset_manager_auto_save_toggle() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         assert!(manager.is_auto_save());
 
         manager.toggle_auto_save();
@@ -839,7 +862,11 @@ mod tests {
 
     #[test]
     fn preset_manager_deactivate_preset() {
-        let mut manager = manager_with_preset("Test".to_string());
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = manager_with_preset(
+            "Test".to_string(),
+            directory.path().join("midi_presets.json"),
+        );
         manager.set_active_preset(1);
         assert!(manager.has_active_preset());
 
@@ -849,7 +876,8 @@ mod tests {
 
     #[test]
     fn preset_manager_multiple_targets() {
-        let mut manager = MidiPresetManager::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = MidiPresetManager::new(directory.path().join("midi_presets.json"));
         manager.create_preset("DA1".to_string(), TargetType::DeckA);
         manager.create_preset("DA2".to_string(), TargetType::DeckA);
         manager.create_preset("DB1".to_string(), TargetType::DeckB);
@@ -863,7 +891,11 @@ mod tests {
 
     #[test]
     fn preset_manager_mapping_name_lookup() {
-        let mut manager = manager_with_preset("Test".to_string());
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager = manager_with_preset(
+            "Test".to_string(),
+            directory.path().join("midi_presets.json"),
+        );
         manager.set_active_preset(1);
 
         let preset = manager.active_preset().unwrap();

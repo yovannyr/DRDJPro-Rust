@@ -39,7 +39,7 @@ pub enum VideoFormat {
 
 impl VideoFormat {
     /// Detect format from file extension.
-    pub fn from_extension(path: &PathBuf) -> Self {
+    pub fn from_extension(path: &std::path::Path) -> Self {
         match path.extension().and_then(|e| e.to_str()) {
             Some("mp4") => Self::Mp4,
             Some("webm") => Self::Webm,

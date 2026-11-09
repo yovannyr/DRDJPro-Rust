@@ -965,9 +965,8 @@ mod tests {
     fn p19b_pad_color_coding() {
         // Color coding based on sample properties
         let mut pad_states = Vec::new();
-        for i in 0..8 {
+        for _i in 0..8 {
             pad_states.push(PadState {
-                index: i,
                 is_active: false,
                 category: String::from("drums"),
                 color: PadColor::default(),
@@ -1134,20 +1133,20 @@ mod tests {
     #[test]
     fn p19b_category_filtering() {
         // Test category-based filtering
-        let mut samples = Vec::new();
-        samples.push(SampleInfo {
-            path: String::from("kick.wav"),
-            category: String::from("drums"),
-        });
-        samples.push(SampleInfo {
-            path: String::from("vocal.wav"),
-            category: String::from("vocals"),
-        });
-        samples.push(SampleInfo {
-            path: ("snare.wav").into(),
-            category: String::from("drums"),
-        });
-
+        let samples = [
+            SampleInfo {
+                path: String::from("kick.wav"),
+                category: String::from("drums"),
+            },
+            SampleInfo {
+                path: String::from("vocal.wav"),
+                category: String::from("vocals"),
+            },
+            SampleInfo {
+                path: ("snare.wav").into(),
+                category: String::from("drums"),
+            },
+        ];
         let drums: Vec<&SampleInfo> = samples.iter().filter(|s| s.category == "drums").collect();
         assert_eq!(drums.len(), 2);
     }
@@ -1177,7 +1176,6 @@ mod tests {
     #[test]
     fn p19b_pad_state_initialization() {
         let state = PadState {
-            index: 0,
             is_active: false,
             category: String::from("drums"),
             color: PadColor::default(),
@@ -1263,24 +1261,24 @@ mod tests {
 
     #[test]
     fn p19b_category_counts() {
-        let mut samples = Vec::new();
-        samples.push(SampleInfo {
-            path: String::from("k1.wav"),
-            category: String::from("drums"),
-        });
-        samples.push(SampleInfo {
-            path: String::from("k2.wav"),
-            category: String::from("drums"),
-        });
-        samples.push(SampleInfo {
-            path: String::from("v1.wav"),
-            category: String::from("vocals"),
-        });
-        samples.push(SampleInfo {
-            path: String::from("fx1.wav"),
-            category: String::from("FX"),
-        });
-
+        let samples = [
+            SampleInfo {
+                path: String::from("k1.wav"),
+                category: String::from("drums"),
+            },
+            SampleInfo {
+                path: String::from("k2.wav"),
+                category: String::from("drums"),
+            },
+            SampleInfo {
+                path: String::from("v1.wav"),
+                category: String::from("vocals"),
+            },
+            SampleInfo {
+                path: String::from("fx1.wav"),
+                category: String::from("FX"),
+            },
+        ];
         let mut counts = std::collections::HashMap::new();
         for s in &samples {
             *counts.entry(&s.category).or_insert(0) += 1;
@@ -1376,50 +1374,31 @@ mod tests {
             assert!(!shared.ready(i));
         }
     }
-}
+    // Additional types for P19b tests
+    struct PadState {
+        is_active: bool,
+        category: String,
+        color: PadColor,
+    }
 
-// Additional types for P19b tests
-struct PadState {
-    index: usize,
-    is_active: bool,
-    category: String,
-    color: PadColor,
-}
+    #[derive(Debug, PartialEq, Default)]
+    enum PadColor {
+        #[default]
+        Default,
+        Red,
+        Green,
+        Blue,
+        Bright,
+    }
 
-#[derive(Debug, PartialEq, Default)]
-enum PadColor {
-    #[default]
-    Default,
-    Red,
-    Green,
-    Blue,
-    Bright,
-}
+    struct SampleInfo {
+        path: String,
+        category: String,
+    }
 
-struct SampleInfo {
-    path: String,
-    category: String,
-}
-
-impl PadState {
-    fn new(index: usize) -> Self {
-        Self {
-            index,
-            is_active: false,
-            category: String::from("drums"),
-            color: PadColor::default(),
+    impl Shared {
+        fn set_loop_mode(&self, mode: bool) {
+            self.loop_mode.store(mode, Ordering::Release);
         }
-    }
-}
-
-impl Shared {
-    fn set_loop_mode(&self, mode: bool) {
-        self.loop_mode.store(mode, Ordering::Release);
-    }
-}
-
-impl PadState {
-    fn set_category(&mut self, category: &str) {
-        self.category = category.to_string();
     }
 }

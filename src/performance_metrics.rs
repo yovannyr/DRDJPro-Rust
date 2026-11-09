@@ -846,8 +846,11 @@ mod tests {
 
     #[test]
     fn performance_metrics_session_duration() {
-        let mut metrics = PerformanceMetrics::default();
-        metrics.session_start = Instant::now() - Duration::from_secs(1);
+        let metrics = PerformanceMetrics {
+            session_start: Instant::now() - Duration::from_secs(1),
+            ..Default::default()
+        };
+
         assert!(metrics.session_duration() >= Duration::from_secs(1));
     }
 

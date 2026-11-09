@@ -563,8 +563,6 @@ pub struct DvsRecordingEngine {
     metrics: DvsRecordingMetrics,
     /// Last signal loss time.
     last_signal_loss: Option<std::time::Instant>,
-    /// Session start time.
-    session_start: std::time::Instant,
 }
 
 impl DvsRecordingEngine {
@@ -580,7 +578,6 @@ impl DvsRecordingEngine {
             recovery: RecoveryState::default(),
             metrics: DvsRecordingMetrics::new(),
             last_signal_loss: None,
-            session_start: std::time::Instant::now(),
         }
     }
 

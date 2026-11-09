@@ -116,7 +116,9 @@ impl PreparedTrack {
         cancel.check()?;
         // Reuse library analysis BPM when available; fall back to real-time estimate only if hint is absent.
         let tempo = if bpm_hint > 0.0 {
-            Some(crate::tempo::TempoEstimate { bpm: bpm_hint as f64 })
+            Some(crate::tempo::TempoEstimate {
+                bpm: bpm_hint as f64,
+            })
         } else {
             crate::tempo::estimate(&samples, channels, rate)
         };
@@ -2130,6 +2132,33 @@ pub fn mix_files(a: &Path, b: &Path) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_file_loading_profile() {
+        let paths = crate::test_support::benchmark_paths(std::env::var_os("DRDJ_LOAD_BENCH_FILES"));
+        for path in paths {
+            let start = std::time::Instant::now();
+            let cancel = crate::cancellation::Cancellation::default();
+            let (_, channels, rate, samples) =
+                decode_pcm(&path, 64 * 1024 * 1024, &cancel).unwrap();
+            let decode = start.elapsed();
+            let stage = std::time::Instant::now();
+            let overview = crate::waveform::peak_overview(&samples, channels);
+            let overview_time = stage.elapsed();
+            let stage = std::time::Instant::now();
+            let detail = crate::waveform::DetailPeaks::new(&samples, channels, rate);
+            let detail_time = stage.elapsed();
+            let stage = std::time::Instant::now();
+            let tempo = crate::tempo::estimate(&samples, channels, rate);
+            let tempo_time = stage.elapsed();
+            let stage = std::time::Instant::now();
+            let metadata = crate::track_metadata::read_cancellable(&path, &cancel).unwrap();
+            let metadata_time = stage.elapsed();
+            let total = start.elapsed();
+            std::hint::black_box((overview, detail, tempo, metadata));
+            eprintln!("LOAD_PROFILE path={} rate={} channels={} frames={} decode={:?} overview={:?} detail_and_colors={:?} tempo={:?} metadata={:?} total={:?}", path.display(), rate, channels, samples.len() / usize::from(channels), decode, overview_time, detail_time, tempo_time, metadata_time, total);
+        }
+    }
+
     #[test]
     fn split_cue_master_meter_excludes_native_auxiliary_channels() {
         let (mixer, mut output) = rodio::mixer::mixer(4, 48000);

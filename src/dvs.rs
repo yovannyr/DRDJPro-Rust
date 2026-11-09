@@ -237,9 +237,7 @@ impl DvsDeck {
         let speed_ratio: f64 = 1.0; // Simulated — would be derived from frequency deviation.
 
         // Determine scratch type based on speed ratio.
-        let scratch_type = if (speed_ratio - 1.0).abs() < 0.01 {
-            ScratchType::Forward
-        } else if speed_ratio > 1.0 {
+        let scratch_type = if (speed_ratio - 1.0).abs() < 0.01 || speed_ratio > 1.0 {
             ScratchType::Forward
         } else {
             ScratchType::Reverse

@@ -239,17 +239,6 @@ impl DeckPool {
     pub fn active_count(&self) -> u8 {
         (1..=MAX_DECKS).filter(|id| self.is_active(*id)).count() as u8
     }
-
-    /// List all loaded deck IDs.
-    pub fn loaded_decks(&self) -> Vec<u8> {
-        (1..=MAX_DECKS)
-            .filter(|id| {
-                self.get(*id)
-                    .map(|deck| deck.state.lock().unwrap().track_loaded)
-                    .unwrap_or(false)
-            })
-            .collect()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -339,12 +328,20 @@ impl MixerState {
 
     /// Compute crossfade gain for deck A (0.0–1.0).
     pub fn crossfade_gain_a(&self) -> f32 {
-        (1.0 - self.crossfade).max(0.0).min(1.0)
+        if self.crossfade.is_nan() {
+            0.0
+        } else {
+            (1.0 - self.crossfade).clamp(0.0, 1.0)
+        }
     }
 
     /// Compute crossfade gain for deck B (0.0–1.0).
     pub fn crossfade_gain_b(&self) -> f32 {
-        self.crossfade.max(0.0).min(1.0)
+        if self.crossfade.is_nan() {
+            0.0
+        } else {
+            self.crossfade.clamp(0.0, 1.0)
+        }
     }
 }
 

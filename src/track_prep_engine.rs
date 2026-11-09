@@ -1805,11 +1805,6 @@ mod tests {
 
     /// Helper to test cue_jump from module (public API).
     fn cue_jump(cue: &CueJump) -> Result<(), PrepError> {
-        cue.cue_id;
-        cue.position;
-        cue.label.clone();
-        cue.color;
-        cue.jump_type;
         if cue.position == 0 {
             return Err(PrepError::InvalidCuePosition(
                 "Cue position is 0".to_string(),

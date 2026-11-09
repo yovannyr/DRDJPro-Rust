@@ -656,6 +656,12 @@ impl Default for BeatGridEngine {
 // Tests
 // ---------------------------------------------------------------------------
 
+impl Default for PhaseAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

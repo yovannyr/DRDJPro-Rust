@@ -21,7 +21,6 @@ const CHROMA_HOP: usize = 8192;
 const CHROMA_MIN_HZ: f64 = 100.0;
 const CHROMA_MAX_HZ: f64 = 3500.0;
 const CHROMA_SILENCE_RMS: f32 = 1e-3;
-const MIN_KEY_CORRELATION: f64 = 0.3;
 
 // --- Krumhansl-Kessler profiles (tonic at index 0) ---
 const KK_MAJOR: [f64; 12] = [
@@ -173,7 +172,12 @@ pub fn analyze_pcm(samples: &[f32], channels: u16, rate: u32) -> Result<KeyAnaly
         }
     }
 
-    let confidence = (best_corr * best_shift_corr).max(0.0).min(1.0) as f32;
+    let combined = best_corr * best_shift_corr;
+    let confidence = if combined.is_nan() {
+        0.0
+    } else {
+        combined.clamp(0.0, 1.0) as f32
+    };
 
     let root = NOTE_NAMES[best_shift].to_string();
     let camelot = camelot_notation(best_shift, mode);

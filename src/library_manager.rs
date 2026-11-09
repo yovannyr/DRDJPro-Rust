@@ -503,21 +503,6 @@ impl Default for LibraryManager {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Calculate average of a slice of f64.
-trait F64Average {
-    fn average(&self) -> Option<f64>;
-}
-
-impl F64Average for [f64] {
-    fn average(&self) -> Option<f64> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(self.iter().sum::<f64>() / self.len() as f64)
-        }
-    }
-}
-
 /// Get current Unix timestamp in seconds.
 fn current_unix_timestamp() -> u64 {
     std::time::SystemTime::now()

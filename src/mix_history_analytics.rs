@@ -133,11 +133,30 @@ pub struct TrackInfo {
     pub file_path: String,
 }
 
-impl TrackInfo {
+/// Track identity supplied together when recording session metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackIdentity {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+}
+impl TrackIdentity {
     pub fn new(
         title: impl Into<String>,
         artist: impl Into<String>,
         album: impl Into<String>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            artist: artist.into(),
+            album: album.into(),
+        }
+    }
+}
+
+impl TrackInfo {
+    pub fn new(
+        identity: TrackIdentity,
         duration: Duration,
         bpm: f64,
         key: impl Into<String>,
@@ -145,9 +164,9 @@ impl TrackInfo {
         file_path: impl Into<String>,
     ) -> Self {
         TrackInfo {
-            title: title.into(),
-            artist: artist.into(),
-            album: album.into(),
+            title: identity.title,
+            artist: identity.artist,
+            album: identity.album,
             duration,
             bpm,
             key: key.into(),
@@ -183,18 +202,32 @@ pub struct TransitionRecord {
     pub phrase_aligned: bool,                    // FR-023-004
 }
 
+/// Measurements captured together for a session transition.
+#[derive(Debug, Clone)]
+pub struct TransitionDetails {
+    pub duration: Duration,
+    pub bpm_difference: f64,
+    pub key_compatibility: f32,
+    pub quality_score: QualityScore,
+    pub timestamp: SystemTime,
+}
+
 impl TransitionRecord {
     pub fn new(
         transition_number: u32,
         source_track: TrackInfo,
         destination_track: TrackInfo,
         transition_type: TransitionType,
-        duration: Duration,
-        bpm_difference: f64,
-        key_compatibility: f32,
-        quality_score: QualityScore,
-        timestamp: SystemTime,
+        details: TransitionDetails,
     ) -> Self {
+        let TransitionDetails {
+            duration,
+            bpm_difference,
+            key_compatibility,
+            quality_score,
+            timestamp,
+        } = details;
+
         TransitionRecord {
             transition_number,
             source_track,
@@ -216,14 +249,18 @@ impl TransitionRecord {
         source_track: TrackInfo,
         destination_track: TrackInfo,
         transition_type: TransitionType,
-        duration: Duration,
-        bpm_difference: f64,
-        key_compatibility: f32,
-        quality_score: QualityScore,
-        timestamp: SystemTime,
+        details: TransitionDetails,
         crossfader_position: CrossfaderPosition,
         phrase_aligned: bool,
     ) -> Self {
+        let TransitionDetails {
+            duration,
+            bpm_difference,
+            key_compatibility,
+            quality_score,
+            timestamp,
+        } = details;
+
         TransitionRecord {
             transition_number,
             source_track,
@@ -403,7 +440,7 @@ impl SessionRecord {
                 .or_insert(0) += 1;
         }
         let mut freq: Vec<(String, u32)> = track_counts.into_iter().collect();
-        freq.sort_by(|a, b| b.1.cmp(&a.1));
+        freq.sort_by_key(|value| std::cmp::Reverse(value.1));
         freq.truncate(top_n);
         freq
     }
@@ -635,14 +672,12 @@ impl SessionReplay {
 /// Session replay builder.
 pub struct SessionReplayBuilder {
     snapshots: Vec<ReplaySnapshot>,
-    start_time: SystemTime,
 }
 
 impl SessionReplayBuilder {
     pub fn new() -> Self {
         SessionReplayBuilder {
             snapshots: Vec::new(),
-            start_time: SystemTime::now(),
         }
     }
 
@@ -743,7 +778,7 @@ impl OverallStatistics {
             }
         }
         let mut top_genres: Vec<(String, u32)> = genre_counts.into_iter().collect();
-        top_genres.sort_by(|a, b| b.1.cmp(&a.1));
+        top_genres.sort_by_key(|value| std::cmp::Reverse(value.1));
         top_genres.truncate(10); // Top 10
 
         // Sessions per day
@@ -1330,6 +1365,17 @@ impl fmt::Display for PerformanceMetrics {
 // Unit Tests
 // ============================================================================
 
+impl Default for SessionReplay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Default for SessionReplayBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1386,9 +1432,7 @@ mod tests {
     #[test]
     fn test_track_info_new() {
         let track = TrackInfo::new(
-            "Test Track",
-            "Test Artist",
-            "Test Album",
+            TrackIdentity::new("Test Track", "Test Artist", "Test Album"),
             Duration::from_secs(240),
             128.0,
             "Am",
@@ -1405,9 +1449,7 @@ mod tests {
     #[test]
     fn test_transition_record_new() {
         let source = TrackInfo::new(
-            "Track A",
-            "Artist A",
-            "Album A",
+            TrackIdentity::new("Track A", "Artist A", "Album A"),
             Duration::from_secs(200),
             120.0,
             "Cm",
@@ -1415,9 +1457,7 @@ mod tests {
             "/a.mp3",
         );
         let dest = TrackInfo::new(
-            "Track B",
-            "Artist B",
-            "Album B",
+            TrackIdentity::new("Track B", "Artist B", "Album B"),
             Duration::from_secs(180),
             125.0,
             "Em",
@@ -1429,11 +1469,13 @@ mod tests {
             source.clone(),
             dest.clone(),
             TransitionType::Mix,
-            Duration::from_secs(30),
-            5.0,
-            0.85,
-            QualityScore::new(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(30),
+                bpm_difference: 5.0,
+                key_compatibility: 0.85,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         );
         assert_eq!(trans.transition_number, 1);
         assert_eq!(trans.bpm_difference, 5.0);
@@ -1468,9 +1510,7 @@ mod tests {
         let trans = TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(100),
                 120.0,
                 "Cm",
@@ -1478,9 +1518,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(100),
                 125.0,
                 "Em",
@@ -1488,11 +1526,13 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(20),
-            5.0,
-            0.8,
-            QualityScore::new(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 5.0,
+                key_compatibility: 0.8,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         );
         session.add_transition(trans);
         assert_eq!(session.transitions.len(), 1);
@@ -1612,9 +1652,7 @@ mod tests {
         session.add_transition(TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(60),
                 120.0,
                 "Cm",
@@ -1622,9 +1660,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(60),
                 130.0,
                 "Em",
@@ -1632,11 +1668,13 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(10),
-            10.0,
-            0.7,
-            QualityScore(0.5),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(10),
+                bpm_difference: 10.0,
+                key_compatibility: 0.7,
+                quality_score: QualityScore(0.5),
+                timestamp: SystemTime::now(),
+            },
         ));
         let avg = session.average_bpm();
         assert!((avg - 125.0).abs() < f64::EPSILON); // (120 + 130) / 2 = 125
@@ -1676,9 +1714,7 @@ mod tests {
         session.add_transition(TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(60),
                 120.0,
                 "Cm",
@@ -1686,9 +1722,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(60),
                 130.0,
                 "Em",
@@ -1696,11 +1730,13 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(10),
-            10.0,
-            0.7,
-            QualityScore(0.8),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(10),
+                bpm_difference: 10.0,
+                key_compatibility: 0.7,
+                quality_score: QualityScore(0.8),
+                timestamp: SystemTime::now(),
+            },
         ));
         let builder = SessionReplayBuilder::build_from_session(&session);
         assert_eq!(builder.snapshots().len(), 1);
@@ -1927,8 +1963,11 @@ mod tests {
 
     #[test]
     fn test_mix_history_analytics_max_sessions_limit() {
-        let mut config = PersistenceConfig::default();
-        config.max_sessions = 3;
+        let config = PersistenceConfig {
+            max_sessions: 3,
+            ..Default::default()
+        };
+
         let mut analytics = MixHistoryAnalytics::new(config);
 
         for i in 0..5 {
@@ -2074,8 +2113,11 @@ mod tests {
         ));
 
         let temp_file = std::env::temp_dir().join("drdj_test_persist.json");
-        let mut config = PersistenceConfig::default();
-        config.storage_path = temp_file.clone();
+        let config = PersistenceConfig {
+            storage_path: temp_file.clone(),
+            ..Default::default()
+        };
+
         let mut analytics2 = MixHistoryAnalytics::new(config);
         for session in analytics.all_sessions() {
             analytics2.add_session(session.clone());
@@ -2099,8 +2141,11 @@ mod tests {
 
     #[test]
     fn test_mix_history_analytics_auto_save_respects_config() {
-        let mut config = PersistenceConfig::default();
-        config.auto_save = false;
+        let config = PersistenceConfig {
+            auto_save: false,
+            ..Default::default()
+        };
+
         let mut analytics = MixHistoryAnalytics::new(config);
         analytics.add_session(SessionRecord::new(
             "s1",
@@ -2112,9 +2157,12 @@ mod tests {
 
         // Should not save when auto_save is false
         let temp_file = std::env::temp_dir().join("drdj_test_autosave.json");
-        let mut config2 = PersistenceConfig::default();
-        config2.storage_path = temp_file.clone();
-        config2.auto_save = false;
+        let config2 = PersistenceConfig {
+            storage_path: temp_file.clone(),
+            auto_save: false,
+            ..Default::default()
+        };
+
         let mut analytics2 = MixHistoryAnalytics::new(config2);
         analytics2.save_to_file().unwrap();
 
@@ -2363,9 +2411,7 @@ mod tests {
         session.add_transition(TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(300),
                 125.0,
                 "Cm",
@@ -2373,9 +2419,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(280),
                 128.0,
                 "Am",
@@ -2383,11 +2427,13 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Blend,
-            Duration::from_secs(25),
-            3.0,
-            0.9,
-            QualityScore(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(25),
+                bpm_difference: 3.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         analytics.add_session(session);
 
@@ -2410,8 +2456,11 @@ mod tests {
 
         // 6. Save and reload
         let temp_file = std::env::temp_dir().join("drdj_lifecycle_test.json");
-        let mut config = PersistenceConfig::default();
-        config.storage_path = temp_file.clone();
+        let config = PersistenceConfig {
+            storage_path: temp_file.clone(),
+            ..Default::default()
+        };
+
         let mut analytics2 = MixHistoryAnalytics::new(config);
         analytics2.add_session(SessionRecord::new(
             "session-2",
@@ -2441,8 +2490,11 @@ mod tests {
 
     #[test]
     fn test_auto_session_manual_start() {
-        let mut state = AutoSessionState::default();
-        state.manual_start_requested = true;
+        let state = AutoSessionState {
+            manual_start_requested: true,
+            ..Default::default()
+        };
+
         assert!(state.manual_start_requested);
     }
 
@@ -2491,7 +2543,14 @@ mod tests {
         );
         session.end_session();
         assert!(session.ended_at.is_some());
-        assert!(session.duration.as_secs() >= 0);
+        assert_eq!(
+            session.duration,
+            session
+                .ended_at
+                .unwrap()
+                .duration_since(session.created_at)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -2517,9 +2576,7 @@ mod tests {
     #[test]
     fn test_transition_with_crossfader() {
         let source = TrackInfo::new(
-            "A",
-            "A",
-            "A",
+            TrackIdentity::new("A", "A", "A"),
             Duration::from_secs(200),
             120.0,
             "Cm",
@@ -2527,9 +2584,7 @@ mod tests {
             "/a.mp3",
         );
         let dest = TrackInfo::new(
-            "B",
-            "B",
-            "B",
+            TrackIdentity::new("B", "B", "B"),
             Duration::from_secs(180),
             122.0,
             "Am",
@@ -2541,11 +2596,13 @@ mod tests {
             source,
             dest,
             TransitionType::Mix,
-            Duration::from_secs(20),
-            2.0,
-            0.9,
-            QualityScore::new(0.85),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 2.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.85),
+                timestamp: SystemTime::now(),
+            },
             CrossfaderPosition::new(0.5),
             true,
         );
@@ -2616,9 +2673,7 @@ mod tests {
         session.add_transition(TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(100),
                 120.0,
                 "Cm",
@@ -2626,9 +2681,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(90),
                 125.0,
                 "Am",
@@ -2636,18 +2689,18 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(20),
-            5.0,
-            0.8,
-            QualityScore::new(0.8),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 5.0,
+                key_compatibility: 0.8,
+                quality_score: QualityScore::new(0.8),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
             2,
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(90),
                 125.0,
                 "Am",
@@ -2655,9 +2708,7 @@ mod tests {
                 "/b.mp3",
             ),
             TrackInfo::new(
-                "C",
-                "C",
-                "C",
+                TrackIdentity::new("C", "C", "C"),
                 Duration::from_secs(110),
                 128.0,
                 "Em",
@@ -2665,11 +2716,13 @@ mod tests {
                 "/c.mp3",
             ),
             TransitionType::Cut,
-            Duration::from_secs(5),
-            3.0,
-            0.6,
-            QualityScore::new(0.6),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(5),
+                bpm_difference: 3.0,
+                key_compatibility: 0.6,
+                quality_score: QualityScore::new(0.6),
+                timestamp: SystemTime::now(),
+            },
         ));
         assert!((session.peak_energy() - 0.8).abs() < 0.001);
     }
@@ -2704,9 +2757,7 @@ mod tests {
         session.add_transition(TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(100),
                 120.0,
                 "Cm",
@@ -2714,9 +2765,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(100),
                 120.0,
                 "Am",
@@ -2724,18 +2773,18 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(20),
-            0.0,
-            0.9,
-            QualityScore::new(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
             2,
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(100),
                 120.0,
                 "Am",
@@ -2743,9 +2792,7 @@ mod tests {
                 "/b.mp3",
             ),
             TrackInfo::new(
-                "C",
-                "C",
-                "C",
+                TrackIdentity::new("C", "C", "C"),
                 Duration::from_secs(100),
                 120.0,
                 "Em",
@@ -2753,11 +2800,13 @@ mod tests {
                 "/c.mp3",
             ),
             TransitionType::Cut,
-            Duration::from_secs(1),
-            0.0,
-            0.9,
-            QualityScore::new(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(1),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         let dist = session.transition_type_distribution();
         assert_eq!(*dist.get(&TransitionType::Mix).unwrap(), 1);
@@ -2776,9 +2825,7 @@ mod tests {
         session.add_transition(TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(100),
                 120.0,
                 "Cm",
@@ -2786,9 +2833,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(100),
                 120.0,
                 "Am",
@@ -2796,18 +2841,18 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(20),
-            0.0,
-            0.9,
-            QualityScore::new(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
             2,
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(100),
                 120.0,
                 "Am",
@@ -2815,9 +2860,7 @@ mod tests {
                 "/b.mp3",
             ),
             TrackInfo::new(
-                "C",
-                "C",
-                "C",
+                TrackIdentity::new("C", "C", "C"),
                 Duration::from_secs(100),
                 120.0,
                 "Em",
@@ -2825,11 +2868,13 @@ mod tests {
                 "/c.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(20),
-            0.0,
-            0.9,
-            QualityScore::new(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         let freq = session.most_frequent_tracks(3);
         assert!(freq.len() <= 3);
@@ -3091,9 +3136,7 @@ mod tests {
         session.add_transition(TransitionRecord::new(
             1,
             TrackInfo::new(
-                "A",
-                "A",
-                "A",
+                TrackIdentity::new("A", "A", "A"),
                 Duration::from_secs(100),
                 120.0,
                 "Cm",
@@ -3101,9 +3144,7 @@ mod tests {
                 "/a.mp3",
             ),
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(100),
                 120.0,
                 "Am",
@@ -3111,18 +3152,18 @@ mod tests {
                 "/b.mp3",
             ),
             TransitionType::Mix,
-            Duration::from_secs(20),
-            0.0,
-            0.9,
-            QualityScore::new(0.9),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
             2,
             TrackInfo::new(
-                "B",
-                "B",
-                "B",
+                TrackIdentity::new("B", "B", "B"),
                 Duration::from_secs(100),
                 120.0,
                 "Am",
@@ -3130,9 +3171,7 @@ mod tests {
                 "/b.mp3",
             ),
             TrackInfo::new(
-                "C",
-                "C",
-                "C",
+                TrackIdentity::new("C", "C", "C"),
                 Duration::from_secs(100),
                 125.0,
                 "Em",
@@ -3140,11 +3179,13 @@ mod tests {
                 "/c.mp3",
             ),
             TransitionType::Blend,
-            Duration::from_secs(25),
-            5.0,
-            0.8,
-            QualityScore::new(0.7),
-            SystemTime::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(25),
+                bpm_difference: 5.0,
+                key_compatibility: 0.8,
+                quality_score: QualityScore::new(0.7),
+                timestamp: SystemTime::now(),
+            },
         ));
 
         let replay = session.create_replay();
@@ -3325,10 +3366,12 @@ mod tests {
     fn test_persistence_backup_restore() {
         let temp_file = std::env::temp_dir().join("drdj_backup_test.json");
         {
-            let mut config = PersistenceConfig::default();
-            config.storage_path = temp_file.clone();
-            config.backup_enabled = true;
-            config.max_sessions = 50;
+            let config = PersistenceConfig {
+                storage_path: temp_file.clone(),
+                backup_enabled: true,
+                max_sessions: 50,
+                ..Default::default()
+            };
 
             let mut analytics = MixHistoryAnalytics::new(config);
             analytics.add_session(SessionRecord::new(
@@ -3355,8 +3398,11 @@ mod tests {
 
     #[test]
     fn test_max_sessions_enforcement() {
-        let mut config = PersistenceConfig::default();
-        config.max_sessions = 3;
+        let config = PersistenceConfig {
+            max_sessions: 3,
+            ..Default::default()
+        };
+
         let mut analytics = MixHistoryAnalytics::new(config);
 
         for i in 0..5 {

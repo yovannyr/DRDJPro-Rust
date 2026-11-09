@@ -74,3 +74,18 @@ unsafe impl GlobalAlloc for CountingAllocator {
 }
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+#[test]
+fn allocator_records_real_allocation_growth_and_release() {
+    let stats = measured_heap(|| {
+        let mut values = Vec::<u64>::with_capacity(4);
+        values.resize(64, 7);
+        std::hint::black_box(&values);
+        drop(values);
+    });
+    assert!(stats.allocations >= 1);
+    assert!(stats.reallocations >= 1);
+    assert!(stats.deallocations >= 1);
+    assert_eq!(stats.live_bytes, 0);
+    assert!(stats.peak_bytes >= 64 * std::mem::size_of::<u64>());
+}

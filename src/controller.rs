@@ -6227,7 +6227,8 @@ impl AudioController {
                 let result = picker().map(|path| {
                     cancel.check()?;
                     let path = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
-                    let track = PreparedTrack::open_cancellable_with_hint(&path, &cancel, bpm_hint)?;
+                    let track =
+                        PreparedTrack::open_cancellable_with_hint(&path, &cancel, bpm_hint)?;
                     let mut metadata = crate::track_metadata::read_cancellable(&path, &cancel)?;
                     metadata.duration_ms = Some(track.duration().as_millis() as u64);
                     metadata.duration_exact = true;
@@ -21018,6 +21019,55 @@ mod tests {
         assert_eq!(ui.get_left_position(), 0.0);
         assert!((ui.get_right_position() - 80.0).abs() < 0.001);
     }
+    #[test]
+    fn selected_files_load_into_decks_within_five_seconds() {
+        i_slint_backend_testing::init_no_event_loop();
+        let paths = crate::test_support::benchmark_paths(std::env::var_os("DRDJ_LOAD_BENCH_FILES"));
+        for path in paths {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(2, 44100);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 44100));
+            let c = AudioController::wire(
+                &ui,
+                Rc::clone(&engine),
+                Arc::new(|| None),
+                Arc::new(|| None),
+            );
+            for id in [DeckId::A, DeckId::B] {
+                let selected = path.clone();
+                let start = Instant::now();
+                c.start_load(id, Arc::new(move || Some(selected.clone())), 0.0);
+                assert!(c.pending.borrow().is_some());
+                while c.pending.borrow().is_some() {
+                    assert!(
+                        start.elapsed() < Duration::from_secs(5),
+                        "Track load exceeded 5 s: {} {id:?}",
+                        path.display()
+                    );
+                    c.tick();
+                    thread::sleep(Duration::from_millis(2));
+                }
+                let elapsed = start.elapsed();
+                assert!(engine.snapshot(id).loaded, "{}", ui.get_status());
+                assert!(!engine.snapshot(id).playing);
+                assert!(!ui.get_loading());
+                assert!(
+                    elapsed < Duration::from_secs(5),
+                    "Load completion exceeded 5 s: {} {id:?}: {elapsed:?}",
+                    path.display()
+                );
+                if id == DeckId::B {
+                    assert!(engine.snapshot(DeckId::A).loaded);
+                }
+                eprintln!(
+                    "DECK_LOAD path={} deck={id:?} ready={elapsed:?}",
+                    path.display()
+                );
+                output.by_ref().take(256).for_each(drop);
+            }
+        }
+    }
+
     #[test]
     fn headless_gui_load_transport_faders_errors_cancel_and_position() {
         use slint::Model;

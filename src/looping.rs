@@ -168,7 +168,7 @@ pub(crate) use crate::test_alloc::{counted_allocations, measured_heap};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_alloc::counted_allocations as count_allocations;
+
     #[test]
     fn shared_pcm_moves_the_existing_vec_buffer_without_copying_it() {
         let data = vec![0.25; 1000000];

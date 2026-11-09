@@ -40,3 +40,51 @@ windows = { version = "=0.54.0", features = ["Win32_Media_Audio", "Win32_Devices
 [dev-dependencies]
 tempfile = "=3.27.0"
 i-slint-backend-testing = "=1.18.1"
+
+# Keep debug assertions/symbols while avoiding unoptimized full-track DSP/codec loops.
+# No dependency versions, features, or release settings change.
+
+[profile.dev.package.drdjpro-ui-spike]
+opt-level = 1
+
+[profile.dev.package.rodio]
+opt-level = 2
+
+[profile.dev.package.symphonia-core]
+opt-level = 2
+
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 2
+
+[profile.dev.package.symphonia-bundle-flac]
+opt-level = 2
+
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 2
+
+[profile.dev.package.symphonia-codec-alac]
+opt-level = 2
+
+[profile.dev.package.symphonia-codec-pcm]
+opt-level = 2
+
+[profile.dev.package.symphonia-codec-vorbis]
+opt-level = 2
+
+[profile.dev.package.symphonia-format-isomp4]
+opt-level = 2
+
+[profile.dev.package.symphonia-format-ogg]
+opt-level = 2
+
+[profile.dev.package.symphonia-format-riff]
+opt-level = 2
+
+[profile.dev.package.symphonia-metadata]
+opt-level = 2
+
+[profile.dev.package.symphonia-utils-xiph]
+opt-level = 2
+
+[profile.dev.package.opus-pure]
+opt-level = 2

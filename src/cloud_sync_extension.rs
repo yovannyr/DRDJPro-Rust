@@ -456,6 +456,17 @@ impl SyncReportFormatter {
 // Tests
 // ---------------------------------------------------------------------------
 
+impl Default for OfflineQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Default for SyncSummaryCalculator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

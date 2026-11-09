@@ -121,18 +121,43 @@ pub struct TransitionAnalysis {
     pub quality_score: f64,
 }
 
+/// Measurements describing a transition, separate from deck identity.
+#[derive(Debug, Clone, Copy)]
+pub struct TransitionMeasurement {
+    pub duration: f64,
+    pub bpm_difference: f64,
+    pub key_compatibility: f64,
+    pub energy_difference: f64,
+    pub timing_quality: f64,
+}
+/// A track play event; borrowed identity and owned genre annotations.
+#[derive(Debug)]
+pub struct TrackPlay<'a> {
+    pub track_id: &'a str,
+    pub title: &'a str,
+    pub artist: &'a str,
+    pub duration: f64,
+    pub bpm: f64,
+    pub key: &'a str,
+    pub genres: Vec<String>,
+}
+
 impl TransitionAnalysis {
     /// Create a new transition analysis.
     pub fn new(
         from_deck: String,
         to_deck: String,
         transition_type: String,
-        duration: f64,
-        bpm_difference: f64,
-        key_compatibility: f64,
-        energy_difference: f64,
-        timing_quality: f64,
+        measurement: TransitionMeasurement,
     ) -> Self {
+        let TransitionMeasurement {
+            duration,
+            bpm_difference,
+            key_compatibility,
+            energy_difference,
+            timing_quality,
+        } = measurement;
+
         // Composite quality score.
         let quality_score = key_compatibility * 0.4
             + (1.0 - (bpm_difference / 200.0).min(1.0)) * 0.2
@@ -342,16 +367,17 @@ impl SessionAnalyticsEngine {
     }
 
     /// Record track play.
-    pub fn record_track_play(
-        &mut self,
-        track_id: &str,
-        title: &str,
-        artist: &str,
-        duration: f64,
-        bpm: f64,
-        key: &str,
-        genres: Vec<String>,
-    ) {
+    pub fn record_track_play(&mut self, play: TrackPlay<'_>) {
+        let TrackPlay {
+            track_id,
+            title,
+            artist,
+            duration,
+            bpm,
+            key,
+            genres,
+        } = play;
+
         let entry = self
             .track_usage
             .entry(track_id.to_string())
@@ -434,10 +460,7 @@ impl SessionAnalyticsEngine {
         self.genre_stats.clear();
         for usage in self.track_usage.values() {
             for genre in &usage.genres {
-                let stats = self
-                    .genre_stats
-                    .entry(genre.clone())
-                    .or_insert_with(GenreStats::new);
+                let stats = self.genre_stats.entry(genre.clone()).or_default();
                 stats.track_count += 1;
                 stats.total_plays += usage.play_count;
             }
@@ -551,7 +574,7 @@ impl SessionAnalyticsEngine {
     /// Get most played tracks.
     pub fn most_played(&self, limit: usize) -> Vec<(&String, &TrackUsage)> {
         let mut usage: Vec<_> = self.track_usage.iter().collect();
-        usage.sort_by(|a, b| b.1.play_count.cmp(&a.1.play_count));
+        usage.sort_by_key(|value| std::cmp::Reverse(value.1.play_count));
         usage.into_iter().take(limit).collect()
     }
 
@@ -661,6 +684,17 @@ impl Default for SessionAnalyticsEngine {
 // Tests
 // ---------------------------------------------------------------------------
 
+impl Default for GenreStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Default for KeyCompatibilityAnalysis {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,11 +713,13 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            2.0,
-            0.9,
-            0.1,
-            0.85,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 2.0,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.85,
+            },
         );
 
         assert_eq!(analysis.bpm_difference, 2.0);
@@ -697,11 +733,13 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Cut".to_string(),
-            0.0,
-            20.0,
-            0.2,
-            0.8,
-            0.3,
+            TransitionMeasurement {
+                duration: 0.0,
+                bpm_difference: 20.0,
+                key_compatibility: 0.2,
+                energy_difference: 0.8,
+                timing_quality: 0.3,
+            },
         );
 
         assert!(analysis.quality_score < 0.5);
@@ -752,15 +790,15 @@ mod tests {
     #[test]
     fn analytics_engine_record_track() {
         let mut engine = SessionAnalyticsEngine::new();
-        engine.record_track_play(
-            "track1",
-            "Test Track",
-            "Artist",
-            240.0,
-            128.0,
-            "8A",
-            vec!["House".to_string()],
-        );
+        engine.record_track_play(TrackPlay {
+            track_id: "track1",
+            title: "Test Track",
+            artist: "Artist",
+            duration: 240.0,
+            bpm: 128.0,
+            key: "8A",
+            genres: vec!["House".to_string()],
+        });
         assert_eq!(engine.track_count(), 1);
     }
 
@@ -771,11 +809,13 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.5,
-            0.85,
-            0.1,
-            0.9,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.5,
+                key_compatibility: 0.85,
+                energy_difference: 0.1,
+                timing_quality: 0.9,
+            },
         );
         engine.analyze_transition(transition);
         assert_eq!(engine.transition_count(), 1);
@@ -800,21 +840,25 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.9,
-            0.1,
-            0.9,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.9,
+            },
         ));
         engine.analyze_transition(TransitionAnalysis::new(
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            25.0,
-            0.5,
-            0.8,
-            0.2,
-            0.85,
+            TransitionMeasurement {
+                duration: 25.0,
+                bpm_difference: 0.5,
+                key_compatibility: 0.8,
+                energy_difference: 0.2,
+                timing_quality: 0.85,
+            },
         ));
 
         engine.detect_patterns();
@@ -838,21 +882,25 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.95,
-            0.05,
-            0.95,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.95,
+                energy_difference: 0.05,
+                timing_quality: 0.95,
+            },
         ));
         engine.analyze_transition(TransitionAnalysis::new(
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            25.0,
-            0.5,
-            0.9,
-            0.1,
-            0.9,
+            TransitionMeasurement {
+                duration: 25.0,
+                bpm_difference: 0.5,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.9,
+            },
         ));
 
         engine.generate_insights();
@@ -866,11 +914,13 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.9,
-            0.1,
-            0.85,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.85,
+            },
         ));
 
         let quality = engine.avg_transition_quality();
@@ -880,24 +930,24 @@ mod tests {
     #[test]
     fn analytics_engine_genre_distribution() {
         let mut engine = SessionAnalyticsEngine::new();
-        engine.record_track_play(
-            "track1",
-            "Track 1",
-            "Artist",
-            240.0,
-            128.0,
-            "8A",
-            vec!["House".to_string()],
-        );
-        engine.record_track_play(
-            "track2",
-            "Track 2",
-            "Artist",
-            180.0,
-            126.0,
-            "9A",
-            vec!["Techno".to_string()],
-        );
+        engine.record_track_play(TrackPlay {
+            track_id: "track1",
+            title: "Track 1",
+            artist: "Artist",
+            duration: 240.0,
+            bpm: 128.0,
+            key: "8A",
+            genres: vec!["House".to_string()],
+        });
+        engine.record_track_play(TrackPlay {
+            track_id: "track2",
+            title: "Track 2",
+            artist: "Artist",
+            duration: 180.0,
+            bpm: 126.0,
+            key: "9A",
+            genres: vec!["Techno".to_string()],
+        });
 
         let dist = engine.genre_distribution();
         assert_eq!(dist.len(), 2);
@@ -906,24 +956,24 @@ mod tests {
     #[test]
     fn analytics_engine_most_played() {
         let mut engine = SessionAnalyticsEngine::new();
-        engine.record_track_play(
-            "track1",
-            "Track 1",
-            "Artist",
-            240.0,
-            128.0,
-            "8A",
-            vec!["House".to_string()],
-        );
-        engine.record_track_play(
-            "track2",
-            "Track 2",
-            "Artist",
-            180.0,
-            126.0,
-            "9A",
-            vec!["Techno".to_string()],
-        );
+        engine.record_track_play(TrackPlay {
+            track_id: "track1",
+            title: "Track 1",
+            artist: "Artist",
+            duration: 240.0,
+            bpm: 128.0,
+            key: "8A",
+            genres: vec!["House".to_string()],
+        });
+        engine.record_track_play(TrackPlay {
+            track_id: "track2",
+            title: "Track 2",
+            artist: "Artist",
+            duration: 180.0,
+            bpm: 126.0,
+            key: "9A",
+            genres: vec!["Techno".to_string()],
+        });
 
         let most = engine.most_played(1);
         assert_eq!(most.len(), 1);
@@ -932,24 +982,24 @@ mod tests {
     #[test]
     fn analytics_engine_generate_report() {
         let mut engine = SessionAnalyticsEngine::new();
-        engine.record_track_play(
-            "track1",
-            "Track 1",
-            "Artist",
-            240.0,
-            128.0,
-            "8A",
-            vec!["House".to_string()],
-        );
-        engine.record_track_play(
-            "track2",
-            "Track 2",
-            "Artist",
-            180.0,
-            130.0,
-            "9A",
-            vec!["Techno".to_string()],
-        );
+        engine.record_track_play(TrackPlay {
+            track_id: "track1",
+            title: "Track 1",
+            artist: "Artist",
+            duration: 240.0,
+            bpm: 128.0,
+            key: "8A",
+            genres: vec!["House".to_string()],
+        });
+        engine.record_track_play(TrackPlay {
+            track_id: "track2",
+            title: "Track 2",
+            artist: "Artist",
+            duration: 180.0,
+            bpm: 130.0,
+            key: "9A",
+            genres: vec!["Techno".to_string()],
+        });
 
         let report = engine.generate_report("session1", "Test Session");
         assert_eq!(report.total_tracks, 2);
@@ -965,21 +1015,25 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.9,
-            0.1,
-            0.9,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.9,
+            },
         ));
         engine.analyze_transition(TransitionAnalysis::new(
             "deck_b".to_string(),
             "deck_a".to_string(),
             "Cut".to_string(),
-            0.0,
-            2.0,
-            0.5,
-            0.3,
-            0.6,
+            TransitionMeasurement {
+                duration: 0.0,
+                bpm_difference: 2.0,
+                key_compatibility: 0.5,
+                energy_difference: 0.3,
+                timing_quality: 0.6,
+            },
         ));
 
         engine.detect_patterns();
@@ -989,15 +1043,15 @@ mod tests {
     #[test]
     fn analytics_engine_track_stop_position() {
         let mut engine = SessionAnalyticsEngine::new();
-        engine.record_track_play(
-            "track1",
-            "Track 1",
-            "Artist",
-            240.0,
-            128.0,
-            "8A",
-            vec!["House".to_string()],
-        );
+        engine.record_track_play(TrackPlay {
+            track_id: "track1",
+            title: "Track 1",
+            artist: "Artist",
+            duration: 240.0,
+            bpm: 128.0,
+            key: "8A",
+            genres: vec!["House".to_string()],
+        });
 
         engine.record_track_stop("track1", 0.5);
         engine.record_track_stop("track1", 0.75);
@@ -1028,11 +1082,13 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.7,
-            0.3,
-            0.7,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.7,
+                energy_difference: 0.3,
+                timing_quality: 0.7,
+            },
         ));
 
         engine.record_energy(0.0, 0.2, "track1", "Track 1");
@@ -1053,11 +1109,13 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.9,
-            0.1,
-            0.9,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.9,
+            },
         ));
 
         engine.record_energy(0.0, 0.9, "track1", "Track 1");
@@ -1074,34 +1132,36 @@ mod tests {
     fn analytics_engine_insights_repetition() {
         let mut engine = SessionAnalyticsEngine::new();
 
-        engine.record_track_play(
-            "track1",
-            "T1",
-            "A",
-            240.0,
-            128.0,
-            "8A",
-            vec!["House".to_string()],
-        );
-        engine.record_track_play(
-            "track2",
-            "T2",
-            "A",
-            180.0,
-            126.0,
-            "9A",
-            vec!["House".to_string()],
-        );
+        engine.record_track_play(TrackPlay {
+            track_id: "track1",
+            title: "T1",
+            artist: "A",
+            duration: 240.0,
+            bpm: 128.0,
+            key: "8A",
+            genres: vec!["House".to_string()],
+        });
+        engine.record_track_play(TrackPlay {
+            track_id: "track2",
+            title: "T2",
+            artist: "A",
+            duration: 180.0,
+            bpm: 126.0,
+            key: "9A",
+            genres: vec!["House".to_string()],
+        });
 
         engine.analyze_transition(TransitionAnalysis::new(
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.9,
-            0.1,
-            0.9,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.9,
+            },
         ));
 
         engine.generate_insights();
@@ -1129,11 +1189,13 @@ mod tests {
             "deck_a".to_string(),
             "deck_b".to_string(),
             "Fade".to_string(),
-            30.0,
-            1.0,
-            0.9,
-            0.1,
-            0.85,
+            TransitionMeasurement {
+                duration: 30.0,
+                bpm_difference: 1.0,
+                key_compatibility: 0.9,
+                energy_difference: 0.1,
+                timing_quality: 0.85,
+            },
         );
 
         assert_eq!(analysis.duration, 30.0);

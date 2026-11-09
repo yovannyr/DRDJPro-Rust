@@ -304,13 +304,18 @@ impl OverlayAnimationController {
         let mut animations = self.animations.lock().unwrap();
         let mut events = Vec::new();
 
-        for deck_anims in animations.values_mut() {
+        for (&deck_id, deck_anims) in animations.iter_mut() {
             for anim in deck_anims.iter_mut() {
                 anim.elapsed_ms += delta_ms;
                 if anim.elapsed_ms >= anim.kind.duration() {
                     anim.active = false;
+                    let AnimationKind::BpmFlash {
+                        frame, start_ms, ..
+                    } = anim.kind;
                     events.push(AnimationEvent {
-                        deck_id: 0, // caller resolves from key.
+                        deck_id,
+                        frame,
+                        start_ms,
                         kind: AnimationEventKind::Finished,
                     });
                 }
@@ -367,14 +372,16 @@ impl AnimationKind {
 
 /// Animation event emitted on completion.
 #[derive(Debug, Clone)]
-struct AnimationEvent {
-    deck_id: u8,
-    kind: AnimationEventKind,
+pub struct AnimationEvent {
+    pub deck_id: u8,
+    pub kind: AnimationEventKind,
+    pub frame: usize,
+    pub start_ms: u64,
 }
 
 /// Type of animation event.
 #[derive(Debug, Clone, PartialEq)]
-enum AnimationEventKind {
+pub enum AnimationEventKind {
     Finished,
 }
 
@@ -382,10 +389,38 @@ enum AnimationEventKind {
 // Tests
 // ---------------------------------------------------------------------------
 
+impl Default for OverlayAnimationController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mixer_channel::{ChannelRole, ChannelSettings, CueMode, LimiterState, MeterReading};
+
+    #[test]
+    fn finished_animations_identify_their_own_deck_and_frame() {
+        let controller = OverlayAnimationController::new();
+        controller.start_bpm_flash(2, 17);
+        controller.start_bpm_flash(4, 93);
+        assert!(controller.update(100).is_empty());
+        let mut events = controller.update(200);
+        events.sort_by_key(|event| event.deck_id);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| (event.deck_id, event.frame))
+                .collect::<Vec<_>>(),
+            vec![(2, 17), (4, 93)]
+        );
+        assert!(events
+            .iter()
+            .all(|event| event.kind == AnimationEventKind::Finished));
+        assert_eq!(controller.active_count(2), 0);
+        assert_eq!(controller.active_count(4), 0);
+    }
 
     #[test]
     fn test_zoom_level_labels() {

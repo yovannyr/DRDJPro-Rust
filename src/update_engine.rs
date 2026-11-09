@@ -70,7 +70,7 @@ pub struct Release {
 impl Release {
     /// Check if this release is newer than the current version.
     pub fn is_newer_than(&self, current: &str) -> bool {
-        parse_version(&self.version) > parse_version(current)
+        version_gt(parse_version(&self.version), parse_version(current))
     }
 
     /// Format a user-readable version string.

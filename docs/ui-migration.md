@@ -1,6 +1,6 @@
 # Slint-UI-Migration – Arbeitsstand 2026-11-09
 
-**Status: Produktions-UI integriert. Workspace-Check, Release-Build und alle automatisierten Tests erfolgreich. Strenges Clippy weiterhin fehlgeschlagen; deshalb keine vollständige Fehlerfreiheitsfreigabe. Visuelle und manuelle Abnahme auf Nutzerwunsch zurückgestellt.**
+**Status: Produktions-UI integriert; strenges Clippy erfolgreich. Gesamttests: 2188 bestanden, 6 ignoriert, 0 fehlgeschlagen. Debug-/Release-Builds erfolgreich; finale Deck-Ladezeiten 2,41 bis 3,98 s einschließlich eines 310-s-Tracks. Visuelle und manuelle Abnahme bleiben auf Nutzerwunsch zurückgestellt.**
 
 ## Ausgangspunkt und Umfang
 
@@ -1047,7 +1047,7 @@ Neu: `src/atomic_float.rs`. Bereits vorhandene unversionierte Dateien bleiben
 unversioniert; die Tabelle bedeutet weder neue Runtime-Integration noch Commit.
 
 
-## Finale ausgeführte Prüfungen – 2026-11-09
+## Historischer Prüfstand vor der Clippy-Sanierung – 2026-11-09, 13:36
 
 | Befehl / Prüfung | Ergebnis | Exitcode |
 | --- | --- | --- |
@@ -1092,3 +1092,59 @@ Prototypen gelten weiterhin nicht als nutzbare App-Funktionen.
 
 Branch: `Layout_Refinement`; weiterhin Ausgangscommit
 `94297ba5612098a666826e2b12368ecb3ad7d2a6`. Keine Commits, kein Push, kein Merge.
+
+
+## Clippy-Sanierung und Ladezeitkorrektur – Fortsetzung
+
+Der spätere Checkout enthält bereits weitere Commits bis `d8ececd` (BPM-Hint und
+Load-Controls); diese wurden erhalten. Die folgenden Prüfungen beziehen sich auf
+den anschließenden Arbeitsstand. Es wurden durch diesen Lauf keine Commits oder
+Pushes ausgeführt.
+
+Strenges `cargo clippy --workspace --all-targets --locked -- -D warnings` ist
+inzwischen mit Exitcode 0 erfolgreich (`C:/Temp/drdj-clippy-clean.log`). Es wurden
+keine neuen `allow`-/`expect`-Attribute oder Cargo-Lint-Ausnahmen eingeführt.
+
+Die wiederverwendbaren Modellverträge liegen hinter fachlichen Library-Fassaden
+mit privaten Implementierungsmodulen und ausgewählten Typ-/Funktions-Exporten.
+Die Desktop-Composition bleibt im Executable; öffentliche Modelle sind keine
+Behauptung ihrer Runtime-Anbindung. Unbenutzte interne Felder, Duplikate und
+Scheinzustände wurden tatsächlich entfernt. Bestehende Testfälle bleiben erhalten.
+Testhilfstypen und Heap-Messung sind getrennt; pro Test-Binary existiert ein
+zusammengehöriger Allocator/Zähler. Eine neue Regression misst dessen reale
+Allokation, Wachstum und Freigabe.
+
+Zu lange Track-/Transitionskonstruktoren verwenden jetzt benannte Eingabeobjekte
+`TrackIdentity`, `TransitionDetails`, `TransitionMeasurement` und `TrackPlay`.
+Die gespeicherten Record-/Serde-Felder und Berechnungen bleiben erhalten.
+Animationsevents enthalten tatsächliche Deck-/Frame-Identität. NaN-Behandlung beim
+Clamp-Umbau bleibt erhalten; die Rust-Mindestversion wurde nicht angehoben.
+
+MIDI-Presettests arbeiten jetzt mit eigenen Temp-Dateien und expliziten Pfaden.
+Die beim Wiedereinstieg bereits veränderte Repository-Datei
+`presets/midi_presets.json` wurde als fremder Stand unverändert gesichert. Sie ist
+nicht Bestandteil der Reparatur. Hash vor den Abschlussprüfungen:
+`08da1426f21ffddb4e18ac57e7364bb33975c5a0b80abc56d72acfa51e4450f2`.
+
+Die Ladezeitkorrektur und gemessenen Phasen stehen in
+[track-loading-performance.md](track-loading-performance.md). Die drei Nutzer-MP3s
+und generierte vierminütige WAV/MP3 werden im kompletten Headless-Deckpfad mit
+Fünf-Sekunden-Assertion geprüft. Im ersten erfolgreichen optimierten Lauf lagen
+alle zehn A/B-Ladevorgänge zwischen 2,78 und 3,64 Sekunden.
+
+## Abschließender automatisierter Prüfstand
+
+- cargo test --workspace --locked -- --test-threads=1: Exit 0, 2188 bestanden, 6 ignoriert, 0 fehlgeschlagen. Protokoll: C:/Temp/drdj-all-tests-verified.log.
+- cargo clippy --workspace --all-targets --locked -- -D warnings: Exit 0. Protokoll: C:/Temp/drdj-clippy-final-verified.log. Keine neuen Warnungsunterdrückungen.
+- cargo fmt --all -- --check und git diff --check: erfolgreich.
+- Quellhashvergleich aller 127 erfassten Source-/UI-/Manifestdateien nach den Prüfungen: keine Abweichungen. Vorbestehender Preset-Inhalt gegenüber der Sicherung unverändert.
+- Unabhängiges Abschlussreview durch den ausgewählten Reviewer GPT-6.1 Sol, medium: kein verbleibender blockierender Befund; native/manuelle Abnahme bleibt offen.
+
+Der erste Gesamtprüflauf fand eine leere Benchmark-Umgebungsvariable als Test-Harness-Fehler. Ein gemeinsamer Fallback mit eigener Regression behandelt nun fehlende/leere Listen korrekt. Der oben genannte vollständige Lauf wurde nach dieser Korrektur wiederholt.
+
+Finale Builds: `cargo build --locked` und `cargo build --release --locked`, beide
+Exit 0 (`C:/Temp/drdj-final-debug-build.log`, `C:/Temp/drdj-final-release-build.log`).
+Finale Leistungsmessung auf denselben Quellartefakten: sechs Dateien, zwölf
+erfolgreiche A/B-Ladevorgänge mit fester 5-s-Assertion; 2,41 bis 3,98 s einschließlich
+310-s-Nutzerdatei. Details im Ladezeitbericht. Kein eigener Commit, Push oder Merge;
+Branch/HEAD unverändert `Layout_Refinement` / `d8ececd`.

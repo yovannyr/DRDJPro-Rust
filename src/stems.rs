@@ -252,7 +252,7 @@ impl StemSeparation {
     }
 
     /// Export stems to individual files.
-    pub fn export_stems(&self, output_dir: &PathBuf) -> Result<Vec<PathBuf>, StemError> {
+    pub fn export_stems(&self, output_dir: &std::path::Path) -> Result<Vec<PathBuf>, StemError> {
         let mut paths = Vec::new();
 
         for stem in &self.stems {
