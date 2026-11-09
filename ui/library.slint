@@ -1,0 +1,280 @@
+// Generated with the full local GUI input; input handlers are retained.
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox } from "std-widgets.slint";
+import { DjTheme, DeckSlotData, LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow } from "theme.slint";
+import { LibraryButton } from "controls.slint";
+
+export component CratePanel inherits Rectangle {
+    in property <bool> managing;
+    in property <[CrateRow]> rows;
+    in property <[string]> names;
+    in property <int> selection;
+    in property <bool> history-selected;
+    in property <bool> busy;
+    in property <bool> has-track;
+    in property <bool> selected-smart;
+    in property <bool> editor-open;
+    in property <bool> delete-pending;
+    in property <string> dialog-title;
+    in property <bool> editor-smart;
+    in-out property <string> edit-name;
+    in-out property <string> edit-smart-query;
+    in-out property <int> target-index;
+    callback select-crate(int); callback target-changed(int);
+    callback new-crate(); callback new-smart-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
+    callback save-name(); callback cancel-dialog(); callback confirm-delete();
+    callback add-track(); callback remove-track();
+    background: #111111; border-color: #333333; border-width: 1px;
+    VerticalLayout {
+        padding: 3px; spacing: 2px;
+        HorizontalLayout {
+        LibraryButton { text: "All tracks"; active: selection == 0; accessible-label: "All library tracks"; enabled: !busy; clicked => { root.select-crate(0); } }
+        LibraryButton { text: "History"; active: history-selected; accessible-label: "Playback history"; enabled: !busy; clicked => { root.select-crate(-1); } }
+        }
+        ListView {
+            for entry in root.rows : Rectangle {
+                height: 22px; background: root.selection == entry.id ? #07577e : #181818;
+                accessible-role: button; accessible-label: "Crate " + entry.id;
+                accessible-description: entry.smart ? "Smart crate " + entry.name : entry.name + " (" + entry.count + " tracks)";
+                accessible-action-default => { if !root.busy { root.select-crate(entry.id); } }
+                HorizontalLayout { padding: 4px;
+                    Rectangle { width: entry.depth * 10px; }
+                    Text { text: entry.name; font-size: 11px; color: #eeeeee; overflow: elide; vertical-alignment: center; }
+                    Text { text: entry.smart ? "SMART" : "" + entry.count; font-size: 10px; color: #aaaaaa; horizontal-alignment: right; vertical-alignment: center; }
+                }
+                TouchArea { enabled: !root.busy; clicked => { root.select-crate(entry.id); } }
+            }
+        }
+        if root.managing : HorizontalLayout {
+            LibraryButton { text: "+"; accessible-label: "New crate"; enabled: !busy; clicked => { root.new-crate(); } }
+            LibraryButton { text: "+ Sub"; accessible-label: "New subcrate"; enabled: !busy && selection > 0; clicked => { root.new-subcrate(); } }
+            LibraryButton { text: "+ Smart"; accessible-label: "New smart crate"; enabled: !busy; clicked => { root.new-smart-crate(); } }
+        }
+        if root.managing : HorizontalLayout {
+            LibraryButton { text: "Rename"; accessible-label: "Rename crate"; enabled: !busy && selection > 0; clicked => { root.rename-crate(); } }
+            LibraryButton { text: "Delete"; accessible-label: "Delete crate"; enabled: !busy && selection > 0; clicked => { root.delete-crate(); } }
+        }
+        ComboBox { height: 24px; model: root.names; current-index <=> root.target-index; accessible-label: "Target crate"; enabled: !busy && root.names.length > 0; selected(value) => { root.target-changed(self.current-index); } }
+        if root.managing : HorizontalLayout {
+            LibraryButton { text: "Add"; accessible-label: "Add selected track to crate"; enabled: !busy && has-track && names.length > 0; clicked => { root.add-track(); } }
+            LibraryButton { text: "Remove"; accessible-label: "Remove selected track from crate"; enabled: !busy && has-track && selection > 0 && !selected-smart; clicked => { root.remove-track(); } }
+        }
+    }
+    if editor-open || delete-pending : Rectangle {
+        background: #202020;
+        VerticalLayout { padding: 8px; spacing: 6px;
+            Text { text: root.dialog-title; font-size: 11px; color: #eeeeee; wrap: word-wrap; }
+            if root.editor-open : LineEdit { height: 24px; text <=> root.edit-name; accessible-label: "Crate name"; enabled: !root.busy; accepted => { root.save-name(); } }
+            if root.editor-open && root.editor-smart : LineEdit { height: 24px; text <=> root.edit-smart-query; accessible-label: "Smart crate query"; placeholder-text: "Match title, artist, album or path"; enabled: !root.busy; accepted => { root.save-name(); } }
+            if root.delete-pending : Text { text: "This crate's memberships are removed. Direct subcrates move up one level; tracks stay in the library."; font-size: 11px; color: #bbbbbb; wrap: word-wrap; }
+            if root.editor-open : LibraryButton { text: "Save"; accessible-label: "Save crate name"; enabled: !root.busy; clicked => { root.save-name(); } }
+            if root.delete-pending : LibraryButton { text: "Confirm delete"; accessible-label: "Confirm crate deletion"; enabled: !root.busy; clicked => { root.confirm-delete(); } }
+            LibraryButton { text: "Cancel"; accessible-label: "Cancel crate dialog"; clicked => { root.cancel-dialog(); } }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+export component TrackLibrary inherits Rectangle {
+    in property <int> prep-queue-count;
+    callback prep-action(int);
+    out property <bool> search-focused: search-input.has-focus;
+    callback focus-tracks();
+    focus-tracks => { nav.focus(); }
+    callback reveal-row(int);
+    reveal-row(index) => {
+        if index >= 0 {
+            if index * 22px + library-list.content-y < 0px {
+                library-list.content-y = -index * 22px;
+            } else if (index + 1) * 22px + library-list.content-y > library-list.height {
+                library-list.content-y = min(0px, library-list.height - (index + 1) * 22px);
+            }
+        }
+    }
+    in property <[TableColumn]> columns;
+    in property <[TableColumn]> all-columns;
+    in property <float> table-width;
+    in property <int> sort-field;
+    in property <bool> sort-descending;
+    in property <bool> columns-enabled;
+    in-out property <length> table-scroll-x;
+    property <bool> columns-open;
+    callback change-column(int, int);
+    callback analyze();
+    in property <string> analysis-title;
+    in property <string> analysis-summary;
+    in property <[float]> analysis-waveform;
+    in property <bool> can-analyze;
+    in property <string> analysis-progress;
+    in property <bool> analysis-running;
+    in-out property <int> tab;
+    callback tab-selected(int);
+    pure callback track-transfer(string) -> data-transfer;
+    in property <bool> job-active;
+    callback cancel-job();
+    in property <[LibraryRow]> rows;
+    in property <string> count-text;
+    in property <string> page-text;
+    in property <bool> can-previous-page;
+    in property <bool> can-next-page;
+    out property <length> scroll-y: library-list.content-y;
+    callback scroll-page(bool);
+    scroll-page(end) => {
+        library-list.content-y = end ? min(0px, library-list.height - root.rows.length * 22px) : 0px;
+    }
+    callback change-page(int);
+    in property <string> empty-text;
+    in property <string> storage-text;
+    in property <bool> save-failed;
+    in property <bool> busy;
+    in property <bool> can-relocate;
+    in property <bool> can-load-left;
+    in property <bool> can-load-right;
+    in property <int> selection: -1;
+    in-out property <string> query;
+    callback import-files(); callback import-folder(); callback search(); callback select-track(int); callback move-selection(int); callback relocate-track();
+    callback sort-column(int); callback load-left(); callback load-right();
+    callback retry-save();
+    background: #111111; border-color: #333333; border-width: 1px;
+    VerticalLayout {
+        padding: 3px; spacing: 2px;
+        HorizontalLayout {
+            spacing: 2px;
+            LibraryButton { text: "Analyze Files"; accessible-label: "Analyze all library files"; enabled: root.can-analyze; clicked => { root.analyze(); } }
+            for title[index] in ["Library", "Files", "Crates", "History", "Prepare", "Prep Queue"] : LibraryButton {
+                text: title; active: root.tab == index;
+                enabled: !root.busy || root.analysis-running;
+                accessible-label: title + " library tab";
+                clicked => { root.tab-selected(index); }
+            }
+            search-input := LineEdit { height: 24px; min-width: 80px; text <=> query; placeholder-text: "Search library"; accessible-label: "Library search"; edited => { root.search(); } }
+            LibraryButton { text: "X"; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
+            LibraryButton { text: "Load A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
+            LibraryButton { text: "Load B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
+        }
+        if tab == 5 : HorizontalLayout {
+            height: 24px; spacing: 3px;
+            if tab == 5 : LibraryButton { text: "Remove"; accessible-label: "Remove selected track from prep queue"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(1); } }
+            if tab == 5 : LibraryButton { text: "Up"; accessible-label: "Move prep track up"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(2); } }
+            if tab == 5 : LibraryButton { text: "Down"; accessible-label: "Move prep track down"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(3); } }
+            if tab == 5 : Text { text: "" + root.prep-queue-count + " queued. LOAD keeps entries; remove explicitly."; color: #bbbbbb; font-size: 11px; overflow: elide; horizontal-stretch: 1; }
+        }
+        if tab == 1 : HorizontalLayout {
+            spacing: 3px;
+            LibraryButton { text: busy ? "Working..." : "Add files"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
+            LibraryButton { text: "Add folder"; enabled: !busy; accessible-label: "Import library folder"; clicked => { root.import-folder(); } }
+            Text { text: "Import into the target crate on the left. Files stay in their original location."; color: #bbbbbb; font-size: 11px; wrap: word-wrap; }
+        }
+        if tab == 2 : Text {
+            text: "Crates: select on the left; + / + Sub / + Smart create groups. Add / Remove manage the selected track.";
+            color: #bbbbbb; font-size: 11px; wrap: word-wrap;
+        }
+        if tab == 4 : VerticalLayout {
+            spacing: 2px;
+            if root.analysis-progress != "" : Text { height: 14px; text: root.analysis-progress; accessible-role: text; accessible-label: "Library analysis progress"; accessible-description: root.analysis-progress; font-size: 11px; color: #cccccc; overflow: elide; }
+            Text { height: 14px; text: root.analysis-title; font-size: 11px; color: #eeeeee; overflow: elide; }
+            Text { height: 14px; text: root.analysis-summary; accessible-role: text; accessible-label: "Prepare analysis results"; accessible-description: root.analysis-summary; font-size: 11px; color: #cccccc; overflow: elide; }
+            if root.analysis-waveform.length > 0 : Rectangle {
+                height: 20px; background: #0a0a0a;
+                for peak[index] in root.analysis-waveform : Rectangle {
+                    x: index * parent.width / root.analysis-waveform.length;
+                    width: max(1px, parent.width / root.analysis-waveform.length);
+                    height: peak * parent.height;
+                    y: (parent.height - self.height) / 2;
+                    background: #209ac4;
+                }
+            }
+        }
+        if can-relocate : HorizontalLayout {
+            height: 26px;
+            LibraryButton { text: "Relocate"; enabled: !busy; accessible-label: "Relocate selected missing library track"; clicked => { root.relocate-track(); } }
+        }
+        table-scroll := Flickable {
+          interactive: false;
+          content-x <=> root.table-scroll-x;
+          min-width: 0px; min-height: 22px; vertical-stretch: 1;
+          content-width: max(self.width, root.table-width * 1px);
+          content-height: self.height;
+          VerticalLayout {
+          width: table-scroll.content-width; height: table-scroll.height; spacing: 0px; padding: 0px;
+          HorizontalLayout {
+            spacing: 0px; horizontal-stretch: 0;
+            for column in root.columns : LibraryButton {
+                width: column.width * 1px;
+                enabled: root.tab != 5;
+                text: (column.id == 0 && root.tab != 4 ? "Title" : column.title) + (root.tab != 5 && root.sort-field == column.id ? (root.sort-descending ? " ▼" : " ▲") : "");
+                accessible-label: "Sort library by " + column.sort-label;
+                clicked => { root.sort-column(column.id); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+          }
+        nav := FocusScope {
+            min-height: 22px; vertical-stretch: 1;
+            key-pressed(event) => {
+                if event.text == Key.DownArrow { root.move-selection(1); return accept; }
+                if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
+                return reject;
+            }
+            library-list := ListView {
+                content-height: root.rows.length * 22px;
+                for row[index] in root.rows : Rectangle {
+                    height: 22px; background: root.selection == row.id ? #07577e : (mod(index, 2) == 0 ? #202020 : #111111);
+                    accessible-role: button; accessible-label: "Library track " + row.id;
+                    accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.artist + " BPM " + row.bpm + " Key " + row.key + " " + row.album + " " + row.prepare-duration + " Gain dB " + row.gain + " " + row.analysis-status + " " + row.path + (row.metadata-error == "" ? "" : " Metadata unavailable: " + row.metadata-error);
+                    accessible-action-default => { root.select-track(row.id); nav.focus(); }
+                    HorizontalLayout {
+                        spacing: 0px;
+                        for column in root.columns : Text {
+                            width: column.width * 1px;
+                            text: column.id == 6 ? "" + row.id : column.id == 0 ? row.name : column.id == 3 ? (row.artist == "" ? "—" : row.artist) : column.id == 4 ? (row.album == "" ? "—" : row.album) : column.id == 7 ? row.bpm : column.id == 8 ? row.key : column.id == 9 ? row.gain : column.id == 10 ? (row.available ? row.analysis-status : "Missing") : column.id == 5 ? row.prepare-duration : column.id == 2 ? row.path : (row.available ? row.format : "MISSING");
+                            font-size: 11px; vertical-alignment: center; color: column.id == 7 ? #4fc2ed : column.id == 8 ? #d597ed : #cccccc; overflow: elide;
+                            accessible-role: text; accessible-label: "Track " + row.id + " " + column.sort-label;
+                            accessible-description: self.text;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    DragArea {
+                        width: 100%; height: 100%; allow-copy: true;
+                        enabled: row.available && !root.busy;
+                        data: root.track-transfer(row.path);
+                        TouchArea { clicked => { root.select-track(row.id); nav.focus(); } }
+                    }
+                }
+            }
+            Text { text: empty-text; visible: rows.length == 0; color: #9faec2; horizontal-alignment: center; vertical-alignment: center; }
+        }
+          }
+        }
+        HorizontalLayout {
+            LibraryButton { text: "Columns"; accessible-label: "Configure track columns"; clicked => { root.columns-open = !root.columns-open; } }
+            LibraryButton { text: "◀"; accessible-label: "Scroll track columns left"; enabled: root.table-scroll-x < 0px; clicked => { root.table-scroll-x = min(0px, root.table-scroll-x + 240px); } }
+            LibraryButton { text: "▶"; accessible-label: "Scroll track columns right"; enabled: root.table-scroll-x > min(0px, table-scroll.width - root.table-width * 1px); clicked => { root.table-scroll-x = max(min(0px, table-scroll.width - root.table-width * 1px), root.table-scroll-x - 240px); } }
+            Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
+            LibraryButton { text: "To Prep"; accessible-label: "Add selected track to prep queue"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(0); } }
+            LibraryButton { text: "‹"; accessible-label: "Previous library page"; enabled: root.can-previous-page; clicked => { root.change-page(-1); } }
+            Text { text: page-text; accessible-role: text; accessible-label: "Library page"; color: #9faec2; font-size: 11px; vertical-alignment: center; }
+            LibraryButton { text: "›"; accessible-label: "Next library page"; enabled: root.can-next-page; clicked => { root.change-page(1); } }
+            Text { text: storage-text; accessible-role: text; accessible-label: "Library storage status"; color: save-failed ? #ffae58 : #9faec2; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+            if root.job-active : LibraryButton { text: "Cancel"; accessible-label: "Cancel background load or import"; clicked => { root.cancel-job(); } }
+            if save-failed : LibraryButton { text: "Retry save"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
+        }
+    }
+        if root.columns-open : Rectangle {
+            x: 8px; y: 30px; width: min(420px, parent.width - 16px); height: min(280px, parent.height - 36px);
+            background: #222222; border-width: 1px; border-color: #aaaaaa;
+            VerticalLayout {
+                padding: 6px; spacing: 3px;
+                HorizontalLayout {
+                    Text { text: "Columns · visibility and order"; color: #eeeeee; font-size: 11px; }
+                    LibraryButton { text: "Close"; accessible-label: "Close track columns"; clicked => { root.columns-open = false; } }
+                }
+                ListView {
+                    for column[index] in root.all-columns : HorizontalLayout {
+                        height: 24px;
+                        CheckBox { text: column.title; checked: column.visible; enabled: root.columns-enabled; accessible-label: "Show column " + column.sort-label; toggled => { root.change-column(column.id, 0); } }
+                        LibraryButton { text: "←"; accessible-label: "Move column " + column.sort-label + " left"; enabled: root.columns-enabled && index > 0; clicked => { root.change-column(column.id, -1); } }
+                        LibraryButton { text: "→"; accessible-label: "Move column " + column.sort-label + " right"; enabled: root.columns-enabled && index < root.all-columns.length - 1; clicked => { root.change-column(column.id, 1); } }
+                }
+            }
+        }
+    }
+}

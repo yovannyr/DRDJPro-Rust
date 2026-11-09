@@ -1,0 +1,61 @@
+﻿cargo :    Compiling drdjpro-ui-spike v0.1.0 (C:\repo\DRDJPro-Rust)
+In Zeile:2 Zeichen:1
++ cargo build 2>&1 | Out-File -Encoding utf8 build_output.txt; Get-Cont ...
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling dr...o\DRDJPro-Rust):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error: failed to run custom build command for `drdjpro-ui-spike v0.1.0 (C:\repo\DRDJPro-Rust)`
+
+Caused by:
+  process didn't exit successfully: 
+`C:\repo\DRDJPro-Rust\target\debug\build\drdjpro-ui-spike-9624a243f7d8652a\build-script-build` (exit code: 101)
+  --- stderr
+  error: invalid expression
+      --> C:\repo\DRDJPro-Rust\ui\app.slint:1038:47
+       |
+  1038 |     in-out property <string> left-deck-label: 'DECK A';
+       |                                               ^
+       |
+  error: Parse error
+      --> C:\repo\DRDJPro-Rust\ui\app.slint:1038:47
+       |
+  1038 |     in-out property <string> left-deck-label: 'DECK A';
+       |                                               ^
+  error: invalid expression
+      --> C:\repo\DRDJPro-Rust\ui\app.slint:1039:48
+       |
+  1039 |     in-out property <string> right-deck-label: 'DECK B';
+       |                                                ^
+  error: Parse error
+      --> C:\repo\DRDJPro-Rust\ui\app.slint:1349:17
+       |
+  1349 | ...   (root.left-deck-label = root.mc4000-connected ? "DECK A - CTLR" : "DECK A"); accent: #36c9ef; 
+track-title: root.left-title; ...
+       |       ^
+  error: Parse error
+      --> C:\repo\DRDJPro-Rust\ui\app.slint:1388:17
+       |
+  1388 | ...   (root.right-deck-label = root.mc4000-connected ? "DECK B - CTLR" : "DECK B"); accent: #ffae58; 
+track-title: root.right-title...
+       |       ^
+  error: Parse error
+      --> C:\repo\DRDJPro-Rust\ui\app.slint:1490:21
+       |
+  1490 | ...   (root.left-deck-label = root.mc4000-connected ? "DECK A - CTLR" : "DECK A"); accent: #36c9ef; detail: 
+root.left-detail; colo...
+       |       ^
+  error: Parse error
+      --> C:\repo\DRDJPro-Rust\ui\app.slint:1512:21
+       |
+  1512 | ...   (root.right-deck-label = root.mc4000-connected ? "DECK B - CTLR" : "DECK B"); accent: #ffae58; detail: 
+root.right-detail; co...
+       |       ^
+
+  thread 'main' (32412) panicked at build.rs:4:62:
+  Failed to compile Slint UI: CompileError(["C:\\repo\\DRDJPro-Rust\\ui\\app.slint:1038: invalid expression", 
+"C:\\repo\\DRDJPro-Rust\\ui\\app.slint:1038: Parse error", "C:\\repo\\DRDJPro-Rust\\ui\\app.slint:1039: invalid 
+expression", "C:\\repo\\DRDJPro-Rust\\ui\\app.slint:1349: Parse error", "C:\\repo\\DRDJPro-Rust\\ui\\app.slint:1388: 
+Parse error", "C:\\repo\\DRDJPro-Rust\\ui\\app.slint:1490: Parse error", "C:\\repo\\DRDJPro-Rust\\ui\\app.slint:1512: 
+Parse error"])
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

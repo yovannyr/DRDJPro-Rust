@@ -1,1229 +1,65 @@
-import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox } from "std-widgets.slint";
-export struct LoopRange { valid: bool, active: bool, visible: bool, in-visible: bool, out-visible: bool, start: float, end: float, description: string }
-export struct SavedLoopRow { occupied: bool, description: string }
-export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string, label-row: int, label-column: int }
-export struct CrateRow { id: int, name: string, count: int, depth: int, smart: bool }
-export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
-export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, prepare-duration: string, bpm: string, key: string, gain: string, analysis-status: string, metadata-error: string, format: string, path: string, available: bool }
-export struct TableColumn { id: int, title: string, sort-label: string, visible: bool, width: float }
-export enum DeckView { training, virtual }
-export struct SamplerRow {name:string,loaded:bool,busy:bool,playing:bool,occupied:bool}
+// DRDJPRO CONNECTED LAYOUT — generated from local source
+import "layout-fonts/LiberationSans-Regular.ttf";
+import "layout-fonts/LiberationSans-Bold.ttf";
+import "layout-fonts/LiberationMono-Regular.ttf";
+import { DjTheme, LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
+export { LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
+import { VirtualPlatter, ChannelMeter, HotCuePad, NudgeHold, LibraryButton, DjAction } from "controls.slint";
+import { WaveformStrip, DetailWaveform } from "waveform.slint";
+import { CompactDeck, DeckPlaceholder } from "deck.slint";
+import { CratePanel, TrackLibrary } from "library.slint";
+import { EqStrip, FxStrip } from "editors.slint";
 
-component VirtualPlatter inherits Rectangle {
-    in property <string> deck-label;
-    in property <string> bpm;
-    in property <string> time;
-    in property <float> pitch;
-    in property <float> position;
-    in property <bool> playing;
-    in property <float> angle;
-    in property <bool> touched;
-    in property <bool> scratch-enabled;
-    in property <bool> mouse-owned;
-    callback scratch-pointer(int, float, float);
-    property <bool> dragging;
-    function release-pointer() {
-        if root.dragging { root.dragging = false; root.scratch-pointer(2, 0, 0); }
-    }
-    changed scratch-enabled => { if !root.scratch-enabled { root.release-pointer(); } }
-    in property <brush> accent;
-    width: 120px; height: 120px;
-    border-radius: 60px;
-    background: #07090c;
-    border-width: 5px;
-    border-color: root.accent;
-    accessible-role: image;
-    accessible-label: root.deck-label + " round virtual platter";
-    accessible-description: root.bpm + " BPM, pitch " + round(root.pitch * 100) / 100 + "%, " + root.time + ", " + round(root.position) + "%, " + (root.touched ? "Jog touched" : root.playing ? "Playing" : "Paused") + ", rotation " + round(root.angle) + " degrees. Hold left mouse button and drag around the platter to scratch.";
-    Rectangle {
-        x: 58px + 54px * sin(root.angle * 1deg); y: 58px - 54px * cos(root.angle * 1deg);
-        width: 4px; height: 4px; border-radius: 2px; background: root.touched ? #ffffff : #ffce77;
-    }
-    Rectangle {
-        x: 9px; y: 9px; width: 102px; height: 102px;
-        border-radius: 51px; background: #f4f4f2;
-        VerticalLayout {
-            padding-left: 9px; padding-right: 9px; padding-top: 3px; padding-bottom: 3px; spacing: 0px;
-            Text { text: root.bpm; font-size: 20px; font-weight: 800; color: #141414; horizontal-alignment: center; }
-            Text { text: "BPM"; font-size: 9px; color: #343434; horizontal-alignment: center; }
-            Text { text: (root.pitch > 0 ? "+" : "") + round(root.pitch * 100) / 100 + "%"; font-size: 11px; color: #141414; horizontal-alignment: center; }
-            Text { text: root.time; font-size: 12px; font-weight: 700; color: #141414; horizontal-alignment: center; }
-            Text { text: round(root.position) + "%"; font-size: 9px; color: #343434; horizontal-alignment: center; }
-        }
-    }
-    touch := TouchArea {
-        enabled: root.scratch-enabled;
-        mouse-cursor: root.dragging && root.mouse-owned && root.touched ? none : grab;
-        pointer-event(event) => {
-            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
-                if !root.dragging {
-                    keys.focus();
-                    root.dragging = true;
-                    root.scratch-pointer(0, (self.mouse-x - root.width / 2) / 1px, (self.mouse-y - root.height / 2) / 1px);
-                }
-            } else if event.kind == PointerEventKind.cancel || event.kind == PointerEventKind.up {
-                // Slint releases pointer capture on any button-up, including a secondary button.
-                root.release-pointer();
-            }
-        }
-        moved => {
-            if root.dragging {
-                root.scratch-pointer(1, (self.mouse-x - root.width / 2) / 1px, (self.mouse-y - root.height / 2) / 1px);
-            }
-        }
-    }
-    keys := FocusScope {
-        width: 0; height: 0;
-        focus-lost(reason) => { root.release-pointer(); }
-    }
-    if root.dragging && root.mouse-owned && root.touched : Rectangle {
-        x: touch.mouse-x - 14px; y: touch.mouse-y - 14px;
-        width: 28px; height: 28px;
-        border-radius: 14px; background: #f4f4f2;
-        accessible-role: image;
-        accessible-label: root.deck-label + " scratch drag hand";
-        Image {
-            x: 2px; y: 2px; width: 24px; height: 24px;
-            source: @image-url("../assets/drag-hand-gesture.svg");
-            image-fit: contain;
-        }
-    }
-}
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox, Palette } from "std-widgets.slint";
 
-component ChannelMeter inherits Rectangle {
-    in property <string> deck;
-    in property <string> caption;
-    in property <float> level;
-    in property <bool> clipped;
-    in property <bool> warning;
-    callback clear();
-    background: #171d27;
-    HorizontalLayout {
-        padding: 2px; spacing: 4px;
-        Rectangle {
-            background: #0b1119;
-            accessible-role: image;
-            accessible-label: "Deck " + root.deck + " pre-fader sample peak";
-            accessible-description: root.caption + ". Latest complete 50 ms window after EQ/filter/trim and before faders; LAST marks inactive transport and shows the latest produced window. Not true peak or hardware timing.";
-            Rectangle { width: parent.width * clamp(root.level,0,1); background: root.warning ? #b03535 : #216546; }
-            Text { text: root.caption; color: #edf2fa; font-size: 10px; vertical-alignment: center; horizontal-alignment: center; }
-        }
-        Button { width: 72px; text: root.clipped ? "CLIP" : "CLEAR"; enabled: root.clipped; accessible-label: "Deck " + root.deck + " clear clip hold"; clicked => { root.clear(); } }
-    }
-}
 
-component EqStrip inherits Rectangle {
-    in property <string> deck;
-    in-out property <float> trim;
-    in-out property <float> low;
-    in-out property <float> mid;
-    in-out property <float> high;
-    in-out property <float> filter;
-    callback changed();
-    background: #171d27;
-    VerticalLayout {
-        padding: 4px; spacing: 2px;
-        HorizontalLayout {
-            Text { text: "Deck " + root.deck + " EQ / TRIM"; color: #c8d4e4; }
-            Button { text: "RESET"; accessible-label: "Deck " + root.deck + " reset EQ"; clicked => { root.trim = 0; root.low = 0; root.mid = 0; root.high = 0; root.filter = 0; root.changed(); } }
-        }
-        HorizontalLayout {
-            VerticalLayout {
-                Text { text: "TRIM " + round(root.trim * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
-                Slider { minimum: -12; maximum: 12; value <=> root.trim; accessible-label: "Deck " + root.deck + " trim dB"; changed => { root.changed(); } }
-            }
-            VerticalLayout {
-                Text { text: "LOW " + round(root.low * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
-                Slider { minimum: -24; maximum: 12; value <=> root.low; accessible-label: "Deck " + root.deck + " low EQ dB"; changed => { root.changed(); } }
-            }
-            VerticalLayout {
-                Text { text: "MID " + round(root.mid * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
-                Slider { minimum: -24; maximum: 12; value <=> root.mid; accessible-label: "Deck " + root.deck + " mid EQ dB"; changed => { root.changed(); } }
-            }
-            VerticalLayout {
-                Text { text: "HIGH " + round(root.high * 10) / 10 + " dB"; color: #c8d4e4; font-size: 10px; }
-                Slider { minimum: -24; maximum: 12; value <=> root.high; accessible-label: "Deck " + root.deck + " high EQ dB"; changed => { root.changed(); } }
-            }
-            VerticalLayout {
-                Text { text: root.filter == 0 ? "FILTER OFF" : (root.filter < 0 ? "LP " : "HP ") + round(abs(root.filter)*100) + "%"; color: #c8d4e4; font-size: 10px; }
-                Slider { minimum: -1; maximum: 1; value <=> root.filter; accessible-label: "Deck " + root.deck + " bipolar filter"; changed => { root.changed(); } }
-                Button { text: "OFF"; accessible-label: "Deck " + root.deck + " filter off"; clicked => { root.filter = 0; root.changed(); } }
-            }
-        }
-    }
-}
 
-component WaveformStrip inherits Rectangle {
-    in property <string> deck-label;
-    in property <bool> overview;
-    in property <brush> accent;
-    in property <[float]> values;
-    in property <[color]> colors;
-    in property <[BeatLine]> beats;
-    in property <[HotCueRow]> hot-cues;
-    in property <LoopRange> loop-range;
-    in property <bool> enabled;
-    in property <float> position;
-    in property <float> marker;
-    in property <float> range-start: 0;
-    in property <float> range-end: 100;
-    callback seek(float);
-    function cue-label-x(position: float, column: int) -> length {
-        let marker-x = clamp((position - root.range-start) / max(0.000001, root.range-end - root.range-start), 0, 1) * max(0px, root.width - 2px);
-        let preferred-x = marker-x + 3px + column * 56px;
-        let flipped-x = marker-x - 3px - (column + 1) * 56px;
-        let label-x = marker-x > root.width - 115px ? flipped-x : preferred-x;
-        return clamp(label-x, 0px, max(0px, root.width - 54px));
-    }
-    in property <bool> keyboard-zoom: false;
-    callback zoom-step(int);
-    forward-focus: zoom-keys;
-    border-width: zoom-keys.has-focus ? 1px : 0px;
-    border-color: #77baff;
-    background: #070b11; clip: true;
-    Rectangle {
-        visible: root.loop-range.visible;
-        accessible-role: image; accessible-label: root.deck-label + (root.overview ? " overview loop range" : " detail loop range");
-        accessible-description: root.loop-range.description;
-        x: min(clamp(root.loop-range.start / 100, 0, 1) * parent.width, max(0px,parent.width - 1px));
-        width: min(max(1px, max(0, root.loop-range.end - root.loop-range.start) / 100 * parent.width), max(0px,parent.width - self.x));
-        height: parent.height; background: root.loop-range.active ? #36dfa333 : #a8b3c31c;
-    }
-    for value[i] in values : Rectangle {
-        x: i * parent.width / max(1, values.length);
-        y: (parent.height - self.height) / 2;
-        width: parent.width / max(1, values.length);
-        height: clamp(value, 0, 1) * max(0px, parent.height - 6px);
-        background: i < colors.length ? colors[i] : accent;
-    }
-    for line in beats : Rectangle {
-        accessible-role: image; accessible-label: deck-label + (line.warp-marker ? " warp marker" : " beat line"); accessible-value: line.position;
-        x: clamp(line.position, 0, 100) / 100 * max(0px, parent.width - self.width);
-        width: line.warp-marker || line.downbeat ? 2px : 1px; height: parent.height;
-        background: line.first ? #ff4444 : (line.warp-marker ? #ffae58 : (line.downbeat ? #ffffff99 : #ffffff40));
-    }
-    for line in beats : Text {
-        visible: line.downbeat; x: clamp(line.position,0,100)/100*max(0px,parent.width - 14px); y: 1px;
-        text: "" + line.bar; color: line.first ? #ff5555 : #dfe8f5; font-size: 10px;
-        accessible-role: text; accessible-label: deck-label + " bar label"; accessible-description: "Bar " + line.bar;
-    }
-    Rectangle {
-        visible: root.loop-range.in-visible;
-        accessible-role: image; accessible-label: root.deck-label + (root.overview ? " overview loop in" : " detail loop in"); accessible-value: root.loop-range.start;
-        x: clamp(root.loop-range.start / 100,0,1)*max(0px,parent.width - self.width);
-        width: 2px; height: parent.height; background: root.loop-range.active ? #36dfa3 : #a8b3c3;
-        Text { x: 3px; y: 14px; text: "IN"; color: parent.background; font-size: 9px; }
-    }
-    Rectangle {
-        visible: root.loop-range.out-visible;
-        accessible-role: image; accessible-label: root.deck-label + (root.overview ? " overview loop out" : " detail loop out"); accessible-value: root.loop-range.end;
-        x: clamp(root.loop-range.end / 100,0,1)*max(0px,parent.width - self.width);
-        width: 2px; height: parent.height; background: root.loop-range.active ? #36dfa3 : #a8b3c3;
-        Text { x: -22px; y: 14px; text: "OUT"; color: parent.background; font-size: 9px; }
-    }
-    for cue[i] in hot-cues : Rectangle {
-        visible: cue.valid && range-end > range-start && cue.position >= range-start && cue.position <= range-end;
-        accessible-role: image; accessible-label: deck-label + (overview ? " overview cue marker " : " detail cue marker ") + (i + 1);
-        accessible-description: cue.description; accessible-value: cue.position;
-        x: clamp((cue.position - range-start) / max(0.000001, range-end - range-start), 0, 1) * max(0px, parent.width - self.width);
-        width: 2px; height: parent.height; background: cue.tint;
-    }
-    for cue[i] in hot-cues : Text {
-        visible: cue.valid && range-end > range-start && cue.position >= range-start && cue.position <= range-end;
-        x: root.cue-label-x(cue.position, cue.label-column); y: cue.label-row * 10px;
-        width: 54px; height: 10px; text: "" + (i + 1) + " " + cue.name;
-        color: cue.tint; font-size: 10px; overflow: elide;
-        accessible-role: text;
-        accessible-label: deck-label + (overview ? " overview cue label " : " detail cue label ") + (i + 1);
-        accessible-description: cue.description;
-    }
-    Rectangle {
-        accessible-role: image;
-        accessible-label: deck-label + (overview ? " waveform playhead" : " detail playhead");
-        accessible-value: marker;
-        x: clamp(marker, 0, 100) / 100 * max(0px, parent.width - self.width);
-        width: 2px; height: parent.height; background: #ffffff;
-    }
-    zoom-keys := FocusScope {
-        width: 0;
-        enabled: root.enabled && root.keyboard-zoom;
-        key-pressed(event) => {
-            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
-                return reject;
-            }
-            if event.text == "+" {
-                root.zoom-step(-1);
-                return accept;
-            }
-            if event.text == "-" {
-                root.zoom-step(1);
-                return accept;
-            }
-            return reject;
-        }
-    }
-    TouchArea {
-        pointer-event(event) => {
-            if root.enabled && root.keyboard-zoom && event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
-                zoom-keys.focus();
-            }
-        }
-        enabled: root.enabled; accessible-role: slider;
-        accessible-label: deck-label + (overview ? " waveform overview" : " detailed waveform");
-        accessible-description: root.keyboard-zoom ? "Click to seek and focus; use + or - while focused to zoom this deck from 2 to 32 source seconds." : "Click to seek within the track.";
-        accessible-enabled: self.enabled; accessible-value: position;
-        accessible-value-minimum: range-start; accessible-value-maximum: range-end;
-        accessible-action-set-value(v) => { if self.enabled && v.is-float() { root.seek(clamp(v.to-float(), range-start, range-end)); } }
-        clicked => { if self.width > 0px { root.seek(range-start + clamp(self.mouse-x / self.width, 0, 1) * (range-end - range-start)); } }
-    }
-}
 
-component HotCuePad inherits Rectangle {
-    in property <int> slot;
-    in property <string> label;
-    in property <string> text;
-    in property <string> description;
-    in property <bool> occupied;
-    in property <bool> cue-enabled;
-    in property <color> tint;
-    callback held(int, bool, int);
-    property <int> active-input: 0;
-    function begin-input(input: int) {
-        if root.active-input == 0 {
-            root.active-input = input;
-            root.held(root.slot, true, input);
-        }
-    }
-    function end-input(input: int) {
-        if root.active-input == input {
-            root.active-input = 0;
-            root.held(root.slot, false, input);
-        }
-    }
-    function cancel-input() {
-        let input = root.active-input;
-        root.active-input = 0;
-        if input != 0 {
-            root.held(root.slot, false, input);
-        }
-    }
-    height: 27px;
-    background: root.active-input != 0 ? #365472 : #243448;
-    border-radius: 3px;
-    opacity: root.cue-enabled ? 1 : 0.4;
-    forward-focus: keys;
-    accessible-role: button;
-    accessible-label: root.label;
-    accessible-description: root.description + ". Hold to preview from a paused deck.";
-    accessible-enabled: root.cue-enabled;
-    accessible-action-default => {
-        if root.cue-enabled && root.active-input == 0 {
-            root.begin-input(4);
-            root.end-input(4);
-        }
-    }
-    changed cue-enabled => {
-        if !root.cue-enabled {
-            root.cancel-input();
-        }
-    }
-    Text {
-        text: root.text;
-        color: root.occupied ? root.tint : #dfe8f5;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-    TouchArea {
-        enabled: root.cue-enabled;
-        pointer-event(event) => {
-            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
-                keys.focus();
-                root.begin-input(1);
-            } else if event.button == PointerEventButton.left && event.kind == PointerEventKind.up {
-                root.end-input(1);
-            } else if event.kind == PointerEventKind.cancel {
-                root.end-input(1);
-            }
-        }
-    }
-    keys := FocusScope {
-        width: 0; height: 0;
-        enabled: root.cue-enabled;
-        focus-lost(reason) => { root.cancel-input(); }
-        key-pressed(event) => {
-            if event.text == Key.Space || event.text == Key.Return {
-                if !event.repeat {
-                    root.begin-input(event.text == Key.Space ? 2 : 3);
-                }
-                return accept;
-            }
-            return reject;
-        }
-        key-released(event) => {
-            if event.text == Key.Space || event.text == Key.Return {
-                root.end-input(event.text == Key.Space ? 2 : 3);
-                return accept;
-            }
-            return reject;
-        }
-    }
-}
 
-// A temporary rate must always have a matching release, including focus/cancel paths.
-component NudgeHold inherits Rectangle {
-    in property <string> label;
-    in property <string> text;
-    in property <bool> enabled;
-    callback held(bool);
-    callback cancel();
-    // First input owns this gesture; other inputs need a fresh press after release.
-    property <int> active-input: 0;
-    function begin-input(input: int) { if root.active-input == 0 { root.active-input = input; root.held(true); } }
-    function end-input(input: int) { if root.active-input == input { root.active-input = 0; root.held(false); } }
-    function cancel-input() { root.active-input = 0; root.cancel(); }
-    height: 28px;
-    background: root.active-input != 0 ? #365472 : #243448;
-    border-radius: 4px;
-    border-width: keys.has-focus ? 1px : 0px; border-color: #77baff;
-    opacity: enabled ? 1 : 0.4;
-    forward-focus: keys;
-    accessible-role: button; accessible-label: label;
-    accessible-description: "Hold pointer, Space or Return; first input owns the gesture until release";
-    accessible-enabled: enabled;
-    // An accessibility click is instantaneous, so it cannot latch a rate.
-    accessible-action-default => { if root.enabled && root.active-input == 0 { root.begin-input(4); root.end-input(4); } }
-    changed enabled => { if !self.enabled { root.cancel-input(); } }
-    Text { text: root.text; color: #dfe8f5; horizontal-alignment: center; vertical-alignment: center; }
-    touch := TouchArea {
-        enabled: root.enabled;
-        pointer-event(event) => {
-            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
-                keys.focus(); root.begin-input(1);
-            } else if event.kind == PointerEventKind.cancel {
-                root.end-input(1);
-            } else if event.button == PointerEventButton.left && event.kind == PointerEventKind.up {
-                root.end-input(1);
-            }
-        }
-    }
-    keys := FocusScope {
-        width: 0; // Pointer input belongs to the TouchArea, which explicitly focuses us.
-        enabled: root.enabled;
-        focus-lost(reason) => { root.cancel-input(); }
-        key-pressed(event) => {
-            if event.text == Key.Space || event.text == Key.Return { if !event.repeat { root.begin-input(event.text == Key.Space ? 2 : 3); } return accept; }
-            return reject;
-        }
-        key-released(event) => {
-            if event.text == Key.Space || event.text == Key.Return { root.end-input(event.text == Key.Space ? 2 : 3); return accept; }
-            return reject;
-        }
-    }
-}
 
-component FxStrip inherits Rectangle {
-    in property <string> summary;
-    in-out property <int> selected-slot;
-    in-out property <int> effect-kind;
-    in-out property <bool> legacy:true;
-    callback slot-action(int,int,float);
-    callback legacy-changed(bool);
-    in property <string> deck;
-    in property <bool> ready;
-    in-out property <bool> active;
-    in-out property <float> time:250;
-    in-out property <float> feedback:30;
-    in-out property <float> wet:25;
-    in-out property <int> slot:1;
-    in-out property <int> time-base;
-    in-out property <int> division:4;
-    in property <string> timing;
-    callback timing-changed(int,int);
-    callback tap(bool);
-    callback tap-cancel();
-    callback changed();
-    callback preset(int,bool);
-    background:#171d27;
-    VerticalLayout {
-        padding:8px;spacing:6px;
-        Text {text:"Deck "+root.deck+" FX 1 → 2 → 3 (serial)";color:#edf2fa;}
-        Text {text:root.summary;color:#c8d4e4;font-size:11px;overflow:elide;}
-        HorizontalLayout {
-            ComboBox {model:["Slot 1","Slot 2","Slot 3"];current-index <=> root.selected-slot;enabled:root.ready;accessible-label:"Deck "+root.deck+" FX slot";selected(value)=>{root.slot-action(root.selected-slot,4,0);}}
-            ComboBox {model:["Delay","Low-pass","High-pass"];current-index <=> root.effect-kind;enabled:root.ready;accessible-label:"Deck "+root.deck+" effect type";selected(value)=>{root.slot-action(root.selected-slot,5,root.effect-kind);}}
-        }
-        CheckBox {text:"Legacy knobs: Wet / Feedback / Time";checked <=> root.legacy;enabled:root.ready;accessible-label:"Deck "+root.deck+" legacy FX knobs";toggled=>{root.legacy-changed(root.legacy);}}
-        CheckBox {text:"Enabled (unchecked = bypass)";checked <=> root.active;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay enabled";toggled=>{root.changed();}}
-        HorizontalLayout {
-            ComboBox { model:["Milliseconds", "Deck BPM", "Tap BPM"]; current-index <=> root.time-base; enabled:root.ready && root.effect-kind == 0; accessible-label:"Deck "+root.deck+" FX time base"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
-            ComboBox { model:["1/16 beat", "1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.division; enabled:root.ready && root.effect-kind == 0 && root.time-base != 0; accessible-label:"Deck "+root.deck+" FX beat division"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
-            NudgeHold { text:"TAP"; label:"Deck "+root.deck+" FX tap tempo; hold one second to reset"; enabled:root.ready && root.effect-kind == 0; held(value)=>{root.tap(value);} cancel=>{root.tap-cancel();} }
-        }
-        Text {text:root.timing;color:#c8d4e4;overflow:elide;}
-        Text {text:"Time "+round(root.time)+" ms";color:#c8d4e4;}
-        Slider {minimum:20;maximum:1000;value <=> root.time;enabled:root.ready && root.effect-kind == 0 && root.time-base == 0;accessible-label:"Deck "+root.deck+" delay time";changed=>{root.changed();}}
-        Text {text:"Feedback "+round(root.feedback)+"%";color:#c8d4e4;}
-        Slider {minimum:0;maximum:85;value <=> root.feedback;enabled:root.ready && root.effect-kind == 0;accessible-label:"Deck "+root.deck+" delay feedback";changed=>{root.changed();}}
-        Text {text:(root.effect-kind == 0 ? "Dry/Wet " : "Filter intensity ")+round(root.wet)+"%";color:#c8d4e4;}
-        Slider {minimum:0;maximum:100;value <=> root.wet;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay dry wet";changed=>{root.changed();}}
-        HorizontalLayout {
-            SpinBox {minimum:1;maximum:8;value <=> root.slot;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay preset slot";}
-            Button {text:"LOAD";enabled:root.ready;accessible-label:"Deck "+root.deck+" load delay preset";clicked=>{root.preset(root.slot - 1,false);}}
-            Button {text:"SAVE";enabled:root.ready;accessible-label:"Deck "+root.deck+" save delay preset";clicked=>{root.preset(root.slot - 1,true);}}
-        }
-    }
-}
 
-component CompactDeck inherits Rectangle {
-    in property <int> loop-jog-mode;
-    callback loop-jog();
-    callback cancel-loop-jog();
-    out property <bool> loop-name-focused;
-    changed tools-panel => { root.loop-name-focused = false; }
-    callback scratch-pointer(int, float, float);
-    in property <bool> platter-mouse-owned;
-    in property <float> platter-angle;
-    in property <bool> platter-touched;
-    in property <bool> censor;
-    in property <string> deck-label;
-    in property <bool> controller-mode: false;
-    in property <brush> accent;
-    in property <string> track-title;
-    in property <bool> pad-sampler;
-    callback pad-mode();
-    in property <string> time-text;
-    in property <string> platter-bpm: "—";
-    in property <string> platter-time: "—";
-    in property <[float]> waveform;
-    in property <[color]> colors;
-    in property <bool> audio-enabled;
-    in property <bool> loaded;
-    in property <bool> loading;
-    in property <bool> load-busy;
-    in property <bool> playing;
-    in-out property <float> position;
-    in property <[HotCueRow]> hot-cues;
-    in-out property <bool> quantize-cues: false;
-    in property <bool> quantize-enabled: true;
-    in property <bool> quantize-preferences-ready: true;
-    in-out property <bool> quantize-triggers: false;
-    in-out property <int> quantize-step: 3;
-    changed quantize-step => { root.cancel-trigger(); }
-    in-out property <bool> keylock: false;
-    callback keylock-change();
-    callback cancel-trigger();
-    in property <LoopRange> loop-range;
-    property <int> delete-slot: 1;
-    property <int> tools-panel: 0;
-    in property <bool> grid-active;
-    in-out property <int> pitch-range-index: 3;
-    in property <float> pitch-min: -50;
-    in property <float> pitch-max: 100;
-    in property <bool> pitch-outside;
-    in property <bool> pitch-can-down;
-    in property <bool> pitch-can-up;
-    callback nudge(int, bool); callback cancel-nudge();
-    callback pitch-range(); callback pitch-down(); callback pitch-up();
-    in-out property <float> pitch-percent;
-    in property <string> pitch-caption;
-    in property <string> bpm-caption;
-    callback pitch(float); callback reset-pitch();
-    in property <bool> can-match-tempo; callback match-tempo();
-    in property <bool> can-phase-sync; callback phase-sync();
-    in property <bool> sync-active; in property <bool> sync-preparing; in property <bool> can-sync; callback toggle-sync();
-    in-out property <int> alignment-index: 0; callback alignment-mode();
-    in-out property <int> auto-loop-index: 5;
-    in-out property <bool> auto-loop-snap: false;
-    callback auto-loop(); callback half-loop(); callback double-loop();
-    in property <[SavedLoopRow]> saved-loops;
-    in-out property <int> saved-loop-slot: 1;
-    in-out property <string> saved-loop-name;
-    callback save-loop(); callback recall-loop(); callback delete-loop();
-    in property <string> loop-caption;
-    in property <bool> loop-has-in;
-    in property <bool> loop-ready;
-    in property <bool> loop-active;
-    callback loop-in(); callback loop-out(); callback loop-activate(); callback reloop();
-    in property <bool> cue-editing;
-    in-out property <string> cue-name;
-    in-out property <string> cue-rgb;
-    callback edit-hot-cue(int); callback save-hot-cue(); callback cancel-hot-cue();
-    callback hot-cue(int, bool, int); callback delete-hot-cue(int);
-    callback load(); callback toggle(); callback cue(); callback eject(); callback seek(float);
-    callback temporary-cue(bool); callback stutter();
-    pure callback accepts-drop(data-transfer) -> bool;
-    callback drop-track(data-transfer) -> bool;
-    in property <bool> external-hover: false;
-    background: #171c24; border-width: 1px; border-color: deck-drop.has-drag || root.external-hover ? root.accent : #303b4b;
-    deck-drop := DropArea {
-        width: 100%; height: 100%;
-        can-drop(event) => { return root.accepts-drop(event.data) ? DragAction.copy : DragAction.none; }
-        dropped(event) => { return root.drop-track(event.data) ? DragAction.copy : DragAction.none; }
-    }
-    VerticalLayout {
-        padding: 8px; spacing: 4px;
-        HorizontalLayout {
-            Text {
-                text: root.deck-label + (root.controller-mode ? " / MC4000" : " / TRAINING");
-                color: root.accent;
-                font-weight: 700;
-                font-size: 15px;
-                accessible-role: text;
-                accessible-label: root.deck-label + " presentation mode";
-                accessible-description: root.controller-mode ? "Controller mode active" : "Training mode active";
-            }
-            Button { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !load-busy && !playing; clicked => { root.load(); } }
-            Button { text: playing ? "PAUSE" : "PLAY"; accessible-label: deck-label + " play/pause"; enabled: !audio-enabled || loaded; clicked => { root.toggle(); } }
-            NudgeHold { height: 24px; text: "CUE"; label: deck-label + " cue"; enabled: !audio-enabled || (loaded && !loading); held(value) => { if root.audio-enabled { root.temporary-cue(value); } else if value { root.cue(); } } cancel => { if root.audio-enabled { root.temporary-cue(false); } } }
-            Button { text: "EJECT"; accessible-label: deck-label + " eject"; accessible-description: "Stop and unload this deck; keep the track in the library"; enabled: loaded && !loading && !load-busy; clicked => { root.eject(); } }
-        }
-        HorizontalLayout {
-            height: 20px;
-            Text { text: (root.censor ? "CENSOR · " : "") + track-title; color: root.censor ? #ffc15e : #f1f3f7; font-size: 16px; overflow: elide; }
-            Button { height: 20px; text: root.pad-sampler ? "MC: SAMPLER" : "MC: HOT CUES";
-                accessible-label: root.deck-label + " hardware pad mode";
-                accessible-description: "Four MC4000 pads: " + (root.pad-sampler ? "sampler play, SHIFT stop" : "hot cue hold, SHIFT delete") + ". Click to switch. GUI and keyboard hot cues stay independent.";
-                clicked => { root.pad-mode(); }
-            }
-            Button { height: 20px; text: "START"; accessible-label: deck-label + " track start"; enabled: !audio-enabled || (loaded && !loading); clicked => { root.cue(); } }
-            Button { height: 20px; text: "STUTTER"; accessible-label: deck-label + " stutter"; enabled: loaded && !loading; clicked => { root.stutter(); } }
-        }
-        if !root.controller-mode : WaveformStrip {
-            height: 42px; overview: true; deck-label: root.deck-label; accent: root.accent;
-            values: root.waveform; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; position: root.position; marker: root.position;
-            enabled: !audio-enabled || loaded;
-            seek(value) => { if audio-enabled { root.seek(value); } else { root.position = value; } }
-        }
-        if root.controller-mode : HorizontalLayout {
-            height: 120px;
-            spacing: 8px;
-            VirtualPlatter {
-                angle: root.platter-angle; touched: root.platter-touched;
-                scratch-enabled: root.controller-mode && root.loaded && !root.loading;
-                mouse-owned: root.platter-mouse-owned;
-                scratch-pointer(action, x, y) => { root.scratch-pointer(action, x, y); }
-                deck-label: root.deck-label; bpm: root.platter-bpm; time: root.platter-time;
-                pitch: root.pitch-percent; position: root.position; playing: root.playing; accent: root.accent;
-            }
-            VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: 1px;
-            Rectangle {
-                height: 6px;
-                background: #0b1119;
-                accessible-role: image;
-                accessible-label: root.deck-label + " software playhead";
-                accessible-description: root.track-title + ", " + round(root.position) + "%, " + root.time-text + ", " + root.bpm-caption + ", " + root.pitch-caption + ", " + (root.playing ? "playing" : "paused") + ". Software playback position; not physical platter position.";
-                Rectangle {
-                    width: parent.width * clamp(root.position / 100, 0, 1);
-                    height: parent.height;
-                    background: root.accent;
-                }
-            }
-            Text {
-                height: 24px;
-                text: root.time-text;
-                color: #d3dce8;
-                font-size: 10px;
-                wrap: word-wrap;
-                vertical-alignment: center;
-                accessible-role: text;
-                accessible-label: root.deck-label + " virtual deck source time";
-                accessible-description: root.time-text;
-            }
-            HorizontalLayout {
-                height: 13px;
-                spacing: 3px;
-                Text {
-                    text: "POSITION " + round(root.position) + "%";
-                    color: #d3dce8;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    accessible-role: text;
-                    accessible-label: root.deck-label + " virtual deck time and position";
-                    accessible-description: round(root.position) + "%";
-                }
-                Text {
-                    text: root.playing ? "PLAYING" : "PAUSED";
-                    color: root.playing ? #4ee79b : #a8b3c3;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                    accessible-role: text;
-                    accessible-label: root.deck-label + " virtual deck transport state";
-                    accessible-description: root.playing ? "Playing" : "Paused";
-                }
-            }
-            HorizontalLayout {
-                height: 13px;
-                spacing: 3px;
-                Text {
-                    height: 13px;
-                    text: root.bpm-caption;
-                    color: #d3dce8;
-                    font-size: 10px;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                    accessible-role: text;
-                    accessible-label: root.deck-label + " virtual deck BPM";
-                    accessible-description: root.bpm-caption;
-                }
-                Text {
-                    height: 13px;
-                    text: "PITCH " + round(root.pitch-percent * 100) / 100 + "%";
-                    color: #a8b3c3;
-                    font-size: 10px;
-                    overflow: elide;
-                    accessible-role: text;
-                    accessible-label: root.deck-label + " virtual deck pitch";
-                    accessible-description: root.pitch-caption;
-                }
-            }
-            }
-        }
-        if !root.controller-mode : HorizontalLayout {
-            Text {
-                text: root.time-text;
-                color: #a8b3c3;
-                font-size: 11px;
-                overflow: elide;
-                accessible-role: text;
-                accessible-label: root.deck-label + " source time";
-                accessible-description: root.time-text;
-            }
-        }
-        Slider { minimum: 0; maximum: 100; value <=> position; accessible-label: deck-label + " position"; enabled: !audio-enabled || loaded; changed(value) => { if audio-enabled { root.seek(value); } } }
-        if root.tools-panel == 0 : HorizontalLayout {
-            spacing: 2px; height: 30px;
-            for pad[i] in hot-cues : VerticalLayout {
-                spacing: 0px;
-                HotCuePad {
-                    slot: i;
-                    text: "" + (i + 1) + (pad.occupied ? " ●" : " +");
-                    label: deck-label + " hot cue " + (i + 1);
-                    description: pad.description;
-                    occupied: pad.occupied;
-                    cue-enabled: loaded && !loading;
-                    tint: pad.tint;
-                    held(slot, value, input) => { root.hot-cue(slot, value, input); }
-                }
-                Rectangle { height: 3px; background: pad.occupied ? pad.tint : #394251; }
-            }
-        }
-        HorizontalLayout {
-            height: 28px; spacing: 2px;
-            Button { text: "IN"; accessible-label: root.deck-label + " loop in"; enabled: loaded && !loading; clicked => { root.loop-in(); } }
-            Button { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
-            Button { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " loop on/off"; accessible-description: root.loop-caption; enabled: loaded && !loading && loop-ready; clicked => { root.loop-activate(); } }
-            Button { text: "RELOOP"; accessible-label: root.deck-label + " reloop"; accessible-description: "Restart at Loop In"; enabled: loaded && !loading && loop-ready; clicked => { root.reloop(); } }
-            Button { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : (root.tools-panel == 3 ? "NUDGE" : "CUES"))); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.cancel-nudge(); root.tools-panel = root.tools-panel == 4 ? 0 : root.tools-panel + 1; if root.tools-panel != 2 { root.cancel-loop-jog(); } } }
-            Text { width: 64px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : #a8b3c3; font-size: 10px; overflow: elide; vertical-alignment: center; }
-        }
-        if root.tools-panel == 1 : HorizontalLayout {
-            height: 28px; spacing: 2px;
-            SpinBox { width: 64px; minimum: 1; maximum: 8; value <=> root.saved-loop-slot; accessible-label: root.deck-label + " saved loop slot"; }
-            LineEdit { width: 68px; text <=> root.saved-loop-name; placeholder-text: "Loop name"; accessible-label: root.deck-label + " saved loop name"; changed has-focus => { root.loop-name-focused = self.has-focus; } }
-            Button { text: "SAVE"; accessible-label: root.deck-label + " save loop slot"; enabled: loaded && !loading && loop-ready; clicked => { root.save-loop(); } }
-            Button { text: "RECALL"; accessible-label: root.deck-label + " recall loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.recall-loop(); } }
-            Button { text: "DELETE"; accessible-label: root.deck-label + " delete loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.delete-loop(); } }
-        }
-        if root.tools-panel == 1 : Text { height: 14px; text: root.saved-loop-slot >= 1 && root.saved-loop-slot <= root.saved-loops.length ? root.saved-loops[root.saved-loop-slot - 1].description : "Empty slot"; color: #a8b3c3; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " saved loop description"; }
-        if root.tools-panel == 2 : HorizontalLayout {
-            height: 28px; spacing: 2px;
-            ComboBox { model: ["1/8 beat","1/4 beat","1/2 beat","1 beat","2 beats","4 beats","8 beats","16 beats","32 beats"]; current-index <=> root.auto-loop-index; accessible-label: root.deck-label + " auto loop length"; }
-            Button { text: "AUTO LOOP"; accessible-label: root.deck-label + " auto loop"; enabled: loaded && !loading && grid-active; clicked => { root.auto-loop(); } }
-            Button { text: "½"; accessible-label: root.deck-label + " half loop"; enabled: loaded && !loading && loop-ready; clicked => { root.half-loop(); } }
-            Button { text: "×2"; accessible-label: root.deck-label + " double loop"; enabled: loaded && !loading && loop-ready; clicked => { root.double-loop(); } }
-        }
-        if root.tools-panel == 2 : HorizontalLayout {
-            height: 26px; spacing: 2px;
-            CheckBox { text: "BEAT SNAP"; checked <=> root.auto-loop-snap; accessible-label: root.deck-label + " auto loop beat snap"; enabled: root.quantize-preferences-ready && root.quantize-enabled && loaded && !loading && grid-active; }
-            Button { text: root.loop-jog-mode == 1 ? "JOG IN" : (root.loop-jog-mode == 2 ? "JOG OUT" : "JOG OFF"); accessible-label: root.deck-label + " loop jog edit mode"; accessible-description: root.loop-caption; enabled: loaded && !loading && loop-ready; clicked => { root.loop-jog(); } }
-            Text { text: root.quantize-enabled && root.auto-loop-snap ? "Nearest beat" : "Playhead"; color: #a8b3c3; font-size: 10px; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
-        }
-        if root.tools-panel == 3 : VerticalLayout {
-            spacing: 2px;
-            HorizontalLayout {
-                height: 28px;
-                ComboBox { width: 76px; model: ["±8%","±16%","±50%","Wide"]; current-index <=> root.pitch-range-index; accessible-label: root.deck-label + " pitch range"; selected => { root.pitch-range(); } }
-                if !root.pitch-outside : Slider { minimum: root.pitch-min; maximum: root.pitch-max; value <=> root.pitch-percent; accessible-label: root.deck-label + " pitch"; enabled: loaded && !loading; changed(value) => { root.pitch(value); } }
-                if root.pitch-outside : Text { text: "Outside range"; color: #ffcc77; font-size: 10px; vertical-alignment: center; }
-                Button { width: 28px; text: "−"; accessible-label: root.deck-label + " pitch fine down"; enabled: loaded && !loading && root.pitch-can-down; clicked => { root.pitch-down(); } }
-                Button { width: 28px; text: "+"; accessible-label: root.deck-label + " pitch fine up"; enabled: loaded && !loading && root.pitch-can-up; clicked => { root.pitch-up(); } }
-                Text { width: 48px; text: round(root.pitch-percent*100)/100 + "%"; color: #b9c7d9; font-size: 11px; vertical-alignment: center; }
-                Button { width: 40px; text: "1×"; accessible-label: root.deck-label + " reset pitch"; enabled: loaded && !loading; clicked => { root.reset-pitch(); } }
-                Button { width: 54px; text: "MATCH"; accessible-label: root.deck-label + " match tempo"; accessible-description: "One-shot tempo from other deck manual grid; phase unchanged"; enabled: root.can-match-tempo; clicked => { root.match-tempo(); } }
-            }
-            Text { height: 12px; text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " pitch values"; accessible-description: root.pitch-caption; }
-            Text { height: 12px; text: root.bpm-caption; color: #b9c7d9; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " source and current BPM"; accessible-description: root.bpm-caption; }
-        }
-        if root.tools-panel == 4 : VerticalLayout {
-            spacing: 2px;
-            HorizontalLayout {
-                height: 28px; spacing: 4px;
-                NudgeHold { label: root.deck-label + " nudge down"; text: "HOLD −2%"; enabled: root.loaded && root.playing && !root.loading; held(value) => { root.nudge(-1, value); } cancel => { root.cancel-nudge(); } }
-                NudgeHold { label: root.deck-label + " nudge up"; text: "HOLD +2%"; enabled: root.loaded && root.playing && !root.loading; held(value) => { root.nudge(1, value); } cancel => { root.cancel-nudge(); } }
-                Button { text: "CANCEL"; accessible-label: root.deck-label + " cancel nudge"; clicked => { root.cancel-nudge(); } }
-                Button { width: 72px; text: "PHASE"; accessible-label: root.deck-label + " phase sync"; accessible-description: "One-shot tempo and selected beat or bar phase; both decks playing, loops off"; enabled: root.can-phase-sync; clicked => { root.phase-sync(); } }
-            }
-            HorizontalLayout { height: 20px; spacing: 4px;
-                ComboBox { width: 82px; model: ["Beat", "Bar 4/4", "3 beats", "5 beats", "7 beats"]; current-index <=> root.alignment-index; accessible-label: root.deck-label + " phase alignment mode"; selected => { root.alignment-mode(); } }
-                Button { width: 72px; text: root.sync-preparing ? "CANCEL" : (root.sync-active ? "SYNC ON" : "SYNC"); accessible-label: root.deck-label + " continuous sync"; accessible-description: root.sync-preparing ? "Preparing Sync; activate to cancel" : "Follow the other playing deck; toggle off to release"; enabled: root.can-sync; clicked => { root.toggle-sync(); } }
-                Text { text: root.pitch-caption; color: #b9c7d9; font-size: 10px; overflow: elide; vertical-alignment: center; }
-            }
-            Text { height: 12px; text: root.bpm-caption; color: #b9c7d9; font-size: 10px; overflow: elide; }
-        }
-        if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
-            height: 26px;
-            Text { text: "SLOT"; color: #a8b3c3; font-size: 10px; vertical-alignment: center; }
-            SpinBox { minimum: 1; maximum: 8; value <=> root.delete-slot; accessible-label: deck-label + " delete hot cue slot"; }
-            Button { text: "EDIT"; accessible-label: deck-label + " edit hot cue"; enabled: loaded && !loading; clicked => { root.edit-hot-cue(root.delete-slot - 1); } }
-            Button { text: "DELETE"; accessible-label: deck-label + " delete hot cue"; enabled: loaded && !loading; clicked => { root.delete-hot-cue(root.delete-slot - 1); } }
-            CheckBox { text:"Snap cues"; accessible-label:root.deck-label+" quantize new cues"; accessible-description:root.quantize-enabled ? "Set new cues on nearest selected manual grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-cues; enabled:root.quantize-preferences-ready && root.quantize-enabled && (root.quantize-cues || (root.loaded && !root.loading && root.grid-active)); }
-        }
-        if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
-            height: 22px;
-            CheckBox { text: "KEYLOCK"; checked <=> root.keylock; accessible-label: root.deck-label + " keylock"; enabled: root.loaded && !root.loading; toggled => { root.keylock-change(); } }
-            CheckBox { text: "Next grid"; accessible-label: root.deck-label + " quantize cue triggers"; accessible-description: root.quantize-enabled ? "Recall saved cue at next selected grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-triggers; enabled: root.quantize-preferences-ready && root.quantize-enabled && root.loaded && !root.loading; toggled => { root.cancel-trigger(); } }
-            ComboBox { width: 90px; model: ["1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.quantize-step; accessible-label: root.deck-label + " quantization step"; enabled: root.quantize-preferences-ready && root.quantize-enabled && root.loaded && !root.loading; }
-        }
-        if root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
-            height: 26px; spacing: 2px;
-            LineEdit { text <=> root.cue-name; accessible-label: root.deck-label + " cue name"; placeholder-text: "Cue name"; }
-            LineEdit { width: 74px; text <=> root.cue-rgb; accessible-label: root.deck-label + " cue RGB"; placeholder-text: "RRGGBB"; }
-            Button { text: "SAVE"; accessible-label: root.deck-label + " save hot cue"; enabled: !loading; clicked => { root.save-hot-cue(); } }
-            Button { text: "CANCEL"; accessible-label: root.deck-label + " cancel hot cue"; clicked => { root.cancel-hot-cue(); } }
-        }
-    }
-}
 
-component DetailWaveform inherits Rectangle {
-    in property <string> deck-label;
-    in property <brush> accent;
-    in property <[float]> detail;
-    in property <[color]> colors;
-    in property <[BeatLine]> beats;
-    in property <[HotCueRow]> hot-cues;
-    in property <LoopRange> loop-range;
-    in property <bool> enabled;
-    in property <bool> grid-active;
-    in property <bool> grid-editing;
-    in property <bool> grid-controls-enabled;
-    in-out property <string> grid-draft-bpm;
-    in-out property <int> grid-draft-beats: 4;
-    in-out property <int> grid-draft-denominator-index: 1;
-    in-out property <int> grid-meter-bar: 2;
-    in-out property <int> grid-meter-beats: 3;
-    in-out property <int> grid-meter-denominator-index: 1;
-    in property <string> grid-meter-summary;
-    callback meter-set(); callback meter-remove();
-    in-out property <int> grid-tempo-beat: 1;
-    in-out property <string> grid-tempo-bpm;
-    in property <string> grid-tempo-summary;
-    callback tempo-set(); callback tempo-remove();
-    in-out property <int> grid-warp-beat: 1;
-    in property <string> grid-warp-summary;
-    callback warp-set(); callback warp-remove();
-    callback edit-bpm(); callback anchor-grid(); callback earlier-grid(); callback later-grid(); callback save-grid(); callback cancel-grid();
-    in property <string> grid-caption;
-    in-out property <int> grid-bpm: 120;
-    in property <int> suggested-bpm;
-    in property <float> position;
-    in property <float> detail-start;
-    in property <float> detail-end: 100;
-    in property <float> marker;
-    in-out property <int> detail-window: 8;
-    callback seek(float); callback zoom(); callback set-grid(); callback clear-grid();
-    background: #10151d;
-    VerticalLayout {
-        padding: 3px; spacing: 2px;
-        if !root.grid-editing : HorizontalLayout {
-            spacing: 4px;
-            Text { text: deck-label; color: accent; width: 62px; font-size: 12px; vertical-alignment: center; }
-            Text { text: "≤ " + detail-window + " s"; color: #abb6c6; width: 44px; font-size: 11px; vertical-alignment: center; }
-            Button { text: "+"; width: 32px; accessible-label: deck-label + " zoom in"; enabled: root.enabled && detail-window > 2; clicked => { detail-window = max(2, detail-window / 2); root.zoom(); } }
-            Button { text: "−"; width: 32px; accessible-label: deck-label + " zoom out"; enabled: root.enabled && detail-window < 32; clicked => { detail-window = min(32, detail-window * 2); root.zoom(); } }
-            Button { text: suggested-bpm > 0 ? "USE ~" + suggested-bpm : "NO EST."; width: 80px; accessible-label: deck-label + " use BPM suggestion"; enabled: root.grid-controls-enabled && !root.grid-active && suggested-bpm > 0; clicked => { grid-bpm = suggested-bpm; } }
-            SpinBox { minimum: 40; maximum: 240; width: 70px; value <=> grid-bpm; enabled: root.grid-controls-enabled && !root.grid-active; accessible-label: deck-label + " manual BPM"; accessible-description: "Initial BPM for a new grid. Use Edit Grid for an existing grid."; }
-            Button { text: "EDIT GRID"; width: 88px; accessible-label: deck-label + " edit beatgrid"; enabled: root.grid-controls-enabled; clicked => { root.set-grid(); } }
-            Button { text: "GRID OFF"; width: 80px; accessible-label: deck-label + " clear beatgrid"; enabled: root.grid-controls-enabled && grid-active; clicked => { root.clear-grid(); } }
-            Text { text: grid-caption; color: #a0adbe; font-size: 11px; overflow: elide; vertical-alignment: center; }
-        }
-        if root.grid-editing : HorizontalLayout {
-            spacing: 3px;
-            Text { text: root.deck-label + " GRID"; color: root.accent; width: 78px; font-size: 11px; vertical-alignment: center; }
-            Button { text: "+"; width: 28px; accessible-label: root.deck-label + " zoom in"; enabled: root.enabled && root.detail-window > 2; clicked => { root.detail-window = max(2,root.detail-window/2); root.zoom(); } }
-            Button { text: "−"; width: 28px; accessible-label: root.deck-label + " zoom out"; enabled: root.enabled && root.detail-window < 32; clicked => { root.detail-window = min(32,root.detail-window*2); root.zoom(); } }
-            SpinBox { width: 45px; minimum: 1; maximum: 16; value <=> root.grid-draft-beats; accessible-label: root.deck-label + " meter numerator"; enabled: root.grid-controls-enabled; }
-            Text { text: "/"; color: #abb6c6; width: 8px; vertical-alignment: center; }
-            ComboBox { width: 54px; model: ["2", "4", "8", "16"]; current-index <=> root.grid-draft-denominator-index; accessible-label: root.deck-label + " base meter denominator"; enabled: root.grid-controls-enabled; }
-            LineEdit { width: 76px; text <=> root.grid-draft-bpm; accessible-label: root.deck-label + " draft BPM"; enabled: root.grid-controls-enabled; edited => { root.edit-bpm(); } accepted => { root.save-grid(); } }
-            Button { text: "USE ~"; width: 58px; accessible-label: root.deck-label + " use draft BPM suggestion"; enabled: root.grid-controls-enabled && root.suggested-bpm > 0; clicked => { root.grid-draft-bpm = "" + root.suggested-bpm; root.edit-bpm(); } }
-            Button { text: "SET 1"; width: 56px; accessible-label: root.deck-label + " anchor draft at playhead"; enabled: root.grid-controls-enabled; clicked => { root.anchor-grid(); } }
-            Button { text: "−10ms"; width: 60px; accessible-label: root.deck-label + " shift grid earlier"; enabled: root.grid-controls-enabled; clicked => { root.earlier-grid(); } }
-            Button { text: "+10ms"; width: 60px; accessible-label: root.deck-label + " shift grid later"; enabled: root.grid-controls-enabled; clicked => { root.later-grid(); } }
-            Button { text: "CLEAR"; width: 60px; accessible-label: root.deck-label + " clear draft grid"; enabled: root.grid-controls-enabled; clicked => { root.clear-grid(); } }
-            Button { text: "SAVE"; width: 55px; accessible-label: root.deck-label + " save beatgrid"; enabled: root.grid-controls-enabled; clicked => { root.save-grid(); } }
-            Button { text: "CANCEL"; width: 66px; accessible-label: root.deck-label + " cancel beatgrid"; clicked => { root.cancel-grid(); } }
-            Text { text: root.grid-caption; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; }
-        }
-        if root.grid-editing : HorizontalLayout {
-            height: 28px; spacing: 4px;
-            Text { text: "At bar"; color: #abb6c6; width: 42px; vertical-alignment: center; }
-            SpinBox { width: 100px; minimum: 2; maximum: 1000000; value <=> root.grid-meter-bar; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " meter change bar"; }
-            Text { text: "Signature"; color: #abb6c6; width: 58px; vertical-alignment: center; }
-            SpinBox { width: 45px; minimum: 1; maximum: 16; value <=> root.grid-meter-beats; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " meter change numerator"; }
-            Text { text: "/"; color: #abb6c6; width: 8px; vertical-alignment: center; }
-            ComboBox { width: 54px; model: ["2", "4", "8", "16"]; current-index <=> root.grid-meter-denominator-index; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " meter change denominator"; }
-            Button { text: "SET METER"; width: 88px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " set meter change"; clicked => { root.meter-set(); } }
-            Button { text: "REMOVE"; width: 76px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " remove meter change"; clicked => { root.meter-remove(); } }
-            Text { text: root.grid-meter-summary; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; accessible-description: root.grid-meter-summary; }
-        }
-        if root.grid-editing : HorizontalLayout {
-            height: 28px; spacing: 4px;
-            Text { text: "At beat"; color: #abb6c6; width: 48px; vertical-alignment: center; }
-            SpinBox { width: 110px; minimum: 1; maximum: 16000000; value <=> root.grid-tempo-beat; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " tempo change beat"; }
-            Text { text: "BPM"; color: #abb6c6; width: 30px; vertical-alignment: center; }
-            LineEdit { width: 76px; text <=> root.grid-tempo-bpm; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " tempo change BPM"; }
-            Button { text: "SET TEMPO"; width: 90px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " set tempo change"; clicked => { root.tempo-set(); } }
-            Button { text: "REMOVE"; width: 76px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " remove tempo change"; clicked => { root.tempo-remove(); } }
-            Text { text: root.grid-tempo-summary; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; accessible-description: root.grid-tempo-summary; }
-        }
-        if root.grid-editing : HorizontalLayout {
-            height: 28px; spacing: 4px;
-            Text { text: "At beat"; color: #abb6c6; width: 48px; vertical-alignment: center; }
-            SpinBox { width: 110px; minimum: 1; maximum: 16000000; value <=> root.grid-warp-beat; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " warp marker beat"; }
-            Button { text: "SET WARP"; width: 90px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " set warp marker at playhead"; clicked => { root.warp-set(); } }
-            Button { text: "REMOVE"; width: 76px; enabled: root.grid-controls-enabled; accessible-label: root.deck-label + " remove warp marker"; clicked => { root.warp-remove(); } }
-            Text { text: root.grid-warp-summary; color: #ffce77; font-size: 11px; overflow: elide; vertical-alignment: center; accessible-description: root.grid-warp-summary; }
-        }
-        WaveformStrip {
-            keyboard-zoom: true;
-            zoom-step(direction) => {
-                if root.enabled {
-                    let next = direction < 0 ? max(2, root.detail-window / 2) : min(32, root.detail-window * 2);
-                    if next != root.detail-window {
-                        root.detail-window = next;
-                        root.zoom();
-                    }
-                }
-            }
-            min-height: 36px; preferred-height: 54px; max-height: 54px; vertical-stretch: 1;
-            overview: false; deck-label: root.deck-label; accent: root.accent;
-            values: root.detail; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; beats: root.beats; enabled: root.enabled;
-            position: root.position; marker: root.marker; range-start: root.detail-start; range-end: root.detail-end;
-            seek(value) => { root.seek(value); }
-        }
-    }
-}
 
-component LibraryButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> enabled: true;
-    in property <bool> active;
-    callback clicked();
-    min-width: label.preferred-width + 14px;
-    preferred-width: label.preferred-width + 14px;
-    horizontal-stretch: 0;
-    height: 22px;
-    background: active ? #07577e : (touch.has-hover && enabled ? #343434 : #242424);
-    border-color: focus.has-focus ? #eeeeee : (active ? #258db5 : #414141);
-    border-width: 1px;
-    border-radius: 2px;
-    accessible-role: button;
-    accessible-label: text;
-    accessible-enabled: enabled;
-    accessible-action-default => { if enabled { root.clicked(); } }
-    label := Text {
-        text: root.text; font-size: 11px;
-        color: root.enabled ? #eeeeee : #777777;
-        horizontal-alignment: center; vertical-alignment: center;
-    }
-    touch := TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.clicked(); } }
-    focus := FocusScope {
-        focus-on-click: false;
-        enabled: root.enabled;
-        key-pressed(event) => {
-            if root.enabled && (event.text == Key.Return || event.text == " ") { root.clicked(); return accept; }
-            return reject;
-        }
-    }
-}
 
-component CratePanel inherits Rectangle {
-    in property <bool> managing;
-    in property <[CrateRow]> rows;
-    in property <[string]> names;
-    in property <int> selection;
-    in property <bool> history-selected;
-    in property <bool> busy;
-    in property <bool> has-track;
-    in property <bool> selected-smart;
-    in property <bool> editor-open;
-    in property <bool> delete-pending;
-    in property <string> dialog-title;
-    in property <bool> editor-smart;
-    in-out property <string> edit-name;
-    in-out property <string> edit-smart-query;
-    in-out property <int> target-index;
-    callback select-crate(int); callback target-changed(int);
-    callback new-crate(); callback new-smart-crate(); callback new-subcrate(); callback rename-crate(); callback delete-crate();
-    callback save-name(); callback cancel-dialog(); callback confirm-delete();
-    callback add-track(); callback remove-track();
-    background: #111111; border-color: #333333; border-width: 1px;
-    VerticalLayout {
-        padding: 3px; spacing: 2px;
-        LibraryButton { text: "All tracks"; active: selection == 0; accessible-label: "All library tracks"; enabled: !busy; clicked => { root.select-crate(0); } }
-        LibraryButton { text: "History"; active: history-selected; accessible-label: "Playback history"; enabled: !busy; clicked => { root.select-crate(-1); } }
-        ListView {
-            for entry in root.rows : Rectangle {
-                height: 22px; background: root.selection == entry.id ? #07577e : #181818;
-                accessible-role: button; accessible-label: "Crate " + entry.id;
-                accessible-description: entry.smart ? "Smart crate " + entry.name : entry.name + " (" + entry.count + " tracks)";
-                accessible-action-default => { if !root.busy { root.select-crate(entry.id); } }
-                HorizontalLayout { padding: 4px;
-                    Rectangle { width: entry.depth * 10px; }
-                    Text { text: entry.name; font-size: 11px; color: #eeeeee; overflow: elide; vertical-alignment: center; }
-                    Text { text: entry.smart ? "SMART" : "" + entry.count; font-size: 10px; color: #aaaaaa; horizontal-alignment: right; vertical-alignment: center; }
-                }
-                TouchArea { enabled: !root.busy; clicked => { root.select-crate(entry.id); } }
-            }
-        }
-        if root.managing : HorizontalLayout {
-            LibraryButton { text: "+"; accessible-label: "New crate"; enabled: !busy; clicked => { root.new-crate(); } }
-            LibraryButton { text: "+ Sub"; accessible-label: "New subcrate"; enabled: !busy && selection > 0; clicked => { root.new-subcrate(); } }
-            LibraryButton { text: "+ Smart"; accessible-label: "New smart crate"; enabled: !busy; clicked => { root.new-smart-crate(); } }
-        }
-        if root.managing : HorizontalLayout {
-            LibraryButton { text: "Rename"; accessible-label: "Rename crate"; enabled: !busy && selection > 0; clicked => { root.rename-crate(); } }
-            LibraryButton { text: "Delete"; accessible-label: "Delete crate"; enabled: !busy && selection > 0; clicked => { root.delete-crate(); } }
-        }
-        ComboBox { height: 24px; model: root.names; current-index <=> root.target-index; accessible-label: "Target crate"; enabled: !busy && root.names.length > 0; selected(value) => { root.target-changed(self.current-index); } }
-        if root.managing : HorizontalLayout {
-            LibraryButton { text: "Add"; accessible-label: "Add selected track to crate"; enabled: !busy && has-track && names.length > 0; clicked => { root.add-track(); } }
-            LibraryButton { text: "Remove"; accessible-label: "Remove selected track from crate"; enabled: !busy && has-track && selection > 0 && !selected-smart; clicked => { root.remove-track(); } }
-        }
-    }
-    if editor-open || delete-pending : Rectangle {
-        background: #202020;
-        VerticalLayout { padding: 8px; spacing: 6px;
-            Text { text: root.dialog-title; font-size: 11px; color: #eeeeee; wrap: word-wrap; }
-            if root.editor-open : LineEdit { height: 24px; text <=> root.edit-name; accessible-label: "Crate name"; enabled: !root.busy; accepted => { root.save-name(); } }
-            if root.editor-open && root.editor-smart : LineEdit { height: 24px; text <=> root.edit-smart-query; accessible-label: "Smart crate query"; placeholder-text: "Match title, artist, album or path"; enabled: !root.busy; accepted => { root.save-name(); } }
-            if root.delete-pending : Text { text: "This crate's memberships are removed. Direct subcrates move up one level; tracks stay in the library."; font-size: 11px; color: #bbbbbb; wrap: word-wrap; }
-            if root.editor-open : LibraryButton { text: "Save"; accessible-label: "Save crate name"; enabled: !root.busy; clicked => { root.save-name(); } }
-            if root.delete-pending : LibraryButton { text: "Confirm delete"; accessible-label: "Confirm crate deletion"; enabled: !root.busy; clicked => { root.confirm-delete(); } }
-            LibraryButton { text: "Cancel"; accessible-label: "Cancel crate dialog"; clicked => { root.cancel-dialog(); } }
-            Rectangle { vertical-stretch: 1; }
-        }
-    }
-}
 
-component TrackLibrary inherits Rectangle {
-    in property <int> prep-queue-count;
-    callback prep-action(int);
-    out property <bool> search-focused: search-input.has-focus;
-    callback focus-tracks();
-    focus-tracks => { nav.focus(); }
-    callback reveal-row(int);
-    reveal-row(index) => {
-        if index >= 0 {
-            if index * 22px + library-list.content-y < 0px {
-                library-list.content-y = -index * 22px;
-            } else if (index + 1) * 22px + library-list.content-y > library-list.height {
-                library-list.content-y = min(0px, library-list.height - (index + 1) * 22px);
-            }
-        }
-    }
-    in property <[TableColumn]> columns;
-    in property <[TableColumn]> all-columns;
-    in property <float> table-width;
-    in property <int> sort-field;
-    in property <bool> sort-descending;
-    in property <bool> columns-enabled;
-    in-out property <length> table-scroll-x;
-    property <bool> columns-open;
-    callback change-column(int, int);
-    callback analyze();
-    in property <string> analysis-title;
-    in property <string> analysis-summary;
-    in property <[float]> analysis-waveform;
-    in property <bool> can-analyze;
-    in property <string> analysis-progress;
-    in property <bool> analysis-running;
-    in-out property <int> tab;
-    callback tab-selected(int);
-    pure callback track-transfer(string) -> data-transfer;
-    in property <bool> job-active;
-    callback cancel-job();
-    in property <[LibraryRow]> rows;
-    in property <string> count-text;
-    in property <string> page-text;
-    in property <bool> can-previous-page;
-    in property <bool> can-next-page;
-    out property <length> scroll-y: library-list.content-y;
-    callback scroll-page(bool);
-    scroll-page(end) => {
-        library-list.content-y = end ? min(0px, library-list.height - root.rows.length * 22px) : 0px;
-    }
-    callback change-page(int);
-    in property <string> empty-text;
-    in property <string> storage-text;
-    in property <bool> save-failed;
-    in property <bool> busy;
-    in property <bool> can-relocate;
-    in property <bool> can-load-left;
-    in property <bool> can-load-right;
-    in property <int> selection: -1;
-    in-out property <string> query;
-    callback import-files(); callback import-folder(); callback search(); callback select-track(int); callback move-selection(int); callback relocate-track();
-    callback sort-column(int); callback load-left(); callback load-right();
-    callback retry-save();
-    background: #111111; border-color: #333333; border-width: 1px;
-    VerticalLayout {
-        padding: 3px; spacing: 2px;
-        HorizontalLayout {
-            spacing: 2px;
-            LibraryButton { text: "Analyze Files"; accessible-label: "Analyze all library files"; enabled: root.can-analyze; clicked => { root.analyze(); } }
-            for title[index] in ["Library", "Files", "Crates", "History", "Prepare", "Prep Queue"] : LibraryButton {
-                text: title; active: root.tab == index;
-                enabled: !root.busy || root.analysis-running;
-                accessible-label: title + " library tab";
-                clicked => { root.tab-selected(index); }
-            }
-            search-input := LineEdit { height: 24px; min-width: 80px; text <=> query; placeholder-text: "Search library"; accessible-label: "Library search"; edited => { root.search(); } }
-            LibraryButton { text: "X"; accessible-label: "Clear library search"; enabled: query != ""; clicked => { query = ""; root.search(); } }
-            LibraryButton { text: "Load A"; accessible-label: "Load selected into deck A"; enabled: can-load-left; clicked => { root.load-left(); } }
-            LibraryButton { text: "Load B"; accessible-label: "Load selected into deck B"; enabled: can-load-right; clicked => { root.load-right(); } }
-        }
-        if tab == 5 : HorizontalLayout {
-            height: 24px; spacing: 3px;
-            if tab == 5 : LibraryButton { text: "Remove"; accessible-label: "Remove selected track from prep queue"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(1); } }
-            if tab == 5 : LibraryButton { text: "Up"; accessible-label: "Move prep track up"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(2); } }
-            if tab == 5 : LibraryButton { text: "Down"; accessible-label: "Move prep track down"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(3); } }
-            if tab == 5 : Text { text: "" + root.prep-queue-count + " queued. LOAD keeps entries; remove explicitly."; color: #bbbbbb; font-size: 11px; overflow: elide; horizontal-stretch: 1; }
-        }
-        if tab == 1 : HorizontalLayout {
-            spacing: 3px;
-            LibraryButton { text: busy ? "Working..." : "Add files"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
-            LibraryButton { text: "Add folder"; enabled: !busy; accessible-label: "Import library folder"; clicked => { root.import-folder(); } }
-            Text { text: "Import into the target crate on the left. Files stay in their original location."; color: #bbbbbb; font-size: 11px; wrap: word-wrap; }
-        }
-        if tab == 2 : Text {
-            text: "Crates: select on the left; + / + Sub / + Smart create groups. Add / Remove manage the selected track.";
-            color: #bbbbbb; font-size: 11px; wrap: word-wrap;
-        }
-        if tab == 4 : VerticalLayout {
-            spacing: 2px;
-            if root.analysis-progress != "" : Text { height: 14px; text: root.analysis-progress; accessible-role: text; accessible-label: "Library analysis progress"; accessible-description: root.analysis-progress; font-size: 11px; color: #cccccc; overflow: elide; }
-            Text { height: 14px; text: root.analysis-title; font-size: 11px; color: #eeeeee; overflow: elide; }
-            Text { height: 14px; text: root.analysis-summary; accessible-role: text; accessible-label: "Prepare analysis results"; accessible-description: root.analysis-summary; font-size: 11px; color: #cccccc; overflow: elide; }
-            if root.analysis-waveform.length > 0 : Rectangle {
-                height: 20px; background: #0a0a0a;
-                for peak[index] in root.analysis-waveform : Rectangle {
-                    x: index * parent.width / root.analysis-waveform.length;
-                    width: max(1px, parent.width / root.analysis-waveform.length);
-                    height: peak * parent.height;
-                    y: (parent.height - self.height) / 2;
-                    background: #209ac4;
-                }
-            }
-        }
-        if can-relocate : HorizontalLayout {
-            height: 26px;
-            LibraryButton { text: "Relocate"; enabled: !busy; accessible-label: "Relocate selected missing library track"; clicked => { root.relocate-track(); } }
-        }
-        table-scroll := Flickable {
-          interactive: false;
-          content-x <=> root.table-scroll-x;
-          min-width: 0px; min-height: 22px; vertical-stretch: 1;
-          content-width: max(self.width, root.table-width * 1px);
-          content-height: self.height;
-          VerticalLayout {
-          width: table-scroll.content-width; height: table-scroll.height; spacing: 0px; padding: 0px;
-          HorizontalLayout {
-            spacing: 0px; horizontal-stretch: 0;
-            for column in root.columns : LibraryButton {
-                width: column.width * 1px;
-                enabled: root.tab != 5;
-                text: (column.id == 0 && root.tab != 4 ? "Title" : column.title) + (root.tab != 5 && root.sort-field == column.id ? (root.sort-descending ? " ▼" : " ▲") : "");
-                accessible-label: "Sort library by " + column.sort-label;
-                clicked => { root.sort-column(column.id); }
-            }
-            Rectangle { horizontal-stretch: 1; }
-          }
-        nav := FocusScope {
-            min-height: 22px; vertical-stretch: 1;
-            key-pressed(event) => {
-                if event.text == Key.DownArrow { root.move-selection(1); return accept; }
-                if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
-                return reject;
-            }
-            library-list := ListView {
-                content-height: root.rows.length * 22px;
-                for row[index] in root.rows : Rectangle {
-                    height: 22px; background: root.selection == row.id ? #07577e : (mod(index, 2) == 0 ? #202020 : #111111);
-                    accessible-role: button; accessible-label: "Library track " + row.id;
-                    accessible-description: (row.available ? "" : "Missing file: ") + row.name + " " + row.artist + " BPM " + row.bpm + " Key " + row.key + " " + row.album + " " + row.prepare-duration + " Gain dB " + row.gain + " " + row.analysis-status + " " + row.path + (row.metadata-error == "" ? "" : " Metadata unavailable: " + row.metadata-error);
-                    accessible-action-default => { root.select-track(row.id); nav.focus(); }
-                    HorizontalLayout {
-                        spacing: 0px;
-                        for column in root.columns : Text {
-                            width: column.width * 1px;
-                            text: column.id == 6 ? "" + row.id : column.id == 0 ? row.name : column.id == 3 ? (row.artist == "" ? "—" : row.artist) : column.id == 4 ? (row.album == "" ? "—" : row.album) : column.id == 7 ? row.bpm : column.id == 8 ? row.key : column.id == 9 ? row.gain : column.id == 10 ? (row.available ? row.analysis-status : "Missing") : column.id == 5 ? row.prepare-duration : column.id == 2 ? row.path : (row.available ? row.format : "MISSING");
-                            font-size: 11px; vertical-alignment: center; color: column.id == 7 ? #4fc2ed : column.id == 8 ? #d597ed : #cccccc; overflow: elide;
-                            accessible-role: text; accessible-label: "Track " + row.id + " " + column.sort-label;
-                            accessible-description: self.text;
-                        }
-                        Rectangle { horizontal-stretch: 1; }
-                    }
-                    DragArea {
-                        width: 100%; height: 100%; allow-copy: true;
-                        enabled: row.available && !root.busy;
-                        data: root.track-transfer(row.path);
-                        TouchArea { clicked => { root.select-track(row.id); nav.focus(); } }
-                    }
-                }
-            }
-            Text { text: empty-text; visible: rows.length == 0; color: #9faec2; horizontal-alignment: center; vertical-alignment: center; }
-        }
-          }
-        }
-        HorizontalLayout {
-            LibraryButton { text: "Columns"; accessible-label: "Configure track columns"; clicked => { root.columns-open = !root.columns-open; } }
-            LibraryButton { text: "◀"; accessible-label: "Scroll track columns left"; enabled: root.table-scroll-x < 0px; clicked => { root.table-scroll-x = min(0px, root.table-scroll-x + 240px); } }
-            LibraryButton { text: "▶"; accessible-label: "Scroll track columns right"; enabled: root.table-scroll-x > min(0px, table-scroll.width - root.table-width * 1px); clicked => { root.table-scroll-x = max(min(0px, table-scroll.width - root.table-width * 1px), root.table-scroll-x - 240px); } }
-            Text { text: count-text; color: #9faec2; font-size: 11px; vertical-alignment: center; }
-            LibraryButton { text: "To Prep"; accessible-label: "Add selected track to prep queue"; enabled: !root.busy && root.selection > 0; clicked => { root.prep-action(0); } }
-            LibraryButton { text: "‹"; accessible-label: "Previous library page"; enabled: root.can-previous-page; clicked => { root.change-page(-1); } }
-            Text { text: page-text; accessible-role: text; accessible-label: "Library page"; color: #9faec2; font-size: 11px; vertical-alignment: center; }
-            LibraryButton { text: "›"; accessible-label: "Next library page"; enabled: root.can-next-page; clicked => { root.change-page(1); } }
-            Text { text: storage-text; accessible-role: text; accessible-label: "Library storage status"; color: save-failed ? #ffae58 : #9faec2; font-size: 11px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
-            if root.job-active : LibraryButton { text: "Cancel"; accessible-label: "Cancel background load or import"; clicked => { root.cancel-job(); } }
-            if save-failed : LibraryButton { text: "Retry save"; accessible-label: "Retry library save"; clicked => { root.retry-save(); } }
-        }
-    }
-        if root.columns-open : Rectangle {
-            x: 8px; y: 30px; width: min(420px, parent.width - 16px); height: min(280px, parent.height - 36px);
-            background: #222222; border-width: 1px; border-color: #aaaaaa;
-            VerticalLayout {
-                padding: 6px; spacing: 3px;
-                HorizontalLayout {
-                    Text { text: "Columns · visibility and order"; color: #eeeeee; font-size: 11px; }
-                    LibraryButton { text: "Close"; accessible-label: "Close track columns"; clicked => { root.columns-open = false; } }
-                }
-                ListView {
-                    for column[index] in root.all-columns : HorizontalLayout {
-                        height: 24px;
-                        CheckBox { text: column.title; checked: column.visible; enabled: root.columns-enabled; accessible-label: "Show column " + column.sort-label; toggled => { root.change-column(column.id, 0); } }
-                        LibraryButton { text: "←"; accessible-label: "Move column " + column.sort-label + " left"; enabled: root.columns-enabled && index > 0; clicked => { root.change-column(column.id, -1); } }
-                        LibraryButton { text: "→"; accessible-label: "Move column " + column.sort-label + " right"; enabled: root.columns-enabled && index < root.all-columns.length - 1; clicked => { root.change-column(column.id, 1); } }
-                }
-            }
-        }
-    }
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 export component AppWindow inherits Window {
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    default-font-family: DjTheme.font-ui;
+    default-font-size: 12px;
+    // Layout-only view state; A/B source data and engine ownership stay unchanged.
+    in-out property <bool> four-decks: false;
+    out property <int> visible-layout-slots: root.four-decks ? 4 : 2;
+    out property <int> supported-audio-deck-count: 2;
+    in-out property <DeckSlotData> deck-c-data;
+    in-out property <DeckSlotData> deck-d-data;
+    in-out property <[float]> deck-c-waveform;
+    in-out property <[float]> deck-d-waveform;
+    in-out property <[color]> deck-c-colors;
+    in-out property <[color]> deck-d-colors;
+
     in property <bool> left-platter-mouse-owned;
     in property <bool> right-platter-mouse-owned;
     callback virtual-platter-pointer(int, int, float, float);
@@ -1298,7 +134,7 @@ export component AppWindow inherits Window {
         return -1;
     }
     title: "DrDJ Pro"; preferred-width: 1280px; preferred-height: 860px;
-    min-width: 850px; min-height: 740px; background: #090d13;
+    min-width: 850px; min-height: (root.four-decks ? 1020px : 860px) + (root.eq-open ? 120px : 0px) + (root.left-grid-editing ? 110px : 0px) + (root.right-grid-editing ? 110px : 0px); background: DjTheme.app-bg;
     in-out property <int> active-hot-cue-key: -1;
     function hot-cue-key-index(key: string) -> int {
         return key == "1" || key == "!" ? 0
@@ -1722,7 +558,20 @@ export component AppWindow inherits Window {
             return accept;
         }
     VerticalLayout {
-        padding: 8px; spacing: 6px;
+        HorizontalLayout {
+            height: 24px; spacing: 4px;
+            LibraryButton {
+                text: "2 DECKS"; active: !root.four-decks;
+                clicked => { root.four-decks = false; }
+            }
+            LibraryButton {
+                text: "4 SLOTS"; active: root.four-decks;
+                clicked => { root.four-decks = true; }
+            }
+            Text { text: root.four-decks ? "A/B APP • C/D DATA PLACEHOLDERS" : "A/B APP • TWO-DECK VIEW"; color: DjTheme.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        }
+
+        padding: 8px; spacing: 4px;
         HorizontalLayout {
             height: 32px;
             Text { text: "DRDJ PRO"; color: #f1f4fa; font-size: 21px; font-weight: 800; vertical-alignment: center; }
@@ -1736,7 +585,7 @@ export component AppWindow inherits Window {
                 current-index <=> root.deck-view-index;
                 enabled: root.mc4000-connected;
                 accessible-label: "Deck view";
-                accessible-description: root.mc4000-connected ? "Choose training or round virtual decks" : "Training view; connect MC4000 to enable virtual decks";
+                accessible-description: "Choose training or round virtual decks";
             }
         }
         if root.audio-startup-warning != "" : Rectangle {
@@ -1744,13 +593,15 @@ export component AppWindow inherits Window {
             Text {text:"AUDIO OUTPUT NOTICE — check AUDIO settings before playback";color:#fff1de;vertical-alignment:center;
                 accessible-label:"Audio startup fallback warning";accessible-description:root.audio-startup-warning;}
         }
-        HorizontalLayout {
-            height: root.virtual-decks-visible ? 322px : 260px; spacing: 8px;
+        GridLayout {
+            height: 344px + (root.four-decks ? 124px : 0px); spacing: 4px;
             left-deck := CompactDeck {
+            row: 0; col: 0;
+
                 pad-sampler: root.left-pad-sampler; pad-mode => { root.pad-mode(0,true,false); }
                 platter-mouse-owned: root.left-platter-mouse-owned;
                 scratch-pointer(action, x, y) => { root.virtual-platter-pointer(0, action, x, y); }
-                deck-label: "DECK A"; controller-mode: root.virtual-decks-visible; accent: #36c9ef; track-title: root.left-title; time-text: root.left-time;
+                deck-label: "DECK A"; controller-mode: root.virtual-decks-visible; accent: DjTheme.deck-a; track-title: root.left-title; time-text: root.left-time;
                 platter-bpm: root.left-platter-bpm; platter-time: root.left-platter-time;
                 platter-angle: root.left-platter-angle; platter-touched: root.left-platter-touched;
                 censor: root.left-censor;
@@ -1796,10 +647,12 @@ export component AppWindow inherits Window {
                 load => { root.load-left(); } toggle => { root.toggle-left(); } cue => { root.reset-left(); } eject => { root.eject-left(); } seek(value) => { root.seek-left(value); }
             }
             right-deck := CompactDeck {
+            row: 0; col: 1;
+
                 pad-sampler: root.right-pad-sampler; pad-mode => { root.pad-mode(1,true,false); }
                 platter-mouse-owned: root.right-platter-mouse-owned;
                 scratch-pointer(action, x, y) => { root.virtual-platter-pointer(1, action, x, y); }
-                deck-label: "DECK B"; controller-mode: root.virtual-decks-visible; accent: #ffae58; track-title: root.right-title; time-text: root.right-time;
+                deck-label: "DECK B"; controller-mode: root.virtual-decks-visible; accent: DjTheme.deck-b; track-title: root.right-title; time-text: root.right-time;
                 platter-bpm: root.right-platter-bpm; platter-time: root.right-platter-time;
                 platter-angle: root.right-platter-angle; platter-touched: root.right-platter-touched;
                 censor: root.right-censor;
@@ -1844,12 +697,80 @@ export component AppWindow inherits Window {
                 temporary-cue(held) => { root.temporary-cue(1, held, false); } stutter => { root.stutter(1); }
                 load => { root.load-right(); } toggle => { root.toggle-right(); } cue => { root.reset-right(); } eject => { root.eject-right(); } seek(value) => { root.seek-right(value); }
             }
+
+        DeckPlaceholder {
+            row: 1; col: 0; deck-label: "DECK C"; accent: DjTheme.deck-c;
+            collapsed: !root.four-decks; track-data: root.deck-c-data;
+            waveform: root.deck-c-waveform; colors: root.deck-c-colors;
         }
+        DeckPlaceholder {
+            row: 1; col: 1; deck-label: "DECK D"; accent: DjTheme.deck-d;
+            collapsed: !root.four-decks; track-data: root.deck-d-data;
+            waveform: root.deck-d-waveform; colors: root.deck-d-colors;
+        }
+    }
         Rectangle {
-            height: 36px; background: #171d27;
+            accessible-role: groupbox; accessible-label: "Shared waveform area";
+            min-height: (root.four-decks ? 208px : 148px) + (root.left-grid-editing ? 110px : 0px) + (root.right-grid-editing ? 110px : 0px);
+            preferred-height: (root.four-decks ? 244px : 184px) + (root.left-grid-editing ? 110px : 0px) + (root.right-grid-editing ? 110px : 0px);
+            max-height: (root.four-decks ? 244px : 184px) + (root.left-grid-editing ? 110px : 0px) + (root.right-grid-editing ? 110px : 0px);
+            vertical-stretch: 0; background: DjTheme.panel-dark;
+            VerticalLayout { spacing: 2px;
+                DetailWaveform {
+                    deck-label: "DECK A"; accent: DjTheme.deck-a; detail: root.left-detail; colors: root.left-detail-colors;
+                    loop-range: root.left-detail-loop-range;
+                    hot-cues: root.left-hot-cues; beats: root.left-beats; position: root.left-position; marker: root.left-detail-marker;
+                    detail-start: root.left-detail-start; detail-end: root.left-detail-end;
+                    detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
+                    grid-active: root.left-grid-active; grid-caption: root.left-grid-caption;
+                    grid-editing: root.left-grid-editing; grid-draft-bpm <=> root.left-grid-draft-bpm; grid-draft-beats <=> root.left-grid-draft-beats; grid-draft-denominator-index <=> root.left-grid-draft-denominator-index;
+                    grid-meter-bar <=> root.left-grid-meter-bar; grid-meter-beats <=> root.left-grid-meter-beats; grid-meter-denominator-index <=> root.left-grid-meter-denominator-index; grid-meter-summary: root.left-grid-meter-summary;
+                    meter-set => { root.grid-meter-set-left(); } meter-remove => { root.grid-meter-remove-left(); }
+                    grid-tempo-beat <=> root.left-grid-tempo-beat; grid-tempo-bpm <=> root.left-grid-tempo-bpm; grid-tempo-summary: root.left-grid-tempo-summary;
+                    tempo-set => { root.grid-tempo-set-left(); } tempo-remove => { root.grid-tempo-remove-left(); }
+                    grid-warp-beat <=> root.left-grid-warp-beat; grid-warp-summary: root.left-grid-warp-summary;
+                    warp-set => { root.grid-warp-set-left(); } warp-remove => { root.grid-warp-remove-left(); }
+                    grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.left-busy;
+                    edit-bpm => { root.edit-grid-bpm-left(); } anchor-grid => { root.grid-anchor-left(); }
+                    earlier-grid => { root.grid-earlier-left(); } later-grid => { root.grid-later-left(); }
+                    save-grid => { root.save-grid-left(); } cancel-grid => { root.cancel-grid-left(); }
+                    suggested-bpm: root.left-suggested-bpm; enabled: root.audio-enabled && root.left-loaded;
+                    seek(value) => { root.seek-left(value); } zoom => { root.zoom-left(); }
+                    set-grid => { root.grid-left(); } clear-grid => { root.clear-grid-left(); }
+                }
+                DetailWaveform {
+                    deck-label: "DECK B"; accent: DjTheme.deck-b; detail: root.right-detail; colors: root.right-detail-colors;
+                    loop-range: root.right-detail-loop-range;
+                    hot-cues: root.right-hot-cues; beats: root.right-beats; position: root.right-position; marker: root.right-detail-marker;
+                    detail-start: root.right-detail-start; detail-end: root.right-detail-end;
+                    detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
+                    grid-active: root.right-grid-active; grid-caption: root.right-grid-caption;
+                    grid-editing: root.right-grid-editing; grid-draft-bpm <=> root.right-grid-draft-bpm; grid-draft-beats <=> root.right-grid-draft-beats; grid-draft-denominator-index <=> root.right-grid-draft-denominator-index;
+                    grid-meter-bar <=> root.right-grid-meter-bar; grid-meter-beats <=> root.right-grid-meter-beats; grid-meter-denominator-index <=> root.right-grid-meter-denominator-index; grid-meter-summary: root.right-grid-meter-summary;
+                    meter-set => { root.grid-meter-set-right(); } meter-remove => { root.grid-meter-remove-right(); }
+                    grid-tempo-beat <=> root.right-grid-tempo-beat; grid-tempo-bpm <=> root.right-grid-tempo-bpm; grid-tempo-summary: root.right-grid-tempo-summary;
+                    tempo-set => { root.grid-tempo-set-right(); } tempo-remove => { root.grid-tempo-remove-right(); }
+                    grid-warp-beat <=> root.right-grid-warp-beat; grid-warp-summary: root.right-grid-warp-summary;
+                    warp-set => { root.grid-warp-set-right(); } warp-remove => { root.grid-warp-remove-right(); }
+                    grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.right-busy;
+                    edit-bpm => { root.edit-grid-bpm-right(); } anchor-grid => { root.grid-anchor-right(); }
+                    earlier-grid => { root.grid-earlier-right(); } later-grid => { root.grid-later-right(); }
+                    save-grid => { root.save-grid-right(); } cancel-grid => { root.cancel-grid-right(); }
+                    suggested-bpm: root.right-suggested-bpm; enabled: root.audio-enabled && root.right-loaded;
+                    seek(value) => { root.seek-right(value); } zoom => { root.zoom-right(); }
+                    set-grid => { root.grid-right(); } clear-grid => { root.clear-grid-right(); }
+                }
+
+ if root.four-decks : WaveformStrip { height: 28px; deck-label: "DECK C"; accent: DjTheme.deck-c; values: root.deck-c-waveform; colors: root.deck-c-colors; enabled: false; overview: true; }
+
+ if root.four-decks : WaveformStrip { height: 28px; deck-label: "DECK D"; accent: DjTheme.deck-d; values: root.deck-d-waveform; colors: root.deck-d-colors; enabled: false; overview: true; }
+}
+        }
+Rectangle {
+            height: 36px; background: DjTheme.panel-bg;
             HorizontalLayout {
                 padding: 4px; spacing: 8px;
-                Text { text: "A"; color: #36c9ef; vertical-alignment: center; }
+                Text { text: "A"; color: DjTheme.deck-a; vertical-alignment: center; }
                 Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.sampler-open=false;root.eq-open = !root.eq-open; } }
                 Button {text:"SAMPLER";accessible-label:"Show sampler";enabled:root.audio-enabled;clicked=>{root.sampler-open=!root.sampler-open;root.fx-open=false;root.monitor-open=false;root.audio-device-open=false;}}
                 Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;root.sampler-open=false;}}
@@ -1858,13 +779,13 @@ export component AppWindow inherits Window {
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
-                Text { text: "B"; color: #ffae58; vertical-alignment: center; }
+                Text { text: "B"; color: DjTheme.deck-b; vertical-alignment: center; }
                 Slider { accessible-label: "Channel B fader"; minimum: 0; maximum: 1; value <=> root.channel-b; changed => { root.mixer-changed(); } }
                 Rectangle {
                     width: 170px;
                     height: 22px;
                     vertical-stretch: 0;
-                    background: #0b1119;
+                    background: DjTheme.panel-dark;
                     accessible-role: image;
                     accessible-label: "Post-fader bus sample peak";
                     accessible-description: root.output-peak-caption + ". Latest completed 50 ms producer window across all channels; retained when rendering stops. Not hardware timing or true peak.";
@@ -1877,7 +798,7 @@ export component AppWindow inherits Window {
 
                     Text {
                         text: root.output-peak-caption;
-                        color: #edf2fa;
+                        color: DjTheme.text-primary;
                         font-size: 10px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -1901,59 +822,7 @@ export component AppWindow inherits Window {
                 EqStrip { deck: "B"; trim <=> root.eq-trim-b; low <=> root.eq-low-b; mid <=> root.eq-mid-b; high <=> root.eq-high-b; filter <=> root.eq-filter-b; changed => { root.eq-changed(1); } }
             }
         }
-        Rectangle {
-            accessible-role: groupbox; accessible-label: "Shared waveform area";
-            min-height: 148px + (root.left-grid-editing ? 56px : 0px) + (root.right-grid-editing ? 56px : 0px);
-            preferred-height: 184px + (root.left-grid-editing ? 56px : 0px) + (root.right-grid-editing ? 56px : 0px);
-            max-height: 184px + (root.left-grid-editing ? 56px : 0px) + (root.right-grid-editing ? 56px : 0px);
-            vertical-stretch: 0; background: #10151d;
-            VerticalLayout { spacing: 2px;
-                DetailWaveform {
-                    deck-label: "DECK A"; accent: #36c9ef; detail: root.left-detail; colors: root.left-detail-colors;
-                    loop-range: root.left-detail-loop-range;
-                    hot-cues: root.left-hot-cues; beats: root.left-beats; position: root.left-position; marker: root.left-detail-marker;
-                    detail-start: root.left-detail-start; detail-end: root.left-detail-end;
-                    detail-window <=> root.left-detail-window; grid-bpm <=> root.left-grid-bpm;
-                    grid-active: root.left-grid-active; grid-caption: root.left-grid-caption;
-                    grid-editing: root.left-grid-editing; grid-draft-bpm <=> root.left-grid-draft-bpm; grid-draft-beats <=> root.left-grid-draft-beats; grid-draft-denominator-index <=> root.left-grid-draft-denominator-index;
-                    grid-meter-bar <=> root.left-grid-meter-bar; grid-meter-beats <=> root.left-grid-meter-beats; grid-meter-denominator-index <=> root.left-grid-meter-denominator-index; grid-meter-summary: root.left-grid-meter-summary;
-                    meter-set => { root.grid-meter-set-left(); } meter-remove => { root.grid-meter-remove-left(); }
-                    grid-tempo-beat <=> root.left-grid-tempo-beat; grid-tempo-bpm <=> root.left-grid-tempo-bpm; grid-tempo-summary: root.left-grid-tempo-summary;
-                    tempo-set => { root.grid-tempo-set-left(); } tempo-remove => { root.grid-tempo-remove-left(); }
-                    grid-warp-beat <=> root.left-grid-warp-beat; grid-warp-summary: root.left-grid-warp-summary;
-                    warp-set => { root.grid-warp-set-left(); } warp-remove => { root.grid-warp-remove-left(); }
-                    grid-controls-enabled: root.audio-enabled && root.left-loaded && !root.left-busy;
-                    edit-bpm => { root.edit-grid-bpm-left(); } anchor-grid => { root.grid-anchor-left(); }
-                    earlier-grid => { root.grid-earlier-left(); } later-grid => { root.grid-later-left(); }
-                    save-grid => { root.save-grid-left(); } cancel-grid => { root.cancel-grid-left(); }
-                    suggested-bpm: root.left-suggested-bpm; enabled: root.audio-enabled && root.left-loaded;
-                    seek(value) => { root.seek-left(value); } zoom => { root.zoom-left(); }
-                    set-grid => { root.grid-left(); } clear-grid => { root.clear-grid-left(); }
-                }
-                DetailWaveform {
-                    deck-label: "DECK B"; accent: #ffae58; detail: root.right-detail; colors: root.right-detail-colors;
-                    loop-range: root.right-detail-loop-range;
-                    hot-cues: root.right-hot-cues; beats: root.right-beats; position: root.right-position; marker: root.right-detail-marker;
-                    detail-start: root.right-detail-start; detail-end: root.right-detail-end;
-                    detail-window <=> root.right-detail-window; grid-bpm <=> root.right-grid-bpm;
-                    grid-active: root.right-grid-active; grid-caption: root.right-grid-caption;
-                    grid-editing: root.right-grid-editing; grid-draft-bpm <=> root.right-grid-draft-bpm; grid-draft-beats <=> root.right-grid-draft-beats; grid-draft-denominator-index <=> root.right-grid-draft-denominator-index;
-                    grid-meter-bar <=> root.right-grid-meter-bar; grid-meter-beats <=> root.right-grid-meter-beats; grid-meter-denominator-index <=> root.right-grid-meter-denominator-index; grid-meter-summary: root.right-grid-meter-summary;
-                    meter-set => { root.grid-meter-set-right(); } meter-remove => { root.grid-meter-remove-right(); }
-                    grid-tempo-beat <=> root.right-grid-tempo-beat; grid-tempo-bpm <=> root.right-grid-tempo-bpm; grid-tempo-summary: root.right-grid-tempo-summary;
-                    tempo-set => { root.grid-tempo-set-right(); } tempo-remove => { root.grid-tempo-remove-right(); }
-                    grid-warp-beat <=> root.right-grid-warp-beat; grid-warp-summary: root.right-grid-warp-summary;
-                    warp-set => { root.grid-warp-set-right(); } warp-remove => { root.grid-warp-remove-right(); }
-                    grid-controls-enabled: root.audio-enabled && root.right-loaded && !root.right-busy;
-                    edit-bpm => { root.edit-grid-bpm-right(); } anchor-grid => { root.grid-anchor-right(); }
-                    earlier-grid => { root.grid-earlier-right(); } later-grid => { root.grid-later-right(); }
-                    save-grid => { root.save-grid-right(); } cancel-grid => { root.cancel-grid-right(); }
-                    suggested-bpm: root.right-suggested-bpm; enabled: root.audio-enabled && root.right-loaded;
-                    seek(value) => { root.seek-right(value); } zoom => { root.zoom-right(); }
-                    set-grid => { root.grid-right(); } clear-grid => { root.clear-grid-right(); }
-                }
-            }
-        }
+
         Rectangle {
             accessible-role: groupbox; accessible-label: "Track library area"; vertical-stretch: 1; min-height: root.virtual-decks-visible ? 100px : 160px;
             HorizontalLayout { spacing: 6px;
@@ -1997,8 +866,8 @@ export component AppWindow inherits Window {
             track-transfer(path) => { return root.track-transfer(path); }
             busy: root.loading || root.library-busy || !root.audio-enabled;
             can-relocate: root.library-can-relocate-selected;
-            can-load-left: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.left-playing;
-            can-load-right: root.audio-enabled && root.selected-track >= 0 && !root.loading && !root.library-busy && !root.right-playing;
+            can-load-left: root.audio-enabled && root.selected-track >= 0;
+            can-load-right: root.audio-enabled && root.selected-track >= 0;
             import-files => { root.import-library(); } import-folder => { root.import-library-folder(); } search => { root.library-search(); }
             relocate-track => { root.relocate-library-track(); }
             select-track(id) => { root.select-library(id); } move-selection(delta) => { root.move-library-selection(delta); }
@@ -2016,13 +885,13 @@ export component AppWindow inherits Window {
         }
     }
     if root.audio-device-open : Rectangle {
-        x:16px;y:60px;width:parent.width - 32px;height:250px;background:#0b1119;border-width:1px;border-color:#53657d;
+        x:16px;y:60px;width:parent.width - 32px;height:250px;background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Audio device settings panel";
         VerticalLayout {
             padding:10px;spacing:8px;
-            HorizontalLayout {Text {text:"CURRENT: " + root.audio-device-current;color:#edf2fa;} Button {text:"CLOSE AUDIO";accessible-label:"Close audio device settings";clicked=>{root.audio-device-open=false;}}}
+            HorizontalLayout {Text {text:"CURRENT: " + root.audio-device-current;color:DjTheme.text-primary;} Button {text:"CLOSE AUDIO";accessible-label:"Close audio device settings";clicked=>{root.audio-device-open=false;}}}
             Text {text:root.audio-startup-warning;color:#ffb86c;wrap:word-wrap;}
-            Text {text:"OUTPUT DEVICE — apply now with paused decks, or save for next start";color:#edf2fa;}
+            Text {text:"OUTPUT DEVICE — apply now with paused decks, or save for next start";color:DjTheme.text-primary;}
             ComboBox {accessible-label:"Audio output device selection";model:root.audio-device-names;current-index <=> root.audio-device-choice;enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;}
             HorizontalLayout {
                 Button {text:root.audio-device-scanning ? "SCANNING…":"REFRESH";accessible-label:"Refresh audio devices";enabled:!root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-scan();}}
@@ -2030,58 +899,58 @@ export component AppWindow inherits Window {
                 Button {text:root.audio-device-switching ? "SWITCHING…":"APPLY NOW";accessible-label:"Apply audio device now";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-apply();}}
                 Button {text:"REOPEN CURRENT";accessible-label:"Reopen current audio output";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-reopen();}}
             }
-            Text {text:root.audio-device-status;color:#edf2fa;wrap:word-wrap;}
+            Text {text:root.audio-device-status;color:DjTheme.text-primary;wrap:word-wrap;}
         }
     }
     if root.monitor-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:270px;
-        background:#0b1119;border-width:1px;border-color:#53657d;
+        background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Headphone monitor panel";
         VerticalLayout {
             padding:10px;spacing:8px;
             HorizontalLayout {
-                Text {text:"HEADPHONE CUE — OUT 3/4";color:#edf2fa;}
+                Text {text:"HEADPHONE CUE — OUT 3/4";color:DjTheme.text-primary;}
                 Button {text:"CLOSE MON";accessible-label:"Close headphone monitor";clicked=>{root.monitor-open=false;}}
             }
-            Text {text:root.monitor-status;color:#edf2fa;}
+            Text {text:root.monitor-status;color:DjTheme.text-primary;}
             HorizontalLayout {
                 CheckBox {text:"CUE A (pre-fader)";accessible-label:"Deck A headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-a;toggled=>{root.monitor-cue-changed(0);}}
                 CheckBox {text:"CUE B (pre-fader)";accessible-label:"Deck B headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-b;toggled=>{root.monitor-cue-changed(1);}}
                 CheckBox {text:"SPLIT CUE";accessible-label:"Split headphone cue";accessible-description:"Cue mono left, master mono right; mix and level remain active";enabled:root.monitor-available;checked <=> root.monitor-split;toggled=>{root.monitor-changed();}}
             }
-            Text {text:"HEADPHONE LEVEL " + round(root.monitor-gain) + "%";color:#edf2fa;}
+            Text {text:"HEADPHONE LEVEL " + round(root.monitor-gain) + "%";color:DjTheme.text-primary;}
             Slider {accessible-label:"Headphone monitor gain";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-gain;changed=>{root.monitor-changed();}}
-            Text {text:root.monitor-split ? "CUE mono L ← BALANCE " + round(root.monitor-mix) + "% → MASTER mono R" : "CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:#edf2fa;}
+            Text {text:root.monitor-split ? "CUE mono L ← BALANCE " + round(root.monitor-mix) + "% → MASTER mono R" : "CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:DjTheme.text-primary;}
             Slider {accessible-label:"Headphone cue master mix";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-mix;changed=>{root.monitor-changed();}}
             Text {text:"Settings follow audio profile status. MC4000 Monitor Level / Pan control these sliders.";color:#a6b4c8;}
         }
     }
     if root.sampler-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:340px;
-        background:#0b1119;border-width:1px;border-color:#53657d;
+        background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Four-slot sampler";
         VerticalLayout {
             padding:10px;spacing:8px;
-            HorizontalLayout {Text {text:root.sampler-status;color:#edf2fa;overflow:elide;}Button {text:"STOP ALL";accessible-label:"Stop all sampler slots";clicked=>{root.sampler-action(0,4,false);}}Button {text:"CLOSE";accessible-label:"Close sampler";clicked=>{root.sampler-open=false;}}}
+            HorizontalLayout {Text {text:root.sampler-status;color:DjTheme.text-primary;overflow:elide;}Button {text:"STOP ALL";accessible-label:"Stop all sampler slots";clicked=>{root.sampler-action(0,4,false);}}Button {text:"CLOSE";accessible-label:"Close sampler";clicked=>{root.sampler-open=false;}}}
             for slot[index] in root.sampler-slots : HorizontalLayout {
-                Text {text:(index+1)+" · "+slot.name+(slot.playing ? " · PLAYING" : slot.busy ? " · PREPARING" : "");color:slot.playing ? #ffc15e : #edf2fa;overflow:elide;horizontal-stretch:1;}
+                Text {text:(index+1)+" · "+slot.name+(slot.playing ? " · PLAYING" : slot.busy ? " · PREPARING" : "");color:slot.playing ? #ffc15e : DjTheme.text-primary;overflow:elide;horizontal-stretch:1;}
                 Button {text:"LOAD";accessible-label:"Sampler slot "+(index+1)+" load";enabled:root.sampler-ready && !root.sampler-loading;clicked=>{root.sampler-action(index,2,false);}}
                 Button {text:"PLAY";accessible-label:"Sampler slot "+(index+1)+" play";enabled:root.sampler-ready && slot.loaded && !slot.busy;clicked=>{root.sampler-action(index,0,false);}}
                 Button {text:"STOP";accessible-label:"Sampler slot "+(index+1)+" stop";clicked=>{root.sampler-action(index,1,false);}}
                 Button {text:"CLEAR";accessible-label:"Sampler slot "+(index+1)+" clear";enabled:slot.occupied || slot.busy;clicked=>{root.sampler-action(index,3,false);}}
             }
-            Text {text:"SAMPLER LEVEL "+round(root.sampler-gain)+"% · One-shot / retrigger · 4 voices";color:#c8d4e4;}
+            Text {text:"SAMPLER LEVEL "+round(root.sampler-gain)+"% · One-shot / retrigger · 4 voices";color:DjTheme.text-secondary;}
             Slider {minimum:0;maximum:100;value <=> root.sampler-gain;enabled:root.sampler-ready;accessible-label:"Sampler master level";changed=>{root.sampler-level();}}
             Text {text:"Mono/stereo, up to10s /480000 source frames. Restored samples stay stopped.";color:#a6b4c8;}
         }
     }
     if root.fx-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:480px;
-        background:#0b1119;border-width:1px;border-color:#53657d;
+        background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Delay effects panel";
         VerticalLayout {
             padding:8px;spacing:6px;
-            HorizontalLayout {Text {text:root.fx-status;color:#edf2fa;} Button {text:"CLOSE FX";accessible-label:"Close delay effects";clicked=>{root.fx-tap-cancel(0);root.fx-tap-cancel(1);root.fx-open=false;}}}
+            HorizontalLayout {Text {text:root.fx-status;color:DjTheme.text-primary;} Button {text:"CLOSE FX";accessible-label:"Close delay effects";clicked=>{root.fx-tap-cancel(0);root.fx-tap-cancel(1);root.fx-open=false;}}}
             HorizontalLayout {
                 spacing:8px;
                 FxStrip {deck:"A";summary:root.fx-summary-a;selected-slot <=> root.fx-selected-a;effect-kind <=> root.fx-kind-a;legacy <=> root.fx-legacy-a;slot-action(slot,action,value)=>{root.fx-slot-action(0,slot,action,value);}legacy-changed(value)=>{root.fx-legacy-changed(0,value);}time-base <=> root.fx-base-a;division <=> root.fx-division-a;timing:root.fx-timing-a;timing-changed(base,division)=>{root.fx-timing-changed(0,base,division);}tap(held)=>{root.fx-tap(0,held);}tap-cancel=>{root.fx-tap-cancel(0);}ready:root.quantize-preferences-ready;active <=> root.fx-active-a;time <=> root.fx-time-a;feedback <=> root.fx-feedback-a;wet <=> root.fx-wet-a;slot <=> root.fx-slot-a;changed=>{root.fx-changed(0);}preset(slot,save)=>{root.fx-preset(0,slot,save);}}

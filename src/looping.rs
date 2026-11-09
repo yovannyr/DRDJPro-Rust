@@ -164,92 +164,11 @@ impl Source for PcmSource {
     }
 }
 #[cfg(test)]
-#[derive(Clone, Copy, Default, Debug)]
-pub(crate) struct HeapStats {
-    pub allocations: usize,
-    pub deallocations: usize,
-    pub reallocations: usize,
-    pub live_bytes: usize,
-    pub peak_bytes: usize,
-}
-#[cfg(test)]
-pub(crate) fn measured_heap(action: impl FnOnce()) -> HeapStats {
-    tests::measure_heap(action)
-}
-#[cfg(test)]
-pub(crate) fn counted_allocations(action: impl FnOnce()) -> usize {
-    tests::count_allocations(action)
-}
+pub(crate) use crate::test_alloc::{counted_allocations, measured_heap};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-    thread_local! {
-        static COUNT: Cell<Option<usize>> = const { Cell::new(None) };
-        static HEAP: Cell<Option<HeapStats>> = const { Cell::new(None) };
-    }
-    pub(super) fn measure_heap(action: impl FnOnce()) -> HeapStats {
-        HEAP.with(|s| {
-            assert!(s.get().is_none());
-            s.set(Some(HeapStats::default()));
-        });
-        action();
-        HEAP.with(|s| s.replace(None).unwrap())
-    }
-    fn heap_update(size: usize, old: usize, reallocation: bool, deallocation: bool) {
-        let _ = HEAP.try_with(|cell| {
-            if let Some(mut s) = cell.get() {
-                if deallocation {
-                    s.deallocations += 1;
-                    s.live_bytes = s.live_bytes.saturating_sub(old);
-                } else {
-                    s.allocations += 1;
-                    if reallocation {
-                        s.reallocations += 1;
-                    }
-                    s.peak_bytes = s.peak_bytes.max(s.live_bytes.saturating_add(size));
-                    s.live_bytes = s.live_bytes.saturating_sub(old).saturating_add(size);
-                }
-                cell.set(Some(s));
-            }
-        });
-    }
-    pub(super) fn count_allocations(action: impl FnOnce()) -> usize {
-        COUNT.with(|count| {
-            assert!(count.get().is_none());
-            count.set(Some(0));
-        });
-        action();
-        COUNT.with(|count| count.replace(None).unwrap())
-    }
-    struct CountingAllocator;
-    unsafe impl GlobalAlloc for CountingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            heap_update(layout.size(), 0, false, false);
-            let _ = COUNT.try_with(|count| {
-                if let Some(n) = count.get() {
-                    count.set(Some(n + 1));
-                }
-            });
-            System.alloc(layout)
-        }
-        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-            heap_update(0, layout.size(), false, true);
-            System.dealloc(pointer, layout);
-        }
-        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-            heap_update(size, layout.size(), true, false);
-            let _ = COUNT.try_with(|count| {
-                if let Some(n) = count.get() {
-                    count.set(Some(n + 1));
-                }
-            });
-            System.realloc(pointer, layout, size)
-        }
-    }
-    #[global_allocator]
-    static ALLOCATOR: CountingAllocator = CountingAllocator;
+
     #[test]
     fn shared_pcm_moves_the_existing_vec_buffer_without_copying_it() {
         let data = vec![0.25; 1000000];
@@ -335,13 +254,13 @@ mod tests {
         let mut source = PcmSource::new(2, 48_000, vec![0.25, -0.25, 0.5, -0.5]);
         source.set_loop(FrameLoop::new(0, 2, 2).unwrap()).unwrap();
         source.set_playback_rate(std::num::NonZeroU32::new(72_000).unwrap());
-        COUNT.with(|c| c.set(Some(0)));
         let started = std::time::Instant::now();
-        for _ in 0..1_000_000 {
-            std::hint::black_box(source.next());
-        }
+        let allocations = counted_allocations(|| {
+            for _ in 0..1_000_000 {
+                std::hint::black_box(source.next());
+            }
+        });
         let elapsed = started.elapsed();
-        let allocations = COUNT.with(|c| c.replace(None).unwrap());
         assert_eq!(allocations, 0);
         eprintln!("LoopSource: 1000000 samples in {elapsed:?}, {allocations} allocations (diagnostic, not a real-time deadline)");
     }

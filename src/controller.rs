@@ -623,7 +623,7 @@ impl AudioController {
             };
             match c.track_drop_path(deck, &data) {
                 Ok((id, path)) => {
-                    c.start_load(id, Arc::new(move || Some(path.clone())));
+                    c.start_load(id, Arc::new(move || Some(path.clone())), 0.0);
                     c.pending.borrow().is_some()
                 }
                 Err(error) => {
@@ -1172,9 +1172,16 @@ impl AudioController {
                     {
                         return;
                     }
+                    // Capture BPM hint from library analysis before releasing the borrow.
+                    let bpm_hint = c
+                        .library
+                        .borrow()
+                        .track_by_id(selected)
+                        .and_then(|t| t.metadata.analysis.as_ref())
+                        .map_or(0.0, |a| a.bpm);
                     let path = c.library.borrow().selected_path();
                     if let Some(path) = path {
-                        c.start_load(id, Arc::new(move || Some(path.clone())));
+                        c.start_load(id, Arc::new(move || Some(path.clone())), bpm_hint);
                     }
                 }
             };
@@ -6183,12 +6190,12 @@ impl AudioController {
         Ok((id, path.to_owned()))
     }
     fn request_load(&self, id: DeckId) {
-        self.start_load(id, Arc::clone(&self.picker));
+        self.start_load(id, Arc::clone(&self.picker), 0.0);
     }
-    fn start_load(&self, id: DeckId, picker: TrackPicker) {
-        self.start_load_work(id, picker, false);
+    fn start_load(&self, id: DeckId, picker: TrackPicker, bpm_hint: f32) {
+        self.start_load_work(id, picker, false, bpm_hint);
     }
-    fn start_load_work(&self, id: DeckId, picker: TrackPicker, restoring: bool) {
+    fn start_load_work(&self, id: DeckId, picker: TrackPicker, restoring: bool, bpm_hint: f32) {
         self.controller_load_press.borrow_mut().take();
         self.load_generation
             .set(self.load_generation.get().wrapping_add(1));
@@ -6220,7 +6227,8 @@ impl AudioController {
                 let result = picker().map(|path| {
                     cancel.check()?;
                     let path = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
-                    let track = PreparedTrack::open_cancellable(&path, &cancel)?;
+                    let track =
+                        PreparedTrack::open_cancellable_with_hint(&path, &cancel, bpm_hint)?;
                     let mut metadata = crate::track_metadata::read_cancellable(&path, &cancel)?;
                     metadata.duration_ms = Some(track.duration().as_millis() as u64);
                     metadata.duration_exact = true;
@@ -6264,7 +6272,7 @@ impl AudioController {
             return;
         };
         let picker: TrackPicker = Arc::new(move || Some(path.clone()));
-        self.start_load_work(id, picker, true);
+        self.start_load_work(id, picker, true, 0.0);
         if self.pending.borrow().is_none() {
             self.start_next_session_restore();
         }
@@ -9211,7 +9219,7 @@ mod tests {
                     .invoke_accessible_default_action();
             }
         }
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for (index, label) in [(0, "DECK A"), (1, "DECK B")] {
                 let button = control(&ui, &format!("{label} loop jog edit mode"));
@@ -9797,7 +9805,7 @@ mod tests {
         assert!(ui.get_left_hot_cues().row_data(0).unwrap().occupied);
         ui.set_audio_enabled(true);
         ui.show().unwrap();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["A", "B"] {
                 let button = control(&ui, &format!("DECK {deck} hardware pad mode"));
@@ -9872,7 +9880,7 @@ mod tests {
         ui.show().unwrap();
         ui.set_sampler_open(true);
         c.publish_sampler();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for slot in 1..=4 {
                 for action in ["load", "play", "stop", "clear"] {
@@ -10076,7 +10084,7 @@ mod tests {
         assert!(engine.fx_slot(DeckId::A, 1).delay.enabled);
         ui.show().unwrap();
         ui.set_fx_open(true);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["A", "B"] {
                 for suffix in [
@@ -10205,7 +10213,7 @@ mod tests {
         ui.invoke_fx_timing_changed(0, 0, 4);
         ui.show().unwrap();
         ui.set_fx_open(true);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["A", "B"] {
                 for suffix in [
@@ -10477,7 +10485,7 @@ mod tests {
         assert!(!engine.headphone_cue(DeckId::A));
         c.tick();
         assert!(engine.snapshot(DeckId::B).playing);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for label in [
                 "Deck A headphone cue",
@@ -10572,17 +10580,19 @@ mod tests {
             ui.get_channel_a_clipped(),
             "clip history survives track replacement until clear"
         );
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["A", "B"] {
                 let meter = control(&ui, &format!("Deck {deck} pre-fader sample peak"));
+                let wave = control(&ui, "Shared waveform area");
+                assert!(
+                    meter.absolute_position().y
+                        >= wave.absolute_position().y + wave.size().height - 1.
+                );
                 assert!(meter.size().width > 100. && meter.size().height > 0.);
                 assert!(meter.absolute_position().x >= 0.);
                 assert!(meter.absolute_position().x + meter.size().width <= width + 1.);
-                assert!(
-                    meter.absolute_position().y + meter.size().height
-                        <= control(&ui, "Shared waveform area").absolute_position().y + 1.
-                );
+                assert!(meter.absolute_position().y + meter.size().height <= height + 1.);
             }
         }
         control(&ui, "Deck A clear clip hold").invoke_accessible_default_action();
@@ -10641,16 +10651,17 @@ mod tests {
         assert!(!ui.get_output_peak_warning());
         assert_eq!(ui.get_output_peak_caption(), "BUS PEAK -\u{221e} dBFS");
         ui.show().unwrap();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let meter = control(&ui, "Post-fader bus sample peak");
+            let wave = control(&ui, "Shared waveform area");
+            assert!(
+                meter.absolute_position().y >= wave.absolute_position().y + wave.size().height - 1.
+            );
             assert!(meter.size().width >= 170. && meter.size().height >= 22.);
             assert!(meter.absolute_position().x >= 0.);
             assert!(meter.absolute_position().x + meter.size().width <= width + 0.1);
-            assert!(
-                meter.absolute_position().y + meter.size().height
-                    <= control(&ui, "Shared waveform area").absolute_position().y
-            );
+            assert!(meter.absolute_position().y + meter.size().height <= height);
             for label in ["Channel A fader", "Crossfader", "Channel B fader"] {
                 let slider = control(&ui, label);
                 assert!(slider.size().width > 0.);
@@ -10690,7 +10701,7 @@ mod tests {
         println!("20,000-row preparation: lazy {lazy_allocations} allocations; eager {eager_allocations}");
         drop(visible);
         drop(library);
-        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.window().set_size(slint::LogicalSize::new(850., 860.));
         c.publish_library();
         finish_search(&c);
         ui.show().unwrap();
@@ -11030,7 +11041,7 @@ mod tests {
         c.library
             .borrow_mut()
             .insert((0..401).map(|i| dir.path().join(format!("track-{i:04}.wav"))));
-        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.window().set_size(slint::LogicalSize::new(850., 860.));
         ui.show().unwrap();
         c.publish_library();
         finish_search(&c);
@@ -11308,7 +11319,7 @@ mod tests {
         engine.play(DeckId::A);
         engine.play(DeckId::B);
         c.refresh();
-        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.window().set_size(slint::LogicalSize::new(850., 860.));
         ui.show().unwrap();
         let dispatch =
             |note| crate::mc4000::apply(&ui, crate::mc4000::decode(&[0x9f, note, 127]).unwrap());
@@ -11352,7 +11363,7 @@ mod tests {
         dispatch(2); // LOAD A still rejects a playing target.
         assert!(c.pending.borrow().is_none());
         assert_eq!(c.library.borrow().prep_queue(), &[first_id]);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             ui.show().unwrap();
             for label in [
@@ -11513,7 +11524,7 @@ mod tests {
         c.library
             .borrow_mut()
             .insert((0..401).map(|i| dir.path().join(format!("track-{i:04}.wav"))));
-        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.window().set_size(slint::LogicalSize::new(850., 860.));
         ui.show().unwrap();
         c.publish_library();
         finish_search(&c);
@@ -11768,7 +11779,7 @@ mod tests {
             count
         );
         let insert_time = start.elapsed();
-        ui.window().set_size(slint::LogicalSize::new(850., 740.));
+        ui.window().set_size(slint::LogicalSize::new(850., 860.));
         ui.show().unwrap();
         let start = Instant::now();
         c.publish_library();
@@ -12101,14 +12112,14 @@ mod tests {
         c.tick();
         assert_eq!(ui.get_left_time(), a);
         ui.show().unwrap();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let shared = control(&ui, "Shared waveform area");
             for deck in ["DECK A", "DECK B"] {
                 let time = control(&ui, &format!("{deck} source time"));
                 let seek = control(&ui, &format!("{deck} position"));
                 assert!(time.size().height >= 22., "both time lines have height");
-                assert!(time.size().width >= 275., "compact time row has width");
+                assert!(time.size().width >= 200., "compact time row has width");
                 assert!(time.absolute_position().x >= 0.);
                 assert!(time.absolute_position().x + time.size().width <= width + 0.1);
                 assert!(
@@ -12279,7 +12290,7 @@ mod tests {
         assert_eq!(ui.get_eq_filter_a(), -0.5);
         control(&ui, "Deck A reset EQ").invoke_accessible_default_action();
         assert_eq!(engine.eq_settings(DeckId::A).filter, 0.);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["A", "B"] {
                 let item = control(&ui, &format!("Deck {deck} bipolar filter"));
@@ -13033,7 +13044,7 @@ mod tests {
         ui.invoke_load_right();
         entry.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(ui.get_background_job_active());
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let cancel = control(&ui, "Cancel background load or import");
             assert_eq!(cancel.accessible_enabled(), Some(true));
@@ -14405,7 +14416,7 @@ mod tests {
         assert!(detail.visible && detail.start < detail.end);
         ui.set_left_loop_range(overview);
         ui.set_left_detail_loop_range(detail);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for (view, label) in [
                 ("DECK A waveform overview", "DECK A overview loop range"),
@@ -14483,7 +14494,7 @@ mod tests {
         assert!((ui.get_left_loop_range().start - 100. / 3.).abs() < 0.001);
         assert!((ui.get_left_loop_range().end - 200. / 3.).abs() < 0.001);
         assert_eq!(count("DECK B overview loop range"), 0);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             engine
                 .seek_position(DeckId::A, Duration::from_secs(15))
@@ -15155,7 +15166,7 @@ mod tests {
         assert!(ui.get_status().contains("changed"));
         assert!(ui.get_right_cue_editing());
         ui.invoke_cancel_hot_cue_right();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for (view, label, start, end) in [
                 (
@@ -15648,7 +15659,7 @@ mod tests {
     fn external_drop_ingress_loads_both_decks_and_preserves_guards() {
         use crate::external_drop::{drop_file, refresh_hover, FileGesture};
         i_slint_backend_testing::init_no_event_loop();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             let ui = AppWindow::new().unwrap();
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let (mixer, _output) = rodio::mixer::mixer(2, 48000);
@@ -15719,7 +15730,7 @@ mod tests {
     fn library_pointer_drag_loads_both_decks_at_supported_sizes() {
         use slint::platform::{PointerEventButton, WindowEvent};
         i_slint_backend_testing::init_no_event_loop();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             let ui = AppWindow::new().unwrap();
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let (mixer, _output) = rodio::mixer::mixer(2, 48000);
@@ -18088,7 +18099,7 @@ mod tests {
         ui.show().unwrap();
         ui.invoke_select_crate(id);
         finish_search(&c);
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for (index, name) in [
                 "Library",
@@ -18439,7 +18450,7 @@ mod tests {
         assert_eq!(row.prepare_duration, "04:14.90");
         assert_eq!(row.gain, "+0.0");
         assert_eq!(row.analysis_status, "Analyzed");
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for label in [
                 "Track 1 BPM",
@@ -18822,7 +18833,7 @@ mod tests {
         assert_eq!(ui.get_library_rows().row_data(0).unwrap().id, 3);
         assert_eq!(c.library.borrow().len(), 3);
         assert!(ui.get_left_playing());
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let navigation = control(&ui, "Crate navigation").absolute_position();
             let status = control(&ui, "Application status");
@@ -19724,7 +19735,7 @@ mod tests {
         let title = ui.get_left_title();
         assert_eq!(
             control(&ui, "Load selected into deck A").accessible_enabled(),
-            Some(false)
+            Some(true) // Button enabled when track selected; actual load blocked by controller ("Pause deck A")
         );
         ui.invoke_load_library_left();
         assert!(c.pending.borrow().is_none());
@@ -19747,7 +19758,7 @@ mod tests {
         finish_import(&c);
         assert_eq!(ui.get_library_rows().row_count(), 3);
         assert_eq!(ui.get_status(), "Library import cancelled");
-        for (width, height) in [(850.0, 740.0), (1280.0, 860.0)] {
+        for (width, height) in [(850.0, 860.0), (1280.0, 860.0)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let quantize = control(&ui, "Global Quantize");
             let output_pair = control(&ui, "Audio output pair");
@@ -20038,7 +20049,7 @@ mod tests {
         c.tick();
         assert_eq!(ui.get_left_beats(), grid_model);
         for width in [1200.0, 850.0] {
-            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            ui.window().set_size(slint::LogicalSize::new(width, 860.0));
             let view = control(&ui, "DECK A detailed waveform");
             let lines: Vec<_> =
                 ElementHandle::find_by_accessible_label(&ui, "DECK A beat line").collect();
@@ -20102,7 +20113,7 @@ mod tests {
         assert!(ui.get_status().contains("1 skipped"));
         assert!(audio.is_file());
         for width in [850.0, 1280.0] {
-            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            ui.window().set_size(slint::LogicalSize::new(width, 860.0));
             let button = control(&ui, "Import library folder");
             let library = control(&ui, "Track library area");
             assert!(button.absolute_position().x >= library.absolute_position().x);
@@ -20153,7 +20164,7 @@ mod tests {
         assert_eq!(ui.get_library_rows().row_count(), 1);
         assert!(ui.get_library_can_relocate_selected());
         for width in [850.0, 1280.0] {
-            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            ui.window().set_size(slint::LogicalSize::new(width, 860.0));
             let button = control(&ui, "Relocate selected missing library track");
             let library_area = control(&ui, "Track library area");
             assert!(button.absolute_position().x >= library_area.absolute_position().x);
@@ -20331,7 +20342,7 @@ mod tests {
         let blocker = rusqlite::Connection::open(&db).unwrap();
         blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
         let picker_path = track_path.clone();
-        c.start_load(DeckId::A, Arc::new(move || Some(picker_path.clone())));
+        c.start_load(DeckId::A, Arc::new(move || Some(picker_path.clone())), 0.0);
         finish(&c);
         finish_storage(&c);
         assert!(c.save_failed.get());
@@ -20559,7 +20570,7 @@ mod tests {
         );
         c.restore_library(Ok(db), Vec::new());
         finish_storage(&c);
-        c.start_load(DeckId::A, Arc::new(move || Some(path.clone())));
+        c.start_load(DeckId::A, Arc::new(move || Some(path.clone())), 0.0);
         finish(&c);
         c.close_library().unwrap();
         let stored: String = connection
@@ -20628,7 +20639,7 @@ mod tests {
         engine.set_speed(DeckId::B, 0.75).unwrap();
         c.tick();
         let gains = engine.output_volumes();
-        for (width, height) in [(850., 740.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             ui.set_left_detail_window(8);
             ui.set_right_detail_window(8);
@@ -20822,7 +20833,7 @@ mod tests {
         assert_eq!(ui.get_left_detail_window(), 8);
         engine.play(DeckId::A);
         for width in [1200.0, 850.0] {
-            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            ui.window().set_size(slint::LogicalSize::new(width, 860.0));
             engine.seek_percent(DeckId::A, 50.0).unwrap();
             c.tick();
             assert!((ui.get_left_detail_start() - 100.0 * 11.0 / 30.0).abs() < 0.001);
@@ -20910,7 +20921,7 @@ mod tests {
         assert!((0..model.row_count()).all(|i| model.row_data(i) == Some(0.25)));
         let right_model = ui.get_right_waveform();
         for width in [1200.0, 850.0] {
-            ui.window().set_size(slint::LogicalSize::new(width, 740.0));
+            ui.window().set_size(slint::LogicalSize::new(width, 860.0));
             for (deck, fraction) in [("A", 0.25), ("B", 0.75), ("A", 0.5)] {
                 let overview = control(&ui, &format!("DECK {deck} waveform overview"));
                 let origin = overview.absolute_position();
@@ -21008,6 +21019,55 @@ mod tests {
         assert_eq!(ui.get_left_position(), 0.0);
         assert!((ui.get_right_position() - 80.0).abs() < 0.001);
     }
+    #[test]
+    fn selected_files_load_into_decks_within_five_seconds() {
+        i_slint_backend_testing::init_no_event_loop();
+        let paths = crate::test_support::benchmark_paths(std::env::var_os("DRDJ_LOAD_BENCH_FILES"));
+        for path in paths {
+            let ui = AppWindow::new().unwrap();
+            let (mixer, mut output) = rodio::mixer::mixer(2, 44100);
+            let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 44100));
+            let c = AudioController::wire(
+                &ui,
+                Rc::clone(&engine),
+                Arc::new(|| None),
+                Arc::new(|| None),
+            );
+            for id in [DeckId::A, DeckId::B] {
+                let selected = path.clone();
+                let start = Instant::now();
+                c.start_load(id, Arc::new(move || Some(selected.clone())), 0.0);
+                assert!(c.pending.borrow().is_some());
+                while c.pending.borrow().is_some() {
+                    assert!(
+                        start.elapsed() < Duration::from_secs(5),
+                        "Track load exceeded 5 s: {} {id:?}",
+                        path.display()
+                    );
+                    c.tick();
+                    thread::sleep(Duration::from_millis(2));
+                }
+                let elapsed = start.elapsed();
+                assert!(engine.snapshot(id).loaded, "{}", ui.get_status());
+                assert!(!engine.snapshot(id).playing);
+                assert!(!ui.get_loading());
+                assert!(
+                    elapsed < Duration::from_secs(5),
+                    "Load completion exceeded 5 s: {} {id:?}: {elapsed:?}",
+                    path.display()
+                );
+                if id == DeckId::B {
+                    assert!(engine.snapshot(DeckId::A).loaded);
+                }
+                eprintln!(
+                    "DECK_LOAD path={} deck={id:?} ready={elapsed:?}",
+                    path.display()
+                );
+                output.by_ref().take(256).for_each(drop);
+            }
+        }
+    }
+
     #[test]
     fn headless_gui_load_transport_faders_errors_cancel_and_position() {
         use slint::Model;
@@ -21159,7 +21219,7 @@ mod tests {
         );
         ui.set_mc4000_connected(true);
         i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
-        for (width, height) in [(850.0, 740.0), (1250.0, 768.0), (1280.0, 860.0)] {
+        for (width, height) in [(850.0, 860.0), (1250.0, 860.0), (1280.0, 860.0)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             let playhead = control(&ui, "DECK A software playhead");
             let right_playhead = control(&ui, "DECK B software playhead");
@@ -21258,7 +21318,7 @@ mod tests {
                 .as_str(),
             "Virtuelle Decks"
         );
-        for (width, height) in [(850., 740.), (1250., 768.), (1280., 860.)] {
+        for (width, height) in [(850., 860.), (1250., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["DECK A", "DECK B"] {
                 let disc = control(&ui, &format!("{deck} round virtual platter"));

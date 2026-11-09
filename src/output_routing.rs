@@ -54,6 +54,16 @@ pub struct RoutingControl {
     requested: AtomicU32,
     monitor: AtomicU64,
 }
+/// A standalone stereo route for model-only use; hardware routers use source channels.
+impl Default for RoutingControl {
+    fn default() -> Self {
+        Self {
+            channels: 2,
+            requested: AtomicU32::new(0),
+            monitor: AtomicU64::new(MonitorSettings::default().bits()),
+        }
+    }
+}
 impl RoutingControl {
     pub fn set_monitor(&self, settings: MonitorSettings) {
         self.monitor.store(settings.bits(), Ordering::Release);

@@ -1,0 +1,385 @@
+// Generated with the full local GUI input; input handlers are retained.
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox } from "std-widgets.slint";
+import { DjTheme, DeckSlotData, LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow } from "theme.slint";
+import { DjAction, HotCuePad, NudgeHold, VirtualPlatter } from "controls.slint";
+import { WaveformStrip } from "waveform.slint";
+
+export component CompactDeck inherits Rectangle {
+    in property <int> loop-jog-mode;
+    callback loop-jog();
+    callback cancel-loop-jog();
+    out property <bool> loop-name-focused;
+    changed tools-panel => { root.loop-name-focused = false; }
+    callback scratch-pointer(int, float, float);
+    in property <bool> platter-mouse-owned;
+    in property <float> platter-angle;
+    in property <bool> platter-touched;
+    in property <bool> censor;
+    in property <string> deck-label;
+    in property <bool> controller-mode: false;
+    in property <brush> accent;
+    in property <string> track-title;
+    in property <bool> pad-sampler;
+    callback pad-mode();
+    in property <string> time-text;
+    in property <string> platter-bpm: "—";
+    in property <string> platter-time: "—";
+    in property <[float]> waveform;
+    in property <[color]> colors;
+    in property <bool> audio-enabled;
+    in property <bool> loaded;
+    in property <bool> loading;
+    in property <bool> load-busy;
+    in property <bool> playing;
+    in-out property <float> position;
+    in property <[HotCueRow]> hot-cues;
+    in-out property <bool> quantize-cues: false;
+    in property <bool> quantize-enabled: true;
+    in property <bool> quantize-preferences-ready: true;
+    in-out property <bool> quantize-triggers: false;
+    in-out property <int> quantize-step: 3;
+    changed quantize-step => { root.cancel-trigger(); }
+    in-out property <bool> keylock: false;
+    callback keylock-change();
+    callback cancel-trigger();
+    in property <LoopRange> loop-range;
+    property <int> delete-slot: 1;
+    property <int> tools-panel: 0;
+    in property <bool> grid-active;
+    in-out property <int> pitch-range-index: 3;
+    in property <float> pitch-min: -50;
+    in property <float> pitch-max: 100;
+    in property <bool> pitch-outside;
+    in property <bool> pitch-can-down;
+    in property <bool> pitch-can-up;
+    callback nudge(int, bool); callback cancel-nudge();
+    callback pitch-range(); callback pitch-down(); callback pitch-up();
+    in-out property <float> pitch-percent;
+    in property <string> pitch-caption;
+    in property <string> bpm-caption;
+    callback pitch(float); callback reset-pitch();
+    in property <bool> can-match-tempo; callback match-tempo();
+    in property <bool> can-phase-sync; callback phase-sync();
+    in property <bool> sync-active; in property <bool> sync-preparing; in property <bool> can-sync; callback toggle-sync();
+    in-out property <int> alignment-index: 0; callback alignment-mode();
+    in-out property <int> auto-loop-index: 5;
+    in-out property <bool> auto-loop-snap: false;
+    callback auto-loop(); callback half-loop(); callback double-loop();
+    in property <[SavedLoopRow]> saved-loops;
+    in-out property <int> saved-loop-slot: 1;
+    in-out property <string> saved-loop-name;
+    callback save-loop(); callback recall-loop(); callback delete-loop();
+    in property <string> loop-caption;
+    in property <bool> loop-has-in;
+    in property <bool> loop-ready;
+    in property <bool> loop-active;
+    callback loop-in(); callback loop-out(); callback loop-activate(); callback reloop();
+    in property <bool> cue-editing;
+    changed cue-editing => { if root.cue-editing { root.tools-panel = 0; } }
+    in-out property <string> cue-name;
+    in-out property <string> cue-rgb;
+    callback edit-hot-cue(int); callback save-hot-cue(); callback cancel-hot-cue();
+    callback hot-cue(int, bool, int); callback delete-hot-cue(int);
+    callback load(); callback toggle(); callback cue(); callback eject(); callback seek(float);
+    callback temporary-cue(bool); callback stutter();
+    pure callback accepts-drop(data-transfer) -> bool;
+    callback drop-track(data-transfer) -> bool;
+    in property <bool> external-hover: false;
+    background: DjTheme.panel-bg; border-width: 1px; border-color: deck-drop.has-drag || root.external-hover ? root.accent : DjTheme.divider;
+    deck-drop := DropArea {
+        width: 100%; height: 100%;
+        can-drop(event) => { return root.accepts-drop(event.data) ? DragAction.copy : DragAction.none; }
+        dropped(event) => { return root.drop-track(event.data) ? DragAction.copy : DragAction.none; }
+    }
+    VerticalLayout {
+        padding: 6px; spacing: 3px;
+        HorizontalLayout {
+            Text {
+                text: root.deck-label + (root.controller-mode ? " / MC4000" : " / TRAINING");
+                color: root.accent;
+                font-weight: 700;
+                font-size: 12px;
+                accessible-role: text;
+                accessible-label: root.deck-label + " presentation mode";
+                accessible-description: root.controller-mode ? "Controller mode active" : "Training mode active";
+            }
+            DjAction { text: "LOAD"; accessible-label: deck-label + " load track"; enabled: audio-enabled && !loading && !load-busy && !playing; clicked => { root.load(); } }
+            DjAction { text: playing ? "PAUSE" : "PLAY"; accessible-label: deck-label + " play/pause"; enabled: !audio-enabled || loaded; clicked => { root.toggle(); } }
+            NudgeHold { height: 24px; text: "CUE"; label: deck-label + " cue"; enabled: !audio-enabled || (loaded && !loading); held(value) => { if root.audio-enabled { root.temporary-cue(value); } else if value { root.cue(); } } cancel => { if root.audio-enabled { root.temporary-cue(false); } } }
+            DjAction { text: "EJECT"; accessible-label: deck-label + " eject"; accessible-description: "Stop and unload this deck; keep the track in the library"; enabled: loaded && !loading && !load-busy; clicked => { root.eject(); } }
+        }
+
+
+
+
+        HorizontalLayout {
+            height: 156px;
+            spacing: 8px;
+            VirtualPlatter {
+                virtual-mode: root.controller-mode;
+                angle: root.platter-angle; touched: root.platter-touched;
+                scratch-enabled: root.controller-mode && root.loaded && !root.loading;
+                mouse-owned: root.platter-mouse-owned;
+                scratch-pointer(action, x, y) => { root.scratch-pointer(action, x, y); }
+                metadata-known: root.loaded; deck-label: root.deck-label; bpm: root.platter-bpm; time: root.platter-time;
+                pitch: root.pitch-percent; position: root.position; playing: root.playing; accent: root.accent;
+            }
+            VerticalLayout {
+HorizontalLayout {
+            height: 20px;
+            Text { text: (root.censor ? "CENSOR · " : "") + track-title; color: root.censor ? #ffc15e : DjTheme.text-primary; font-size: 13px; overflow: elide; }
+
+
+
+        }
+WaveformStrip { height: 42px; overview: true; deck-label: root.deck-label; accent: root.accent; values: root.waveform; colors: root.colors; hot-cues: root.hot-cues; loop-range: root.loop-range; position: root.position; marker: root.position; enabled: !root.audio-enabled || root.loaded; seek(value) => { if root.audio-enabled { root.seek(value); } else { root.position = value; } } }
+
+
+            horizontal-stretch: 1;
+            spacing: 1px;
+            if root.controller-mode : Rectangle {
+                height: 6px;
+                background: DjTheme.panel-dark;
+                accessible-role: image;
+                accessible-label: root.deck-label + " software playhead";
+                accessible-description: root.track-title + ", " + round(root.position) + "%, " + root.time-text + ", " + root.bpm-caption + ", " + root.pitch-caption + ", " + (root.playing ? "playing" : "paused") + ". Software playback position; not physical platter position.";
+                Rectangle {
+                    width: parent.width * clamp(root.position / 100, 0, 1);
+                    height: parent.height;
+                    background: root.accent;
+                }
+            }
+            Text {
+                height: 24px;
+                text: root.time-text;
+                color: #d3dce8;
+                font-size: 10px;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                accessible-role: text;
+                accessible-label: root.deck-label + (root.controller-mode ? " virtual deck source time" : " source time");
+                accessible-description: root.time-text;
+            }
+Slider { minimum: 0; maximum: 100; value <=> position; accessible-label: deck-label + " position"; enabled: !audio-enabled || loaded; changed(value) => { if audio-enabled { root.seek(value); } } }
+            HorizontalLayout {
+                height: 13px;
+                spacing: 3px;
+                Text {
+                    text: "POSITION " + round(root.position) + "%";
+                    color: #d3dce8;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck time and position";
+                    accessible-description: round(root.position) + "%";
+                }
+                Text {
+                    text: root.playing ? "PLAYING" : "PAUSED";
+                    color: root.playing ? #4ee79b : DjTheme.text-secondary;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck transport state";
+                    accessible-description: root.playing ? "Playing" : "Paused";
+                }
+            }
+            HorizontalLayout {
+                height: 13px;
+                spacing: 3px;
+                Text {
+                    height: 13px;
+                    text: root.bpm-caption;
+                    color: #d3dce8;
+                    font-size: 10px;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck BPM";
+                    accessible-description: root.bpm-caption;
+                }
+                Text {
+                    height: 13px;
+                    text: "PITCH " + round(root.pitch-percent * 100) / 100 + "%";
+                    color: DjTheme.text-secondary;
+                    font-size: 10px;
+                    overflow: elide;
+                    accessible-role: text;
+                    accessible-label: root.deck-label + " virtual deck pitch";
+                    accessible-description: root.pitch-caption;
+                }
+            }
+            }
+        }
+
+
+        if root.tools-panel == 0 : HorizontalLayout {
+            spacing: 2px; height: 30px;
+            for pad[i] in hot-cues : VerticalLayout {
+                spacing: 0px;
+                HotCuePad {
+                    slot: i;
+                    text: "" + (i + 1) + (pad.occupied ? " " + pad.name : " +");
+                    label: deck-label + " hot cue " + (i + 1);
+                    description: pad.description;
+                    occupied: pad.occupied;
+                    cue-enabled: loaded && !loading;
+                    tint: pad.tint;
+                    held(slot, value, input) => { root.hot-cue(slot, value, input); }
+                }
+                Rectangle { height: 3px; background: pad.occupied ? pad.tint : #394251; }
+            }
+        }
+        HorizontalLayout {
+            height: 28px; spacing: 2px;
+            DjAction { text: "IN"; accessible-label: root.deck-label + " loop in"; enabled: loaded && !loading; clicked => { root.loop-in(); } }
+            DjAction { text: "OUT"; accessible-label: root.deck-label + " loop out"; enabled: loaded && !loading && loop-has-in; clicked => { root.loop-out(); } }
+            DjAction { text: loop-active ? "ACTIVE" : "LOOP"; accessible-label: root.deck-label + " loop on/off"; accessible-description: root.loop-caption; enabled: loaded && !loading && loop-ready; clicked => { root.loop-activate(); } }
+            DjAction { text: "RELOOP"; accessible-label: root.deck-label + " reloop"; accessible-description: "Restart at Loop In"; enabled: loaded && !loading && loop-ready; clicked => { root.reloop(); } }
+            DjAction { text: root.tools-panel == 0 ? "SLOTS" : (root.tools-panel == 1 ? "AUTO" : (root.tools-panel == 2 ? "PITCH" : (root.tools-panel == 3 ? "NUDGE" : "CUES"))); width: 48px; accessible-label: root.deck-label + " deck tools panel"; clicked => { root.cancel-nudge(); root.tools-panel = root.tools-panel == 4 ? 0 : root.tools-panel + 1; if root.tools-panel != 2 { root.cancel-loop-jog(); } } }
+            Text { width: 64px; text: root.loop-caption; accessible-role: text; accessible-label: root.deck-label + " loop state"; accessible-description: root.loop-caption; color: loop-active ? #4ee79b : DjTheme.text-secondary; font-size: 10px; overflow: elide; vertical-alignment: center; }
+        }
+        if root.tools-panel == 1 : HorizontalLayout {
+            height: 28px; spacing: 2px;
+            SpinBox { width: 64px; minimum: 1; maximum: 8; value <=> root.saved-loop-slot; accessible-label: root.deck-label + " saved loop slot"; }
+            LineEdit { width: 68px; text <=> root.saved-loop-name; placeholder-text: "Loop name"; accessible-label: root.deck-label + " saved loop name"; changed has-focus => { root.loop-name-focused = self.has-focus; } }
+            DjAction { text: "SAVE"; accessible-label: root.deck-label + " save loop slot"; enabled: loaded && !loading && loop-ready; clicked => { root.save-loop(); } }
+            DjAction { text: "RECALL"; accessible-label: root.deck-label + " recall loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.recall-loop(); } }
+            DjAction { text: "DELETE"; accessible-label: root.deck-label + " delete loop slot"; enabled: loaded && !loading && saved-loop-slot >= 1 && saved-loop-slot <= saved-loops.length && saved-loops[saved-loop-slot - 1].occupied; clicked => { root.delete-loop(); } }
+        }
+        if root.tools-panel == 1 : Text { height: 14px; text: root.saved-loop-slot >= 1 && root.saved-loop-slot <= root.saved-loops.length ? root.saved-loops[root.saved-loop-slot - 1].description : "Empty slot"; color: DjTheme.text-secondary; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " saved loop description"; }
+        if root.tools-panel == 2 : HorizontalLayout {
+            height: 28px; spacing: 2px;
+            ComboBox { model: ["1/8 beat","1/4 beat","1/2 beat","1 beat","2 beats","4 beats","8 beats","16 beats","32 beats"]; current-index <=> root.auto-loop-index; accessible-label: root.deck-label + " auto loop length"; }
+            DjAction { text: "AUTO LOOP"; accessible-label: root.deck-label + " auto loop"; enabled: loaded && !loading && grid-active; clicked => { root.auto-loop(); } }
+            DjAction { text: "½"; accessible-label: root.deck-label + " half loop"; enabled: loaded && !loading && loop-ready; clicked => { root.half-loop(); } }
+            DjAction { text: "×2"; accessible-label: root.deck-label + " double loop"; enabled: loaded && !loading && loop-ready; clicked => { root.double-loop(); } }
+        }
+        if root.tools-panel == 2 : HorizontalLayout {
+            height: 26px; spacing: 2px;
+            CheckBox { text: "BEAT SNAP"; checked <=> root.auto-loop-snap; accessible-label: root.deck-label + " auto loop beat snap"; enabled: root.quantize-preferences-ready && root.quantize-enabled && loaded && !loading && grid-active; }
+            DjAction { text: root.loop-jog-mode == 1 ? "JOG IN" : (root.loop-jog-mode == 2 ? "JOG OUT" : "JOG OFF"); accessible-label: root.deck-label + " loop jog edit mode"; accessible-description: root.loop-caption; enabled: loaded && !loading && loop-ready; clicked => { root.loop-jog(); } }
+            Text { text: root.quantize-enabled && root.auto-loop-snap ? "Nearest beat" : "Playhead"; color: DjTheme.text-secondary; font-size: 10px; overflow: elide; horizontal-stretch: 1; vertical-alignment: center; }
+        }
+        if root.tools-panel == 3 : VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                height: 28px;
+                ComboBox { width: 76px; model: ["±8%","±16%","±50%","Wide"]; current-index <=> root.pitch-range-index; accessible-label: root.deck-label + " pitch range"; selected => { root.pitch-range(); } }
+                if !root.pitch-outside : Slider { minimum: root.pitch-min; maximum: root.pitch-max; value <=> root.pitch-percent; accessible-label: root.deck-label + " pitch"; enabled: loaded && !loading; changed(value) => { root.pitch(value); } }
+                if root.pitch-outside : Text { text: "Outside range"; color: #ffcc77; font-size: 10px; vertical-alignment: center; }
+                DjAction { width: 28px; text: "−"; accessible-label: root.deck-label + " pitch fine down"; enabled: loaded && !loading && root.pitch-can-down; clicked => { root.pitch-down(); } }
+                DjAction { width: 28px; text: "+"; accessible-label: root.deck-label + " pitch fine up"; enabled: loaded && !loading && root.pitch-can-up; clicked => { root.pitch-up(); } }
+                Text { width: 48px; text: round(root.pitch-percent*100)/100 + "%"; color: DjTheme.text-secondary; font-size: 11px; vertical-alignment: center; }
+                DjAction { width: 40px; text: "1×"; accessible-label: root.deck-label + " reset pitch"; enabled: loaded && !loading; clicked => { root.reset-pitch(); } }
+                DjAction { width: 54px; text: "MATCH"; accessible-label: root.deck-label + " match tempo"; accessible-description: "One-shot tempo from other deck manual grid; phase unchanged"; enabled: root.can-match-tempo; clicked => { root.match-tempo(); } }
+            }
+            Text { height: 12px; text: root.pitch-caption; color: DjTheme.text-secondary; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " pitch values"; accessible-description: root.pitch-caption; }
+            Text { height: 12px; text: root.bpm-caption; color: DjTheme.text-secondary; font-size: 10px; overflow: elide; accessible-role: text; accessible-label: root.deck-label + " source and current BPM"; accessible-description: root.bpm-caption; }
+        }
+        if root.tools-panel == 4 : VerticalLayout {
+            spacing: 2px;
+            HorizontalLayout {
+                height: 28px; spacing: 4px;
+                NudgeHold { label: root.deck-label + " nudge down"; text: "HOLD −2%"; enabled: root.loaded && root.playing && !root.loading; held(value) => { root.nudge(-1, value); } cancel => { root.cancel-nudge(); } }
+                NudgeHold { label: root.deck-label + " nudge up"; text: "HOLD +2%"; enabled: root.loaded && root.playing && !root.loading; held(value) => { root.nudge(1, value); } cancel => { root.cancel-nudge(); } }
+                DjAction { text: "CANCEL"; accessible-label: root.deck-label + " cancel nudge"; clicked => { root.cancel-nudge(); } }
+                DjAction { width: 72px; text: "PHASE"; accessible-label: root.deck-label + " phase sync"; accessible-description: "One-shot tempo and selected beat or bar phase; both decks playing, loops off"; enabled: root.can-phase-sync; clicked => { root.phase-sync(); } }
+            }
+            HorizontalLayout { height: 20px; spacing: 4px;
+                ComboBox { width: 82px; model: ["Beat", "Bar 4/4", "3 beats", "5 beats", "7 beats"]; current-index <=> root.alignment-index; accessible-label: root.deck-label + " phase alignment mode"; selected => { root.alignment-mode(); } }
+                DjAction { width: 72px; text: root.sync-preparing ? "CANCEL" : (root.sync-active ? "SYNC ON" : "SYNC"); accessible-label: root.deck-label + " continuous sync"; accessible-description: root.sync-preparing ? "Preparing Sync; activate to cancel" : "Follow the other playing deck; toggle off to release"; enabled: root.can-sync; clicked => { root.toggle-sync(); } }
+                Text { text: root.pitch-caption; color: DjTheme.text-secondary; font-size: 10px; overflow: elide; vertical-alignment: center; }
+            }
+            Text { height: 12px; text: root.bpm-caption; color: DjTheme.text-secondary; font-size: 10px; overflow: elide; }
+        }
+        HorizontalLayout { height: 20px; spacing: 3px;
+DjAction { height: 20px; text: root.pad-sampler ? "MC: SAMPLER" : "MC: HOT CUES";
+                accessible-label: root.deck-label + " hardware pad mode";
+                accessible-description: "Four MC4000 pads: " + (root.pad-sampler ? "sampler play, SHIFT stop" : "hot cue hold, SHIFT delete") + ". Click to switch. GUI and keyboard hot cues stay independent.";
+                clicked => { root.pad-mode(); }
+            }
+DjAction { height: 20px; text: "START"; accessible-label: deck-label + " track start"; enabled: !audio-enabled || (loaded && !loading); clicked => { root.cue(); } }
+DjAction { height: 20px; text: "STUTTER"; accessible-label: deck-label + " stutter"; enabled: loaded && !loading; clicked => { root.stutter(); } }
+        }
+        if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
+            height: 26px;
+            Text { text: "SLOT"; color: DjTheme.text-secondary; font-size: 10px; vertical-alignment: center; }
+            SpinBox { minimum: 1; maximum: 8; value <=> root.delete-slot; accessible-label: deck-label + " delete hot cue slot"; }
+            DjAction { text: "EDIT"; accessible-label: deck-label + " edit hot cue"; enabled: loaded && !loading; clicked => { root.edit-hot-cue(root.delete-slot - 1); } }
+            DjAction { text: "DELETE"; accessible-label: deck-label + " delete hot cue"; enabled: loaded && !loading; clicked => { root.delete-hot-cue(root.delete-slot - 1); } }
+            CheckBox { text:"Snap cues"; accessible-label:root.deck-label+" quantize new cues"; accessible-description:root.quantize-enabled ? "Set new cues on nearest selected manual grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-cues; enabled:root.quantize-preferences-ready && root.quantize-enabled && (root.quantize-cues || (root.loaded && !root.loading && root.grid-active)); }
+        }
+        if !root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
+            height: 22px;
+            CheckBox { text: "KEYLOCK"; checked <=> root.keylock; accessible-label: root.deck-label + " keylock"; enabled: root.loaded && !root.loading; toggled => { root.keylock-change(); } }
+            CheckBox { text: "Next grid"; accessible-label: root.deck-label + " quantize cue triggers"; accessible-description: root.quantize-enabled ? "Recall saved cue at next selected grid step" : "Bypassed by global Quantize"; checked <=> root.quantize-triggers; enabled: root.quantize-preferences-ready && root.quantize-enabled && root.loaded && !root.loading; toggled => { root.cancel-trigger(); } }
+            ComboBox { width: 90px; model: ["1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.quantize-step; accessible-label: root.deck-label + " quantization step"; enabled: root.quantize-preferences-ready && root.quantize-enabled && root.loaded && !root.loading; }
+        }
+        if root.cue-editing && root.tools-panel == 0 : HorizontalLayout {
+            height: 26px; spacing: 2px;
+            LineEdit { text <=> root.cue-name; accessible-label: root.deck-label + " cue name"; placeholder-text: "Cue name"; }
+            LineEdit { width: 74px; text <=> root.cue-rgb; accessible-label: root.deck-label + " cue RGB"; placeholder-text: "RRGGBB"; }
+            DjAction { text: "SAVE"; accessible-label: root.deck-label + " save hot cue"; enabled: !loading; clicked => { root.save-hot-cue(); } }
+            DjAction { text: "CANCEL"; accessible-label: root.deck-label + " cancel hot cue"; clicked => { root.cancel-hot-cue(); } }
+        }
+    }
+}
+
+export component DeckPlaceholder inherits Rectangle {
+    in property <string> deck-label;
+    in property <brush> accent;
+    in property <DeckSlotData> track-data;
+    in property <[float]> waveform;
+    in property <[color]> colors;
+    in property <bool> collapsed: true;
+    min-height: root.collapsed ? 0px : 120px;
+    preferred-height: root.collapsed ? 0px : 120px;
+    max-height: root.collapsed ? 0px : 120px;
+    vertical-stretch: 0;
+    visible: !root.collapsed;
+    clip: true;
+    background: DjTheme.panel-dark;
+    border-width: root.collapsed ? 0px : 1px;
+    border-color: DjTheme.divider;
+    accessible-role: groupbox;
+    accessible-label: root.deck-label + " data placeholder";
+    accessible-description: "Display-only slot. No Deck C/D audio engine or input routing.";
+    VerticalLayout {
+        padding: 6px; spacing: 3px;
+        HorizontalLayout {
+            height: 18px;
+            Text { text: root.deck-label; color: root.accent; font-weight: 700; }
+            Text { text: "READ ONLY / NO AUDIO"; color: DjTheme.text-secondary; font-size: 10px; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            VirtualPlatter {
+                diameter: 84px;
+                metadata-known: root.track-data.title != ""; deck-label: root.deck-label;
+                bpm: root.track-data.bpm == "" ? "—" : root.track-data.bpm;
+                time: root.track-data.time == "" ? "—" : root.track-data.time;
+                pitch: root.track-data.pitch; position: 0; playing: false;
+                angle: 0; touched: false; scratch-enabled: false; mouse-owned: false;
+                accent: root.accent;
+            }
+            VerticalLayout {
+                spacing: 3px;
+                Text { text: root.track-data.title == "" ? "No data connected" : root.track-data.title; color: DjTheme.text-primary; font-size: 14px; overflow: elide; }
+                if root.track-data.artist != "" : Text { text: root.track-data.artist; color: DjTheme.text-secondary; font-size: 11px; overflow: elide; }
+                WaveformStrip {
+                    height: 18px; deck-label: root.deck-label; overview: true;
+                    accent: root.accent; values: root.waveform; colors: root.colors;
+                    enabled: false; position: 0; marker: 0;
+                }
+                HorizontalLayout {
+                    spacing: 3px;
+                    DjAction { text: "LOAD"; enabled: false; }
+                    DjAction { text: "PLAY"; enabled: false; }
+                    DjAction { text: "CUE"; enabled: false; }
+                    DjAction { text: "SYNC"; enabled: false; }
+                }
+            }
+        }
+    }
+}
+

@@ -24,7 +24,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -80,7 +80,7 @@ impl fmt::Display for QualityScore {
 }
 
 /// Mix transition types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransitionType {
     Mix,
     Cut,
@@ -104,8 +104,8 @@ impl fmt::Display for TransitionType {
 /// Session deletion mode (FR-023-010).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeleteMode {
-    Soft,       // Remove from list, keep recordings
-    Permanent,  // Remove everything including recordings
+    Soft,      // Remove from list, keep recordings
+    Permanent, // Remove everything including recordings
 }
 
 /// Export format (FR-023-012).
@@ -133,11 +133,30 @@ pub struct TrackInfo {
     pub file_path: String,
 }
 
-impl TrackInfo {
+/// Track identity supplied together when recording session metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackIdentity {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+}
+impl TrackIdentity {
     pub fn new(
         title: impl Into<String>,
         artist: impl Into<String>,
         album: impl Into<String>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            artist: artist.into(),
+            album: album.into(),
+        }
+    }
+}
+
+impl TrackInfo {
+    pub fn new(
+        identity: TrackIdentity,
         duration: Duration,
         bpm: f64,
         key: impl Into<String>,
@@ -145,9 +164,9 @@ impl TrackInfo {
         file_path: impl Into<String>,
     ) -> Self {
         TrackInfo {
-            title: title.into(),
-            artist: artist.into(),
-            album: album.into(),
+            title: identity.title,
+            artist: identity.artist,
+            album: identity.album,
             duration,
             bpm,
             key: key.into(),
@@ -178,9 +197,19 @@ pub struct TransitionRecord {
     pub bpm_difference: f64,
     pub key_compatibility: f32, // 0.0–1.0
     pub quality_score: QualityScore,
-    pub timestamp: Instant,
+    pub timestamp: SystemTime,
     pub crossfader_position: CrossfaderPosition, // FR-023-003
     pub phrase_aligned: bool,                    // FR-023-004
+}
+
+/// Measurements captured together for a session transition.
+#[derive(Debug, Clone)]
+pub struct TransitionDetails {
+    pub duration: Duration,
+    pub bpm_difference: f64,
+    pub key_compatibility: f32,
+    pub quality_score: QualityScore,
+    pub timestamp: SystemTime,
 }
 
 impl TransitionRecord {
@@ -189,12 +218,16 @@ impl TransitionRecord {
         source_track: TrackInfo,
         destination_track: TrackInfo,
         transition_type: TransitionType,
-        duration: Duration,
-        bpm_difference: f64,
-        key_compatibility: f32,
-        quality_score: QualityScore,
-        timestamp: Instant,
+        details: TransitionDetails,
     ) -> Self {
+        let TransitionDetails {
+            duration,
+            bpm_difference,
+            key_compatibility,
+            quality_score,
+            timestamp,
+        } = details;
+
         TransitionRecord {
             transition_number,
             source_track,
@@ -216,14 +249,18 @@ impl TransitionRecord {
         source_track: TrackInfo,
         destination_track: TrackInfo,
         transition_type: TransitionType,
-        duration: Duration,
-        bpm_difference: f64,
-        key_compatibility: f32,
-        quality_score: QualityScore,
-        timestamp: Instant,
+        details: TransitionDetails,
         crossfader_position: CrossfaderPosition,
         phrase_aligned: bool,
     ) -> Self {
+        let TransitionDetails {
+            duration,
+            bpm_difference,
+            key_compatibility,
+            quality_score,
+            timestamp,
+        } = details;
+
         TransitionRecord {
             transition_number,
             source_track,
@@ -244,24 +281,29 @@ impl TransitionRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub session_id: String,
-    pub session_name: String,             // FR-023-002
-    pub created_at: Instant,
-    pub ended_at: Option<Instant>,        // FR-023-002
+    pub session_name: String, // FR-023-002
+    pub created_at: SystemTime,
+    pub ended_at: Option<SystemTime>, // FR-023-002
     pub duration: Duration,
     pub quality_score: QualityScore,
     pub track_count: u32,
     pub transitions: Vec<TransitionRecord>,
     pub genres: Vec<String>,
-    pub recording_path: Option<String>,   // FR-023-002
-    pub venue: Option<String>,            // FR-023-002
-    pub listener_count: u32,              // FR-023-002
-    pub deleted: bool,                    // For soft-deletion (FR-023-010)
+    pub recording_path: Option<String>, // FR-023-002
+    pub venue: Option<String>,          // FR-023-002
+    pub listener_count: u32,            // FR-023-002
+    pub deleted: bool,                  // For soft-deletion (FR-023-010)
 }
 
 impl SessionRecord {
+    pub fn create_replay(&self) -> SessionReplay {
+        let builder = SessionReplayBuilder::build_from_session(self);
+        SessionReplay::build(self.session_id.clone(), builder.snapshots)
+    }
+
     pub fn new(
         session_id: impl Into<String>,
-        created_at: Instant,
+        created_at: SystemTime,
         duration: Duration,
         quality_score: QualityScore,
         track_count: u32,
@@ -287,7 +329,7 @@ impl SessionRecord {
     pub fn with_name(
         session_id: impl Into<String>,
         session_name: impl Into<String>,
-        created_at: Instant,
+        created_at: SystemTime,
         duration: Duration,
         quality_score: QualityScore,
         track_count: u32,
@@ -336,10 +378,12 @@ impl SessionRecord {
 
     /// End the session (FR-023-002).
     pub fn end_session(&mut self) {
-        self.ended_at = Some(Instant::now());
-        self.duration = self.ended_at
+        self.ended_at = Some(SystemTime::now());
+        self.duration = self
+            .ended_at
             .unwrap()
-            .duration_since(self.created_at);
+            .duration_since(self.created_at)
+            .unwrap_or_default();
     }
 
     /// Quality score color coding (FR-023-006).
@@ -366,13 +410,13 @@ impl SessionRecord {
 
     /// Genre distribution as percentage (FR-023-005).
     pub fn genre_distribution(&self) -> HashMap<String, f32> {
-        let genre_counts: HashMap<String, u32> = self
-            .genres
-            .iter()
-            .map(|g| (g.clone(), 1u32))
-            .collect();
-        let total = self.genres.len() as f32.max(1.0);
-        genre_counts.into_iter().map(|(k, v)| (k, (v as f32 / total) * 100.0)).collect()
+        let genre_counts: HashMap<String, u32> =
+            self.genres.iter().map(|g| (g.clone(), 1u32)).collect();
+        let total = (self.genres.len() as f32).max(1.0);
+        genre_counts
+            .into_iter()
+            .map(|(k, v)| (k, (v as f32 / total) * 100.0))
+            .collect()
     }
 
     /// Transition type distribution (FR-023-005).
@@ -388,18 +432,25 @@ impl SessionRecord {
     pub fn most_frequent_tracks(&self, top_n: usize) -> Vec<(String, u32)> {
         let mut track_counts: HashMap<String, u32> = HashMap::new();
         for t in &self.transitions {
-            *track_counts.entry(t.source_track.title.clone()).or_insert(0) += 1;
-            *track_counts.entry(t.destination_track.title.clone()).or_insert(0) += 1;
+            *track_counts
+                .entry(t.source_track.title.clone())
+                .or_insert(0) += 1;
+            *track_counts
+                .entry(t.destination_track.title.clone())
+                .or_insert(0) += 1;
         }
         let mut freq: Vec<(String, u32)> = track_counts.into_iter().collect();
-        freq.sort_by(|a, b| b.1.cmp(&a.1));
+        freq.sort_by_key(|value| std::cmp::Reverse(value.1));
         freq.truncate(top_n);
         freq
     }
 
     /// Transition type count (FR-023-005).
     pub fn transition_type_count(&self, ttype: TransitionType) -> u32 {
-        self.transitions.iter().filter(|t| t.transition_type == ttype).count() as u32
+        self.transitions
+            .iter()
+            .filter(|t| t.transition_type == ttype)
+            .count() as u32
     }
 
     // ============================================================================
@@ -427,7 +478,7 @@ impl SessionRecord {
         let bpm_penalty = if bpm_difference <= 2.0 {
             0.0
         } else if bpm_difference <= 5.0 {
-            (bpm_difference - 2.0) * 2.0  // 2-5 BPM: -6 to 0
+            (bpm_difference - 2.0) * 2.0 // 2-5 BPM: -6 to 0
         } else {
             6.0 + (bpm_difference - 5.0) * 3.0 // >5 BPM: steep penalty
         };
@@ -436,20 +487,20 @@ impl SessionRecord {
         // Key compatibility: harmonic mixing bonus
         // FR-023-004: Key compatibility (harmonic = bonus points)
         if key_compatibility >= 0.9 {
-            score += 3.0;  // Perfect harmonic match bonus
+            score += 3.0; // Perfect harmonic match bonus
         } else if key_compatibility < 0.3 {
-            score -= 8.0;  // Incompatible keys penalty
+            score -= 8.0; // Incompatible keys penalty
         }
 
         // Transition smoothness: 15-45 seconds = ideal
         // FR-023-004: Transition smoothness (appropriate duration)
         let duration_secs = transition_duration.as_secs_f64();
-        if duration_secs >= 15.0 && duration_secs <= 45.0 {
-            score += 2.0;  // Ideal range bonus
+        if (15.0..=45.0).contains(&duration_secs) {
+            score += 2.0; // Ideal range bonus
         } else if duration_secs < 5.0 {
-            score -= 5.0;  // Too abrupt
+            score -= 5.0; // Too abrupt
         } else if duration_secs > 120.0 {
-            score -= 3.0;  // Too long
+            score -= 3.0; // Too long
         }
 
         // Phrase alignment bonus
@@ -461,7 +512,7 @@ impl SessionRecord {
         // EQ/volume balance: modeled via key compatibility correlation
         // FR-023-004: EQ and volume balance
         if key_compatibility >= 0.7 {
-            score += 1.0;  // Likely good EQ balance
+            score += 1.0; // Likely good EQ balance
         }
 
         // Clamp to 0-100
@@ -470,20 +521,24 @@ impl SessionRecord {
     }
 
     /// Generate auto session name from date (FR-023-002).
-    pub fn auto_session_name(created_at: &Instant) -> String {
-        // Use synthetic date formatting since Instant has no direct datetime
-        let day_key = created_at.as_secs() / 86400;
-        let hour = ((created_at.as_secs() % 86400) / 3600) as u32;
+    pub fn auto_session_name(created_at: &SystemTime) -> String {
+        // Use synthetic date formatting since SystemTime has no direct datetime
+        let day_key = epoch_seconds(*created_at) / 86400;
+        let hour = ((epoch_seconds(*created_at) % 86400) / 3600) as u32;
         format!("Mix Session {}_{}", day_key, hour)
     }
 
     /// Sort sessions by the given key and direction (FR-023-008).
-    pub fn sort_sessions(sessions: &mut [SessionRecord], key: SortKey, direction: SortDirection) {
+    pub fn sort_sessions<T: std::borrow::Borrow<SessionRecord>>(
+        sessions: &mut [T],
+        key: SortKey,
+        direction: SortDirection,
+    ) {
         sessions.sort_by(|a, b| {
+            let a = a.borrow();
+            let b = b.borrow();
             let cmp = match key {
-                SortKey::DateCreated => a.created_at
-                    .duration_since(Instant::now())
-                    .cmp(&b.created_at.duration_since(Instant::now())),
+                SortKey::DateCreated => a.created_at.cmp(&b.created_at),
                 SortKey::Duration => a.duration.cmp(&b.duration),
                 SortKey::Quality => a.quality_score.0.total_cmp(&b.quality_score.0),
                 SortKey::TrackCount => a.track_count.cmp(&b.track_count),
@@ -515,21 +570,11 @@ impl SessionRecord {
 // ============================================================================
 
 /// Session state tracking for auto-creation (FR-023-001).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AutoSessionState {
     pub is_active: bool,
     pub first_track_loaded: bool,
     pub manual_start_requested: bool,
-}
-
-impl Default for AutoSessionState {
-    fn default() -> Self {
-        AutoSessionState {
-            is_active: false,
-            first_track_loaded: false,
-            manual_start_requested: false,
-        }
-    }
 }
 
 // ============================================================================
@@ -543,8 +588,8 @@ pub struct ReplaySnapshot {
     pub current_track: Option<TrackInfo>,
     pub active_transition: Option<TransitionRecord>,
     pub quality_at_point: QualityScore,
-    pub energy_level: f32, // 0.0–1.0 mock
-    pub timestamp: Instant, // FR-023-013: exact transition time
+    pub energy_level: f32,     // 0.0–1.0 mock
+    pub timestamp: SystemTime, // FR-023-013: exact transition time
 }
 
 impl ReplaySnapshot {
@@ -554,7 +599,7 @@ impl ReplaySnapshot {
         active_transition: Option<TransitionRecord>,
         quality_at_point: QualityScore,
         energy_level: f32,
-        timestamp: Instant,
+        timestamp: SystemTime,
     ) -> Self {
         ReplaySnapshot {
             elapsed_time,
@@ -588,10 +633,14 @@ impl SessionReplay {
 
     /// Build replay with timeline data (FR-023-013).
     pub fn build(session_id: impl Into<String>, snapshots: Vec<ReplaySnapshot>) -> Self {
-        let quality_timeline: Vec<(Duration, f32)> =
-            snapshots.iter().map(|s| (s.elapsed_time, s.quality_at_point.0)).collect();
-        let energy_timeline: Vec<(Duration, f32)> =
-            snapshots.iter().map(|s| (s.elapsed_time, s.energy_level)).collect();
+        let quality_timeline: Vec<(Duration, f32)> = snapshots
+            .iter()
+            .map(|s| (s.elapsed_time, s.quality_at_point.0))
+            .collect();
+        let energy_timeline: Vec<(Duration, f32)> = snapshots
+            .iter()
+            .map(|s| (s.elapsed_time, s.energy_level))
+            .collect();
 
         SessionReplay {
             session_id: session_id.into(),
@@ -610,8 +659,9 @@ impl SessionReplay {
         for i in (0..self.snapshots.len()).step_by(window_size.max(1)) {
             let end = (i + window_size).min(self.snapshots.len());
             let window = &self.snapshots[i..end];
-            let avg = window.iter().map(|s| s.quality_at_point.0).sum::<f32>() / window.len() as f32;
-            if let Some(ref first) = window.first() {
+            let avg =
+                window.iter().map(|s| s.quality_at_point.0).sum::<f32>() / window.len() as f32;
+            if let Some(first) = window.first() {
                 result.push((first.elapsed_time, avg));
             }
         }
@@ -622,14 +672,12 @@ impl SessionReplay {
 /// Session replay builder.
 pub struct SessionReplayBuilder {
     snapshots: Vec<ReplaySnapshot>,
-    start_time: Instant,
 }
 
 impl SessionReplayBuilder {
     pub fn new() -> Self {
         SessionReplayBuilder {
             snapshots: Vec::new(),
-            start_time: Instant::now(),
         }
     }
 
@@ -669,9 +717,9 @@ impl SessionReplayBuilder {
         for i in (0..self.snapshots.len()).step_by(window_size.max(1)) {
             let end = (i + window_size).min(self.snapshots.len());
             let window = &self.snapshots[i..end];
-            let avg = window.iter().map(|s| s.quality_at_point.0).sum::<f32>()
-                / window.len() as f32;
-            if let Some(ref first) = window.first() {
+            let avg =
+                window.iter().map(|s| s.quality_at_point.0).sum::<f32>() / window.len() as f32;
+            if let Some(first) = window.first() {
                 result.push((first.elapsed_time, QualityScore::new(avg)));
             }
         }
@@ -705,9 +753,8 @@ impl OverallStatistics {
 
         let total_sessions = sessions.len() as u32;
         let total_mixing_time: Duration = sessions.iter().map(|s| s.duration).sum();
-        let average_session_length = Duration::from_secs(
-            total_mixing_time.as_secs() / total_sessions.max(1),
-        );
+        let average_session_length =
+            Duration::from_secs(total_mixing_time.as_secs() / u64::from(total_sessions.max(1)));
 
         // Unique tracks
         let mut unique_track_set = std::collections::HashSet::new();
@@ -721,8 +768,7 @@ impl OverallStatistics {
 
         // Average quality
         let quality_sum: f32 = sessions.iter().map(|s| s.quality_score.0).sum();
-        let average_quality =
-            QualityScore::new(quality_sum / sessions.len() as f32);
+        let average_quality = QualityScore::new(quality_sum / sessions.len() as f32);
 
         // Genre frequency
         let mut genre_counts: HashMap<String, u32> = HashMap::new();
@@ -732,24 +778,24 @@ impl OverallStatistics {
             }
         }
         let mut top_genres: Vec<(String, u32)> = genre_counts.into_iter().collect();
-        top_genres.sort_by(|a, b| b.1.cmp(&a.1));
+        top_genres.sort_by_key(|value| std::cmp::Reverse(value.1));
         top_genres.truncate(10); // Top 10
 
         // Sessions per day
         let mut sessions_per_day: HashMap<String, u32> = HashMap::new();
         for session in sessions {
             // Mock date formatting: use a synthetic day key from created_at
-            let day_key = format!("day_{}", session.created_at.as_secs() / 86400);
+            let day_key = format!("day_{}", epoch_seconds(session.created_at) / 86400);
             *sessions_per_day.entry(day_key).or_insert(0) += 1;
         }
 
         // Quality trend per day
         let mut quality_by_day: HashMap<String, Vec<f32>> = HashMap::new();
         for session in sessions {
-            let day_key = format!("day_{}", session.created_at.as_secs() / 86400);
+            let day_key = format!("day_{}", epoch_seconds(session.created_at) / 86400);
             quality_by_day
                 .entry(day_key)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(session.quality_score.0);
         }
         let quality_trend: Vec<(String, QualityScore)> = quality_by_day
@@ -764,10 +810,10 @@ impl OverallStatistics {
         let mut genre_evolution: HashMap<String, Vec<(String, u32)>> = HashMap::new();
         for session in sessions {
             for genre in &session.genres {
-                let day_key = format!("day_{}", session.created_at.as_secs() / 86400);
+                let day_key = format!("day_{}", epoch_seconds(session.created_at) / 86400);
                 genre_evolution
                     .entry(genre.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push((day_key, 1));
             }
         }
@@ -847,14 +893,16 @@ impl ExportBuilder {
     /// Export sessions to CSV (FR-023-012).
     pub fn to_csv(&self) -> ExportResult {
         let mut csv_data = String::new();
-        csv_data.push_str("Session ID,Created At,Duration (s),Quality,Track Count,Transitions,Genres\n");
+        csv_data.push_str(
+            "Session ID,Created At,Duration (s),Quality,Track Count,Transitions,Genres\n",
+        );
 
         for session in &self.sessions {
             let genres = session.genres.join("; ");
             csv_data.push_str(&format!(
                 "{},{},{},{},{},{},\"{}\"\n",
                 session.session_id,
-                session.created_at.as_secs(),
+                epoch_seconds(session.created_at),
                 session.duration.as_secs(),
                 session.quality_score.as_percentage(),
                 session.track_count,
@@ -867,7 +915,7 @@ impl ExportBuilder {
                 csv_data.push_str(&format!(
                     "{},{},Trans {},{} BPM diff {}, Key compat {:.2}, Score {}\n",
                     session.session_id,
-                    session.created_at.as_secs(),
+                    epoch_seconds(session.created_at),
                     trans.transition_number,
                     trans.transition_type,
                     trans.bpm_difference,
@@ -895,10 +943,7 @@ impl ExportBuilder {
             stats.total_mixing_time.as_secs_f64() / 60.0
         ));
         summary.push_str(&format!("Unique Tracks: {}\n", stats.unique_tracks));
-        summary.push_str(&format!(
-            "Average Quality: {}\n\n",
-            stats.average_quality
-        ));
+        summary.push_str(&format!("Average Quality: {}\n\n", stats.average_quality));
         summary.push_str("Top Genres:\n");
         for (genre, count) in &stats.top_genres {
             summary.push_str(&format!("  - {}: {} sessions\n", genre, count));
@@ -993,7 +1038,7 @@ impl MixHistoryAnalytics {
     }
 
     /// Save sessions to persistent storage (FR-023-014).
-    pub fn save_to_file(&self) -> Result<(), String> {
+    pub fn save_to_file(&mut self) -> Result<(), String> {
         if !self.config.auto_save {
             return Ok(());
         }
@@ -1006,10 +1051,7 @@ impl MixHistoryAnalytics {
 
         // Backup if enabled (FR-023-014)
         if self.config.backup_enabled && self.config.storage_path.exists() {
-            let backup_path = self
-                .config
-                .storage_path
-                .with_extension("json.bak");
+            let backup_path = self.config.storage_path.with_extension("json.bak");
             if let Ok(existing) = fs::read_to_string(&self.config.storage_path) {
                 if let Err(e) = fs::write(&backup_path, existing) {
                     eprintln!("Warning: Failed to create backup: {}", e);
@@ -1042,7 +1084,8 @@ impl MixHistoryAnalytics {
         self.sessions.push(session);
         // Enforce max_sessions limit
         if self.sessions.len() > self.config.max_sessions as usize {
-            self.sessions.drain(..self.sessions.len() - self.config.max_sessions as usize);
+            self.sessions
+                .drain(..self.sessions.len() - self.config.max_sessions as usize);
         }
     }
 
@@ -1050,7 +1093,10 @@ impl MixHistoryAnalytics {
     pub fn remove_session(&mut self, session_id: &str, mode: DeleteMode) {
         match mode {
             DeleteMode::Soft => {
-                if let Some(session) = self.sessions.iter_mut().find(|s| s.session_id == session_id)
+                if let Some(session) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|s| s.session_id == session_id)
                 {
                     session.deleted = true;
                 }
@@ -1062,8 +1108,11 @@ impl MixHistoryAnalytics {
     }
 
     /// Get all active (non-deleted) sessions.
-    pub fn active_sessions(&self) -> &[SessionRecord] {
-        &self.sessions
+    pub fn active_sessions(&self) -> Vec<&SessionRecord> {
+        self.sessions
+            .iter()
+            .filter(|session| !session.deleted)
+            .collect()
     }
 
     /// Get all sessions including deleted (for restoration).
@@ -1073,7 +1122,11 @@ impl MixHistoryAnalytics {
 
     /// Restore a soft-deleted session.
     pub fn restore_session(&mut self, session_id: &str) -> bool {
-        if let Some(session) = self.sessions.iter_mut().find(|s| s.session_id == session_id) {
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.session_id == session_id)
+        {
             if session.deleted {
                 session.deleted = false;
                 return true;
@@ -1097,79 +1150,71 @@ impl MixHistoryAnalytics {
     // Session Filtering (FR-023-007)
     // ============================================================================
 
-    /// Filter options for session queries (FR-023-007).
-    #[derive(Debug, Clone, Default)]
-    pub struct SessionFilter {
-        pub date_range_start: Option<Instant>,   // Date range
-        pub date_range_end: Option<Instant>,      // Date range
-        pub genre: Option<String>,                // Genre filter
-        pub min_track_count: Option<u32>,         // Minimum track count
-        pub min_quality_score: Option<f32>,       // Minimum quality score (0-1)
-        pub venue: Option<String>,                // Venue filter
-        pub recording_status: Option<bool>,       // true=recorded, false=not recorded, None=any
-    }
-
     /// Filter sessions based on criteria (FR-023-007).
-    pub fn filter_sessions(
-        &self,
-        filter: &SessionFilter,
-    ) -> Vec<&SessionRecord> {
-        self.sessions.iter().filter(|s| {
-            // Date range filter (FR-023-007)
-            if let Some(start) = filter.date_range_start {
-                if s.created_at < start {
-                    return false;
-                }
-            }
-            if let Some(end) = filter.date_range_end {
-                if s.created_at > end {
-                    return false;
-                }
-            }
-
-            // Genre filter (FR-023-007)
-            if let Some(ref genre) = filter.genre {
-                if !s.genres.iter().any(|g| g.to_lowercase().contains(&genre.to_lowercase())) {
-                    return false;
-                }
-            }
-
-            // Minimum track count filter (FR-023-007)
-            if let Some(min_tracks) = filter.min_track_count {
-                if s.track_count < min_tracks {
-                    return false;
-                }
-            }
-
-            // Minimum quality score filter (FR-023-007)
-            if let Some(min_quality) = filter.min_quality_score {
-                if s.quality_score.0 < min_quality {
-                    return false;
-                }
-            }
-
-            // Venue filter (FR-023-007)
-            if let Some(ref venue) = filter.venue {
-                match &s.venue {
-                    Some(session_venue) => {
-                        if !session_venue.to_lowercase().contains(&venue.to_lowercase()) {
-                            return false;
-                        }
+    pub fn filter_sessions(&self, filter: &SessionFilter) -> Vec<&SessionRecord> {
+        self.sessions
+            .iter()
+            .filter(|s| {
+                // Date range filter (FR-023-007)
+                if let Some(start) = filter.date_range_start {
+                    if s.created_at < start {
+                        return false;
                     }
-                    None => return false,
                 }
-            }
-
-            // Recording status filter (FR-023-007)
-            if let Some(recording_required) = filter.recording_status {
-                let has_recording = s.recording_path.is_some();
-                if recording_required != has_recording {
-                    return false;
+                if let Some(end) = filter.date_range_end {
+                    if s.created_at > end {
+                        return false;
+                    }
                 }
-            }
 
-            true
-        }).collect()
+                // Genre filter (FR-023-007)
+                if let Some(ref genre) = filter.genre {
+                    if !s
+                        .genres
+                        .iter()
+                        .any(|g| g.to_lowercase().contains(&genre.to_lowercase()))
+                    {
+                        return false;
+                    }
+                }
+
+                // Minimum track count filter (FR-023-007)
+                if let Some(min_tracks) = filter.min_track_count {
+                    if s.track_count < min_tracks {
+                        return false;
+                    }
+                }
+
+                // Minimum quality score filter (FR-023-007)
+                if let Some(min_quality) = filter.min_quality_score {
+                    if s.quality_score.0 < min_quality {
+                        return false;
+                    }
+                }
+
+                // Venue filter (FR-023-007)
+                if let Some(ref venue) = filter.venue {
+                    match &s.venue {
+                        Some(session_venue) => {
+                            if !session_venue.to_lowercase().contains(&venue.to_lowercase()) {
+                                return false;
+                            }
+                        }
+                        None => return false,
+                    }
+                }
+
+                // Recording status filter (FR-023-007)
+                if let Some(recording_required) = filter.recording_status {
+                    let has_recording = s.recording_path.is_some();
+                    if recording_required != has_recording {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .collect()
     }
 
     // ============================================================================
@@ -1180,7 +1225,11 @@ impl MixHistoryAnalytics {
     pub fn create_replay(&self) -> SessionReplay {
         let mut replay = SessionReplay::new();
 
-        for trans in &self.transitions {
+        for trans in self
+            .sessions
+            .iter()
+            .flat_map(|session| &session.transitions)
+        {
             replay.snapshots.push(ReplaySnapshot {
                 elapsed_time: trans.duration,
                 current_track: Some(trans.destination_track.clone()),
@@ -1206,26 +1255,21 @@ impl MixHistoryAnalytics {
 
     /// Get performance metrics for tracking (FR-023-015).
     pub fn performance_metrics(&self) -> PerformanceMetrics {
-        let mut quality_scores: Vec<f32> = self
-            .sessions
-            .iter()
-            .map(|s| s.quality_score.0)
-            .collect();
-        quality_scores.sort_by(|a, b| a.total_cmp(b));
+        let mut chronological: Vec<&SessionRecord> =
+            self.sessions.iter().filter(|s| !s.deleted).collect();
+        chronological.sort_by_key(|session| session.created_at);
+        let quality_scores: Vec<f32> = chronological.iter().map(|s| s.quality_score.0).collect();
 
         PerformanceMetrics {
             total_sessions: self.sessions.len() as u32,
             average_quality: QualityScore::new(
-                quality_scores
-                    .iter()
-                    .sum::<f32>()
-                    .max(f32::EPSILON)
+                quality_scores.iter().sum::<f32>().max(f32::EPSILON)
                     / quality_scores.len().max(1) as f32,
             ),
             quality_trend: if quality_scores.len() >= 2 {
                 let start = quality_scores.first().copied().unwrap_or(0.0);
                 let end = quality_scores.last().copied().unwrap_or(0.0);
-                (end - start).abs()
+                end - start
             } else {
                 0.0
             },
@@ -1237,7 +1281,11 @@ impl MixHistoryAnalytics {
         if self.sessions.len() < 2 {
             return 0.0;
         }
-        let mean = self.sessions.iter().map(|s| s.duration.as_secs_f64()).sum::<f64>()
+        let mean = self
+            .sessions
+            .iter()
+            .map(|s| s.duration.as_secs_f64())
+            .sum::<f64>()
             / self.sessions.len() as f64;
         let variance: f64 = self
             .sessions
@@ -1317,6 +1365,17 @@ impl fmt::Display for PerformanceMetrics {
 // Unit Tests
 // ============================================================================
 
+impl Default for SessionReplay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Default for SessionReplayBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1373,9 +1432,7 @@ mod tests {
     #[test]
     fn test_track_info_new() {
         let track = TrackInfo::new(
-            "Test Track",
-            "Test Artist",
-            "Test Album",
+            TrackIdentity::new("Test Track", "Test Artist", "Test Album"),
             Duration::from_secs(240),
             128.0,
             "Am",
@@ -1391,18 +1448,34 @@ mod tests {
 
     #[test]
     fn test_transition_record_new() {
-        let source = TrackInfo::new("Track A", "Artist A", "Album A", Duration::from_secs(200), 120.0, "Cm", "Techno", "/a.mp3");
-        let dest = TrackInfo::new("Track B", "Artist B", "Album B", Duration::from_secs(180), 125.0, "Em", "Techno", "/b.mp3");
+        let source = TrackInfo::new(
+            TrackIdentity::new("Track A", "Artist A", "Album A"),
+            Duration::from_secs(200),
+            120.0,
+            "Cm",
+            "Techno",
+            "/a.mp3",
+        );
+        let dest = TrackInfo::new(
+            TrackIdentity::new("Track B", "Artist B", "Album B"),
+            Duration::from_secs(180),
+            125.0,
+            "Em",
+            "Techno",
+            "/b.mp3",
+        );
         let trans = TransitionRecord::new(
             1,
             source.clone(),
             dest.clone(),
             TransitionType::Mix,
-            Duration::from_secs(30),
-            5.0,
-            0.85,
-            QualityScore::new(0.9),
-            Instant::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(30),
+                bpm_difference: 5.0,
+                key_compatibility: 0.85,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         );
         assert_eq!(trans.transition_number, 1);
         assert_eq!(trans.bpm_difference, 5.0);
@@ -1413,7 +1486,13 @@ mod tests {
 
     #[test]
     fn test_session_record_new() {
-        let session = SessionRecord::new("session-1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 5);
+        let session = SessionRecord::new(
+            "session-1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            5,
+        );
         assert_eq!(session.session_id, "session-1");
         assert_eq!(session.track_count, 5);
         assert!(session.transitions.is_empty());
@@ -1421,17 +1500,39 @@ mod tests {
 
     #[test]
     fn test_session_record_add_transition() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 2);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            2,
+        );
         let trans = TransitionRecord::new(
             1,
-            TrackInfo::new("A", "A", "A", Duration::from_secs(100), 120.0, "Cm", "Techno", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(100), 125.0, "Em", "Techno", "/b.mp3"),
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(100),
+                120.0,
+                "Cm",
+                "Techno",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(100),
+                125.0,
+                "Em",
+                "Techno",
+                "/b.mp3",
+            ),
             TransitionType::Mix,
-            Duration::from_secs(20),
-            5.0,
-            0.8,
-            QualityScore::new(0.9),
-            Instant::now(),
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 5.0,
+                key_compatibility: 0.8,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         );
         session.add_transition(trans);
         assert_eq!(session.transitions.len(), 1);
@@ -1439,7 +1540,13 @@ mod tests {
 
     #[test]
     fn test_session_record_add_genre_duplicate() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        );
         session.add_genre("House");
         session.add_genre("House");
         assert_eq!(session.genres.len(), 1);
@@ -1448,7 +1555,13 @@ mod tests {
 
     #[test]
     fn test_session_record_set_recording_path() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        );
         session.set_recording_path("/recording.wav");
         assert_eq!(session.recording_path, Some("/recording.wav".to_string()));
     }
@@ -1456,18 +1569,46 @@ mod tests {
     #[test]
     fn test_session_record_sort_by_date() {
         let mut sessions = vec![
-            SessionRecord::new("s2", Instant::now() - Duration::from_secs(100), Duration::from_secs(60), QualityScore(0.5), 1),
-            SessionRecord::new("s1", Instant::now() - Duration::from_secs(200), Duration::from_secs(60), QualityScore(0.5), 1),
+            SessionRecord::new(
+                "s2",
+                SystemTime::now() - Duration::from_secs(100),
+                Duration::from_secs(60),
+                QualityScore(0.5),
+                1,
+            ),
+            SessionRecord::new(
+                "s1",
+                SystemTime::now() - Duration::from_secs(200),
+                Duration::from_secs(60),
+                QualityScore(0.5),
+                1,
+            ),
         ];
-        SessionRecord::sort_sessions(&mut sessions, SortKey::DateCreated, SortDirection::Descending);
+        SessionRecord::sort_sessions(
+            &mut sessions,
+            SortKey::DateCreated,
+            SortDirection::Descending,
+        );
         assert_eq!(sessions[0].session_id, "s2");
     }
 
     #[test]
     fn test_session_record_sort_by_quality() {
         let mut sessions = vec![
-            SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1),
-            SessionRecord::new("s2", Instant::now(), Duration::from_secs(60), QualityScore(0.9), 1),
+            SessionRecord::new(
+                "s1",
+                SystemTime::now(),
+                Duration::from_secs(60),
+                QualityScore(0.5),
+                1,
+            ),
+            SessionRecord::new(
+                "s2",
+                SystemTime::now(),
+                Duration::from_secs(60),
+                QualityScore(0.9),
+                1,
+            ),
         ];
         SessionRecord::sort_sessions(&mut sessions, SortKey::Quality, SortDirection::Descending);
         assert_eq!(sessions[0].session_id, "s2");
@@ -1476,21 +1617,64 @@ mod tests {
     #[test]
     fn test_session_record_sort_by_track_count() {
         let mut sessions = vec![
-            SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 3),
-            SessionRecord::new("s2", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 5),
+            SessionRecord::new(
+                "s1",
+                SystemTime::now(),
+                Duration::from_secs(60),
+                QualityScore(0.5),
+                3,
+            ),
+            SessionRecord::new(
+                "s2",
+                SystemTime::now(),
+                Duration::from_secs(60),
+                QualityScore(0.5),
+                5,
+            ),
         ];
-        SessionRecord::sort_sessions(&mut sessions, SortKey::TrackCount, SortDirection::Descending);
+        SessionRecord::sort_sessions(
+            &mut sessions,
+            SortKey::TrackCount,
+            SortDirection::Descending,
+        );
         assert_eq!(sessions[0].session_id, "s2");
     }
 
     #[test]
     fn test_session_record_average_bpm() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(120), QualityScore(0.5), 2);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(120),
+            QualityScore(0.5),
+            2,
+        );
         session.add_transition(TransitionRecord::new(
             1,
-            TrackInfo::new("A", "A", "A", Duration::from_secs(60), 120.0, "Cm", "Techno", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(60), 130.0, "Em", "Techno", "/b.mp3"),
-            TransitionType::Mix, Duration::from_secs(10), 10.0, 0.7, QualityScore(0.5), Instant::now(),
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(60),
+                120.0,
+                "Cm",
+                "Techno",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(60),
+                130.0,
+                "Em",
+                "Techno",
+                "/b.mp3",
+            ),
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(10),
+                bpm_difference: 10.0,
+                key_compatibility: 0.7,
+                quality_score: QualityScore(0.5),
+                timestamp: SystemTime::now(),
+            },
         ));
         let avg = session.average_bpm();
         assert!((avg - 125.0).abs() < f64::EPSILON); // (120 + 130) / 2 = 125
@@ -1498,7 +1682,13 @@ mod tests {
 
     #[test]
     fn test_session_record_average_bpm_empty() {
-        let session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 0);
+        let session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            0,
+        );
         assert_eq!(session.average_bpm(), 0.0);
     }
 
@@ -1514,12 +1704,39 @@ mod tests {
 
     #[test]
     fn test_session_replay_build_from_session() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(120), QualityScore(0.8), 2);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(120),
+            QualityScore(0.8),
+            2,
+        );
         session.add_transition(TransitionRecord::new(
             1,
-            TrackInfo::new("A", "A", "A", Duration::from_secs(60), 120.0, "Cm", "Techno", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(60), 130.0, "Em", "Techno", "/b.mp3"),
-            TransitionType::Mix, Duration::from_secs(10), 10.0, 0.7, QualityScore(0.8), Instant::now(),
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(60),
+                120.0,
+                "Cm",
+                "Techno",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(60),
+                130.0,
+                "Em",
+                "Techno",
+                "/b.mp3",
+            ),
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(10),
+                bpm_difference: 10.0,
+                key_compatibility: 0.7,
+                quality_score: QualityScore(0.8),
+                timestamp: SystemTime::now(),
+            },
         ));
         let builder = SessionReplayBuilder::build_from_session(&session);
         assert_eq!(builder.snapshots().len(), 1);
@@ -1528,12 +1745,22 @@ mod tests {
     #[test]
     fn test_session_replay_timeline() {
         let mut builder = SessionReplayBuilder::new();
-        let now = Instant::now();
+        let now = SystemTime::now();
         builder.snapshots.push(ReplaySnapshot::new(
-            Duration::from_secs(10), None, None, QualityScore(0.5), 0.5, now,
+            Duration::from_secs(10),
+            None,
+            None,
+            QualityScore(0.5),
+            0.5,
+            now,
         ));
         builder.snapshots.push(ReplaySnapshot::new(
-            Duration::from_secs(20), None, None, QualityScore(0.7), 0.7, now,
+            Duration::from_secs(20),
+            None,
+            None,
+            QualityScore(0.7),
+            0.7,
+            now,
         ));
         let timeline = builder.timeline();
         assert_eq!(timeline.len(), 2);
@@ -1544,10 +1771,15 @@ mod tests {
     #[test]
     fn test_session_replay_quality_trend() {
         let mut builder = SessionReplayBuilder::new();
-        let base = Instant::now();
+        let base = SystemTime::now();
         for i in 0..10 {
             builder.snapshots.push(ReplaySnapshot::new(
-                Duration::from_secs(i * 10), None, None, QualityScore::new(0.5 + i as f32 * 0.05), i as f32 * 0.1, base,
+                Duration::from_secs(i * 10),
+                None,
+                None,
+                QualityScore::new(0.5 + i as f32 * 0.05),
+                i as f32 * 0.1,
+                base,
             ));
         }
         let trend = builder.quality_trend(5);
@@ -1567,25 +1799,43 @@ mod tests {
 
     #[test]
     fn test_overall_statistics_from_sessions() {
-        let mut session1 = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore(0.8), 3);
+        let mut session1 = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore(0.8),
+            3,
+        );
         session1.add_genre("House");
         session1.add_genre("Techno");
 
-        let mut session2 = SessionRecord::new("s2", Instant::now() - Duration::from_secs(3600), Duration::from_secs(1800), QualityScore(0.6), 2);
+        let mut session2 = SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(3600),
+            Duration::from_secs(1800),
+            QualityScore(0.6),
+            2,
+        );
         session2.add_genre("House");
 
         let sessions = vec![session1, session2];
         let stats = OverallStatistics::from_sessions(&sessions);
 
         assert_eq!(stats.total_sessions, 2);
-        assert_eq!(stats.unique_tracks, 5); // 3 + 2 transitions
+        assert_eq!(stats.unique_tracks, 0); // Counts alone do not identify unique tracks.
         assert!(stats.average_quality.0 >= 0.0);
         assert!(stats.top_genres.iter().any(|(g, _)| g == "House"));
     }
 
     #[test]
     fn test_overall_statistics_single_session() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore(0.9), 4);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore(0.9),
+            4,
+        );
         session.add_genre("Techno");
         let stats = OverallStatistics::from_sessions(&[session]);
         assert_eq!(stats.total_sessions, 1);
@@ -1603,7 +1853,13 @@ mod tests {
 
     #[test]
     fn test_export_to_json() {
-        let sessions = vec![SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1)];
+        let sessions = vec![SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        )];
         let builder = ExportBuilder::new(sessions);
         let result = builder.to_json();
         assert_eq!(result.format, ExportFormat::Json);
@@ -1613,7 +1869,13 @@ mod tests {
 
     #[test]
     fn test_export_to_csv() {
-        let sessions = vec![SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1)];
+        let sessions = vec![SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        )];
         let builder = ExportBuilder::new(sessions);
         let result = builder.to_csv();
         assert_eq!(result.format, ExportFormat::Csv);
@@ -1624,7 +1886,13 @@ mod tests {
 
     #[test]
     fn test_export_to_pdf_summary() {
-        let sessions = vec![SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.7), 2)];
+        let sessions = vec![SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.7),
+            2,
+        )];
         let builder = ExportBuilder::new(sessions);
         let result = builder.to_pdf_summary();
         assert_eq!(result.format, ExportFormat::PdfSummary);
@@ -1634,7 +1902,13 @@ mod tests {
 
     #[test]
     fn test_export_all() {
-        let sessions = vec![SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1)];
+        let sessions = vec![SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        )];
         let builder = ExportBuilder::new(sessions);
         let results = builder.export_all();
         assert_eq!(results.len(), 3);
@@ -1645,7 +1919,13 @@ mod tests {
 
     #[test]
     fn test_export_result_save_to_file() {
-        let sessions = vec![SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1)];
+        let sessions = vec![SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        )];
         let builder = ExportBuilder::new(sessions);
         let result = builder.to_json();
         let temp_dir = std::env::temp_dir().join("drdj_test_export");
@@ -1662,26 +1942,38 @@ mod tests {
     fn test_mix_history_analytics_new() {
         let analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
         assert!(analytics.active_sessions().is_empty());
-        assert_eq!(format!("{}", analytics), "MixHistoryAnalytics { sessions: 0, max: 100, last_saved: None }");
+        assert_eq!(
+            format!("{}", analytics),
+            "MixHistoryAnalytics { sessions: 0, max: 100, last_saved: None }"
+        );
     }
 
     #[test]
     fn test_mix_history_analytics_add_session() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.8), 2));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.8),
+            2,
+        ));
         assert_eq!(analytics.active_sessions().len(), 1);
     }
 
     #[test]
     fn test_mix_history_analytics_max_sessions_limit() {
-        let mut config = PersistenceConfig::default();
-        config.max_sessions = 3;
+        let config = PersistenceConfig {
+            max_sessions: 3,
+            ..Default::default()
+        };
+
         let mut analytics = MixHistoryAnalytics::new(config);
 
         for i in 0..5 {
             analytics.add_session(SessionRecord::new(
                 format!("s{}", i),
-                Instant::now(),
+                SystemTime::now(),
                 Duration::from_secs(60),
                 QualityScore(0.5),
                 1,
@@ -1694,7 +1986,13 @@ mod tests {
     #[test]
     fn test_mix_history_analytics_remove_session_soft() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        ));
         analytics.remove_session("s1", DeleteMode::Soft);
 
         let all = analytics.all_sessions();
@@ -1706,7 +2004,13 @@ mod tests {
     #[test]
     fn test_mix_history_analytics_remove_session_permanent() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        ));
         analytics.remove_session("s1", DeleteMode::Permanent);
         assert_eq!(analytics.active_sessions().len(), 0);
         assert_eq!(analytics.all_sessions().len(), 0);
@@ -1715,7 +2019,13 @@ mod tests {
     #[test]
     fn test_mix_history_analytics_restore_session() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1);
+        let session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        );
         analytics.add_session(session);
         analytics.remove_session("s1", DeleteMode::Soft);
 
@@ -1734,8 +2044,20 @@ mod tests {
     #[test]
     fn test_mix_history_analytics_get_sorted_sessions() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1));
-        analytics.add_session(SessionRecord::new("s2", Instant::now(), Duration::from_secs(120), QualityScore(0.8), 2));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s2",
+            SystemTime::now(),
+            Duration::from_secs(120),
+            QualityScore(0.8),
+            2,
+        ));
 
         let sorted = analytics.get_sorted_sessions(SortKey::Quality, SortDirection::Descending);
         assert_eq!(sorted[0].session_id, "s2");
@@ -1744,7 +2066,13 @@ mod tests {
     #[test]
     fn test_mix_history_analytics_get_statistics() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore(0.8), 3));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore(0.8),
+            3,
+        ));
         let stats = analytics.get_statistics();
         assert_eq!(stats.total_sessions, 1);
         assert_eq!(stats.average_quality.0, 0.8);
@@ -1761,21 +2089,39 @@ mod tests {
     #[test]
     fn test_mix_history_analytics_performance_metrics() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        ));
         let metrics = analytics.performance_metrics();
         assert_eq!(metrics.total_sessions, 1);
-        assert_eq!(format!("{}", metrics.technique_assessment()), "Stable");
+        assert_eq!(metrics.technique_assessment().to_string(), "Stable");
     }
 
     #[test]
     fn test_mix_history_analytics_save_load_roundtrip() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.9), 2));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.9),
+            2,
+        ));
 
         let temp_file = std::env::temp_dir().join("drdj_test_persist.json");
-        let mut config = PersistenceConfig::default();
-        config.storage_path = temp_file.clone();
+        let config = PersistenceConfig {
+            storage_path: temp_file.clone(),
+            ..Default::default()
+        };
+
         let mut analytics2 = MixHistoryAnalytics::new(config);
+        for session in analytics.all_sessions() {
+            analytics2.add_session(session.clone());
+        }
         analytics2.save_to_file().unwrap();
 
         let loaded = MixHistoryAnalytics::load_from_file(&temp_file).unwrap();
@@ -1795,16 +2141,28 @@ mod tests {
 
     #[test]
     fn test_mix_history_analytics_auto_save_respects_config() {
-        let mut config = PersistenceConfig::default();
-        config.auto_save = false;
+        let config = PersistenceConfig {
+            auto_save: false,
+            ..Default::default()
+        };
+
         let mut analytics = MixHistoryAnalytics::new(config);
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        ));
 
         // Should not save when auto_save is false
         let temp_file = std::env::temp_dir().join("drdj_test_autosave.json");
-        let mut config2 = PersistenceConfig::default();
-        config2.storage_path = temp_file.clone();
-        config2.auto_save = false;
+        let config2 = PersistenceConfig {
+            storage_path: temp_file.clone(),
+            auto_save: false,
+            ..Default::default()
+        };
+
         let mut analytics2 = MixHistoryAnalytics::new(config2);
         analytics2.save_to_file().unwrap();
 
@@ -1874,7 +2232,7 @@ mod tests {
         let metrics = PerformanceMetrics {
             total_sessions: 5,
             average_quality: QualityScore(0.75),
-            quality_trend: 0.05,
+            quality_trend: 0.06,
             session_length_variance: 0.0,
         };
         let display = format!("{}", metrics);
@@ -1887,7 +2245,13 @@ mod tests {
     #[test]
     fn test_delete_mode_soft_preserves_recording() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        );
         session.set_recording_path("/recording.wav");
         analytics.add_session(session);
 
@@ -1901,7 +2265,13 @@ mod tests {
     #[test]
     fn test_delete_mode_permanent_removes_all() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore(0.5),
+            1,
+        );
         session.set_recording_path("/recording.wav");
         analytics.add_session(session);
 
@@ -1921,7 +2291,7 @@ mod tests {
             None,
             QualityScore(0.8),
             0.5,
-            Instant::now(),
+            SystemTime::now(),
         );
         assert_eq!(snap.elapsed_time, Duration::from_secs(10));
         assert_eq!(snap.energy_level, 0.5);
@@ -1935,7 +2305,7 @@ mod tests {
             None,
             QualityScore(0.5),
             1.5, // Should clamp to 1.0
-            Instant::now(),
+            SystemTime::now(),
         );
         assert_eq!(snap.energy_level, 1.0);
 
@@ -1945,7 +2315,7 @@ mod tests {
             None,
             QualityScore(0.5),
             -0.5, // Should clamp to 0.0
-            Instant::now(),
+            SystemTime::now(),
         );
         assert_eq!(snap2.energy_level, 0.0);
     }
@@ -1955,8 +2325,20 @@ mod tests {
     #[test]
     fn test_sort_direction_ascending() {
         let mut sessions = vec![
-            SessionRecord::new("s2", Instant::now(), Duration::from_secs(120), QualityScore(0.5), 1),
-            SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1),
+            SessionRecord::new(
+                "s2",
+                SystemTime::now(),
+                Duration::from_secs(120),
+                QualityScore(0.5),
+                1,
+            ),
+            SessionRecord::new(
+                "s1",
+                SystemTime::now(),
+                Duration::from_secs(60),
+                QualityScore(0.5),
+                1,
+            ),
         ];
         SessionRecord::sort_sessions(&mut sessions, SortKey::Duration, SortDirection::Ascending);
         assert_eq!(sessions[0].duration, Duration::from_secs(60));
@@ -1965,8 +2347,20 @@ mod tests {
     #[test]
     fn test_sort_direction_descending() {
         let mut sessions = vec![
-            SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore(0.5), 1),
-            SessionRecord::new("s2", Instant::now(), Duration::from_secs(120), QualityScore(0.5), 1),
+            SessionRecord::new(
+                "s1",
+                SystemTime::now(),
+                Duration::from_secs(60),
+                QualityScore(0.5),
+                1,
+            ),
+            SessionRecord::new(
+                "s2",
+                SystemTime::now(),
+                Duration::from_secs(120),
+                QualityScore(0.5),
+                1,
+            ),
         ];
         SessionRecord::sort_sessions(&mut sessions, SortKey::Duration, SortDirection::Descending);
         assert_eq!(sessions[0].duration, Duration::from_secs(120));
@@ -2006,13 +2400,40 @@ mod tests {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
 
         // 1. Add session
-        let mut session = SessionRecord::new("session-1", Instant::now(), Duration::from_secs(3600), QualityScore(0.85), 4);
+        let mut session = SessionRecord::new(
+            "session-1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore(0.85),
+            4,
+        );
         session.add_genre("House");
         session.add_transition(TransitionRecord::new(
             1,
-            TrackInfo::new("A", "A", "A", Duration::from_secs(300), 125.0, "Cm", "House", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(280), 128.0, "Am", "House", "/b.mp3"),
-            TransitionType::Blend, Duration::from_secs(25), 3.0, 0.9, QualityScore(0.9), Instant::now(),
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(300),
+                125.0,
+                "Cm",
+                "House",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(280),
+                128.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TransitionType::Blend,
+            TransitionDetails {
+                duration: Duration::from_secs(25),
+                bpm_difference: 3.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         analytics.add_session(session);
 
@@ -2035,10 +2456,19 @@ mod tests {
 
         // 6. Save and reload
         let temp_file = std::env::temp_dir().join("drdj_lifecycle_test.json");
-        let mut config = PersistenceConfig::default();
-        config.storage_path = temp_file.clone();
+        let config = PersistenceConfig {
+            storage_path: temp_file.clone(),
+            ..Default::default()
+        };
+
         let mut analytics2 = MixHistoryAnalytics::new(config);
-        analytics2.add_session(SessionRecord::new("session-2", Instant::now(), Duration::from_secs(1800), QualityScore(0.7), 2));
+        analytics2.add_session(SessionRecord::new(
+            "session-2",
+            SystemTime::now(),
+            Duration::from_secs(1800),
+            QualityScore(0.7),
+            2,
+        ));
         analytics2.save_to_file().unwrap();
 
         let loaded = MixHistoryAnalytics::load_from_file(&temp_file).unwrap();
@@ -2060,8 +2490,11 @@ mod tests {
 
     #[test]
     fn test_auto_session_manual_start() {
-        let mut state = AutoSessionState::default();
-        state.manual_start_requested = true;
+        let state = AutoSessionState {
+            manual_start_requested: true,
+            ..Default::default()
+        };
+
         assert!(state.manual_start_requested);
     }
 
@@ -2072,7 +2505,12 @@ mod tests {
     #[test]
     fn test_session_with_name() {
         let session = SessionRecord::with_name(
-            "s1", "My Mix", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 5,
+            "s1",
+            "My Mix",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            5,
         );
         assert_eq!(session.session_name, "My Mix");
         assert_eq!(session.session_id, "s1");
@@ -2080,7 +2518,13 @@ mod tests {
 
     #[test]
     fn test_session_venue_and_listeners() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 5);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            5,
+        );
         session.set_venue("Berghain");
         session.set_listener_count(150);
         assert_eq!(session.venue, Some("Berghain".to_string()));
@@ -2089,15 +2533,29 @@ mod tests {
 
     #[test]
     fn test_session_end() {
-        let mut session = SessionRecord::with_name("s1", "Test", Instant::now(), Duration::ZERO, QualityScore::new(0.5), 2);
+        let mut session = SessionRecord::with_name(
+            "s1",
+            "Test",
+            SystemTime::now(),
+            Duration::ZERO,
+            QualityScore::new(0.5),
+            2,
+        );
         session.end_session();
         assert!(session.ended_at.is_some());
-        assert!(session.duration.as_secs() >= 0);
+        assert_eq!(
+            session.duration,
+            session
+                .ended_at
+                .unwrap()
+                .duration_since(session.created_at)
+                .unwrap()
+        );
     }
 
     #[test]
     fn test_auto_session_name() {
-        let name = SessionRecord::auto_session_name(&Instant::now());
+        let name = SessionRecord::auto_session_name(&SystemTime::now());
         assert!(name.starts_with("Mix Session"));
     }
 
@@ -2117,11 +2575,36 @@ mod tests {
 
     #[test]
     fn test_transition_with_crossfader() {
-        let source = TrackInfo::new("A", "A", "A", Duration::from_secs(200), 120.0, "Cm", "House", "/a.mp3");
-        let dest = TrackInfo::new("B", "B", "B", Duration::from_secs(180), 122.0, "Am", "House", "/b.mp3");
+        let source = TrackInfo::new(
+            TrackIdentity::new("A", "A", "A"),
+            Duration::from_secs(200),
+            120.0,
+            "Cm",
+            "House",
+            "/a.mp3",
+        );
+        let dest = TrackInfo::new(
+            TrackIdentity::new("B", "B", "B"),
+            Duration::from_secs(180),
+            122.0,
+            "Am",
+            "House",
+            "/b.mp3",
+        );
         let trans = TransitionRecord::with_crossfader(
-            1, source, dest, TransitionType::Mix, Duration::from_secs(20), 2.0, 0.9,
-            QualityScore::new(0.85), Instant::now(), CrossfaderPosition::new(0.5), true,
+            1,
+            source,
+            dest,
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 2.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.85),
+                timestamp: SystemTime::now(),
+            },
+            CrossfaderPosition::new(0.5),
+            true,
         );
         assert!(trans.phrase_aligned);
         assert_eq!(trans.crossfader_position.0, 0.5);
@@ -2133,34 +2616,42 @@ mod tests {
 
     #[test]
     fn test_quality_score_perfect_match() {
-        let score = SessionRecord::calculate_quality_score(1.5, 0.95, Duration::from_secs(30), true);
+        let score =
+            SessionRecord::calculate_quality_score(1.5, 0.95, Duration::from_secs(30), true);
         assert!(score.0 >= 0.95); // Near perfect: base 100 + key + smoothness + phrase + EQ
     }
 
     #[test]
     fn test_quality_score_bpm_penalty() {
-        let score_good = SessionRecord::calculate_quality_score(1.0, 0.5, Duration::from_secs(25), false);
-        let score_bad = SessionRecord::calculate_quality_score(10.0, 0.5, Duration::from_secs(25), false);
+        let score_good =
+            SessionRecord::calculate_quality_score(1.0, 0.5, Duration::from_secs(25), false);
+        let score_bad =
+            SessionRecord::calculate_quality_score(10.0, 0.5, Duration::from_secs(25), false);
         assert!(score_good.0 > score_bad.0);
     }
 
     #[test]
     fn test_quality_score_key_penalty() {
-        let score_compat = SessionRecord::calculate_quality_score(3.0, 0.9, Duration::from_secs(20), false);
-        let score_incompat = SessionRecord::calculate_quality_score(3.0, 0.2, Duration::from_secs(20), false);
+        let score_compat =
+            SessionRecord::calculate_quality_score(3.0, 0.9, Duration::from_secs(20), false);
+        let score_incompat =
+            SessionRecord::calculate_quality_score(3.0, 0.2, Duration::from_secs(20), false);
         assert!(score_compat.0 > score_incompat.0);
     }
 
     #[test]
     fn test_quality_score_clamped() {
-        let score = SessionRecord::calculate_quality_score(50.0, 0.0, Duration::from_secs(1), false);
+        let score =
+            SessionRecord::calculate_quality_score(50.0, 0.0, Duration::from_secs(1), false);
         assert_eq!(score.0, 0.0); // Extreme penalty should clamp to 0
     }
 
     #[test]
     fn test_quality_score_phrase_bonus() {
-        let with_phrase = SessionRecord::calculate_quality_score(2.0, 0.5, Duration::from_secs(20), true);
-        let without_phrase = SessionRecord::calculate_quality_score(2.0, 0.5, Duration::from_secs(20), false);
+        let with_phrase =
+            SessionRecord::calculate_quality_score(10.0, 0.5, Duration::from_secs(20), true);
+        let without_phrase =
+            SessionRecord::calculate_quality_score(10.0, 0.5, Duration::from_secs(20), false);
         assert!(with_phrase.0 > without_phrase.0);
         // Phrase bonus is +5 points = +0.05 in normalized
         assert!((with_phrase.0 - without_phrase.0 - 0.05).abs() < 0.001);
@@ -2172,46 +2663,150 @@ mod tests {
 
     #[test]
     fn test_peak_energy() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(120), QualityScore::new(0.5), 2);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(120),
+            QualityScore::new(0.5),
+            2,
+        );
         session.add_transition(TransitionRecord::new(
             1,
-            TrackInfo::new("A", "A", "A", Duration::from_secs(100), 120.0, "Cm", "House", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(90), 125.0, "Am", "House", "/b.mp3"),
-            TransitionType::Mix, Duration::from_secs(20), 5.0, 0.8, QualityScore::new(0.8), Instant::now(),
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(100),
+                120.0,
+                "Cm",
+                "House",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(90),
+                125.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 5.0,
+                key_compatibility: 0.8,
+                quality_score: QualityScore::new(0.8),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
             2,
-            TrackInfo::new("B", "B", "B", Duration::from_secs(90), 125.0, "Am", "House", "/b.mp3"),
-            TrackInfo::new("C", "C", "C", Duration::from_secs(110), 128.0, "Em", "Techno", "/c.mp3"),
-            TransitionType::Cut, Duration::from_secs(5), 3.0, 0.6, QualityScore::new(0.6), Instant::now(),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(90),
+                125.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("C", "C", "C"),
+                Duration::from_secs(110),
+                128.0,
+                "Em",
+                "Techno",
+                "/c.mp3",
+            ),
+            TransitionType::Cut,
+            TransitionDetails {
+                duration: Duration::from_secs(5),
+                bpm_difference: 3.0,
+                key_compatibility: 0.6,
+                quality_score: QualityScore::new(0.6),
+                timestamp: SystemTime::now(),
+            },
         ));
         assert!((session.peak_energy() - 0.8).abs() < 0.001);
     }
 
     #[test]
     fn test_genre_distribution() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(120), QualityScore::new(0.5), 1);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(120),
+            QualityScore::new(0.5),
+            1,
+        );
         session.add_genre("House");
         session.add_genre("House");
         session.add_genre("Techno");
         let dist = session.genre_distribution();
         assert!(dist.contains_key("House"));
-        assert!((dist["House"] - 66.666).abs() < 0.1);
-        assert!((dist["Techno"] - 33.333).abs() < 0.1);
+        assert!((dist["House"] - 50.0).abs() < 0.1); // Unique session categories.
+        assert!((dist["Techno"] - 50.0).abs() < 0.1);
     }
 
     #[test]
     fn test_transition_type_distribution() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(120), QualityScore::new(0.5), 1);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(120),
+            QualityScore::new(0.5),
+            1,
+        );
         session.add_transition(TransitionRecord::new(
-            1, TrackInfo::new("A", "A", "A", Duration::from_secs(100), 120.0, "Cm", "House", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(100), 120.0, "Am", "House", "/b.mp3"),
-            TransitionType::Mix, Duration::from_secs(20), 0.0, 0.9, QualityScore::new(0.9), Instant::now(),
+            1,
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(100),
+                120.0,
+                "Cm",
+                "House",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(100),
+                120.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
-            2, TrackInfo::new("B", "B", "B", Duration::from_secs(100), 120.0, "Am", "House", "/b.mp3"),
-            TrackInfo::new("C", "C", "C", Duration::from_secs(100), 120.0, "Em", "House", "/c.mp3"),
-            TransitionType::Cut, Duration::from_secs(1), 0.0, 0.9, QualityScore::new(0.9), Instant::now(),
+            2,
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(100),
+                120.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("C", "C", "C"),
+                Duration::from_secs(100),
+                120.0,
+                "Em",
+                "House",
+                "/c.mp3",
+            ),
+            TransitionType::Cut,
+            TransitionDetails {
+                duration: Duration::from_secs(1),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         let dist = session.transition_type_distribution();
         assert_eq!(*dist.get(&TransitionType::Mix).unwrap(), 1);
@@ -2220,16 +2815,66 @@ mod tests {
 
     #[test]
     fn test_most_frequent_tracks() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(120), QualityScore::new(0.5), 1);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(120),
+            QualityScore::new(0.5),
+            1,
+        );
         session.add_transition(TransitionRecord::new(
-            1, TrackInfo::new("A", "A", "A", Duration::from_secs(100), 120.0, "Cm", "House", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(100), 120.0, "Am", "House", "/b.mp3"),
-            TransitionType::Mix, Duration::from_secs(20), 0.0, 0.9, QualityScore::new(0.9), Instant::now(),
+            1,
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(100),
+                120.0,
+                "Cm",
+                "House",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(100),
+                120.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
-            2, TrackInfo::new("B", "B", "B", Duration::from_secs(100), 120.0, "Am", "House", "/b.mp3"),
-            TrackInfo::new("C", "C", "C", Duration::from_secs(100), 120.0, "Em", "House", "/c.mp3"),
-            TransitionType::Mix, Duration::from_secs(20), 0.0, 0.9, QualityScore::new(0.9), Instant::now(),
+            2,
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(100),
+                120.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("C", "C", "C"),
+                Duration::from_secs(100),
+                120.0,
+                "Em",
+                "House",
+                "/c.mp3",
+            ),
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         let freq = session.most_frequent_tracks(3);
         assert!(freq.len() <= 3);
@@ -2240,13 +2885,25 @@ mod tests {
 
     #[test]
     fn test_quality_color_green() {
-        let session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore::new(0.85), 1);
+        let session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore::new(0.85),
+            1,
+        );
         assert_eq!(session.quality_color(), "green");
     }
 
     #[test]
     fn test_quality_color_red() {
-        let session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore::new(0.5), 1);
+        let session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore::new(0.5),
+            1,
+        );
         assert_eq!(session.quality_color(), "red");
     }
 
@@ -2256,13 +2913,25 @@ mod tests {
 
     #[test]
     fn test_quality_color_yellow() {
-        let session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore::new(0.62), 1);
+        let session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore::new(0.62),
+            1,
+        );
         assert_eq!(session.quality_color(), "yellow");
     }
 
     #[test]
     fn test_quality_color_blue() {
-        let session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(60), QualityScore::new(0.75), 1);
+        let session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(60),
+            QualityScore::new(0.75),
+            1,
+        );
         assert_eq!(session.quality_color(), "blue");
     }
 
@@ -2273,11 +2942,23 @@ mod tests {
     #[test]
     fn test_filter_by_genre() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        let mut s1 = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 5);
+        let mut s1 = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            5,
+        );
         s1.add_genre("House");
         analytics.add_session(s1);
 
-        let mut s2 = SessionRecord::new("s2", Instant::now() - Duration::from_secs(3600), Duration::from_secs(1800), QualityScore::new(0.6), 3);
+        let mut s2 = SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(3600),
+            Duration::from_secs(1800),
+            QualityScore::new(0.6),
+            3,
+        );
         s2.add_genre("Techno");
         analytics.add_session(s2);
 
@@ -2293,8 +2974,20 @@ mod tests {
     #[test]
     fn test_filter_by_min_track_count() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 10));
-        analytics.add_session(SessionRecord::new("s2", Instant::now() - Duration::from_secs(1800), Duration::from_secs(600), QualityScore::new(0.5), 2));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            10,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(1800),
+            Duration::from_secs(600),
+            QualityScore::new(0.5),
+            2,
+        ));
 
         let filter = SessionFilter {
             min_track_count: Some(5),
@@ -2308,8 +3001,20 @@ mod tests {
     #[test]
     fn test_filter_by_min_quality() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.9), 5));
-        analytics.add_session(SessionRecord::new("s2", Instant::now() - Duration::from_secs(1800), Duration::from_secs(600), QualityScore::new(0.4), 3));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.9),
+            5,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(1800),
+            Duration::from_secs(600),
+            QualityScore::new(0.4),
+            3,
+        ));
 
         let filter = SessionFilter {
             min_quality_score: Some(0.7),
@@ -2323,11 +3028,23 @@ mod tests {
     #[test]
     fn test_filter_by_venue() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        let mut s1 = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 5);
+        let mut s1 = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            5,
+        );
         s1.set_venue("Berghain");
         analytics.add_session(s1);
 
-        let mut s2 = SessionRecord::new("s2", Instant::now() - Duration::from_secs(3600), Duration::from_secs(1800), QualityScore::new(0.6), 3);
+        let mut s2 = SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(3600),
+            Duration::from_secs(1800),
+            QualityScore::new(0.6),
+            3,
+        );
         s2.set_venue("Tresor");
         analytics.add_session(s2);
 
@@ -2343,11 +3060,23 @@ mod tests {
     #[test]
     fn test_filter_by_recording_status() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        let mut s1 = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 5);
+        let mut s1 = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.8),
+            5,
+        );
         s1.set_recording_path("/rec/session1.wav");
         analytics.add_session(s1);
 
-        analytics.add_session(SessionRecord::new("s2", Instant::now() - Duration::from_secs(3600), Duration::from_secs(1800), QualityScore::new(0.6), 3));
+        analytics.add_session(SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(3600),
+            Duration::from_secs(1800),
+            QualityScore::new(0.6),
+            3,
+        ));
 
         let filter = SessionFilter {
             recording_status: Some(true),
@@ -2361,11 +3090,23 @@ mod tests {
     #[test]
     fn test_filter_combined() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        let mut s1 = SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.9), 10);
+        let mut s1 = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.9),
+            10,
+        );
         s1.add_genre("House");
         analytics.add_session(s1);
 
-        let mut s2 = SessionRecord::new("s2", Instant::now() - Duration::from_secs(3600), Duration::from_secs(1800), QualityScore::new(0.85), 5);
+        let mut s2 = SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(3600),
+            Duration::from_secs(1800),
+            QualityScore::new(0.85),
+            5,
+        );
         s2.add_genre("Techno");
         analytics.add_session(s2);
 
@@ -2385,16 +3126,66 @@ mod tests {
 
     #[test]
     fn test_create_replay() {
-        let mut session = SessionRecord::new("s1", Instant::now(), Duration::from_secs(300), QualityScore::new(0.8), 3);
+        let mut session = SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(300),
+            QualityScore::new(0.8),
+            3,
+        );
         session.add_transition(TransitionRecord::new(
-            1, TrackInfo::new("A", "A", "A", Duration::from_secs(100), 120.0, "Cm", "House", "/a.mp3"),
-            TrackInfo::new("B", "B", "B", Duration::from_secs(100), 120.0, "Am", "House", "/b.mp3"),
-            TransitionType::Mix, Duration::from_secs(20), 0.0, 0.9, QualityScore::new(0.9), Instant::now(),
+            1,
+            TrackInfo::new(
+                TrackIdentity::new("A", "A", "A"),
+                Duration::from_secs(100),
+                120.0,
+                "Cm",
+                "House",
+                "/a.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(100),
+                120.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TransitionType::Mix,
+            TransitionDetails {
+                duration: Duration::from_secs(20),
+                bpm_difference: 0.0,
+                key_compatibility: 0.9,
+                quality_score: QualityScore::new(0.9),
+                timestamp: SystemTime::now(),
+            },
         ));
         session.add_transition(TransitionRecord::new(
-            2, TrackInfo::new("B", "B", "B", Duration::from_secs(100), 120.0, "Am", "House", "/b.mp3"),
-            TrackInfo::new("C", "C", "C", Duration::from_secs(100), 125.0, "Em", "House", "/c.mp3"),
-            TransitionType::Blend, Duration::from_secs(25), 5.0, 0.8, QualityScore::new(0.7), Instant::now(),
+            2,
+            TrackInfo::new(
+                TrackIdentity::new("B", "B", "B"),
+                Duration::from_secs(100),
+                120.0,
+                "Am",
+                "House",
+                "/b.mp3",
+            ),
+            TrackInfo::new(
+                TrackIdentity::new("C", "C", "C"),
+                Duration::from_secs(100),
+                125.0,
+                "Em",
+                "House",
+                "/c.mp3",
+            ),
+            TransitionType::Blend,
+            TransitionDetails {
+                duration: Duration::from_secs(25),
+                bpm_difference: 5.0,
+                key_compatibility: 0.8,
+                quality_score: QualityScore::new(0.7),
+                timestamp: SystemTime::now(),
+            },
         ));
 
         let replay = session.create_replay();
@@ -2404,27 +3195,45 @@ mod tests {
     }
 
     #[test]
-    fn test_session_replay_quality_trend() {
+    fn test_session_replay_quality_trend_extended() {
         let mut replay = SessionReplay::new();
-        let base = Instant::now();
+        let base = SystemTime::now();
         for i in 0..10 {
             replay.snapshots.push(ReplaySnapshot::new(
-                Duration::from_secs(i * 30), None, None,
-                QualityScore::new(0.5 + i as f32 * 0.05), 0.5 + i as f32 * 0.05, base,
+                Duration::from_secs(i * 30),
+                None,
+                None,
+                QualityScore::new(0.5 + i as f32 * 0.05),
+                0.5 + i as f32 * 0.05,
+                base,
             ));
         }
         let trend = replay.quality_trend(5);
         assert!(!trend.is_empty());
         assert!(trend.len() <= 10);
         // Trend should show improving quality
-        assert!(trend.last().unwrap().1.0 >= trend.first().unwrap().1.0);
+        assert!(trend.last().unwrap().1 >= trend.first().unwrap().1);
     }
 
     #[test]
     fn test_session_replay_build() {
         let snapshots = vec![
-            ReplaySnapshot::new(Duration::from_secs(30), None, None, QualityScore::new(0.6), 0.6, Instant::now()),
-            ReplaySnapshot::new(Duration::from_secs(60), None, None, QualityScore::new(0.8), 0.8, Instant::now()),
+            ReplaySnapshot::new(
+                Duration::from_secs(30),
+                None,
+                None,
+                QualityScore::new(0.6),
+                0.6,
+                SystemTime::now(),
+            ),
+            ReplaySnapshot::new(
+                Duration::from_secs(60),
+                None,
+                None,
+                QualityScore::new(0.8),
+                0.8,
+                SystemTime::now(),
+            ),
         ];
         let replay = SessionReplay::build("test-session", snapshots);
         assert_eq!(replay.session_id, "test-session");
@@ -2440,10 +3249,34 @@ mod tests {
     fn test_performance_improving() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
         // Add sessions with increasing quality
-        analytics.add_session(SessionRecord::new("s1", Instant::now() - Duration::from_secs(86400 * 3), Duration::from_secs(3600), QualityScore::new(0.5), 3));
-        analytics.add_session(SessionRecord::new("s2", Instant::now() - Duration::from_secs(86400 * 2), Duration::from_secs(3600), QualityScore::new(0.6), 4));
-        analytics.add_session(SessionRecord::new("s3", Instant::now() - Duration::from_secs(86400), Duration::from_secs(3600), QualityScore::new(0.7), 5));
-        analytics.add_session(SessionRecord::new("s4", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.9), 6));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now() - Duration::from_secs(86400 * 3),
+            Duration::from_secs(3600),
+            QualityScore::new(0.5),
+            3,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(86400 * 2),
+            Duration::from_secs(3600),
+            QualityScore::new(0.6),
+            4,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s3",
+            SystemTime::now() - Duration::from_secs(86400),
+            Duration::from_secs(3600),
+            QualityScore::new(0.7),
+            5,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s4",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.9),
+            6,
+        ));
 
         let metrics = analytics.performance_metrics();
         assert!(metrics.is_improving());
@@ -2453,29 +3286,67 @@ mod tests {
     #[test]
     fn test_performance_declining() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now() - Duration::from_secs(86400 * 3), Duration::from_secs(3600), QualityScore::new(0.9), 6));
-        analytics.add_session(SessionRecord::new("s2", Instant::now() - Duration::from_secs(86400 * 2), Duration::from_secs(3600), QualityScore::new(0.7), 4));
-        analytics.add_session(SessionRecord::new("s3", Instant::now() - Duration::from_secs(86400), Duration::from_secs(3600), QualityScore::new(0.5), 3));
-        analytics.add_session(SessionRecord::new("s4", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.4), 2));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now() - Duration::from_secs(86400 * 3),
+            Duration::from_secs(3600),
+            QualityScore::new(0.9),
+            6,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s2",
+            SystemTime::now() - Duration::from_secs(86400 * 2),
+            Duration::from_secs(3600),
+            QualityScore::new(0.7),
+            4,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s3",
+            SystemTime::now() - Duration::from_secs(86400),
+            Duration::from_secs(3600),
+            QualityScore::new(0.5),
+            3,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s4",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.4),
+            2,
+        ));
 
         let metrics = analytics.performance_metrics();
         // Declining trend is negative, is_improving() checks > 0.05
         assert!(!metrics.is_improving());
-        assert!(metrics.improvement_percentage() < 0.0 || metrics.improvement_percentage().abs() > 0.05);
+        assert!(
+            metrics.improvement_percentage() < 0.0 || metrics.improvement_percentage().abs() > 0.05
+        );
     }
 
     #[test]
     fn test_performance_stable() {
         let mut analytics = MixHistoryAnalytics::new(PersistenceConfig::default());
-        analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.7), 5));
-        analytics.add_session(SessionRecord::new("s2", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.7), 5));
+        analytics.add_session(SessionRecord::new(
+            "s1",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.7),
+            5,
+        ));
+        analytics.add_session(SessionRecord::new(
+            "s2",
+            SystemTime::now(),
+            Duration::from_secs(3600),
+            QualityScore::new(0.7),
+            5,
+        ));
 
         let metrics = analytics.performance_metrics();
         assert_eq!(metrics.technique_assessment(), "Stable");
     }
 
     #[test]
-    fn test_performance_metrics_display() {
+    fn test_performance_metrics_display_extended() {
         let metrics = PerformanceMetrics {
             total_sessions: 5,
             average_quality: QualityScore::new(0.75),
@@ -2495,13 +3366,21 @@ mod tests {
     fn test_persistence_backup_restore() {
         let temp_file = std::env::temp_dir().join("drdj_backup_test.json");
         {
-            let mut config = PersistenceConfig::default();
-            config.storage_path = temp_file.clone();
-            config.backup_enabled = true;
-            config.max_sessions = 50;
+            let config = PersistenceConfig {
+                storage_path: temp_file.clone(),
+                backup_enabled: true,
+                max_sessions: 50,
+                ..Default::default()
+            };
 
             let mut analytics = MixHistoryAnalytics::new(config);
-            analytics.add_session(SessionRecord::new("s1", Instant::now(), Duration::from_secs(3600), QualityScore::new(0.8), 5));
+            analytics.add_session(SessionRecord::new(
+                "s1",
+                SystemTime::now(),
+                Duration::from_secs(3600),
+                QualityScore::new(0.8),
+                5,
+            ));
             analytics.save_to_file().unwrap();
         }
 
@@ -2519,16 +3398,40 @@ mod tests {
 
     #[test]
     fn test_max_sessions_enforcement() {
-        let mut config = PersistenceConfig::default();
-        config.max_sessions = 3;
+        let config = PersistenceConfig {
+            max_sessions: 3,
+            ..Default::default()
+        };
+
         let mut analytics = MixHistoryAnalytics::new(config);
 
         for i in 0..5 {
             analytics.add_session(SessionRecord::new(
-                format!("s{}", i), Instant::now() - Duration::from_secs(i * 60),
-                Duration::from_secs(300), QualityScore::new(0.5 + i as f32 * 0.05), 2,
+                format!("s{}", i),
+                SystemTime::now() - Duration::from_secs(i * 60),
+                Duration::from_secs(300),
+                QualityScore::new(0.5 + i as f32 * 0.05),
+                2,
             ));
         }
         assert_eq!(analytics.active_sessions().len(), 3);
     }
+}
+
+/// Filter options for session queries (FR-023-007).
+#[derive(Debug, Clone, Default)]
+pub struct SessionFilter {
+    pub date_range_start: Option<SystemTime>, // Date range
+    pub date_range_end: Option<SystemTime>,   // Date range
+    pub genre: Option<String>,                // Genre filter
+    pub min_track_count: Option<u32>,         // Minimum track count
+    pub min_quality_score: Option<f32>,       // Minimum quality score (0-1)
+    pub venue: Option<String>,                // Venue filter
+    pub recording_status: Option<bool>,       // true=recorded, false=not recorded, None=any
+}
+
+fn epoch_seconds(time: SystemTime) -> u64 {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }

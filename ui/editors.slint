@@ -1,0 +1,98 @@
+// Generated with the full local GUI input; input handlers are retained.
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox } from "std-widgets.slint";
+import { DjTheme, DeckSlotData, LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow } from "theme.slint";
+import { NudgeHold } from "controls.slint";
+
+export component EqStrip inherits Rectangle {
+    in property <string> deck;
+    in-out property <float> trim;
+    in-out property <float> low;
+    in-out property <float> mid;
+    in-out property <float> high;
+    in-out property <float> filter;
+    callback changed();
+    background: DjTheme.panel-bg;
+    VerticalLayout {
+        padding: 4px; spacing: 2px;
+        HorizontalLayout {
+            Text { text: "Deck " + root.deck + " EQ / TRIM"; color: DjTheme.text-secondary; }
+            Button { text: "RESET"; accessible-label: "Deck " + root.deck + " reset EQ"; clicked => { root.trim = 0; root.low = 0; root.mid = 0; root.high = 0; root.filter = 0; root.changed(); } }
+        }
+        HorizontalLayout {
+            VerticalLayout {
+                Text { text: "TRIM " + round(root.trim * 10) / 10 + " dB"; color: DjTheme.text-secondary; font-size: 10px; }
+                Slider { minimum: -12; maximum: 12; value <=> root.trim; accessible-label: "Deck " + root.deck + " trim dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: "LOW " + round(root.low * 10) / 10 + " dB"; color: DjTheme.text-secondary; font-size: 10px; }
+                Slider { minimum: -24; maximum: 12; value <=> root.low; accessible-label: "Deck " + root.deck + " low EQ dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: "MID " + round(root.mid * 10) / 10 + " dB"; color: DjTheme.text-secondary; font-size: 10px; }
+                Slider { minimum: -24; maximum: 12; value <=> root.mid; accessible-label: "Deck " + root.deck + " mid EQ dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: "HIGH " + round(root.high * 10) / 10 + " dB"; color: DjTheme.text-secondary; font-size: 10px; }
+                Slider { minimum: -24; maximum: 12; value <=> root.high; accessible-label: "Deck " + root.deck + " high EQ dB"; changed => { root.changed(); } }
+            }
+            VerticalLayout {
+                Text { text: root.filter == 0 ? "FILTER OFF" : (root.filter < 0 ? "LP " : "HP ") + round(abs(root.filter)*100) + "%"; color: DjTheme.text-secondary; font-size: 10px; }
+                Slider { minimum: -1; maximum: 1; value <=> root.filter; accessible-label: "Deck " + root.deck + " bipolar filter"; changed => { root.changed(); } }
+                Button { text: "OFF"; accessible-label: "Deck " + root.deck + " filter off"; clicked => { root.filter = 0; root.changed(); } }
+            }
+        }
+    }
+}
+
+export component FxStrip inherits Rectangle {
+    in property <string> summary;
+    in-out property <int> selected-slot;
+    in-out property <int> effect-kind;
+    in-out property <bool> legacy:true;
+    callback slot-action(int,int,float);
+    callback legacy-changed(bool);
+    in property <string> deck;
+    in property <bool> ready;
+    in-out property <bool> active;
+    in-out property <float> time:250;
+    in-out property <float> feedback:30;
+    in-out property <float> wet:25;
+    in-out property <int> slot:1;
+    in-out property <int> time-base;
+    in-out property <int> division:4;
+    in property <string> timing;
+    callback timing-changed(int,int);
+    callback tap(bool);
+    callback tap-cancel();
+    callback changed();
+    callback preset(int,bool);
+    background:DjTheme.panel-bg;
+    VerticalLayout {
+        padding:8px;spacing:6px;
+        Text {text:"Deck "+root.deck+" FX 1 → 2 → 3 (serial)";color:DjTheme.text-primary;}
+        Text {text:root.summary;color:DjTheme.text-secondary;font-size:11px;overflow:elide;}
+        HorizontalLayout {
+            ComboBox {model:["Slot 1","Slot 2","Slot 3"];current-index <=> root.selected-slot;enabled:root.ready;accessible-label:"Deck "+root.deck+" FX slot";selected(value)=>{root.slot-action(root.selected-slot,4,0);}}
+            ComboBox {model:["Delay","Low-pass","High-pass"];current-index <=> root.effect-kind;enabled:root.ready;accessible-label:"Deck "+root.deck+" effect type";selected(value)=>{root.slot-action(root.selected-slot,5,root.effect-kind);}}
+        }
+        CheckBox {text:"Legacy knobs: Wet / Feedback / Time";checked <=> root.legacy;enabled:root.ready;accessible-label:"Deck "+root.deck+" legacy FX knobs";toggled=>{root.legacy-changed(root.legacy);}}
+        CheckBox {text:"Enabled (unchecked = bypass)";checked <=> root.active;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay enabled";toggled=>{root.changed();}}
+        HorizontalLayout {
+            ComboBox { model:["Milliseconds", "Deck BPM", "Tap BPM"]; current-index <=> root.time-base; enabled:root.ready && root.effect-kind == 0; accessible-label:"Deck "+root.deck+" FX time base"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
+            ComboBox { model:["1/16 beat", "1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"]; current-index <=> root.division; enabled:root.ready && root.effect-kind == 0 && root.time-base != 0; accessible-label:"Deck "+root.deck+" FX beat division"; selected(value)=>{root.timing-changed(root.time-base,root.division);} }
+            NudgeHold { text:"TAP"; label:"Deck "+root.deck+" FX tap tempo; hold one second to reset"; enabled:root.ready && root.effect-kind == 0; held(value)=>{root.tap(value);} cancel=>{root.tap-cancel();} }
+        }
+        Text {text:root.timing;color:DjTheme.text-secondary;overflow:elide;}
+        Text {text:"Time "+round(root.time)+" ms";color:DjTheme.text-secondary;}
+        Slider {minimum:20;maximum:1000;value <=> root.time;enabled:root.ready && root.effect-kind == 0 && root.time-base == 0;accessible-label:"Deck "+root.deck+" delay time";changed=>{root.changed();}}
+        Text {text:"Feedback "+round(root.feedback)+"%";color:DjTheme.text-secondary;}
+        Slider {minimum:0;maximum:85;value <=> root.feedback;enabled:root.ready && root.effect-kind == 0;accessible-label:"Deck "+root.deck+" delay feedback";changed=>{root.changed();}}
+        Text {text:(root.effect-kind == 0 ? "Dry/Wet " : "Filter intensity ")+round(root.wet)+"%";color:DjTheme.text-secondary;}
+        Slider {minimum:0;maximum:100;value <=> root.wet;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay dry wet";changed=>{root.changed();}}
+        HorizontalLayout {
+            SpinBox {minimum:1;maximum:8;value <=> root.slot;enabled:root.ready;accessible-label:"Deck "+root.deck+" delay preset slot";}
+            Button {text:"LOAD";enabled:root.ready;accessible-label:"Deck "+root.deck+" load delay preset";clicked=>{root.preset(root.slot - 1,false);}}
+            Button {text:"SAVE";enabled:root.ready;accessible-label:"Deck "+root.deck+" save delay preset";clicked=>{root.preset(root.slot - 1,true);}}
+        }
+    }
+}
