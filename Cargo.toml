@@ -22,6 +22,13 @@ rodio = { version = "=0.21.1", default-features = false, features = ["playback",
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "pcm", "isomp4", "aac", "alac", "flac", "aiff", "ogg", "vorbis"] }
 ebur128 = "0.1"
 rustfft = "6"
+aes-gcm = { version = "0.10", features = ["std"] }
+flume = "0.11"
+thiserror = "2"
+log = "0.4"
+getrandom = "0.3"
+crossbeam = "0.8"
+rand = "0.9"
 
 [build-dependencies]
 slint-build = "=1.18.1"
