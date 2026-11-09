@@ -125,6 +125,7 @@ impl Bank {
 pub(crate) struct Shared {
     banks: [Bank; 4],
     gain: AtomicU32,
+    loop_mode: AtomicBool,
     output_rate: u32,
 }
 impl Shared {
@@ -135,6 +136,7 @@ impl Shared {
         Ok(Arc::new(Self {
             banks: [Bank::new()?, Bank::new()?, Bank::new()?, Bank::new()?],
             gain: AtomicU32::new(0.5f32.to_bits()),
+            loop_mode: AtomicBool::new(false),
             output_rate,
         }))
     }
@@ -263,7 +265,7 @@ struct Voice {
     fade_total: u32,
 }
 impl Voice {
-    fn frame(&mut self, b: &Bank, output_rate: u32, ramp: u32) -> [f32; 2] {
+    fn frame(&mut self, b: &Bank, output_rate: u32, ramp: u32, looping: bool) -> [f32; 2] {
         let command = b.command.load(Ordering::SeqCst);
         if command == self.command && !self.playing && self.fade == 0 {
             self.last = [0.; 2];
@@ -306,7 +308,15 @@ impl Voice {
             } else {
                 self.phase = self.phase.saturating_add(rate);
                 if self.phase >= frames * u64::from(output_rate) {
-                    self.playing = false;
+                    if looping {
+                        self.phase %= frames * u64::from(output_rate);
+                        // Match the end ramp with a bounded fade-in at the wrap.
+                        self.offset = [0.0; 2];
+                        self.fade_total = clip_ramp;
+                        self.fade = clip_ramp;
+                    } else {
+                        self.playing = false;
+                    }
                 }
             }
         }
@@ -371,8 +381,9 @@ impl Iterator for Bus {
                 self.remaining -= 1;
             }
             self.frame = [0.; 2];
+            let looping = self.shared.loop_mode.load(Ordering::Acquire);
             for (voice, bank) in self.voices.iter_mut().zip(&self.shared.banks) {
-                let frame = voice.frame(bank, self.rate, self.ramp);
+                let frame = voice.frame(bank, self.rate, self.ramp, looping);
                 for (to, value) in self.frame.iter_mut().zip(frame) {
                     *to += value * 0.25 * self.gain;
                 }
@@ -512,6 +523,50 @@ mod tests {
         let (token, _) = shared.begin_load(slot).unwrap();
         shared.install(slot, token, prepared).unwrap();
     }
+    #[test]
+    fn looping_short_clips_multiple_rates_are_heap_free_and_end_on_disable() {
+        for rate in [8000, 192000] {
+            for frames in [1, 2, 31] {
+                let shared = Shared::new(192000).unwrap();
+                let prepared = Prepared {
+                    path: "short.wav".into(),
+                    rate,
+                    samples: vec![0.5; frames * 2],
+                };
+                install(&shared, 0, &prepared);
+                shared.set_loop_mode(true);
+                shared.play(0).unwrap();
+                let mut bus = Bus::new(shared.clone(), 2, 192000);
+                let allocations = crate::looping::counted_allocations(|| {
+                    for _ in 0..10000 {
+                        assert!(bus.next().unwrap().is_finite());
+                    }
+                });
+                assert_eq!(allocations, 0);
+                assert!(shared.active(0));
+                shared.play(0).unwrap(); // Retrigger after many wraps.
+                for _ in 0..100 {
+                    bus.next();
+                }
+                shared.stop(0);
+                assert!(!shared.active(0));
+                install(&shared, 0, &prepared); // Replace the asset near a wrap.
+                shared.play(0).unwrap();
+                for _ in 0..100 {
+                    bus.next();
+                }
+                shared.set_loop_mode(false);
+                for _ in 0..10000 {
+                    bus.next();
+                }
+                assert!(!shared.active(0));
+                for _ in 0..100 {
+                    assert_eq!(bus.next(), Some(0.0));
+                }
+            }
+        }
+    }
+
     #[test]
     fn sampler_four_voices_headroom_routes_retrigger_stop_eof_and_level() {
         let shared = Shared::new(48000).unwrap();
@@ -845,15 +900,24 @@ mod tests {
             shared.play(i).unwrap();
         }
 
-        let mut bus = Bus::new(shared.clone(), 4, 48000);
-        // In loop mode, samples should repeat
+        let mut bus = Bus::new(shared.clone(), 2, 48000);
+        let mut post_wrap_energy = 0.0;
         for frame in 0..10000 {
-            let a = bus.next().unwrap();
-            assert!((0. ..=1.).contains(&a));
-            if frame >= 4800 && frame < 9600 {
-                // Loop should continue
-                assert_eq!(a, 1.);
+            let left = bus.next().unwrap();
+            let right = bus.next().unwrap();
+            assert_eq!(left, right);
+            assert!((0.0..=0.5).contains(&left));
+            if frame >= 4800 {
+                post_wrap_energy += left;
             }
+        }
+        assert!(post_wrap_energy > 2000.0); // Real output beyond the first source pass.
+        for slot in 0..4 {
+            assert!(shared.active(slot));
+        }
+        shared.stop_all();
+        for slot in 0..4 {
+            assert!(!shared.active(slot));
         }
     }
 
@@ -878,6 +942,8 @@ mod tests {
 
         // Trigger pad
         shared.play(0).unwrap();
+        let mut feedback_bus = Bus::new(shared.clone(), 2, 48000);
+        feedback_bus.next(); // Feedback acknowledges actual callback consumption.
         assert!(shared.active(0));
 
         // Visual feedback should indicate pad is active
@@ -934,7 +1000,7 @@ mod tests {
         for _ in 0..4800 {
             let a = bus.next().unwrap();
             // Should be within bounds due to gain control
-            assert!(-1.0 <= a && a <= 1.0);
+            assert!((-1.0..=1.0).contains(&a));
         }
     }
 
@@ -993,17 +1059,22 @@ mod tests {
     }
 
     #[test]
-    fn p19b_all_eight_pads() {
+    fn p19b_four_supported_pads_reject_additional_slots() {
         let shared = Shared::new(48000).unwrap();
         let prepared = sample(1., 4800);
 
-        // Load samples into all 8 pads
-        for slot in 0..8 {
+        // The active engine exposes four independent sampler slots.
+        for slot in 0..4 {
             install(&shared, slot, &prepared);
         }
 
-        // All pads should be ready
-        for i in 0..8 {
+        for i in 4..8 {
+            assert!(shared.begin_load(i).is_err());
+            assert!(shared.play(i).is_err());
+            assert!(!shared.ready(i));
+        }
+        // All supported pads should be ready.
+        for i in 0..4 {
             assert!(shared.ready(i));
         }
     }
@@ -1052,7 +1123,9 @@ mod tests {
             shared.play(i).unwrap();
         }
 
-        // All should be active
+        let mut bus = Bus::new(shared.clone(), 2, 48000);
+        bus.next();
+        // All should be active after the render callback consumes the commands.
         for i in 0..4 {
             assert!(shared.active(i));
         }
@@ -1075,9 +1148,7 @@ mod tests {
             category: String::from("drums"),
         });
 
-        let drums: Vec<&SampleInfo> = samples.iter()
-            .filter(|s| s.category == "drums")
-            .collect();
+        let drums: Vec<&SampleInfo> = samples.iter().filter(|s| s.category == "drums").collect();
         assert_eq!(drums.len(), 2);
     }
 
@@ -1093,6 +1164,9 @@ mod tests {
         let mut bus = Bus::new(shared.clone(), 4, 48000);
         for frame in 0..6000 {
             let a = bus.next().unwrap();
+            for _ in 1..4 {
+                bus.next();
+            }
             if frame >= 4800 {
                 // Should stop after sample ends when loop mode is off
                 assert_eq!(a, 0.);
@@ -1141,7 +1215,7 @@ mod tests {
         shared.play(0).unwrap();
 
         let mut bus = Bus::new(shared.clone(), 4, 48000);
-        let mut max_sample = 0.;
+        let mut max_sample = 0.0f32;
 
         for _ in 0..4800 {
             let sample = bus.next().unwrap();
@@ -1179,6 +1253,8 @@ mod tests {
 
         // Play uploaded sample
         shared.play(0).unwrap();
+        let mut feedback_bus = Bus::new(shared.clone(), 2, 48000);
+        feedback_bus.next(); // Feedback acknowledges actual callback consumption.
         assert!(shared.active(0));
 
         let mut bus = Bus::new(shared.clone(), 4, 48000);
@@ -1188,10 +1264,22 @@ mod tests {
     #[test]
     fn p19b_category_counts() {
         let mut samples = Vec::new();
-        samples.push(SampleInfo { path: String::from("k1.wav"), category: String::from("drums") });
-        samples.push(SampleInfo { path: String::from("k2.wav"), category: String::from("drums") });
-        samples.push(SampleInfo { path: String::from("v1.wav"), category: String::from("vocals") });
-        samples.push(SampleInfo { path: String::from("fx1.wav"), category: String::from("FX") });
+        samples.push(SampleInfo {
+            path: String::from("k1.wav"),
+            category: String::from("drums"),
+        });
+        samples.push(SampleInfo {
+            path: String::from("k2.wav"),
+            category: String::from("drums"),
+        });
+        samples.push(SampleInfo {
+            path: String::from("v1.wav"),
+            category: String::from("vocals"),
+        });
+        samples.push(SampleInfo {
+            path: String::from("fx1.wav"),
+            category: String::from("FX"),
+        });
 
         let mut counts = std::collections::HashMap::new();
         for s in &samples {
@@ -1208,7 +1296,7 @@ mod tests {
         let shared = Shared::new(48000).unwrap();
         let prepared = sample(1., 4800);
 
-        for slot in 0..8 {
+        for slot in 0..4 {
             install(&shared, slot, &prepared);
         }
 
@@ -1216,17 +1304,29 @@ mod tests {
         shared.set_loop_mode(true);
 
         // Trigger all pads
-        for i in 0..8 {
+        for i in 0..4 {
             shared.play(i).unwrap();
         }
 
         // All should loop
-        let mut bus = Bus::new(shared.clone(), 8, 48000);
+        let mut bus = Bus::new(shared.clone(), 2, 48000);
+        let mut post_wrap_energy = 0.0;
         for frame in 0..10000 {
-            let a = bus.next().unwrap();
-            if frame >= 4800 && frame < 9600 {
-                assert_eq!(a, 1.);
+            let left = bus.next().unwrap();
+            let right = bus.next().unwrap();
+            assert_eq!(left, right);
+            assert!((0.0..=0.5).contains(&left));
+            if frame >= 4800 {
+                post_wrap_energy += left;
             }
+        }
+        assert!(post_wrap_energy > 2000.0); // Real output beyond the first source pass.
+        for slot in 0..4 {
+            assert!(shared.active(slot));
+        }
+        shared.stop_all();
+        for slot in 0..4 {
+            assert!(!shared.active(slot));
         }
     }
 
@@ -1242,6 +1342,8 @@ mod tests {
 
         // After trigger - glow active
         shared.play(0).unwrap();
+        let mut feedback_bus = Bus::new(shared.clone(), 2, 48000);
+        feedback_bus.next(); // Feedback acknowledges actual callback consumption.
         assert!(shared.active(0));
 
         // After stop - no glow
@@ -1284,18 +1386,14 @@ struct PadState {
     color: PadColor,
 }
 
+#[derive(Debug, PartialEq, Default)]
 enum PadColor {
+    #[default]
     Default,
     Red,
     Green,
     Blue,
     Bright,
-}
-
-impl Default for PadColor {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 struct SampleInfo {
@@ -1315,8 +1413,8 @@ impl PadState {
 }
 
 impl Shared {
-    fn set_loop_mode(&self, _mode: bool) {
-        // Loop mode is handled internally
+    fn set_loop_mode(&self, mode: bool) {
+        self.loop_mode.store(mode, Ordering::Release);
     }
 }
 

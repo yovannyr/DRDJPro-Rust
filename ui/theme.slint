@@ -1,0 +1,56 @@
+// Values are design proposals, not color measurements from the reference photo.
+export global DjTheme {
+    in-out property <color> app-bg: #111111;
+    in-out property <color> panel-bg: #191919;
+    in-out property <color> panel-dark: #141414;
+    in-out property <color> control-bg: #252525;
+    in-out property <color> control-hover: #333333;
+    in-out property <color> control-pressed: #444444;
+    in-out property <color> divider: #383838;
+    in-out property <color> text-primary: #eeeeee;
+    in-out property <color> text-secondary: #a5a5a5;
+    in-out property <color> text-disabled: #737373;
+    in-out property <color> selection-bg: #087bb5;
+    in-out property <color> focus-border: #9ad7ff;
+    in-out property <color> warning: #ffb454;
+    in-out property <color> error: #ed5b5b;
+    in-out property <color> deck-a: #45b4e7;
+    in-out property <color> deck-b: #d3b444;
+    in-out property <color> deck-c: #74c391;
+    in-out property <color> deck-d: #c58ce3;
+    in-out property <color> play-green: #56bc69;
+    in-out property <string> font-ui: "Liberation Sans";
+    in-out property <string> font-numeric: "Liberation Mono";
+    in-out property <length> gap-small: 2px;
+    in-out property <length> gap-normal: 4px;
+    in-out property <length> row-height: 22px;
+    in-out property <length> control-height: 24px;
+    in-out property <length> toolbar-height: 32px;
+    in-out property <length> deck-height: 232px;
+    in-out property <length> compact-deck-height: 176px;
+    in-out property <length> four-detail-height: 176px;
+    in-out property <length> detail-height: 164px;
+    in-out property <length> mixer-height: 36px;
+    in-out property <length> status-height: 22px;
+}
+
+// Read-only display contract. There is deliberately no transport capability here.
+export struct DeckSlotData { title: string, artist: string, bpm: string, time: string, pitch: float }
+
+export struct LoopRange { valid: bool, active: bool, visible: bool, in-visible: bool, out-visible: bool, start: float, end: float, description: string }
+
+export struct SavedLoopRow { occupied: bool, description: string }
+
+export struct HotCueRow { occupied: bool, description: string, tint: color, position: float, valid: bool, name: string, label-row: int, label-column: int }
+
+export struct CrateRow { id: int, name: string, count: int, depth: int, smart: bool }
+
+export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
+
+export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, prepare-duration: string, bpm: string, key: string, gain: string, analysis-status: string, metadata-error: string, format: string, path: string, available: bool }
+
+export struct TableColumn { id: int, title: string, sort-label: string, visible: bool, width: float }
+
+export enum DeckView { training, virtual }
+
+export struct SamplerRow {name:string,loaded:bool,busy:bool,playing:bool,occupied:bool}

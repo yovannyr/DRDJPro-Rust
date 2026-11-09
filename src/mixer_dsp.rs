@@ -11,24 +11,11 @@ pub(crate) const MAX_CHANNELS: u16 = 32;
 const STAGES: usize = 4;
 const COEFFICIENTS: usize = STAGES * 5 + 1;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct EqSettings {
-    pub trim: f64,
-    pub low: f64,
-    pub mid: f64,
-    pub high: f64,
-    pub filter: f64,
+pub(crate) use drdjpro_ui_spike::audio_contracts::EqSettings;
+trait EqCoefficients {
+    fn coefficients(self, rate: u32) -> [f64; COEFFICIENTS];
 }
-impl EqSettings {
-    pub fn valid(self) -> bool {
-        self.trim.is_finite()
-            && (-12. ..=12.).contains(&self.trim)
-            && self.filter.is_finite()
-            && (-1. ..=1.).contains(&self.filter)
-            && [self.low, self.mid, self.high]
-                .iter()
-                .all(|v| v.is_finite() && (-24. ..=12.).contains(v))
-    }
+impl EqCoefficients for EqSettings {
     fn coefficients(self, rate: u32) -> [f64; COEFFICIENTS] {
         let mut result = [0.; COEFFICIENTS];
         for (index, (frequency, db)) in [(250_f64, self.low), (1000., self.mid), (4000., self.high)]

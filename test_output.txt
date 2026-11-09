@@ -1,0 +1,144 @@
+﻿cargo :    Compiling drdjpro-ui-spike v0.1.0 (C:\repo\DRDJPro-Rust)
+In Zeile:2 Zeichen:1
++ cargo test -- mc4000 2>&1 | Out-File -Encoding utf8 test_output.txt;  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling dr...o\DRDJPro-Rust):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0599]: no method named `get_left_deck_label` found for struct `slint_generatedAppWindow::AppWindow` in the 
+current scope
+     --> src\controller.rs:15900:23
+      |
+15900 |         assert_eq!(ui.get_left_deck_label(), "DECK A");
+      |                       ^^^^^^^^^^^^^^^^^^^
+      |
+     ::: C:\repo\DRDJPro-Rust\target\debug\build\drdjpro-ui-spike-bb32f209ebeee62a\out\app.rs:63763:6
+      |
+63763 |      pub struct r#AppWindow (sp :: VRc < sp :: ItemTreeVTable , InnerAppWindow >) ;
+      |      ---------------------- method `get_left_deck_label` not found for this struct
+      |
+help: there is a method `get_left_detail` with a similar name
+      |
+15900 -         assert_eq!(ui.get_left_deck_label(), "DECK A");
+15900 +         assert_eq!(ui.get_left_detail(), "DECK A");
+      |
+
+error[E0599]: no method named `get_right_deck_label` found for struct `slint_generatedAppWindow::AppWindow` in the 
+current scope
+     --> src\controller.rs:15901:23
+      |
+15901 |         assert_eq!(ui.get_right_deck_label(), "DECK B");
+      |                       ^^^^^^^^^^^^^^^^^^^^
+      |
+     ::: C:\repo\DRDJPro-Rust\target\debug\build\drdjpro-ui-spike-bb32f209ebeee62a\out\app.rs:63763:6
+      |
+63763 |      pub struct r#AppWindow (sp :: VRc < sp :: ItemTreeVTable , InnerAppWindow >) ;
+      |      ---------------------- method `get_right_deck_label` not found for this struct
+      |
+help: there is a method `get_right_detail` with a similar name
+      |
+15901 -         assert_eq!(ui.get_right_deck_label(), "DECK B");
+15901 +         assert_eq!(ui.get_right_detail(), "DECK B");
+      |
+
+error[E0599]: no method named `get_left_deck_label` found for struct `slint_generatedAppWindow::AppWindow` in the 
+current scope
+     --> src\controller.rs:15906:23
+      |
+15906 |         assert_eq!(ui.get_left_deck_label(), "DECK A - CTLR");
+      |                       ^^^^^^^^^^^^^^^^^^^
+      |
+     ::: C:\repo\DRDJPro-Rust\target\debug\build\drdjpro-ui-spike-bb32f209ebeee62a\out\app.rs:63763:6
+      |
+63763 |      pub struct r#AppWindow (sp :: VRc < sp :: ItemTreeVTable , InnerAppWindow >) ;
+      |      ---------------------- method `get_left_deck_label` not found for this struct
+      |
+help: there is a method `get_left_detail` with a similar name
+      |
+15906 -         assert_eq!(ui.get_left_deck_label(), "DECK A - CTLR");
+15906 +         assert_eq!(ui.get_left_detail(), "DECK A - CTLR");
+      |
+
+error[E0599]: no method named `get_right_deck_label` found for struct `slint_generatedAppWindow::AppWindow` in the 
+current scope
+     --> src\controller.rs:15907:23
+      |
+15907 |         assert_eq!(ui.get_right_deck_label(), "DECK B - CTLR");
+      |                       ^^^^^^^^^^^^^^^^^^^^
+      |
+     ::: C:\repo\DRDJPro-Rust\target\debug\build\drdjpro-ui-spike-bb32f209ebeee62a\out\app.rs:63763:6
+      |
+63763 |      pub struct r#AppWindow (sp :: VRc < sp :: ItemTreeVTable , InnerAppWindow >) ;
+      |      ---------------------- method `get_right_deck_label` not found for this struct
+      |
+help: there is a method `get_right_detail` with a similar name
+      |
+15907 -         assert_eq!(ui.get_right_deck_label(), "DECK B - CTLR");
+15907 +         assert_eq!(ui.get_right_detail(), "DECK B - CTLR");
+      |
+
+error[E0599]: no method named `get_left_deck_label` found for struct `slint_generatedAppWindow::AppWindow` in the 
+current scope
+     --> src\controller.rs:15912:23
+      |
+15912 |         assert_eq!(ui.get_left_deck_label(), "DECK A");
+      |                       ^^^^^^^^^^^^^^^^^^^
+      |
+     ::: C:\repo\DRDJPro-Rust\target\debug\build\drdjpro-ui-spike-bb32f209ebeee62a\out\app.rs:63763:6
+      |
+63763 |      pub struct r#AppWindow (sp :: VRc < sp :: ItemTreeVTable , InnerAppWindow >) ;
+      |      ---------------------- method `get_left_deck_label` not found for this struct
+      |
+help: there is a method `get_left_detail` with a similar name
+      |
+15912 -         assert_eq!(ui.get_left_deck_label(), "DECK A");
+15912 +         assert_eq!(ui.get_left_detail(), "DECK A");
+      |
+
+error[E0599]: no method named `get_right_deck_label` found for struct `slint_generatedAppWindow::AppWindow` in the 
+current scope
+     --> src\controller.rs:15913:23
+      |
+15913 |         assert_eq!(ui.get_right_deck_label(), "DECK B");
+      |                       ^^^^^^^^^^^^^^^^^^^^
+      |
+     ::: C:\repo\DRDJPro-Rust\target\debug\build\drdjpro-ui-spike-bb32f209ebeee62a\out\app.rs:63763:6
+      |
+63763 |      pub struct r#AppWindow (sp :: VRc < sp :: ItemTreeVTable , InnerAppWindow >) ;
+      |      ---------------------- method `get_right_deck_label` not found for this struct
+      |
+help: there is a method `get_right_detail` with a similar name
+      |
+15913 -         assert_eq!(ui.get_right_deck_label(), "DECK B");
+15913 +         assert_eq!(ui.get_right_detail(), "DECK B");
+      |
+
+warning: unused variable: `c`
+     --> src\controller.rs:15922:13
+      |
+15922 |         let c = AudioController::wire(
+      |             ^ help: if this is intentional, prefix it with an underscore: `_c`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `c`
+     --> src\controller.rs:15955:13
+      |
+15955 |         let c =
+      |             ^ help: if this is intentional, prefix it with an underscore: `_c`
+
+warning: unused variable: `c`
+     --> src\controller.rs:15995:13
+      |
+15995 |         let c =
+      |             ^ help: if this is intentional, prefix it with an underscore: `_c`
+
+warning: unused variable: `c`
+     --> src\controller.rs:16018:13
+      |
+16018 |         let c = AudioController::wire(
+      |             ^ help: if this is intentional, prefix it with an underscore: `_c`
+
+For more information about this error, try `rustc --explain E0599`.
+warning: `drdjpro-ui-spike` (bin "drdjpro-ui-spike" test) generated 4 warnings
+error: could not compile `drdjpro-ui-spike` (bin "drdjpro-ui-spike" test) due to 6 previous errors; 4 warnings emitted
