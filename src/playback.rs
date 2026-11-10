@@ -73,6 +73,7 @@ pub struct PreparedTrack {
     overview: Arc<[f32]>,
     detail: Arc<crate::waveform::DetailPeaks>,
     tempo: Option<crate::tempo::TempoEstimate>,
+    cover_data: Option<Vec<u8>>, // decoded RGBA cover art pixels
 }
 impl PreparedTrack {
     /// Decode on a worker, never inside an audio callback. Limit retained PCM to 256 MiB/track.
@@ -123,6 +124,11 @@ impl PreparedTrack {
             crate::tempo::estimate(&samples, channels, rate)
         };
         cancel.check()?;
+        // Extract cover art for dominant color (non-blocking, best-effort).
+        let cover_data = crate::cover_art::read_cancellable(path, cancel)
+            .ok()
+            .and_then(|result| result.map(|(_, _, pixels)| pixels))
+            .filter(|pixels| !pixels.is_empty());
         Ok(Self {
             keylock: None,
             path: canonical.into(),
@@ -135,6 +141,7 @@ impl PreparedTrack {
             overview,
             detail,
             tempo,
+            cover_data,
         })
     }
     pub fn duration(&self) -> Duration {
@@ -357,6 +364,7 @@ pub struct DeckSnapshot {
     pub requested_speed: f64,
     pub effective_speed: f64,
     pub sync_factor: f64,
+    pub cover_color: u32, // ARGB color, 0x00000000 = no cover
 }
 impl DeckSnapshot {
     pub fn percent(&self) -> f32 {
@@ -1915,6 +1923,9 @@ impl DualDeckEngine {
             } else {
                 deck.sync_factor
             },
+            cover_color: deck.track.as_ref().and_then(|t| t.cover_data.as_ref())
+                .map(|pixels| crate::cover_art::dominant_color(pixels))
+                .unwrap_or(0x00000000),
         }
     }
     /// Returns the latest complete producer window, not device/current freshness.
@@ -4143,6 +4154,7 @@ mod tests {
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 1, rate)),
                 tempo: None,
                 samples: PcmSource::new(1, rate, samples),
+                cover_data: None,
             }
         }
         let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
@@ -4241,6 +4253,7 @@ mod tests {
                     detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, source_rate)),
                     tempo: None,
                     samples: PcmSource::new(2, source_rate, samples),
+                    cover_data: None,
                 },
             );
             engine.set_levels(MixerLevels {
@@ -4455,6 +4468,7 @@ mod tests {
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48000)),
                 tempo: None,
                 samples: PcmSource::new(2, 48000, samples),
+                cover_data: None,
             },
         );
         engine.set_levels(MixerLevels {
@@ -4512,6 +4526,7 @@ mod tests {
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48000)),
                 tempo: None,
                 samples: PcmSource::new(2, 48000, samples),
+                cover_data: None,
             },
         );
         engine.set_levels(MixerLevels {
@@ -4580,6 +4595,7 @@ mod tests {
                     detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, base)),
                     tempo: None,
                     samples: PcmSource::new(2, base, samples),
+                    cover_data: None,
                 },
             );
             engine.set_levels(MixerLevels {
@@ -4908,6 +4924,7 @@ mod tests {
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48_000)),
                 tempo: None,
                 samples: PcmSource::new(2, 48_000, samples),
+                cover_data: None,
             },
         );
         let other = wav_file(4096, 48_000 * 4);
@@ -5138,6 +5155,7 @@ mod tests {
                 detail: Arc::new(crate::waveform::DetailPeaks::new(&samples, 2, 48_000)),
                 tempo: None,
                 samples: PcmSource::new(2, 48_000, samples),
+                cover_data: None,
             },
         );
         engine.set_levels(MixerLevels {

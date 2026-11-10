@@ -4,6 +4,9 @@ import "layout-fonts/LiberationSans-Bold.ttf";
 import "layout-fonts/LiberationMono-Regular.ttf";
 import { DjTheme, LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
 export { LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
+import { LayoutMode } from "layout-modes.slint";
+import { DeckAction, HoldAction, ControlKind, JogPhase } from "modern-state.slint";
+import { ModernView } from "modern-view.slint";
 import { VirtualPlatter, ChannelMeter, HotCuePad, NudgeHold, LibraryButton, DjAction } from "controls.slint";
 import { WaveformStrip, DetailWaveform } from "waveform.slint";
 import { CompactDeck, DeckPlaceholder } from "deck.slint";
@@ -51,6 +54,138 @@ export component AppWindow inherits Window {
     default-font-size: 12px;
     // Layout-only view state; A/B source data and engine ownership stay unchanged.
     in-out property <bool> four-decks: false;
+    in-out property <LayoutMode> view-mode: LayoutMode.Classic;
+    out property <int> layout-index: root.view-mode == LayoutMode.Classic ? 0 : 1;
+    in-out property <bool> modern-library-open: true;
+    callback layout-changed();
+    // Modern view callbacks
+    callback modern-action(int, DeckAction);
+    callback modern-hold-started(int, HoldAction, int);
+    callback modern-hold-ended(int, HoldAction, int);
+    callback modern-hold-canceled(int, HoldAction, int);
+    callback modern-control-requested(int, ControlKind, float);
+    callback modern-gesture-ended(int);
+    callback modern-jog(int, JogPhase, float, float);
+    callback modern-seek-requested(int, float);
+    callback modern-detail-zoom(int, int);
+    callback library-toggle();
+    modern-action(deck, action) => {
+        if deck == 0 {
+            if action == DeckAction.load { root.load-left(); }
+            else if action == DeckAction.play-pause { root.toggle-left(); }
+            else if action == DeckAction.sync { root.toggle-sync-left(); }
+            else if action == DeckAction.keylock { root.left-keylock = !root.left-keylock; root.keylock-left(); }
+            else if action == DeckAction.quantize { root.quantize-enabled = !root.quantize-enabled; }
+            else if action == DeckAction.loop-toggle {
+                if root.left-loop-active { root.loop-exit-left(); } else { root.loop-activate-left(); }
+            }
+            else if action == DeckAction.loop-half { root.half-loop-left(); }
+            else if action == DeckAction.loop-double { root.double-loop-left(); }
+            else if action == DeckAction.monitor { root.monitor-cue-a = !root.monitor-cue-a; root.monitor-cue-changed(0); }
+            else if action == DeckAction.fx { root.fx-open = true; }
+            else if action == DeckAction.edit { root.grid-left(); }
+        } else if deck == 1 {
+            if action == DeckAction.load { root.load-right(); }
+            else if action == DeckAction.play-pause { root.toggle-right(); }
+            else if action == DeckAction.sync { root.toggle-sync-right(); }
+            else if action == DeckAction.keylock { root.right-keylock = !root.right-keylock; root.keylock-right(); }
+            else if action == DeckAction.quantize { root.quantize-enabled = !root.quantize-enabled; }
+            else if action == DeckAction.loop-toggle {
+                if root.right-loop-active { root.loop-exit-right(); } else { root.loop-activate-right(); }
+            }
+            else if action == DeckAction.loop-half { root.half-loop-right(); }
+            else if action == DeckAction.loop-double { root.double-loop-right(); }
+            else if action == DeckAction.monitor { root.monitor-cue-b = !root.monitor-cue-b; root.monitor-cue-changed(1); }
+            else if action == DeckAction.fx { root.fx-open = true; }
+            else if action == DeckAction.edit { root.grid-right(); }
+        }
+    }
+    modern-hold-started(deck, action, slot) => {
+        if deck == 0 {
+            if action == HoldAction.cue { root.temporary-cue(0, true, false); }
+            else if action == HoldAction.hot-cue { root.hold-hot-cue-left(slot, true, 5); }
+            else if action == HoldAction.nudge-backward { root.nudge-left(-1, true); }
+            else if action == HoldAction.nudge-forward { root.nudge-left(1, true); }
+        } else if deck == 1 {
+            if action == HoldAction.cue { root.temporary-cue(1, true, false); }
+            else if action == HoldAction.hot-cue { root.hold-hot-cue-right(slot, true, 5); }
+            else if action == HoldAction.nudge-backward { root.nudge-right(-1, true); }
+            else if action == HoldAction.nudge-forward { root.nudge-right(1, true); }
+        }
+    }
+    modern-hold-ended(deck, action, slot) => {
+        if deck == 0 {
+            if action == HoldAction.cue { root.temporary-cue(0, false, false); }
+            else if action == HoldAction.hot-cue { root.hold-hot-cue-left(slot, false, 5); }
+            else if action == HoldAction.nudge-backward { root.nudge-left(-1, false); }
+            else if action == HoldAction.nudge-forward { root.nudge-left(1, false); }
+        } else if deck == 1 {
+            if action == HoldAction.cue { root.temporary-cue(1, false, false); }
+            else if action == HoldAction.hot-cue { root.hold-hot-cue-right(slot, false, 5); }
+            else if action == HoldAction.nudge-backward { root.nudge-right(-1, false); }
+            else if action == HoldAction.nudge-forward { root.nudge-right(1, false); }
+        }
+    }
+    modern-hold-canceled(deck, action, slot) => {
+        if deck == 0 {
+            if action == HoldAction.cue { root.temporary-cue(0, false, false); }
+            else if action == HoldAction.hot-cue { root.hold-hot-cue-left(slot, false, 5); }
+            else if action == HoldAction.nudge-backward { root.cancel-nudge-left(); }
+            else if action == HoldAction.nudge-forward { root.cancel-nudge-left(); }
+        } else if deck == 1 {
+            if action == HoldAction.cue { root.temporary-cue(1, false, false); }
+            else if action == HoldAction.hot-cue { root.hold-hot-cue-right(slot, false, 5); }
+            else if action == HoldAction.nudge-backward { root.cancel-nudge-right(); }
+            else if action == HoldAction.nudge-forward { root.cancel-nudge-right(); }
+        }
+    }
+    modern-control-requested(deck, kind, value) => {
+        if deck == -1 && kind == ControlKind.crossfader {
+            root.crossfader = value;
+            root.mixer-changed();
+        } else if deck == 0 {
+            if kind == ControlKind.gain { root.eq-trim-a = value * 24 - 12; root.eq-changed(0); }
+            else if kind == ControlKind.high { root.eq-high-a = value * 36 - 24; root.eq-changed(0); }
+            else if kind == ControlKind.mid { root.eq-mid-a = value * 36 - 24; root.eq-changed(0); }
+            else if kind == ControlKind.low { root.eq-low-a = value * 36 - 24; root.eq-changed(0); }
+            else if kind == ControlKind.filter { root.eq-filter-a = value * 2 - 1; root.eq-changed(0); }
+            else if kind == ControlKind.volume { root.channel-a = value; root.mixer-changed(); }
+            else if kind == ControlKind.pitch { root.pitch-left(root.left-pitch-min + value * (root.left-pitch-max - root.left-pitch-min)); }
+        } else if deck == 1 {
+            if kind == ControlKind.gain { root.eq-trim-b = value * 24 - 12; root.eq-changed(1); }
+            else if kind == ControlKind.high { root.eq-high-b = value * 36 - 24; root.eq-changed(1); }
+            else if kind == ControlKind.mid { root.eq-mid-b = value * 36 - 24; root.eq-changed(1); }
+            else if kind == ControlKind.low { root.eq-low-b = value * 36 - 24; root.eq-changed(1); }
+            else if kind == ControlKind.filter { root.eq-filter-b = value * 2 - 1; root.eq-changed(1); }
+            else if kind == ControlKind.volume { root.channel-b = value; root.mixer-changed(); }
+            else if kind == ControlKind.pitch { root.pitch-right(root.right-pitch-min + value * (root.right-pitch-max - root.right-pitch-min)); }
+        }
+    }
+    modern-jog(deck, phase, x, y) => {
+        if deck >= 0 && deck < 2 {
+            let action = phase == JogPhase.begin ? 0 : (phase == JogPhase.move ? 1 : 2);
+            root.virtual-platter-pointer(deck, action, x, y);
+        }
+    }
+    modern-seek-requested(deck, position) => {
+        if deck == 0 { root.seek-left(position); }
+        else if deck == 1 { root.seek-right(position); }
+    }
+    modern-detail-zoom(deck, step) => {
+        if deck == 0 {
+            if root.left-loaded {
+                let next = step < 0 ? max(2, root.left-detail-window / 2) : min(32, root.left-detail-window * 2);
+                if next != root.left-detail-window { root.left-detail-window = next; root.zoom-left(); }
+            }
+        }
+        else if deck == 1 {
+            if root.right-loaded {
+                let next = step < 0 ? max(2, root.right-detail-window / 2) : min(32, root.right-detail-window * 2);
+                if next != root.right-detail-window { root.right-detail-window = next; root.zoom-right(); }
+            }
+        }
+    }
+    library-toggle() => { root.modern-library-open = !root.modern-library-open; }
     out property <int> visible-layout-slots: root.four-decks ? 4 : 2;
     out property <int> supported-audio-deck-count: 2;
     in-out property <DeckSlotData> deck-c-data;
@@ -99,10 +234,10 @@ export component AppWindow inherits Window {
     callback reveal-library-row(int);
     reveal-library-row(index) => { track-library.reveal-row(index); }
     in-out property <bool> controller-shift;
-    in property <float> left-platter-angle;
-    in property <float> right-platter-angle;
-    in property <bool> left-platter-touched;
-    in property <bool> right-platter-touched;
+    in-out property <float> left-platter-angle: 0;
+    in-out property <float> right-platter-angle: 0;
+    in-out property <bool> left-platter-touched: false;
+    in-out property <bool> right-platter-touched: false;
     in property <bool> left-vinyl: true;
     in property <bool> right-vinyl: true;
     in property <[TableColumn]> table-columns;
@@ -117,19 +252,24 @@ export component AppWindow inherits Window {
     pure callback accepts-track-drop(int, data-transfer) -> bool;
     callback drop-track(int, data-transfer) -> bool;
     in property <int> external-drop-deck: -1;
-    in property <string> library-performance;
+    in-out property <string> library-performance;
     pure callback external-drop-target(float, float) -> int;
     external-drop-target(px, py) => {
         if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open {
             return -1;
         }
-        if px >= left-deck.absolute-position.x / 1px && px < (left-deck.absolute-position.x + left-deck.width) / 1px
-            && py >= left-deck.absolute-position.y / 1px && py < (left-deck.absolute-position.y + left-deck.height) / 1px {
-            return 0;
+        if root.view-mode == LayoutMode.Modern {
+            return modern-view.external-drop-target(px, py);
         }
-        if px >= right-deck.absolute-position.x / 1px && px < (right-deck.absolute-position.x + right-deck.width) / 1px
-            && py >= right-deck.absolute-position.y / 1px && py < (right-deck.absolute-position.y + right-deck.height) / 1px {
-            return 1;
+        if root.view-mode == LayoutMode.Classic {
+            if px >= left-deck.absolute-position.x / 1px && px < (left-deck.absolute-position.x + left-deck.width) / 1px
+                && py >= left-deck.absolute-position.y / 1px && py < (left-deck.absolute-position.y + left-deck.height) / 1px {
+                return 0;
+            }
+            if px >= right-deck.absolute-position.x / 1px && px < (right-deck.absolute-position.x + right-deck.width) / 1px
+                && py >= right-deck.absolute-position.y / 1px && py < (right-deck.absolute-position.y + right-deck.height) / 1px {
+                return 1;
+            }
         }
         return -1;
     }
@@ -207,6 +347,12 @@ export component AppWindow inherits Window {
     in property <bool> right-loaded: false;
     in property <string> left-title: "DEMO TRACK";
     in property <string> right-title: "DEMO TRACK";
+    in property <string> left-artist;
+    in property <string> right-artist;
+    in property <string> left-musical-key;
+    in property <string> right-musical-key;
+    in property <color> left-cover: #00000000;
+    in property <color> right-cover: #00000000;
     in property <string> left-time: "SIMULATION";
     in property <string> right-time: "SIMULATION";
     in property <string> status;
@@ -216,10 +362,10 @@ export component AppWindow inherits Window {
     out property <DeckView> deck-view: root.deck-view-index == 1 ? DeckView.virtual : DeckView.training;
     out property <bool> virtual-decks-visible: root.mc4000-connected && root.deck-view == DeckView.virtual;
     changed mc4000-connected => { root.deck-view-index = root.mc4000-connected ? 1 : 0; }
-    in property <string> left-platter-bpm: "—";
-    in property <string> right-platter-bpm: "—";
-    in property <string> left-platter-time: "—";
-    in property <string> right-platter-time: "—";
+    in-out property <string> left-platter-bpm: "—";
+    in-out property <string> right-platter-bpm: "—";
+    in-out property <string> left-platter-time: "—";
+    in-out property <string> right-platter-time: "—";
     in-out property <bool> controller-reconnect-requested: false;
     in property<string> output-peak-caption:"BUS PEAK —";
     in property<float> output-peak-level:0;
@@ -562,11 +708,33 @@ export component AppWindow inherits Window {
             height: 24px; spacing: 4px;
             LibraryButton {
                 text: "2 DECKS"; active: !root.four-decks;
-                clicked => { root.four-decks = false; }
+                clicked => {
+                    if root.four-decks {
+                        root.four-decks = false;
+                        root.layout-changed();
+                    }
+                }
             }
             LibraryButton {
                 text: "4 SLOTS"; active: root.four-decks;
-                clicked => { root.four-decks = true; }
+                clicked => {
+                    if !root.four-decks {
+                        root.four-decks = true;
+                        root.layout-changed();
+                    }
+                }
+            }
+            ComboBox {
+                width: 130px; model: ["Classic", "Modern"];
+                current-index: root.layout-index;
+                accessible-label: "Performance layout";
+                selected => {
+                    let selected-mode = self.current-index == 1 ? LayoutMode.Modern : LayoutMode.Classic;
+                    if root.view-mode != selected-mode {
+                        root.view-mode = selected-mode;
+                        root.layout-changed();
+                    }
+                }
             }
             Text { text: root.four-decks ? "A/B APP • C/D DATA PLACEHOLDERS" : "A/B APP • TWO-DECK VIEW"; color: DjTheme.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
         }
@@ -594,7 +762,9 @@ export component AppWindow inherits Window {
                 accessible-label:"Audio startup fallback warning";accessible-description:root.audio-startup-warning;}
         }
         GridLayout {
-            height: 344px + (root.four-decks ? 124px : 0px); spacing: 4px;
+            visible: root.view-mode == LayoutMode.Classic;
+            height: root.view-mode == LayoutMode.Classic ? 344px + (root.four-decks ? 124px : 0px) : 0px;
+            spacing: 4px;
             left-deck := CompactDeck {
             row: 0; col: 0;
 
@@ -709,7 +879,132 @@ export component AppWindow inherits Window {
             waveform: root.deck-d-waveform; colors: root.deck-d-colors;
         }
     }
-        Rectangle {
+        modern-view := ModernView {
+            visible: root.view-mode == LayoutMode.Modern;
+            vertical-stretch: root.view-mode == LayoutMode.Modern ? 1 : 0;
+            min-height: root.view-mode == LayoutMode.Modern ? (root.four-decks ? 500px : 420px) : 0px;
+            preferred-height: root.view-mode == LayoutMode.Modern ? (root.four-decks ? 500px : 420px) : 0px;
+            four-slots: root.four-decks;
+            library-open: root.modern-library-open;
+            active-view: true;
+            crossfader: root.crossfader;
+            external-drop-deck: root.external-drop-deck;
+            deck-a-title: root.left-title;
+            deck-a-artist: root.left-artist;
+            deck-a-musical-key: root.left-musical-key;
+            deck-a-time-text: root.left-time;
+            deck-a-bpm: root.left-bpm-caption;
+            deck-a-pitch-percent: root.left-pitch-percent;
+            deck-a-pitch-min: root.left-pitch-min;
+            deck-a-pitch-max: root.left-pitch-max;
+            deck-a-loaded: root.left-loaded;
+            deck-a-playing: root.left-playing;
+            deck-a-loop-active: root.left-loop-active;
+            deck-a-supported: true;
+            deck-a-can-control: root.audio-enabled && !root.left-busy && !root.loading;
+            deck-a-sync-active: root.left-sync-active;
+            deck-a-keylock-active: root.left-keylock;
+            deck-a-quantize-active: root.quantize-enabled;
+            deck-a-overview: root.left-waveform;
+            deck-a-detail: root.left-detail;
+            deck-a-overview-colors: root.left-waveform-colors;
+            deck-a-detail-colors: root.left-detail-colors;
+            deck-a-cues: root.left-hot-cues;
+            deck-a-beats: root.left-beats;
+            deck-a-playhead: root.left-position / 100;
+            deck-a-detail-playhead: root.left-detail-marker / 100;
+            deck-a-detail-start: root.left-detail-start;
+            deck-a-detail-end: root.left-detail-end;
+            deck-a-overview-loop-start: root.left-loop-range.visible ? root.left-loop-range.start : -1;
+            deck-a-overview-loop-end: root.left-loop-range.visible ? root.left-loop-range.end : -1;
+            deck-a-detail-loop-start: root.left-detail-loop-range.visible ? root.left-detail-loop-range.start : -1;
+            deck-a-detail-loop-end: root.left-detail-loop-range.visible ? root.left-detail-loop-range.end : -1;
+            deck-a-gain: (root.eq-trim-a + 12) / 24;
+            deck-a-high: (root.eq-high-a + 24) / 36;
+            deck-a-mid: (root.eq-mid-a + 24) / 36;
+            deck-a-low: (root.eq-low-a + 24) / 36;
+            deck-a-filter: (root.eq-filter-a + 1) / 2;
+            deck-a-volume: root.channel-a;
+            deck-a-meter: root.channel-a-peak-level;
+            deck-a-monitored: root.monitor-cue-a;
+            deck-a-monitor-available: root.monitor-available;
+            deck-a-platter-angle: root.left-platter-angle;
+            deck-a-platter-time: root.left-platter-time;
+            deck-a-platter-touched: root.left-platter-touched;
+            deck-a-platter-position: root.left-position / 100;
+            deck-a-platter-bpm: root.left-platter-bpm;
+            deck-a-platter-pitch-percent: root.left-pitch-percent;
+            deck-a-cover: root.left-cover;
+            deck-b-title: root.right-title;
+            deck-b-artist: root.right-artist;
+            deck-b-musical-key: root.right-musical-key;
+            deck-b-time-text: root.right-time;
+            deck-b-bpm: root.right-bpm-caption;
+            deck-b-pitch-percent: root.right-pitch-percent;
+            deck-b-pitch-min: root.right-pitch-min;
+            deck-b-pitch-max: root.right-pitch-max;
+            deck-b-loaded: root.right-loaded;
+            deck-b-playing: root.right-playing;
+            deck-b-loop-active: root.right-loop-active;
+            deck-b-supported: true;
+            deck-b-can-control: root.audio-enabled && !root.right-busy && !root.loading;
+            deck-b-sync-active: root.right-sync-active;
+            deck-b-keylock-active: root.right-keylock;
+            deck-b-quantize-active: root.quantize-enabled;
+            deck-b-overview: root.right-waveform;
+            deck-b-detail: root.right-detail;
+            deck-b-overview-colors: root.right-waveform-colors;
+            deck-b-detail-colors: root.right-detail-colors;
+            deck-b-cues: root.right-hot-cues;
+            deck-b-beats: root.right-beats;
+            deck-b-playhead: root.right-position / 100;
+            deck-b-detail-playhead: root.right-detail-marker / 100;
+            deck-b-detail-start: root.right-detail-start;
+            deck-b-detail-end: root.right-detail-end;
+            deck-b-overview-loop-start: root.right-loop-range.visible ? root.right-loop-range.start : -1;
+            deck-b-overview-loop-end: root.right-loop-range.visible ? root.right-loop-range.end : -1;
+            deck-b-detail-loop-start: root.right-detail-loop-range.visible ? root.right-detail-loop-range.start : -1;
+            deck-b-detail-loop-end: root.right-detail-loop-range.visible ? root.right-detail-loop-range.end : -1;
+            deck-b-gain: (root.eq-trim-b + 12) / 24;
+            deck-b-high: (root.eq-high-b + 24) / 36;
+            deck-b-mid: (root.eq-mid-b + 24) / 36;
+            deck-b-low: (root.eq-low-b + 24) / 36;
+            deck-b-filter: (root.eq-filter-b + 1) / 2;
+            deck-b-volume: root.channel-b;
+            deck-b-meter: root.channel-b-peak-level;
+            deck-b-monitored: root.monitor-cue-b;
+            deck-b-monitor-available: root.monitor-available;
+            deck-b-platter-angle: root.right-platter-angle;
+            deck-b-platter-time: root.right-platter-time;
+            deck-b-platter-touched: root.right-platter-touched;
+            deck-b-platter-position: root.right-position / 100;
+            deck-b-platter-bpm: root.right-platter-bpm;
+            deck-b-platter-pitch-percent: root.right-pitch-percent;
+            deck-b-cover: root.right-cover;
+            deck-c-title: root.deck-c-data.title;
+            deck-c-bpm: root.deck-c-data.bpm;
+            deck-c-supported: false;
+            deck-c-can-control: false;
+            deck-c-overview: root.deck-c-waveform;
+            deck-c-overview-colors: root.deck-c-colors;
+            deck-d-title: root.deck-d-data.title;
+            deck-d-bpm: root.deck-d-data.bpm;
+            deck-d-supported: false;
+            deck-d-can-control: false;
+            deck-d-overview: root.deck-d-waveform;
+            deck-d-overview-colors: root.deck-d-colors;
+            action(idx, act) => { root.modern-action(idx, act); }
+            hold-started(idx, act, slot) => { root.modern-hold-started(idx, act, slot); }
+            hold-ended(idx, act, slot) => { root.modern-hold-ended(idx, act, slot); }
+            hold-canceled(idx, act, slot) => { root.modern-hold-canceled(idx, act, slot); }
+            control-requested(idx, kind, value) => { root.modern-control-requested(idx, kind, value); }
+            gesture-ended(idx) => { root.modern-gesture-ended(idx); }
+            jog(idx, phase, x, y) => { root.modern-jog(idx, phase, x, y); }
+            seek-requested(idx, value) => { root.modern-seek-requested(idx, value); }
+            detail-zoom(deck, step) => { root.modern-detail-zoom(deck, step); }
+            toggle-library() => { root.library-toggle(); }
+        }
+        if root.view-mode == LayoutMode.Classic || root.left-grid-editing || root.right-grid-editing : Rectangle {
             accessible-role: groupbox; accessible-label: "Shared waveform area";
             min-height: (root.four-decks ? 208px : 148px) + (root.left-grid-editing ? 110px : 0px) + (root.right-grid-editing ? 110px : 0px);
             preferred-height: (root.four-decks ? 244px : 184px) + (root.left-grid-editing ? 110px : 0px) + (root.right-grid-editing ? 110px : 0px);
@@ -824,6 +1119,7 @@ Rectangle {
         }
 
         Rectangle {
+            visible: root.view-mode == LayoutMode.Classic || root.modern-library-open;
             accessible-role: groupbox; accessible-label: "Track library area"; vertical-stretch: 1; min-height: root.virtual-decks-visible ? 100px : 160px;
             HorizontalLayout { spacing: 6px;
                 CratePanel {
@@ -916,12 +1212,12 @@ Rectangle {
             HorizontalLayout {
                 CheckBox {text:"CUE A (pre-fader)";accessible-label:"Deck A headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-a;toggled=>{root.monitor-cue-changed(0);}}
                 CheckBox {text:"CUE B (pre-fader)";accessible-label:"Deck B headphone cue";enabled:root.monitor-available;checked <=> root.monitor-cue-b;toggled=>{root.monitor-cue-changed(1);}}
-                CheckBox {text:"SPLIT CUE";accessible-label:"Split headphone cue";accessible-description:"Cue mono left, master mono right; mix and level remain active";enabled:root.monitor-available;checked <=> root.monitor-split;toggled=>{root.monitor-changed();}}
+                CheckBox {text:"SPLIT CUE";accessible-label:"Split headphone cue";accessible-description:"Cue mono left, master mono right; mix and level remain active";enabled:root.monitor-available;checked <=> root.monitor-split; toggled=>{root.monitor-changed();}}
             }
             Text {text:"HEADPHONE LEVEL " + round(root.monitor-gain) + "%";color:DjTheme.text-primary;}
-            Slider {accessible-label:"Headphone monitor gain";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-gain;changed=>{root.monitor-changed();}}
+            Slider {accessible-label:"Headphone monitor gain";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-gain; changed => { root.monitor-changed(); }}
             Text {text:root.monitor-split ? "CUE mono L ← BALANCE " + round(root.monitor-mix) + "% → MASTER mono R" : "CUE ← MIX " + round(root.monitor-mix) + "% → MASTER";color:DjTheme.text-primary;}
-            Slider {accessible-label:"Headphone cue master mix";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-mix;changed=>{root.monitor-changed();}}
+            Slider {accessible-label:"Headphone cue master mix";enabled:root.monitor-available;minimum:0;maximum:100;value <=> root.monitor-mix; changed => { root.monitor-changed(); }}
             Text {text:"Settings follow audio profile status. MC4000 Monitor Level / Pan control these sliders.";color:#a6b4c8;}
         }
     }
@@ -940,7 +1236,7 @@ Rectangle {
                 Button {text:"CLEAR";accessible-label:"Sampler slot "+(index+1)+" clear";enabled:slot.occupied || slot.busy;clicked=>{root.sampler-action(index,3,false);}}
             }
             Text {text:"SAMPLER LEVEL "+round(root.sampler-gain)+"% · One-shot / retrigger · 4 voices";color:DjTheme.text-secondary;}
-            Slider {minimum:0;maximum:100;value <=> root.sampler-gain;enabled:root.sampler-ready;accessible-label:"Sampler master level";changed=>{root.sampler-level();}}
+            Slider {minimum:0;maximum:100;value <=> root.sampler-gain;enabled:root.sampler-ready;accessible-label:"Sampler master level"; changed => { root.sampler-level(); }}
             Text {text:"Mono/stereo, up to10s /480000 source frames. Restored samples stay stopped.";color:#a6b4c8;}
         }
     }
@@ -953,8 +1249,8 @@ Rectangle {
             HorizontalLayout {Text {text:root.fx-status;color:DjTheme.text-primary;} Button {text:"CLOSE FX";accessible-label:"Close delay effects";clicked=>{root.fx-tap-cancel(0);root.fx-tap-cancel(1);root.fx-open=false;}}}
             HorizontalLayout {
                 spacing:8px;
-                FxStrip {deck:"A";summary:root.fx-summary-a;selected-slot <=> root.fx-selected-a;effect-kind <=> root.fx-kind-a;legacy <=> root.fx-legacy-a;slot-action(slot,action,value)=>{root.fx-slot-action(0,slot,action,value);}legacy-changed(value)=>{root.fx-legacy-changed(0,value);}time-base <=> root.fx-base-a;division <=> root.fx-division-a;timing:root.fx-timing-a;timing-changed(base,division)=>{root.fx-timing-changed(0,base,division);}tap(held)=>{root.fx-tap(0,held);}tap-cancel=>{root.fx-tap-cancel(0);}ready:root.quantize-preferences-ready;active <=> root.fx-active-a;time <=> root.fx-time-a;feedback <=> root.fx-feedback-a;wet <=> root.fx-wet-a;slot <=> root.fx-slot-a;changed=>{root.fx-changed(0);}preset(slot,save)=>{root.fx-preset(0,slot,save);}}
-                FxStrip {deck:"B";summary:root.fx-summary-b;selected-slot <=> root.fx-selected-b;effect-kind <=> root.fx-kind-b;legacy <=> root.fx-legacy-b;slot-action(slot,action,value)=>{root.fx-slot-action(1,slot,action,value);}legacy-changed(value)=>{root.fx-legacy-changed(1,value);}time-base <=> root.fx-base-b;division <=> root.fx-division-b;timing:root.fx-timing-b;timing-changed(base,division)=>{root.fx-timing-changed(1,base,division);}tap(held)=>{root.fx-tap(1,held);}tap-cancel=>{root.fx-tap-cancel(1);}ready:root.quantize-preferences-ready;active <=> root.fx-active-b;time <=> root.fx-time-b;feedback <=> root.fx-feedback-b;wet <=> root.fx-wet-b;slot <=> root.fx-slot-b;changed=>{root.fx-changed(1);}preset(slot,save)=>{root.fx-preset(1,slot,save);}}
+                FxStrip {deck:"A";summary:root.fx-summary-a;selected-slot <=> root.fx-selected-a;effect-kind <=> root.fx-kind-a;legacy <=> root.fx-legacy-a;slot-action(slot,action,value)=>{root.fx-slot-action(0,slot,action,value);}legacy-changed(value)=>{root.fx-legacy-changed(0,value);}time-base <=> root.fx-base-a;division <=> root.fx-division-a;timing:root.fx-timing-a;timing-changed(base,division)=>{root.fx-timing-changed(0,base,division);}tap(held)=>{root.fx-tap(0,held);}tap-cancel=>{root.fx-tap-cancel(0);}ready:root.quantize-preferences-ready;active <=> root.fx-active-a;time <=> root.fx-time-a;feedback <=> root.fx-feedback-a;wet <=> root.fx-wet-a;slot <=> root.fx-slot-a;changed => {root.fx-changed(0);}preset(slot,save)=>{root.fx-preset(0,slot,save);}}
+                FxStrip {deck:"B";summary:root.fx-summary-b;selected-slot <=> root.fx-selected-b;effect-kind <=> root.fx-kind-b;legacy <=> root.fx-legacy-b;slot-action(slot,action,value)=>{root.fx-slot-action(1,slot,action,value);}legacy-changed(value)=>{root.fx-legacy-changed(1,value);}time-base <=> root.fx-base-b;division <=> root.fx-division-b;timing:root.fx-timing-b;timing-changed(base,division)=>{root.fx-timing-changed(1,base,division);}tap(held)=>{root.fx-tap(1,held);}tap-cancel=>{root.fx-tap-cancel(1);}ready:root.quantize-preferences-ready;active <=> root.fx-active-b;time <=> root.fx-time-b;feedback <=> root.fx-feedback-b;wet <=> root.fx-wet-b;slot <=> root.fx-slot-b;changed => {root.fx-changed(1);}preset(slot,save)=>{root.fx-preset(1,slot,save);}}
             }
         }
         }

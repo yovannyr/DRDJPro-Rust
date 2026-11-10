@@ -1,0 +1,308 @@
+import { ModernTheme } from "modern-theme.slint";
+import { DeckAction, HoldAction, ControlKind, JogPhase } from "modern-state.slint";
+import { HotCueRow } from "theme.slint";
+import { HoldButton, ValueRail } from "modern-controls.slint";
+import { ModernOverviewStrip, ModernDetailWaveform } from "modern-waveform.slint";
+
+export component ModernTrackHeader inherits Rectangle {
+    in property <color> cover;
+    in property <color> cover-dominant: #333333;
+    in property <string> title: "";
+    in property <string> artist: "";
+    in property <string> time-text: "";
+    in property <string> musical-key: "";
+    in property <bool> loaded: false;
+    in property <color> accent;
+    in property <string> label;
+    in property <[float]> peaks;
+    in property <[color]> colors;
+    in property <[HotCueRow]> cues;
+    in property <float> playhead: 0.5;
+    in property <float> loop-start: -1;
+    in property <float> loop-end: -1;
+    callback seek(float);
+    background: ModernTheme.surface;
+    height: 102px;
+    HorizontalLayout {
+        padding: 10px; spacing: 9px;
+        Rectangle {
+            width: 58px; height: 58px; background: #202831; border-width: 1px; border-color: root.accent;
+            Rectangle {
+                background: root.cover-dominant; border-radius: 4px; opacity: 0.7;
+            }
+            if !root.loaded : Text { text: root.label; color: root.accent; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        VerticalLayout {
+            spacing: 3px;
+            HorizontalLayout {
+                Text { text: root.label; color: root.accent; width: 22px; font-size: 12px; font-weight: 700; }
+                Text { text: root.title == "" ? "No track loaded" : root.title; color: ModernTheme.text; font-size: 15px; font-weight: 700; overflow: elide; }
+                Text { width: 180px; text: root.time-text == "" ? "—" : root.time-text; color: ModernTheme.muted; font-size: 10px; horizontal-alignment: right; overflow: elide; }
+            }
+            HorizontalLayout {
+                Text { text: root.artist == "" ? "—" : root.artist; color: ModernTheme.muted; font-size: 11px; overflow: elide; }
+                Text { width: 60px; text: root.musical-key == "" ? "KEY —" : "KEY " + root.musical-key; color: root.accent; font-size: 10px; horizontal-alignment: right; }
+            }
+            ModernOverviewStrip {
+                height: 29px; horizontal-stretch: 1;
+                deck-label: root.label;
+                accent: root.accent;
+                peaks: root.peaks;
+                colors: root.colors;
+                cues: root.cues;
+                playhead: root.playhead;
+                loop-start: root.loop-start;
+                loop-end: root.loop-end;
+                enabled: root.loaded;
+                seek(position) => { root.seek(position * 100); }
+            }
+        }
+    }
+}
+
+export component ModernPlatter inherits Rectangle {
+    in property <color> cover;
+    in property <bool> loaded: false;
+    in property <color> accent;
+    in property <bool> enabled: false;
+    in property <string> bpm: "";
+    in property <string> time: "";
+    in property <float> pitch-percent: 0.0;
+    in property <float> position: 0.5;
+    in property <float> angle: 0.0;
+    in property <bool> touched: false;
+    in property <string> deck-label: "";
+    in property <bool> playing: false;
+    accessible-role: image;
+    accessible-label: "Deck " + root.deck-label + " modern platter";
+    accessible-description: !root.loaded ? "No track data. Transport and scratch unavailable." : root.bpm + " BPM, pitch " + (root.pitch-percent > 0 ? "+" : "") + round(root.pitch-percent * 100) / 100 + "%, " + root.time + ", " + round(root.position * 100) + "%, " + (root.touched ? "Jog touched" : (root.playing ? "Playing" : "Paused")) + ", rotation " + round(root.angle) + " degrees.";
+    callback jog(JogPhase, float, float);
+    background: #06080b; border-width: 2px; border-color: #45505d;
+    border-radius: self.width / 2; clip: true;
+    Rectangle {
+        x: 7px; y: 7px; width: parent.width - 14px; height: parent.height - 14px;
+        border-radius: self.width / 2; background: #111820; border-width: 1px; border-color: #2b3541;
+    }
+    // Cover color accent on platter (static indicator, position marker rotates)
+    Rectangle {
+        x: parent.width * 0.42; y: 10px;
+        width: parent.width * 0.16; height: 4px;
+        border-radius: 2px;
+        visible: root.cover != #000000;
+        background: root.cover; opacity: 0.7;
+    }
+    // Center label area with track info
+    Rectangle {
+        x: parent.width * 0.23; y: parent.height * 0.23;
+        width: parent.width * 0.54; height: parent.height * 0.54;
+        border-radius: self.width / 2; clip: true; background: ModernTheme.surface; border-width: 1px; border-color: root.accent;
+        VerticalLayout {
+            padding-left: 6px; padding-right: 6px; padding-top: 4px; padding-bottom: 4px; spacing: 0px;
+            Text { text: root.bpm; font-size: parent.height > 80px ? 16px : 12px; font-weight: 800; color: ModernTheme.text; horizontal-alignment: center; }
+            Text { text: "BPM"; font-size: 8px; color: ModernTheme.muted; horizontal-alignment: center; }
+            Text { text: root.loaded ? (root.pitch-percent > 0 ? "+" : "") + round(root.pitch-percent * 100) / 100 + "%" : "—"; font-size: 10px; color: ModernTheme.text; horizontal-alignment: center; }
+            Text { text: root.time; font-size: parent.height > 80px ? 10px : 8px; font-weight: 700; color: ModernTheme.text; horizontal-alignment: center; }
+            Text { text: root.loaded ? round(root.position * 100) + "%" : "—"; font-size: 8px; color: ModernTheme.muted; horizontal-alignment: center; }
+        }
+    }
+    // Rotating position marker (exact VirtualPlatter formula)
+    Rectangle {
+        x: (parent.width / 2 - 2px) + (parent.width / 2 - 6px) * sin(root.angle * 1deg);
+        y: (parent.height / 2 - 2px) - (parent.height / 2 - 6px) * cos(root.angle * 1deg);
+        width: 4px; height: 4px; border-radius: 2px;
+        background: root.touched ? #ffffff : #ffce77;
+        accessible-role: image;
+        accessible-label: root.deck-label + " position marker at " + round(root.angle) + " degrees";
+    }
+    property <bool> engaged: false;
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.cancel || event.kind == PointerEventKind.up {
+                if root.engaged { root.engaged = false; root.jog(JogPhase.cancel, 0, 0); }
+            } else if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                if !root.engaged {
+                    keys.focus();
+                    root.engaged = true;
+                    root.jog(JogPhase.begin, (self.mouse-x - root.width / 2) / 1px, (self.mouse-y - root.height / 2) / 1px);
+                }
+            }
+        }
+        moved => { if root.engaged { root.jog(JogPhase.move, (self.mouse-x - root.width / 2) / 1px, (self.mouse-y - root.height / 2) / 1px); } }
+    }
+    changed enabled => { if !root.enabled && root.engaged { root.engaged = false; root.jog(JogPhase.cancel, 0, 0); } }
+    keys := FocusScope {
+        width: 0; height: 0;
+        focus-lost(reason) => { if root.engaged { root.engaged = false; root.jog(JogPhase.cancel, 0, 0); } }
+    }
+}
+
+// Single-deck performance panel with jogwheel, transport, pads, tempo.
+export component PerformanceDeck inherits Rectangle {
+    in property <color> cover;
+    in property <string> title: "";
+    in property <string> bpm: "";
+    in property <float> pitch-percent: 0.0;
+    in property <float> pitch-min: -50.0;
+    in property <float> pitch-max: 100.0;
+    in property <bool> loaded: false;
+    in property <bool> playing: false;
+    in property <bool> loop-active: false;
+    in property <bool> supported: true;
+    in property <bool> can-control: true;
+    in property <bool> external-hover: false;
+    in property <[HotCueRow]> cues;
+    in property <color> accent;
+    in property <string> label;
+    in property <int> deck-index;
+    in property <bool> active-view: true;
+    in property <bool> compact: false;
+    property <bool> controllable: root.active-view && root.supported && root.can-control;
+    callback action(int, DeckAction);
+    callback hold-started(int, HoldAction, int);
+    callback hold-ended(int, HoldAction, int);
+    callback hold-canceled(int, HoldAction, int);
+    callback control-requested(int, ControlKind, float);
+    callback gesture-ended(int);
+    callback jog(int, JogPhase, float, float);
+    in property <float> platter-angle: 0.0;
+    in property <string> platter-time: "";
+    in property <bool> platter-touched: false;
+    in property <float> platter-position: 0.5;
+    in property <string> platter-bpm: "";
+    in property <float> platter-pitch-percent: 0.0;
+
+    background: ModernTheme.surface;
+    border-width: 1px;
+    border-color: root.external-hover ? root.accent : ModernTheme.line;
+    min-width: 210px;
+    VerticalLayout {
+        padding: 10px; spacing: 8px;
+        HorizontalLayout {
+            Text { text: "DECK " + root.label; color: root.accent; font-size: 11px; font-weight: 700; }
+            Text { text: !root.supported ? "UNSUPPORTED" : (root.can-control ? "" : "READ ONLY"); color: ModernTheme.muted; font-size: 9px; horizontal-alignment: right; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle {
+                horizontal-stretch: 1;
+                min-height: root.compact ? 112px : 190px;
+                preferred-height: root.compact ? 132px : 212px;
+                ModernPlatter {
+                    width: min(parent.width, parent.height); height: self.width;
+                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    cover: root.cover; loaded: root.loaded; accent: root.accent;
+                    enabled: root.controllable && root.loaded;
+                    angle: root.platter-angle;
+                    time: root.platter-time;
+                    touched: root.platter-touched;
+                    position: root.platter-position;
+                    bpm: root.platter-bpm;
+                    pitch-percent: root.platter-pitch-percent;
+                    playing: root.playing;
+                    deck-label: root.label;
+                    jog(phase, x, y) => { root.jog(root.deck-index, phase, x, y); }
+                }
+            }
+            VerticalLayout {
+                spacing: 4px; width: 44px;
+                Text { text: "TEMPO"; color: ModernTheme.muted; font-size: 9px; horizontal-alignment: center; }
+                Text { text: root.bpm == "" ? "—" : root.bpm; color: root.accent; font-size: 12px; font-weight: 700; horizontal-alignment: center; }
+                ValueRail {
+                    width: 22px; horizontal-stretch: 0;
+                    value: clamp((root.pitch-percent - root.pitch-min) / max(0.000001, root.pitch-max - root.pitch-min), 0, 1);
+                    enabled: root.controllable && root.loaded; label: "Pitch";
+                    requested(value) => { root.control-requested(root.deck-index, ControlKind.pitch, value); }
+                    gesture-ended => { root.gesture-ended(root.deck-index); }
+                }
+                Text { text: root.loaded ? "" + round(root.pitch-percent * 10) / 10 + "%" : "—"; color: ModernTheme.muted; font-size: 10px; horizontal-alignment: center; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 5px;
+            HoldButton {
+                text: "CUE"; horizontal-stretch: 1; accent: root.accent;
+                enabled: root.controllable && root.loaded;
+                started => { root.hold-started(root.deck-index, HoldAction.cue, -1); }
+                ended => { root.hold-ended(root.deck-index, HoldAction.cue, -1); }
+                canceled => { root.hold-canceled(root.deck-index, HoldAction.cue, -1); }
+            }
+            HoldButton {
+                text: root.playing ? "PAUSE" : "PLAY"; horizontal-stretch: 1;
+                active: root.playing; accent: root.accent;
+                enabled: root.controllable && root.loaded;
+                started => { root.action(root.deck-index, DeckAction.play-pause); }
+                canceled => { }
+            }
+            HoldButton {
+                text: "LOAD"; accent: root.accent;
+                accessibility-label: "DECK " + root.label + " load track";
+                enabled: root.controllable;
+                started => { root.action(root.deck-index, DeckAction.load); }
+                canceled => { }
+            }
+        }
+        VerticalLayout {
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 4px;
+                for slot in [0, 1, 2, 3] : HoldButton {
+                    horizontal-stretch: 1;
+                    text: "" + (slot + 1) + (slot < root.cues.length && root.cues[slot].occupied ? " " + root.cues[slot].name : "");
+                    accent: slot < root.cues.length ? root.cues[slot].tint : root.accent;
+                    active: slot < root.cues.length && root.cues[slot].occupied;
+                    enabled: root.controllable && root.loaded;
+                    started => { root.hold-started(root.deck-index, HoldAction.hot-cue, slot); }
+                    ended => { root.hold-ended(root.deck-index, HoldAction.hot-cue, slot); }
+                    canceled => { root.hold-canceled(root.deck-index, HoldAction.hot-cue, slot); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                for slot in [4, 5, 6, 7] : HoldButton {
+                    horizontal-stretch: 1;
+                    text: "" + (slot + 1) + (slot < root.cues.length && root.cues[slot].occupied ? " " + root.cues[slot].name : "");
+                    accent: slot < root.cues.length ? root.cues[slot].tint : root.accent;
+                    active: slot < root.cues.length && root.cues[slot].occupied;
+                    enabled: root.controllable && root.loaded;
+                    started => { root.hold-started(root.deck-index, HoldAction.hot-cue, slot); }
+                    ended => { root.hold-ended(root.deck-index, HoldAction.hot-cue, slot); }
+                    canceled => { root.hold-canceled(root.deck-index, HoldAction.hot-cue, slot); }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 4px;
+            HoldButton {
+                text: "LOOP"; active: root.loop-active; accent: root.accent;
+                enabled: root.controllable && root.loaded;
+                started => { root.action(root.deck-index, DeckAction.loop-toggle); }
+                canceled => { }
+            }
+            HoldButton {
+                text: "1/2"; accent: root.accent;
+                enabled: root.controllable && root.loaded;
+                started => { root.action(root.deck-index, DeckAction.loop-half); }
+                canceled => { }
+            }
+            HoldButton {
+                text: "x2"; accent: root.accent;
+                enabled: root.controllable && root.loaded;
+                started => { root.action(root.deck-index, DeckAction.loop-double); }
+                canceled => { }
+            }
+            HoldButton {
+                text: "FX"; accent: root.accent;
+                enabled: root.controllable && root.loaded;
+                started => { root.action(root.deck-index, DeckAction.fx); }
+                canceled => { }
+            }
+            HoldButton {
+                text: "EDIT"; accent: root.accent;
+                enabled: root.controllable && root.loaded;
+                started => { root.action(root.deck-index, DeckAction.edit); }
+                canceled => { }
+            }
+        }
+    }
+}
