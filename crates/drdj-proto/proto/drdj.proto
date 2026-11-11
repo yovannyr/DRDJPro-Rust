@@ -1,0 +1,74 @@
+syntax = "proto2";
+package drdj.v1;
+import "google/protobuf/timestamp.proto";
+
+// Replaces the unreleased lossy prototype; those bytes are not this protocol.
+// Once published, never reuse tags or change their wire type.
+message TrackMessage {
+  required string title = 1;
+  required string artist = 2;
+  required string album = 3;
+  required double bpm = 4;
+  required string key = 5;
+  required uint64 duration_ms = 6;
+  required string file_path = 7;
+  required bytes cover_art_bytes = 8;
+  required string analysis_hash = 9;
+  required float tempo = 10;
+  optional BeatGridMessage beat_grid = 11;
+  optional double key_change = 12 [default = 0];
+  repeated CueMessage cues = 13;
+  repeated LoopMessage loops = 14;
+}
+message BeatPointMessage {
+  required uint64 position_ns = 1;
+  required float confidence = 2;
+}
+message WarpMarkerMessage {
+  required uint64 beat = 1;
+  required uint64 position_ns = 2;
+}
+message TempoChangeMessage {
+  required uint64 beat = 1;
+  required double bpm = 2;
+}
+message MeterChangeMessage {
+  required uint32 bar = 1;
+  required uint32 beats = 2;
+  required uint32 denominator = 3;
+}
+message BeatGridMessage {
+  required double bpm = 1;
+  required uint64 anchor_ns = 2;
+  required uint32 beats_per_bar = 3;
+  required uint32 meter_denominator = 4;
+  repeated WarpMarkerMessage warp_markers = 5;
+  repeated TempoChangeMessage tempo_changes = 6;
+  repeated MeterChangeMessage meter_changes = 7;
+  repeated BeatPointMessage points = 8;
+}
+message LoopMessage {
+  required uint32 start_bar = 1;
+  required uint32 end_bar = 2;
+  required uint64 start_beat = 3;
+  required uint64 end_beat = 4;
+  required string quantization = 5;
+}
+message CueMessage {
+  required uint64 position_ms = 1;
+  required string label = 2;
+  required uint32 color = 3;
+  required uint32 point_index = 4;
+}
+message PlaylistMessage {
+  required string name = 1;
+  repeated string track_order = 2;
+  optional google.protobuf.Timestamp created_at = 3;
+  optional google.protobuf.Timestamp modified_at = 4;
+}
+message SyncStateMessage {
+  required uint64 revision = 1;
+  optional google.protobuf.Timestamp last_sync = 2;
+  required bytes pending_changes = 3;
+  required uint64 server_version = 4;
+}

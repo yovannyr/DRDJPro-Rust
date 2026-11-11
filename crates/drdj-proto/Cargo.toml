@@ -3,13 +3,21 @@ name = "drdj-proto"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
-description = "ProtoBuf-like binary serialization for DRDJPro-Rust — efficient sync for cloud, controller, and cross-process transport"
+description = "Schema-generated Protocol Buffers for DRDJPro-Rust"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-byteorder = "1.5"
 thiserror = "2"
+prost = "0.13"
+prost-reflect = "0.14"
+pbjson = "0.7"
+pbjson-types = "0.7"
+serde_json = "1.0"
+
+[build-dependencies]
+prost-build = "0.13"
+pbjson-build = "0.7"
+protoc-bin-vendored = "3"
 
 [dev-dependencies]
-tempfile = "3"
-serde_json = "1.0"
+prost-types = "0.13"

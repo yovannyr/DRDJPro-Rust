@@ -2,7 +2,7 @@
 
 **Feature Branch**: `27-protobuf-serialization`  
 **Created**: 2026-11-11  
-**Status**: Planned  
+**Status**: In progress — generated schemas/wire codec; domain integration and acceptance pending
 **Input**: Serato DJ Pro uses Protocol Buffers for efficient data serialization between components and cloud-sync. DRDJPro-Rust uses serde + JSON for all serialization but lacks ProtoBuf for performance-critical paths.
 
 ## User Scenarios & Testing *(mandatory)*
