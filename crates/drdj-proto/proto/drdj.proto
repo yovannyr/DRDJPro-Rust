@@ -13,6 +13,8 @@ message TrackMessage {
   required uint64 duration_ms = 6;
   required string file_path = 7;
   required bytes cover_art_bytes = 8;
+  // Deprecated transport fingerprint: accepted with a runtime warning by the
+  // checked codecs. Kept at tag 9 for compatibility; never reuse this number.
   required string analysis_hash = 9;
   required float tempo = 10;
   optional BeatGridMessage beat_grid = 11;
@@ -53,22 +55,106 @@ message LoopMessage {
   required uint64 start_beat = 3;
   required uint64 end_beat = 4;
   required string quantization = 5;
+  optional uint64 start_ns = 10;
+  optional uint64 end_ns = 11;
+  optional string name = 12;
+  optional uint32 slot = 13;
 }
 message CueMessage {
   required uint64 position_ms = 1;
   required string label = 2;
   required uint32 color = 3;
   required uint32 point_index = 4;
+  optional uint64 position_ns = 10;
+  optional uint32 slot = 11;
 }
 message PlaylistMessage {
   required string name = 1;
   repeated string track_order = 2;
   optional google.protobuf.Timestamp created_at = 3;
   optional google.protobuf.Timestamp modified_at = 4;
+  optional NativePlaylistMessage native = 10;
 }
 message SyncStateMessage {
   required uint64 revision = 1;
   optional google.protobuf.Timestamp last_sync = 2;
   required bytes pending_changes = 3;
   required uint64 server_version = 4;
+}
+message SyncRequest {
+  required uint32 schema_version = 1;
+  repeated TrackMessage updates = 2;
+  optional SyncStateMessage state = 3;
+  repeated NativeTrackMessage native_updates = 4;
+  repeated PlaylistMessage playlists = 5;
+}
+message SyncResponse {
+  required uint32 schema_version = 1;
+  repeated TrackMessage updates = 2;
+  optional SyncStateMessage state = 3;
+  optional string version_error = 4;
+  repeated NativeTrackMessage native_updates = 5;
+  repeated PlaylistMessage playlists = 6;
+}
+message PadStateMessage {
+  required uint32 index = 1;
+  required bool active = 2;
+  required uint32 color = 3;
+}
+message PadBankMessage {
+  repeated PadStateMessage pads = 1;
+}
+// Complete native snapshots: optional presence and fixed-slot identity matter.
+message AnalysisMessage {
+  required string file_path = 1;
+  required float bpm = 2;
+  required string musical_key = 3;
+  required float gain = 4;
+  required bytes waveform_overview = 5;
+  required bool is_corrupt = 6;
+}
+message NativeMetadataMessage {
+  optional AnalysisMessage analysis = 1;
+  required string title = 2;
+  required string artist = 3;
+  required string album = 4;
+  optional uint64 duration_ms = 5;
+  required bool duration_exact = 6;
+  required bool scanned = 7;
+  optional string error = 8;
+}
+message NativeTrackMessage {
+  required sint32 id = 1;
+  required string name = 2;
+  required string format = 3;
+  required bool available = 4;
+  required NativeMetadataMessage metadata = 5;
+  required bytes native_path = 6;
+  required string path_encoding = 7;
+  optional BeatGridMessage grid = 8;
+  repeated CueMessage hot_cues = 9;
+  repeated LoopMessage saved_loops = 10;
+}
+enum PlaylistKind {
+  PLAYLIST_KIND_UNKNOWN = 0;
+  PLAYLIST_KIND_USER = 1;
+  PLAYLIST_KIND_SMART = 2;
+  PLAYLIST_KIND_RECENTLY_ADDED = 3;
+  PLAYLIST_KIND_MOST_PLAYED = 4;
+  PLAYLIST_KIND_QUEUE = 5;
+}
+message PlaylistEntryMessage {
+  required uint64 entry_id = 1;
+  required uint64 track_id = 2;
+  required uint64 position = 3;
+  required google.protobuf.Timestamp added_at = 4;
+}
+message NativePlaylistMessage {
+  required uint64 id = 1;
+  required PlaylistKind kind = 2;
+  repeated PlaylistEntryMessage entries = 3;
+  required bool is_playing = 4;
+  required uint64 current_index = 5;
+  optional string description = 6;
+  optional string cover_art_path = 7;
 }

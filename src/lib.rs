@@ -88,6 +88,8 @@ pub mod mixing;
 mod library_manager;
 
 mod playlist_manager;
+/// Lossless conversions for the existing playlist contract, outside audio callbacks.
+pub mod protobuf_playlist;
 
 mod smart_playlist;
 

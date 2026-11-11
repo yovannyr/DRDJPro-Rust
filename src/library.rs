@@ -1,4 +1,5 @@
 //! Session library state. File inspection runs on the control worker, not the UI/audio thread.
+pub mod protobuf;
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
