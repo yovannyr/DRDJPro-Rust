@@ -1,7 +1,10 @@
 //! USB discovery without interface claims, transfers or audio-thread I/O.
 //! Native contexts are constructed and used inside the discovery worker.
+mod io;
 mod native;
+mod native_io;
 mod worker;
+pub use io::*;
 pub use native::NativeDiscovery;
 use std::collections::BTreeMap;
 use thiserror::Error;
