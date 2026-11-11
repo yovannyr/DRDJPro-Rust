@@ -191,6 +191,9 @@ pub mod presentation;
 mod atomic_float;
 mod harmony;
 
+/// Crash handler: minidump generation, stack trace capture, and upload queuing.
+pub mod crash_handler;
+
 /// Chroma-based key detection on caller-supplied PCM.
 pub mod tonal_analysis {
     pub use crate::harmony::{analyze_pcm, KeyAnalysis};
