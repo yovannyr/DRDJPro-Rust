@@ -1,4 +1,4 @@
-use slint::{ModelRc, Timer, TimerMode, VecModel};
+﻿use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
 mod audio;
@@ -42,6 +42,7 @@ mod saved_loops;
 mod sync_control;
 mod table_columns;
 mod tempo;
+mod cover_art;
 #[cfg(test)]
 mod test_support;
 mod track_metadata;

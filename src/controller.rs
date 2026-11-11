@@ -606,6 +606,42 @@ impl AudioController {
             )
             .into(),
         );
+        let weak = Rc::downgrade(&controller);
+        ui.on_layout_changed(move || {
+            let Some(controller) = weak.upgrade() else {
+                return;
+            };
+            for id in [DeckId::A, DeckId::B] {
+                controller.cancel_nudge(id);
+                controller.release_platter(id);
+                controller.release_censor(id);
+                if let Err(error) = controller.cancel_temporary_hold(id) {
+                    if let Some(ui) = controller.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
+                }
+                let _ = controller.seek_hold(id, -1, false);
+                let _ = controller.seek_hold(id, 1, false);
+                if let Err(error) = controller.set_loop_jog(id, 0) {
+                    if let Some(ui) = controller.ui.upgrade() {
+                        ui.set_status(error.into());
+                    }
+                }
+                let session =
+                    controller.hot_cue_holds.borrow_mut()[AudioController::grid_index(id)].take();
+                if let Some(session) = session {
+                    if let Err(error) = controller.finish_hot_cue_session(id, session) {
+                        if let Some(ui) = controller.ui.upgrade() {
+                            ui.set_status(error.into());
+                        }
+                    }
+                }
+            }
+            if let Some(ui) = controller.ui.upgrade() {
+                ui.set_active_hot_cue_key(-1);
+            }
+            controller.refresh();
+        });
         ui.on_track_transfer(|path| {
             let mut transfer = slint::DataTransfer::default();
             transfer.set_file_paths([std::path::PathBuf::from(path.as_str())]);
@@ -8353,6 +8389,23 @@ impl AudioController {
         for id in [DeckId::A, DeckId::B] {
             let s = self.engine.borrow().snapshot(id);
             let index = Self::grid_index(id);
+            let metadata = s.path.as_deref().and_then(|path| {
+                let library = self.library.borrow();
+                library
+                    .track_id_for_path(path)
+                    .and_then(|track_id| library.track_by_id(track_id))
+                    .map(|track| {
+                        (
+                            track.metadata.artist.clone(),
+                            track
+                                .metadata
+                                .analysis
+                                .as_ref()
+                                .map_or_else(String::new, |analysis| analysis.musical_key.clone()),
+                        )
+                    })
+            });
+            let (artist, musical_key) = metadata.unwrap_or_else(|| (String::new(), String::new()));
             let desired = s.detail.as_ref().map_or(s.requested_speed, |source| {
                 self.desired_pitch(id, source, s.requested_speed)
             });
@@ -8817,8 +8870,20 @@ impl AudioController {
             match id {
                 DeckId::A => {
                     ui.set_left_title(s.title.into());
+                    ui.set_left_artist(artist.into());
+                    ui.set_left_musical_key(musical_key.into());
                     ui.set_left_loaded(s.loaded);
                     ui.set_left_playing(s.playing);
+                    let cc = s.cover_color;
+                    ui.set_left_cover(if cc == 0x00000000 {
+                        slint::Color::from_rgb_u8(0, 0, 0)
+                    } else {
+                        slint::Color::from_rgb_u8(
+                            ((cc >> 16) & 0xFF) as u8,
+                            ((cc >> 8) & 0xFF) as u8,
+                            (cc & 0xFF) as u8,
+                        )
+                    });
                     ui.set_left_position(percent);
                     ui.set_left_platter_time(
                         format!(
@@ -8837,8 +8902,20 @@ impl AudioController {
                 }
                 DeckId::B => {
                     ui.set_right_title(s.title.into());
+                    ui.set_right_artist(artist.into());
+                    ui.set_right_musical_key(musical_key.into());
                     ui.set_right_loaded(s.loaded);
                     ui.set_right_playing(s.playing);
+                    let cc = s.cover_color;
+                    ui.set_right_cover(if cc == 0x00000000 {
+                        slint::Color::from_rgb_u8(0, 0, 0)
+                    } else {
+                        slint::Color::from_rgb_u8(
+                            ((cc >> 16) & 0xFF) as u8,
+                            ((cc >> 8) & 0xFF) as u8,
+                            (cc & 0xFF) as u8,
+                        )
+                    });
                     ui.set_right_position(percent);
                     ui.set_right_platter_time(
                         format!(
@@ -8936,6 +9013,39 @@ fn precise_time(time: std::time::Duration) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn modern_layout_actions_preserve_transport_and_cancel_held_nudge() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
+        let file = wav_file(16384, 48000 * 3);
+        engine.load_a(file.path()).unwrap();
+        let controller = AudioController::wire(
+            &ui,
+            Rc::clone(&engine),
+            Arc::new(|| None),
+            Arc::new(|| None),
+        );
+
+        assert_eq!(ui.get_layout_index(), 0);
+        ui.set_view_mode(crate::LayoutMode::Modern);
+        assert_eq!(ui.get_layout_index(), 1);
+        ui.invoke_modern_action(0, crate::DeckAction::PlayPause);
+        assert!(engine.snapshot(DeckId::A).playing);
+
+        ui.invoke_modern_hold_started(0, crate::HoldAction::NudgeForward, -1);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 1);
+        ui.set_view_mode(crate::LayoutMode::Classic);
+        ui.invoke_layout_changed();
+        assert_eq!(ui.get_layout_index(), 0);
+        assert_eq!(engine.snapshot(DeckId::A).nudge_direction, 0);
+        assert!(engine.snapshot(DeckId::A).playing);
+
+        drop(controller);
+        drop(ui);
+    }
+
     #[test]
     fn split_cue_gui_midi_and_hardware_meter_liveness() {
         i_slint_backend_testing::init_no_event_loop();

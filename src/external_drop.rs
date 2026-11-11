@@ -305,6 +305,30 @@ mod tests {
     }
 
     #[test]
+    fn modern_layout_routes_external_drops_to_supported_decks() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.window().set_size(slint::LogicalSize::new(1280., 860.));
+        ui.set_audio_enabled(true);
+        ui.set_view_mode(crate::LayoutMode::Modern);
+        ui.show().unwrap();
+        for (expected_deck, label) in [(0, "DECK A load track"), (1, "DECK B load track")] {
+            let button =
+                i_slint_backend_testing::ElementHandle::find_by_accessible_label(&ui, label)
+                    .next()
+                    .unwrap();
+            let origin = button.absolute_position();
+            let actual_deck = ui.invoke_external_drop_target(origin.x + 5., origin.y + 5.);
+            assert_eq!(
+                actual_deck, expected_deck,
+                "LOAD button at ({}, {})",
+                origin.x, origin.y
+            );
+        }
+        ui.hide().unwrap();
+    }
+
+    #[test]
     fn deck_geometry_and_external_dispatch_respect_panels_and_revalidate() {
         i_slint_backend_testing::init_no_event_loop();
         for (width, height) in [(850., 740.), (1280., 860.)] {
