@@ -63,8 +63,8 @@ Crate-Formatprüfung und `git diff --check` ebenfalls bestanden.
 ## Noch offen
 
 - Vollständige Gerätefinder-UI/Composition Root und Einbindung der Geräte-Strings.
-- Kontinuierliche gepufferte HID-Eingangserfassung, Controller-Mappings und
-  dokumentierte Geräteprofile; der explizite Raw-HID-Transport steht bereit.
+- Controller-Mappings und dokumentierte Geräteprofile; Transport und gepufferte
+  HID-Eingangserfassung stehen bereit, die App-Verbraucher sind noch offen.
 - Reale DVS-Dekodierung; der vorhandene `dvs.rs`-Prototyp simuliert diese nur.
 - Vollständige FR-/SC-Abnahme und Gerätemessungen. Insbesondere werden keine
   Serato-Protokolldetails erfunden und keine Herstellerkompatibilität behauptet.
@@ -162,8 +162,8 @@ Feature-Reports. Die Maps sind für Aufrufer unveränderlich. Trunkierte Items,
 übermäßige Längen und nicht unterstützte Long-Items ergeben einen Fehler.
 Der Parser ersetzt keine herstellerspezifische Zuordnung von Reportfeldern.
 
-Input-Reads sind explizite Aufträge mit `read_timeout(..., 0)`; aktuell läuft
-noch kein kontinuierlicher Input-Poller. Native API-Paddingbytes bleiben neben
+Einzelne Input-Reads sind explizite Aufträge mit `read_timeout(..., 0)`;
+kontinuierliche Erfassung ergänzt Schritt 4. Native API-Paddingbytes bleiben neben
 der logischen Reportlänge erhalten. Output/Feature verwenden den von HIDAPI
 geforderten Report-ID-Präfix, einschließlich ID 0 für unnummerierte Reports.
 Windows-Padding auf die maximale API-Länge wird berücksichtigt. Alle regulären
@@ -190,3 +190,34 @@ Prüfbyte, Completion-Validierung und Lease-Invalidierung sind korrigiert und
 im Nachreview akzeptiert. Striktes Crate-Clippy und Clippy aller App-Targets
 sind bestanden. Auch die finale Crate-Formatprüfung und `git diff --check`
 sind bestanden. Reale HID-Report-/Feature-/Output-Tests bleiben offen.
+
+## Schritt 4: gepufferte HID-Eingangserfassung
+
+`HidCapture` öffnet ausschließlich ein explizit gewähltes Nicht-System-Gerät
+auf einem eigenen Reader-Thread. Native Input-Reads warten höchstens 5 ms laut
+HIDAPI-Auftrag; Output-/Feature-Aufträge laufen nicht auf diesem Reader.
+Ein fehlerhafter Treiber kann native Fristen überschreiten. Drop fordert Stop an,
+wartet nicht auf den Treiber und lässt Ressourcen anschließend im Reader schließen.
+
+Die Queue hält maximal 256 Reports. Überlauf verwirft den ältesten Report und
+erhöht einen sichtbaren Zähler. Disconnect verwirft verbliebene Reports mit
+separatem Zähler; erneutes Öffnen erhöht die Verbindungsepoche. Capture-ID,
+Epoche, Session und Sequenz unterscheiden alte Daten auch bei wiederverwendeten
+Backend-IDs. Verbraucher müssen bei Verlust oder Verbindungswechsel gehaltene
+Controls freigeben und Gestenzustand zurücksetzen. Die App-Anbindung steht aus.
+
+Temporäre Verbindungsfehler werden frühestens nach 250 ms erneut versucht;
+Policy-, Descriptor- und ungültige Reportfehler bleiben als `Failed` sichtbar.
+`try_drain` wartet nicht auf den Queue-Lock, allokiert aber den Ergebnisvektor:
+Die Schnittstelle gehört in Control-/UI-Code und nicht in Audio-Callbacks.
+
+Sieben zusätzliche automatisierte Tests prüfen FIFO für 125 synthetische Reports,
+expliziten Überlauf, Disconnect/Reconnect mit wiederverwendeter Backend-ID,
+permanente Fehler, frühe Validierung und Stop bei blockiertem Testtreiber.
+Der Fehlerstatus wird vor potenziell blockierender Ressourcenfreigabe veröffentlicht;
+ein Test mit gesperrtem Destruktor sichert das ab. Der Capture-Transport verzichtet
+hierzu auf vorzeitiges Entfernen der fehlgeschlagenen nativen Lease im Read-Aufruf.
+Unabhängiges Review durch GPT-6.1 Sol (Mittel): Befund behoben, Nachreview akzeptiert.
+35 Tests und striktes Crate-Clippy bestanden.
+Der 125-Report-Burst ist keine Messung physischer 125-Hz-Hardware oder Latenz.
+Es wurden keine realen HID-Reports von angeschlossenen Geräten erfasst.

@@ -12,6 +12,24 @@ pub(crate) struct NativeHid {
     sessions: BTreeMap<HidSessionId, Lease>,
     api: hidapi::HidApi,
 }
+/// Single-connection capture owns the entire backend until loss is published.
+/// Unlike the command worker, it must not eagerly drop a failed session inside
+/// execute: native handle destruction can block before returning the error.
+pub(crate) struct CaptureHid(NativeHid);
+impl CaptureHid {
+    pub(crate) fn new() -> Result<Self, IoError> {
+        NativeHid::new().map(Self)
+    }
+}
+impl Transport for CaptureHid {
+    fn execute(&mut self, command: IoCommand) -> Result<IoReply, IoError> {
+        let IoCommand::Hid(command) = command else {
+            return Err(IoError::InvalidParameter("USB request sent to HID capture"));
+        };
+        command.validate()?;
+        self.0.execute_hid(command).map(IoReply::Hid)
+    }
+}
 fn error(value: hidapi::HidError) -> IoError {
     IoError::HidBackend(value.to_string())
 }
@@ -105,6 +123,20 @@ impl NativeHid {
         );
         Ok(HidReply::Opened { session, layout })
     }
+    fn read_input(&mut self, session: HidSessionId, timeout: i32) -> Result<HidReply, IoError> {
+        let lease = self
+            .sessions
+            .get_mut(&session)
+            .ok_or(IoError::InvalidSession)?;
+        if lease.input.is_empty() {
+            return Err(IoError::NotSupported);
+        }
+        let received = lease
+            .handle
+            .read_timeout(&mut lease.input, timeout)
+            .map_err(error)?;
+        input_completion(&lease.layout, &lease.input, received)
+    }
     fn execute_hid(&mut self, command: HidCommand) -> Result<HidReply, IoError> {
         match command {
             HidCommand::Enumerate => {
@@ -120,19 +152,9 @@ impl NativeHid {
                     .ok_or(IoError::InvalidSession)?;
                 Ok(HidReply::Closed)
             }
-            HidCommand::ReadInput { session } => {
-                let lease = self
-                    .sessions
-                    .get_mut(&session)
-                    .ok_or(IoError::InvalidSession)?;
-                if lease.input.is_empty() {
-                    return Err(IoError::NotSupported);
-                }
-                let received = lease
-                    .handle
-                    .read_timeout(&mut lease.input, 0)
-                    .map_err(error)?;
-                input_completion(&lease.layout, &lease.input, received)
+            HidCommand::ReadInput { session } => self.read_input(session, 0),
+            HidCommand::ReadInputWait { session, timeout } => {
+                self.read_input(session, timeout.as_millis() as i32)
             }
             HidCommand::WriteOutput { session, report } => {
                 let lease = self.sessions.get(&session).ok_or(IoError::InvalidSession)?;

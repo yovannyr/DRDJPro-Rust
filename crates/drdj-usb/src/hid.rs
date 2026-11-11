@@ -63,6 +63,11 @@ pub enum HidCommand {
     ReadInput {
         session: HidSessionId,
     },
+    /// Bounded event-driven wait for a dedicated reader worker.
+    ReadInputWait {
+        session: HidSessionId,
+        timeout: std::time::Duration,
+    },
     WriteOutput {
         session: HidSessionId,
         report: Vec<u8>,
@@ -81,6 +86,14 @@ impl HidCommand {
     pub fn validate(&self) -> Result<(), IoError> {
         match self {
             Self::Open { target } => target.validate(),
+            Self::ReadInputWait { timeout, .. }
+                if !(std::time::Duration::from_millis(1)..=std::time::Duration::from_millis(8))
+                    .contains(timeout) =>
+            {
+                Err(IoError::InvalidParameter(
+                    "HID input wait must be 1 through 8 ms",
+                ))
+            }
             Self::WriteOutput { report, .. } | Self::SendFeature { report, .. }
                 if report.is_empty() || report.len() > MAX_HID_REPORT_BYTES =>
             {
@@ -96,6 +109,7 @@ impl HidCommand {
             Self::Enumerate | Self::Open { .. } => None,
             Self::Close { session }
             | Self::ReadInput { session }
+            | Self::ReadInputWait { session, .. }
             | Self::WriteOutput { session, .. }
             | Self::GetFeature { session, .. }
             | Self::SendFeature { session, .. } => Some(*session),
