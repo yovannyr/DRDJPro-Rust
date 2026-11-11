@@ -24,7 +24,7 @@ pub(crate) fn dominant_color(data: &[u8]) -> u32 {
     // Sample every 64th pixel to keep it fast even for large images.
     let step = 64usize;
     let len = data.len() / 16; // number of pixels
-    let count = (len + step - 1) / step;
+    let count = len.div_ceil(step);
     let mut r: u32 = 0;
     let mut g: u32 = 0;
     let mut b: u32 = 0;

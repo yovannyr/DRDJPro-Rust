@@ -48,6 +48,31 @@ pub struct CrashStore {
 }
 
 impl CrashStore {
+    /// Begin a monitor-only transaction; its OS lock remains held through dump
+    /// generation. Dropping it removes the partial dump and releases the lock.
+    pub(super) fn begin_capture(&self, stack: &str) -> io::Result<Capture> {
+        let lock = self.lock()?;
+        let temp = tempfile::Builder::new()
+            .prefix("crash-write-")
+            .suffix(".tmp")
+            .rand_bytes(16)
+            .tempfile_in(&self.root)?;
+        private_file(temp.as_file())?;
+        Ok(Capture {
+            store: self.clone(),
+            _lock: lock,
+            temp,
+            report: CrashReport {
+                id: random_id()?,
+                created_ms: chrono::Utc::now().timestamp_millis(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                stack: sanitize_stack(stack),
+                status: ReportStatus::Pending,
+            },
+        })
+    }
     /// Create/open a private directory. Empty paths never select the working directory.
     pub fn open(root: PathBuf) -> io::Result<Self> {
         if root.as_os_str().is_empty() {
@@ -283,6 +308,40 @@ impl CrashStore {
             fs::remove_file(path)?;
         }
         Ok(())
+    }
+}
+
+// Not public API: the minidumper callback owns a cloned handle only while this
+// transaction owns the root lock. No finalized report references a partial dump.
+pub(super) struct Capture {
+    store: CrashStore,
+    temp: tempfile::NamedTempFile,
+    report: CrashReport,
+    _lock: File, // Release only after partial temporary files have been removed.
+}
+
+impl Capture {
+    pub(super) fn writer(&self) -> io::Result<(File, PathBuf)> {
+        Ok((
+            self.temp.as_file().try_clone()?,
+            self.temp.path().to_owned(),
+        ))
+    }
+
+    pub(super) fn commit(self) -> io::Result<CrashReport> {
+        // Native writers control their own intermediate buffers. Oversized dumps
+        // are rejected, never retained/submitted as a complete capture.
+        if self.temp.as_file().metadata()?.len() > 10_000_000 {
+            return Err(invalid("Minidump exceeds 10 MB retention limit"));
+        }
+        self.temp.as_file().sync_all()?;
+        let path = self.store.path(&self.report.id, "dmp")?;
+        self.temp.persist(&path).map_err(|e| e.error)?;
+        self.store
+            .write(&self.store.path(&self.report.id, "json")?, &self.report)?;
+        self.store.enforce_unlocked()?;
+        log::info!("Minidump finalized: {}", self.report.id);
+        Ok(self.report)
     }
 }
 

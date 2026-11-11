@@ -90,3 +90,60 @@ Die Variante ohne `--no-deps` scheitert an vorhandenen Lints in `drdj-proto`
 (Spec 27); diese bleiben gemäß Scope unverändert. Auch die bestehende Warnung
 über dessen unbekanntes `drdjpro`-Feature wird nicht unterdrückt. Kein grüner
 Workspace-Gesamtstatus. Logs unter `C:/Temp/drdj-spec26-s1-*.log`.
+
+## Schritt 2 — geprüft
+
+Externer Minidump-Prozess mit den Embark-Crates `crash-handler` und `minidumper`.
+Die Native-Callback-Seite verwendet nur vorinitialisiertes IPC und Atomics.
+Der Rust-Panic-Hook erzeugt begrenzte, pfadbereinigte Symboltexte ohne beliebigen
+Panic-Payload. Er erhält Unwind-/Catch-Semantik. Diese Symbolisierung darf im
+fehlerhaften Rust-Thread allokieren; sie findet nie im nativen Signalhandler statt.
+
+Eine Capture-Transaktion hält die Dateisperre bis zur Finalisierung. Partielle
+Dumps bleiben temporär; bei Fehler/Abbruch werden sie entfernt bzw. beim nächsten
+Storezugriff bereinigt. Fertige Dumps über 10.000.000 Bytes werden verworfen;
+die native Zwischenpuffer-/Schreibgröße ist damit noch keine harte Peak-Garantie.
+
+Upstream-IPC benötigt eine kleine vendorte Anpassung für Fristen und wiederholte
+Captures nach abgefangenen Panics; siehe `vendor/minidumper/DRDJ-PATCH.md` und
+[Upstream](https://github.com/EmbarkStudios/crash-handling).
+Ein Verbindungsbesitzer verarbeitet sämtliche PONG-/CRASH_ACK-Empfänge. Ein
+vorheriges Design mit konkurrierenden Empfängern wurde im Review verworfen.
+
+Auf diesem Windows-Rechner wurden AF_UNIX-Verbindungen in Benutzer-Temp mit
+WSAEINVAL reproduziert, während isolierte Kontrollen unter ProgramData funktionierten.
+Windows verwendet deshalb einen zufälligen kurzlebigen IPC-Unterordner dort;
+eine geschützte Besitzer-DACL wird atomar bei der Erstellung gesetzt. Berichte
+bleiben weiterhin am vorgegebenen Benutzerpfad. Es werden keine Systemrichtlinien
+oder Geräteeinstellungen verändert. Unix verwendet ein privates 0700-Tempverzeichnis.
+
+Die ersten Prozessläufe scheiterten an der Initialisierung und sind keine
+Capture-Nachweise. Nach den Korrekturen wurde die vollständige Prozesssuite
+erfolgreich wiederholt:
+
+- `cargo test -p drdjpro-ui-spike --test crash_process --locked -- --nocapture --test-threads=1`:
+  9 bestanden, inklusive echter nativer Zugriffsverletzung, Main-/Worker-Panic,
+  zwei Worker-Panics plus nativem Fehler im selben Monitor, konkurrierenden
+  Fehlern, Neustart nach Catch/Unwind und normalem/abruptem Ende.
+- Der Parser prüft echte Minidump-Thread-/Exception-Streams; keine Textdatei wird
+  als Dump ausgegeben. Gemessene Probe-Wallzeiten: Main-Panic ca. 1,00 s,
+  nativ ca. 0,63 s, Worker ca. 0,96 s im ersten erfolgreichen Lauf.
+- `cargo test -p drdjpro-ui-spike --lib --locked`: 1664 bestanden, darunter
+  ACL-Readback, verwaiste/live IPC-Verzeichnisse, IPC-Empfangsfrist und Capture-Lock.
+- `cargo clippy -p drdjpro-ui-spike --all-targets --no-deps --locked -- -D warnings`:
+  Exit 0, bekannte Warnung der unveränderten Spec-27-Abhängigkeit bleibt sichtbar.
+- Ein vorhandener App-Clippy-Befund in `cover_art.rs` verwendet nun `div_ceil`
+  statt manueller aufrundender Division; alle 13 Cover-Art-Tests bestanden.
+- Unabhängiges Review: GPT-6.1 Sol, medium; Protokoll-/Lebensdauerbefunde behoben,
+  Follow-ups ohne weitere blockierende Befunde. Logs `C:/Temp/drdj-spec26-s2-*.log`.
+
+Nach einem Abbruch zurückgebliebene Windows-IPC-Verzeichnisse werden beim nächsten
+Start nur im reservierten Namensraum bereinigt, mit begrenztem PID-Marker und
+konservativer Lebendigkeitsprüfung. Unbekannte Dateien und andere Benutzer bleiben
+erhalten. Cleanup ist nie rekursiv.
+
+Linux-/macOS-Runtime, Release-Symbolquote und Prozentziele sind noch nicht gemessen.
+Der 4-s-Helper-Watchdog mit 5-s-Clientfristen ist ein begrenzter Fehlerpfad, keine
+harte Echtzeitgarantie unter beliebiger Scheduler-/Datenträgerstörung. Die normale
+App-Startup-Anbindung folgt mit der UI; bisher verwenden die Prozess-Probes den
+Monitor explizit. HTTP-Transport und UI sind weiterhin offen.

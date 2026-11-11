@@ -215,6 +215,47 @@ fn corrupt_consent_fails_closed() {
     assert!(location.ends_with("DRDJPro-Rust/crashes"));
 }
 
+#[test]
+fn capture_transaction_blocks_other_writers_and_cleans_up_before_unlock() {
+    use std::io::Write;
+    let (_temp, store) = store();
+    let capture = store.begin_capture("frame").unwrap();
+    let (mut writer, path) = capture.writer().unwrap();
+    writer.write_all(b"partial").unwrap();
+    drop(writer);
+    let copy = store.clone();
+    let (started, ready) = std::sync::mpsc::channel();
+    let (done, received) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        copy.insert("another frame").unwrap();
+        done.send(()).unwrap();
+    });
+    ready.recv().unwrap();
+    assert!(received
+        .recv_timeout(std::time::Duration::from_millis(40))
+        .is_err());
+    drop(capture);
+    received
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    thread.join().unwrap();
+    assert!(!path.exists());
+    assert_eq!(store.list().unwrap().len(), 1);
+}
+
+#[test]
+fn oversized_capture_is_not_finalized() {
+    let (_temp, store) = store();
+    let capture = store.begin_capture("frame").unwrap();
+    let (writer, path) = capture.writer().unwrap();
+    writer.set_len(10_000_001).unwrap();
+    drop(writer);
+    assert!(capture.commit().is_err());
+    assert!(store.list().unwrap().is_empty());
+    assert!(!path.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_root_and_attachments_are_never_followed() {

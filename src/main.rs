@@ -1,4 +1,4 @@
-﻿use slint::{ModelRc, Timer, TimerMode, VecModel};
+use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
 mod audio;
@@ -9,6 +9,7 @@ mod audio_identity;
 mod beatgrid;
 mod cancellation;
 mod controller;
+mod cover_art;
 mod crates;
 mod cue_bus;
 mod deck_render;
@@ -42,7 +43,6 @@ mod saved_loops;
 mod sync_control;
 mod table_columns;
 mod tempo;
-mod cover_art;
 #[cfg(test)]
 mod test_support;
 mod track_metadata;
@@ -53,6 +53,14 @@ mod waveform_color;
 use drdjpro_ui_spike::*;
 
 fn main() -> Result<(), slint::PlatformError> {
+    // Internal monitor/probe modes are dispatched before any UI/audio creation.
+    if let Some(result) = crash_handler::internal_mode() {
+        if let Err(error) = result {
+            eprintln!("Crash subsystem failed: {error}");
+            std::process::exit(70);
+        }
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("--analyze") {
         let Some(path) = std::env::args().nth(2) else {
             eprintln!("Usage: drdjpro-ui-spike --analyze <music.mp3|music.wav>");
