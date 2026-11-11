@@ -1,0 +1,15 @@
+[package]
+name = "drdj-proto"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+description = "ProtoBuf-like binary serialization for DRDJPro-Rust — efficient sync for cloud, controller, and cross-process transport"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+byteorder = "1.5"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1.0"
