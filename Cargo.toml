@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/drdj-keylock", "crates/drdj-proto"]
+members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb"]
 resolver = "2"
 exclude = ["vendor/minidumper"]
 
@@ -17,6 +17,7 @@ description = "DrDJ Pro Rust desktop DJ application"
 [dependencies]
 drdj-keylock = { path = "crates/drdj-keylock" }
 drdj-proto = { path = "crates/drdj-proto" }
+drdj-usb = { path = "crates/drdj-usb" }
 midir = "=0.10.3"
 rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled", "backup"] }
 serde = { version = "=1.0.229", features = ["derive"] }

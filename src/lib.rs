@@ -2,6 +2,11 @@
 //! Startup, controllers and audio composition remain in the executable.
 slint::include_modules!();
 
+/// Worker-owned USB discovery. Not a claim of native device/UI acceptance.
+pub mod usb_devices {
+    pub use drdj_usb::*;
+}
+
 mod energy;
 mod harmonie_wheel;
 mod harmony_wheel_ui;

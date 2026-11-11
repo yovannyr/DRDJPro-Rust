@@ -2,7 +2,7 @@
 
 **Feature Branch**: `28-direct-libusb`  
 **Created**: 2026-11-11  
-**Status**: Planned  
+**Status**: In progress — read-only discovery/worker; transfers, HID, DVS and device finder pending
 **Input**: Serato DJ Pro uses `libusb-1.0.0.dylib` (319 KB) for direct USB device access. DRDJPro-Rust uses the `midir` crate for MIDI controllers but lacks direct USB access for non-MIDI devices (e.g., specific DVS turntables, specialized controllers).
 
 ## User Scenarios & Testing *(mandatory)*
