@@ -2,7 +2,7 @@
 
 **Feature Branch**: `26-crash-handler`  
 **Created**: 2026-11-11  
-**Status**: Planned  
+**Status**: In progress — local store implemented; capture, transport and UI pending
 **Input**: Serato DJ Pro uses Google Crashpad for minidump generation and crash reporting. DRDJPro-Rust has `console_error_panic_hook` and `backtrace` but no external crash-handler process.
 
 ## User Scenarios & Testing *(mandatory)*

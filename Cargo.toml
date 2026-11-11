@@ -35,6 +35,7 @@ backtrace = "0.3"
 minidump = "0.22"
 chrono = "0.4"
 dirs = "5"
+tempfile = "=3.27.0"
 
 [build-dependencies]
 slint-build = "=1.18.1"

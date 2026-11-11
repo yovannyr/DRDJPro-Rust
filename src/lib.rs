@@ -191,7 +191,7 @@ pub mod presentation;
 mod atomic_float;
 mod harmony;
 
-/// Crash handler: minidump generation, stack trace capture, and upload queuing.
+/// Local crash evidence, sharing preferences and retention.
 pub mod crash_handler;
 
 /// Chroma-based key detection on caller-supplied PCM.
