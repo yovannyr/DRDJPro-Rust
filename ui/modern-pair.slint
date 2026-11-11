@@ -1,0 +1,328 @@
+import { ModernTheme } from "modern-theme.slint";
+import { BeatLine, HotCueRow } from "theme.slint";
+import { DeckAction, HoldAction, ControlKind, JogPhase } from "modern-state.slint";
+import { ModernTrackHeader, PerformanceDeck } from "modern-deck.slint";
+import { ModernChannelStrip } from "modern-mixer.slint";
+import { ModernOverviewStrip, ModernDetailWaveform } from "modern-waveform.slint";
+import { HoldButton, ValueRail } from "modern-controls.slint";
+
+export component ModernPair inherits Rectangle {
+    // Left deck primitive properties (replaces ModernDeckData)
+    in property <color> left-cover;
+    in property <string> left-title: "";
+    in property <string> left-artist: "";
+    in property <string> left-musical-key: "";
+    in property <string> left-time-text: "";
+    in property <string> left-bpm: "";
+    in property <float> left-pitch-percent: 0.0;
+    in property <float> left-pitch-min: -50.0;
+    in property <float> left-pitch-max: 100.0;
+    in property <bool> left-loaded: false;
+    in property <bool> left-playing: false;
+    in property <bool> left-loop-active: false;
+    in property <bool> left-supported: true;
+    in property <bool> left-can-control: true;
+    in property <bool> left-sync-active: false;
+    in property <bool> left-keylock-active: false;
+    in property <bool> left-quantize-active: false;
+    in property <float> left-platter-angle: 0.0;
+    in property <string> left-platter-time: "";
+    in property <bool> left-platter-touched: false;
+    in property <float> left-platter-position: 0.5;
+    in property <string> left-platter-bpm: "";
+    in property <float> left-platter-pitch-percent: 0.0;
+    // Right deck primitive properties
+    in property <color> right-cover;
+    in property <string> right-title: "";
+    in property <string> right-artist: "";
+    in property <string> right-musical-key: "";
+    in property <string> right-time-text: "";
+    in property <string> right-bpm: "";
+    in property <float> right-pitch-percent: 0.0;
+    in property <float> right-pitch-min: -50.0;
+    in property <float> right-pitch-max: 100.0;
+    in property <bool> right-loaded: false;
+    in property <bool> right-playing: false;
+    in property <bool> right-loop-active: false;
+    in property <bool> right-supported: true;
+    in property <bool> right-can-control: true;
+    in property <bool> right-sync-active: false;
+    in property <bool> right-keylock-active: false;
+    in property <bool> right-quantize-active: false;
+    in property <float> right-platter-angle: 0.0;
+    in property <string> right-platter-time: "";
+    in property <bool> right-platter-touched: false;
+    in property <float> right-platter-position: 0.5;
+    in property <string> right-platter-bpm: "";
+    in property <float> right-platter-pitch-percent: 0.0;
+    in property <int> first-index: 0;
+    in property <bool> active-view: true;
+    in property <bool> compact: false;
+    in property <bool> show-crossfader: true;
+    in property <float> crossfader: 0.5;
+    in property <color> left-accent: ModernTheme.green;
+    in property <color> right-accent: ModernTheme.blue;
+    in property <[float]> left-overview;
+    in property <[float]> right-overview;
+    in property <[float]> left-detail;
+    in property <[float]> right-detail;
+    in property <[color]> left-overview-colors;
+    in property <[color]> left-detail-colors;
+    in property <[color]> right-overview-colors;
+    in property <[color]> right-detail-colors;
+    in property <[HotCueRow]> left-cues;
+    in property <[HotCueRow]> right-cues;
+    in property <[BeatLine]> left-beats;
+    in property <[BeatLine]> right-beats;
+    in property <float> left-playhead: 0.5;
+    in property <float> right-playhead: 0.5;
+    in property <float> left-detail-playhead: 0.5;
+    in property <float> right-detail-playhead: 0.5;
+    in property <float> left-detail-start: 0;
+    in property <float> left-detail-end: 100;
+    in property <float> right-detail-start: 0;
+    in property <float> right-detail-end: 100;
+    in property <float> left-overview-loop-start: -1;
+    in property <float> left-overview-loop-end: -1;
+    in property <float> right-overview-loop-start: -1;
+    in property <float> right-overview-loop-end: -1;
+    in property <float> left-detail-loop-start: -1;
+    in property <float> left-detail-loop-end: -1;
+    in property <float> right-detail-loop-start: -1;
+    in property <float> right-detail-loop-end: -1;
+    in property <float> left-gain: 0.5;
+    in property <float> left-high: 0.667;
+    in property <float> left-mid: 0.667;
+    in property <float> left-low: 0.667;
+    in property <float> left-filter: 0.5;
+    in property <float> left-volume: 1;
+    in property <float> left-meter: 0;
+    in property <bool> left-monitored: false;
+    in property <bool> left-monitor-available: false;
+    in property <float> right-gain: 0.5;
+    in property <float> right-high: 0.667;
+    in property <float> right-mid: 0.667;
+    in property <float> right-low: 0.667;
+    in property <float> right-filter: 0.5;
+    in property <float> right-volume: 1;
+    in property <float> right-meter: 0;
+    in property <bool> right-monitored: false;
+    in property <bool> right-monitor-available: false;
+    in property <int> external-drop-deck: -1;
+    background: ModernTheme.background;
+    callback action(int, DeckAction);
+    callback hold-started(int, HoldAction, int);
+    callback hold-ended(int, HoldAction, int);
+    callback hold-canceled(int, HoldAction, int);
+    callback control-requested(int, ControlKind, float);
+    callback gesture-ended(int);
+    callback jog(int, JogPhase, float, float);
+    callback seek-requested(int, float);
+    callback detail-zoom(int, int);
+    out property <float> left-drop-x: left-performance-deck.absolute-position.x / 1px;
+    out property <float> left-drop-y: left-performance-deck.absolute-position.y / 1px;
+    out property <float> left-drop-width: left-performance-deck.width / 1px;
+    out property <float> left-drop-height: left-performance-deck.height / 1px;
+    out property <float> right-drop-x: right-performance-deck.absolute-position.x / 1px;
+    out property <float> right-drop-y: right-performance-deck.absolute-position.y / 1px;
+    out property <float> right-drop-width: right-performance-deck.width / 1px;
+    out property <float> right-drop-height: right-performance-deck.height / 1px;
+
+    VerticalLayout {
+        spacing: 2px;
+        // Track header row
+        HorizontalLayout {
+            spacing: 2px;
+            ModernTrackHeader {
+                cover: root.left-cover; title: root.left-title; artist: root.left-artist;
+                musical-key: root.left-musical-key; time-text: root.left-time-text;
+                loaded: root.left-loaded; label: root.first-index == 0 ? "A" : "C";
+                accent: root.left-accent; peaks: root.left-overview; colors: root.left-overview-colors;
+                cues: root.left-cues; playhead: root.left-playhead;
+                loop-start: root.left-overview-loop-start; loop-end: root.left-overview-loop-end;
+                seek(position) => { root.seek-requested(root.first-index, position); }
+            }
+            ModernTrackHeader {
+                cover: root.right-cover; title: root.right-title; artist: root.right-artist;
+                musical-key: root.right-musical-key; time-text: root.right-time-text;
+                loaded: root.right-loaded; label: root.first-index == 0 ? "B" : "D";
+                accent: root.right-accent; peaks: root.right-overview; colors: root.right-overview-colors;
+                cues: root.right-cues; playhead: root.right-playhead;
+                loop-start: root.right-overview-loop-start; loop-end: root.right-overview-loop-end;
+                seek(position) => { root.seek-requested(root.first-index + 1, position); }
+            }
+        }
+        // Main performance area
+        HorizontalLayout {
+            spacing: 2px;
+            // Left deck
+            left-performance-deck := PerformanceDeck {
+                cover: root.left-cover; title: root.left-title; bpm: root.left-bpm;
+                pitch-percent: root.left-pitch-percent; pitch-min: root.left-pitch-min; pitch-max: root.left-pitch-max;
+                loaded: root.left-loaded; playing: root.left-playing; loop-active: root.left-loop-active;
+                supported: root.left-supported; can-control: root.left-can-control;
+                external-hover: root.external-drop-deck == root.first-index;
+                cues: root.left-cues; accent: root.left-accent; label: root.first-index == 0 ? "A" : "C";
+                deck-index: root.first-index; active-view: root.active-view; compact: root.compact;
+                horizontal-stretch: 1;
+                action(deck, action) => { root.action(deck, action); }
+                hold-started(deck, kind, slot) => { root.hold-started(deck, kind, slot); }
+                hold-ended(deck, kind, slot) => { root.hold-ended(deck, kind, slot); }
+                hold-canceled(deck, kind, slot) => { root.hold-canceled(deck, kind, slot); }
+                control-requested(deck, kind, value) => { root.control-requested(deck, kind, value); }
+                gesture-ended(deck) => { root.gesture-ended(deck); }
+                jog(deck, phase, x, y) => { root.jog(deck, phase, x, y); }
+                platter-angle: root.left-platter-angle;
+                platter-time: root.left-platter-time;
+                platter-touched: root.left-platter-touched;
+                platter-position: root.left-platter-position;
+                platter-bpm: root.left-platter-bpm;
+                platter-pitch-percent: root.left-platter-pitch-percent;
+            }
+            // Left mixer strip
+            ModernChannelStrip {
+                accent: root.left-accent; active-view: root.active-view;
+                deck-index: root.first-index; supported: root.left-supported; can-control: root.left-can-control;
+                gain: root.left-gain; high: root.left-high; mid: root.left-mid; low: root.left-low;
+                filter: root.left-filter; volume: root.left-volume; meter: root.left-meter;
+                monitored: root.left-monitored; monitor-available: root.left-monitor-available;
+                action(deck, action) => { root.action(deck, action); }
+                control-requested(deck, kind, value) => { root.control-requested(deck, kind, value); }
+                gesture-ended(deck) => { root.gesture-ended(deck); }
+            }
+            // Center waveform area
+            Rectangle {
+                horizontal-stretch: 1.4; min-width: 180px; background: ModernTheme.surface;
+                VerticalLayout {
+                    padding: 10px; spacing: 8px;
+                    // BPM / Sync row
+                    HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            spacing: 5px;
+                            Text { text: root.left-bpm == "" ? "—" : root.left-bpm; color: root.left-accent; font-size: 32px; font-weight: 700; horizontal-alignment: center; }
+                            HoldButton {
+                                text: "SYNC"; active: root.left-sync-active; accent: root.left-accent;
+                                enabled: root.active-view && root.left-supported && root.left-can-control && root.left-loaded;
+                                started => { root.action(root.first-index, DeckAction.sync); }
+                                canceled => { }
+                            }
+                            HoldButton {
+                                text: "KEYLOCK"; active: root.left-keylock-active; accent: root.left-accent;
+                                enabled: root.active-view && root.left-supported && root.left-can-control;
+                                started => { root.action(root.first-index, DeckAction.keylock); }
+                                canceled => { }
+                            }
+                            HoldButton {
+                                text: "QUANTIZE"; active: root.left-quantize-active; accent: root.left-accent;
+                                enabled: root.active-view && root.left-supported && root.left-can-control;
+                                started => { root.action(root.first-index, DeckAction.quantize); }
+                                canceled => { }
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: 5px;
+                            Text { text: root.right-bpm == "" ? "—" : root.right-bpm; color: root.right-accent; font-size: 32px; font-weight: 700; horizontal-alignment: center; }
+                            HoldButton {
+                                text: "SYNC"; active: root.right-sync-active; accent: root.right-accent;
+                                enabled: root.active-view && root.right-supported && root.right-can-control && root.right-loaded;
+                                started => { root.action(root.first-index + 1, DeckAction.sync); }
+                                canceled => { }
+                            }
+                            HoldButton {
+                                text: "KEYLOCK"; active: root.right-keylock-active; accent: root.right-accent;
+                                enabled: root.active-view && root.right-supported && root.right-can-control;
+                                started => { root.action(root.first-index + 1, DeckAction.keylock); }
+                                canceled => { }
+                            }
+                            HoldButton {
+                                text: "QUANTIZE"; active: root.right-quantize-active; accent: root.right-accent;
+                                enabled: root.active-view && root.right-supported && root.right-can-control;
+                                started => { root.action(root.first-index + 1, DeckAction.quantize); }
+                                canceled => { }
+                            }
+                        }
+                    }
+                    // Stacked waveforms
+                    ModernDetailWaveform {
+                        min-height: 38px; vertical-stretch: 1;
+                        deck-label: root.first-index == 0 ? "A / DETAIL" : "C / DETAIL";
+                        accent: root.left-accent;
+                        detail: root.left-detail; colors: root.left-detail-colors;
+                        beats: root.left-beats; cues: root.left-cues;
+                        playhead: root.left-detail-playhead;
+                        loop-start: root.left-detail-loop-start; loop-end: root.left-detail-loop-end;
+                        detail-start: root.left-detail-start; detail-end: root.left-detail-end;
+                        enabled: root.active-view && root.left-supported && root.left-can-control && root.left-loaded;
+                        seek(position) => { root.seek-requested(root.first-index, position); }
+                        zoom-step(step) => { root.detail-zoom(root.first-index, step); }
+                    }
+                    ModernDetailWaveform {
+                        min-height: 38px; vertical-stretch: 1;
+                        deck-label: root.first-index == 0 ? "B / DETAIL" : "D / DETAIL";
+                        accent: root.right-accent;
+                        detail: root.right-detail; colors: root.right-detail-colors;
+                        beats: root.right-beats; cues: root.right-cues;
+                        playhead: root.right-detail-playhead;
+                        loop-start: root.right-detail-loop-start; loop-end: root.right-detail-loop-end;
+                        detail-start: root.right-detail-start; detail-end: root.right-detail-end;
+                        enabled: root.active-view && root.right-supported && root.right-can-control && root.right-loaded;
+                        seek(position) => { root.seek-requested(root.first-index + 1, position); }
+                        zoom-step(step) => { root.detail-zoom(root.first-index + 1, step); }
+                    }
+                    // Crossfader
+                    if root.show-crossfader : VerticalLayout {
+                        spacing: 4px;
+                        Text { height: 12px; text: "CROSSFADER / A — B"; color: ModernTheme.muted; font-size: 9px; horizontal-alignment: center; }
+                        ValueRail {
+                            height: 22px; vertical: false; value: root.crossfader;
+                            enabled: root.active-view && root.left-can-control && root.right-can-control && root.left-supported && root.right-supported;
+                            label: "Crossfader";
+                            requested(value) => { root.control-requested(-1, ControlKind.crossfader, value); }
+                            gesture-ended => { root.gesture-ended(-1); }
+                        }
+                    }
+                }
+            }
+            // Right mixer strip
+            ModernChannelStrip {
+                accent: root.right-accent; active-view: root.active-view;
+                deck-index: root.first-index + 1; supported: root.right-supported; can-control: root.right-can-control;
+                gain: root.right-gain; high: root.right-high; mid: root.right-mid; low: root.right-low;
+                filter: root.right-filter; volume: root.right-volume; meter: root.right-meter;
+                monitored: root.right-monitored; monitor-available: root.right-monitor-available;
+                action(deck, action) => { root.action(deck, action); }
+                control-requested(deck, kind, value) => { root.control-requested(deck, kind, value); }
+                gesture-ended(deck) => { root.gesture-ended(deck); }
+            }
+            // Right deck
+            right-performance-deck := PerformanceDeck {
+                cover: root.right-cover; title: root.right-title; bpm: root.right-bpm;
+                pitch-percent: root.right-pitch-percent; pitch-min: root.right-pitch-min; pitch-max: root.right-pitch-max;
+                loaded: root.right-loaded; playing: root.right-playing; loop-active: root.right-loop-active;
+                supported: root.right-supported; can-control: root.right-can-control;
+                external-hover: root.external-drop-deck == root.first-index + 1;
+                cues: root.right-cues;
+                label: root.first-index == 0 ? "B" : "D";
+                deck-index: root.first-index + 1; accent: root.right-accent;
+                compact: root.compact; active-view: root.active-view;
+                horizontal-stretch: 1;
+                action(deck, action) => { root.action(deck, action); }
+                hold-started(deck, kind, slot) => { root.hold-started(deck, kind, slot); }
+                hold-ended(deck, kind, slot) => { root.hold-ended(deck, kind, slot); }
+                hold-canceled(deck, kind, slot) => { root.hold-canceled(deck, kind, slot); }
+                control-requested(deck, kind, value) => { root.control-requested(deck, kind, value); }
+                gesture-ended(deck) => { root.gesture-ended(deck); }
+                jog(deck, phase, x, y) => { root.jog(deck, phase, x, y); }
+                platter-angle: root.right-platter-angle;
+                platter-time: root.right-platter-time;
+                platter-touched: root.right-platter-touched;
+                platter-position: root.right-platter-position;
+                platter-bpm: root.right-platter-bpm;
+                platter-pitch-percent: root.right-platter-pitch-percent;
+            }
+        }
+    }
+}
+
+

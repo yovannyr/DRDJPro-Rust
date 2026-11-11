@@ -1,0 +1,174 @@
+import { ModernTheme } from "modern-theme.slint";
+
+// Edge-aware control: never turn a cue press into an ordinary clicked callback.
+export component HoldButton inherits Rectangle {
+    in property <string> text;
+    in property <string> accessibility-label: root.text;
+    in property <bool> enabled: false;
+    in property <bool> active: false;
+    in property <color> accent: ModernTheme.green;
+    callback started();
+    callback ended();
+    callback canceled();
+    property <bool> engaged: false;
+    min-width: 24px;
+    preferred-width: 56px;
+    height: 28px;
+    border-radius: 2px;
+    border-width: 1px;
+    border-color: key.has-focus ? #efffff : ModernTheme.line;
+    background: root.engaged ? root.accent : (root.active ? #244235 : ModernTheme.raised);
+    forward-focus: key;
+    accessible-role: button;
+    accessible-label: root.accessibility-label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.started(); root.ended(); } }
+    changed enabled => {
+        if !root.enabled && root.engaged {
+            root.engaged = false;
+            root.canceled();
+        }
+    }
+    Text {
+        text: root.text; color: root.enabled ? ModernTheme.text : ModernTheme.muted;
+        font-size: 11px; horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.cancel {
+                if root.engaged { root.engaged = false; root.canceled(); }
+            } else if event.button == PointerEventButton.left {
+                if event.kind == PointerEventKind.down {
+                    key.focus();
+                    if !root.engaged { root.engaged = true; root.started(); }
+                } else if event.kind == PointerEventKind.up {
+                    if root.engaged { root.engaged = false; root.ended(); }
+                }
+            }
+        }
+    }
+    key := FocusScope {
+        width: 0px; height: 0px;
+        enabled: root.enabled;
+        focus-lost(reason) => {
+            if root.engaged { root.engaged = false; root.canceled(); }
+        }
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                if !event.repeat && !root.engaged { root.engaged = true; root.started(); }
+                return accept;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                if root.engaged { root.engaged = false; root.ended(); }
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+// value is controller-owned; a drag proposes a new value instead of changing audio state.
+export component ValueRail inherits Rectangle {
+    in property <float> value: 0.5;
+    in property <bool> vertical: true;
+    in property <bool> enabled: false;
+    in property <color> accent: ModernTheme.text;
+    in property <string> label;
+    callback requested(float);
+    callback gesture-ended();
+    background: #080a0d;
+    border-width: 1px; border-color: ModernTheme.line;
+    min-width: 14px; min-height: 14px;
+    property <bool> dragging: false;
+    Rectangle {
+        x: root.vertical ? (parent.width - 2px) / 2 : 4px;
+        y: root.vertical ? 4px : (parent.height - 2px) / 2;
+        width: root.vertical ? 2px : parent.width - 8px;
+        height: root.vertical ? parent.height - 8px : 2px;
+        background: ModernTheme.line;
+    }
+    Rectangle {
+        x: root.vertical ? 2px : 4px + clamp(root.value, 0, 1) * max(0px, parent.width - 18px);
+        y: root.vertical ? 4px + (1 - clamp(root.value, 0, 1)) * max(0px, parent.height - 18px) : (parent.height - 2px) / 2;
+        width: root.vertical ? parent.width - 4px : 10px;
+        height: root.vertical ? 10px : parent.height - 4px;
+        background: root.enabled ? root.accent : #677382;
+        border-radius: 1px;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.cancel {
+                if root.dragging { root.dragging = false; root.gesture-ended(); }
+            } else if event.button == PointerEventButton.left {
+                if event.kind == PointerEventKind.down {
+                    root.dragging = true;
+                    root.requested(root.vertical ? 1 - clamp(self.mouse-y / max(1px, root.height), 0, 1) : clamp(self.mouse-x / max(1px, root.width), 0, 1));
+                } else if event.kind == PointerEventKind.up {
+                    if root.dragging { root.dragging = false; root.gesture-ended(); }
+                }
+            }
+        }
+        moved => {
+            if root.dragging {
+                root.requested(root.vertical ? 1 - clamp(self.mouse-y / max(1px, root.height), 0, 1) : clamp(self.mouse-x / max(1px, root.width), 0, 1));
+            }
+        }
+    }
+    changed enabled => {
+        if !root.enabled && root.dragging { root.dragging = false; root.gesture-ended(); }
+    }
+}
+
+// Presentation-only knob. Pointer drag produces normalized values; keyboard +/- is supported.
+export component ModernKnob inherits Rectangle {
+    in property <string> label;
+    in property <float> value: 0.5;
+    in property <bool> enabled: false;
+    in property <color> accent: ModernTheme.text;
+    callback requested(float);
+    callback gesture-ended();
+    min-width: 44px; preferred-width: 48px;
+    height: 60px;
+    forward-focus: keys;
+    wheel := Rectangle {
+        x: (parent.width - 32px) / 2; y: 2px;
+        width: 32px; height: 32px; border-radius: 16px;
+        background: #222932; border-width: 1px;
+        border-color: keys.has-focus ? #eeeeee : ModernTheme.line;
+    }
+    Text {
+        y: 38px; height: 16px; text: root.label; color: ModernTheme.muted;
+        font-size: 10px; horizontal-alignment: center; vertical-alignment: center;
+    }
+    property <float> drag-value: 0.5;
+    property <bool> dragging: false;
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.cancel {
+                if root.dragging { root.dragging = false; root.gesture-ended(); }
+            } else if event.button == PointerEventButton.left {
+                if event.kind == PointerEventKind.down {
+                    keys.focus(); root.drag-value = root.value; root.dragging = true;
+                } else if event.kind == PointerEventKind.up {
+                    if root.dragging { root.dragging = false; root.gesture-ended(); }
+                }
+            }
+        }
+        moved => { if root.dragging { root.requested(clamp(root.drag-value + (self.pressed-y - self.mouse-y) / 120px, 0, 1)); } }
+    }
+    changed enabled => { if !root.enabled && root.dragging { root.dragging = false; root.gesture-ended(); } }
+    keys := FocusScope {
+        width: 0px; height: 0px; enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == "+" { root.requested(clamp(root.value + 0.01, 0, 1)); return accept; }
+            if event.text == "-" { root.requested(clamp(root.value - 0.01, 0, 1)); return accept; }
+            return reject;
+        }
+    }
+}

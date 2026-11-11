@@ -1,0 +1,75 @@
+import { ModernTheme } from "modern-theme.slint";
+import { ControlKind, DeckAction } from "modern-state.slint";
+import { ModernKnob, ValueRail } from "modern-controls.slint";
+import { HoldButton } from "modern-controls.slint";
+
+export component ModernChannelStrip inherits Rectangle {
+    in property <int> deck-index;
+    in property <color> accent;
+    in property <bool> active-view: true;
+    in property <bool> supported: true;
+    in property <bool> can-control: true;
+    in property <float> gain: 0.5;
+    in property <float> high: 0.667;
+    in property <float> mid: 0.667;
+    in property <float> low: 0.667;
+    in property <float> filter: 0.5;
+    in property <float> volume: 1;
+    in property <float> meter: 0;
+    in property <bool> monitored: false;
+    in property <bool> monitor-available: false;
+    property <bool> controllable: root.active-view && root.supported && root.can-control;
+    callback control-requested(int, ControlKind, float);
+    callback gesture-ended(int);
+    callback action(int, DeckAction);
+    width: 62px; background: #10141a;
+    HorizontalLayout {
+        padding: 3px; spacing: 2px;
+        VerticalLayout {
+            spacing: 0px;
+            ModernKnob {
+                label: "Gain"; value: root.gain; accent: root.accent; enabled: root.controllable;
+                requested(value) => { root.control-requested(root.deck-index, ControlKind.gain, value); }
+                gesture-ended => { root.gesture-ended(root.deck-index); }
+            }
+            ModernKnob {
+                label: "High"; value: root.high; accent: root.accent; enabled: root.controllable;
+                requested(value) => { root.control-requested(root.deck-index, ControlKind.high, value); }
+                gesture-ended => { root.gesture-ended(root.deck-index); }
+            }
+            ModernKnob {
+                label: "Mid"; value: root.mid; accent: root.accent; enabled: root.controllable;
+                requested(value) => { root.control-requested(root.deck-index, ControlKind.mid, value); }
+                gesture-ended => { root.gesture-ended(root.deck-index); }
+            }
+            ModernKnob {
+                label: "Low"; value: root.low; accent: root.accent; enabled: root.controllable;
+                requested(value) => { root.control-requested(root.deck-index, ControlKind.low, value); }
+                gesture-ended => { root.gesture-ended(root.deck-index); }
+            }
+            ModernKnob {
+                label: "Filter"; value: root.filter; accent: root.accent; enabled: root.controllable;
+                requested(value) => { root.control-requested(root.deck-index, ControlKind.filter, value); }
+                gesture-ended => { root.gesture-ended(root.deck-index); }
+            }
+            HoldButton {
+                text: "PFL"; active: root.monitored; accent: root.accent;
+                enabled: root.controllable && root.monitor-available;
+                started => { root.action(root.deck-index, DeckAction.monitor); }
+                canceled => { }
+            }
+        }
+        VerticalLayout {
+            spacing: 5px;
+            Rectangle {
+                height: 80px; width: 8px; background: #080a0c;
+                Rectangle { y: parent.height * (1 - clamp(root.meter, 0, 1)); height: parent.height * clamp(root.meter, 0, 1); background: root.accent; }
+            }
+            ValueRail {
+                width: 17px; value: root.volume; enabled: root.controllable; label: "Channel volume";
+                requested(value) => { root.control-requested(root.deck-index, ControlKind.volume, value); }
+                gesture-ended => { root.gesture-ended(root.deck-index); }
+            }
+        }
+    }
+}

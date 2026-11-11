@@ -1,0 +1,378 @@
+import { ModernTheme } from "modern-theme.slint";
+import { DeckAction, HoldAction, ControlKind, JogPhase } from "modern-state.slint";
+import { BeatLine } from "theme.slint";
+import { ModernPair } from "modern-pair.slint";
+import { HotCueRow } from "theme.slint";
+import { Button } from "std-widgets.slint";
+
+// Moderne DJ-Performance-Ansicht für zwei Decks (A/B oder C/D).
+// Nimmt deck-spezifische primitive Properties — die Mapping-Logik
+// erfolgt in app.slint, nicht in Slint-Funktionen (Slint 1.18 Limit).
+export component ModernView inherits Rectangle {
+    in property <bool> four-slots: false;
+    in property <bool> library-open: true;
+    in property <bool> active-view: true;
+    in property <float> crossfader: 0.5;
+    in property <int> external-drop-deck: -1;
+
+    // Deck A (or left pair)
+    in property <color> deck-a-cover: #000000;
+    in property <string> deck-a-title: "";
+    in property <string> deck-a-artist: "";
+    in property <string> deck-a-musical-key: "";
+    in property <string> deck-a-time-text: "";
+    in property <string> deck-a-bpm: "";
+    in property <float> deck-a-pitch-percent: 0.0;
+    in property <float> deck-a-pitch-min: -50.0;
+    in property <float> deck-a-pitch-max: 100.0;
+    in property <bool> deck-a-loaded: false;
+    in property <bool> deck-a-playing: false;
+    in property <bool> deck-a-loop-active: false;
+    in property <bool> deck-a-supported: true;
+    in property <bool> deck-a-can-control: true;
+    in property <bool> deck-a-sync-active: false;
+    in property <bool> deck-a-keylock-active: false;
+    in property <bool> deck-a-quantize-active: false;
+    in property <[float]> deck-a-overview;
+    in property <[float]> deck-a-detail;
+    in property <[color]> deck-a-overview-colors;
+    in property <[color]> deck-a-detail-colors;
+    in property <[HotCueRow]> deck-a-cues;
+    in property <[BeatLine]> deck-a-beats;
+    in property <float> deck-a-playhead: 0.5;
+    in property <float> deck-a-detail-playhead: 0.5;
+    in property <float> deck-a-detail-start: 0;
+    in property <float> deck-a-detail-end: 100;
+    in property <float> deck-a-overview-loop-start: -1;
+    in property <float> deck-a-overview-loop-end: -1;
+    in property <float> deck-a-detail-loop-start: -1;
+    in property <float> deck-a-detail-loop-end: -1;
+    in property <float> deck-a-gain: 0.5;
+    in property <float> deck-a-high: 0.667;
+    in property <float> deck-a-mid: 0.667;
+    in property <float> deck-a-low: 0.667;
+    in property <float> deck-a-filter: 0.5;
+    in property <float> deck-a-volume: 1;
+    in property <float> deck-a-meter: 0;
+    in property <bool> deck-a-monitored: false;
+    in property <bool> deck-a-monitor-available: false;
+    in property <float> deck-a-platter-angle: 0.0;
+    in property <string> deck-a-platter-time: "";
+    in property <bool> deck-a-platter-touched: false;
+    in property <float> deck-a-platter-position: 0.5;
+    in property <string> deck-a-platter-bpm: "";
+    in property <float> deck-a-platter-pitch-percent: 0.0;
+
+    // Deck B (or right pair)
+    in property <color> deck-b-cover: #000000;
+    in property <string> deck-b-title: "";
+    in property <string> deck-b-artist: "";
+    in property <string> deck-b-musical-key: "";
+    in property <string> deck-b-time-text: "";
+    in property <string> deck-b-bpm: "";
+    in property <float> deck-b-pitch-percent: 0.0;
+    in property <float> deck-b-pitch-min: -50.0;
+    in property <float> deck-b-pitch-max: 100.0;
+    in property <bool> deck-b-loaded: false;
+    in property <bool> deck-b-playing: false;
+    in property <bool> deck-b-loop-active: false;
+    in property <bool> deck-b-supported: true;
+    in property <bool> deck-b-can-control: true;
+    in property <bool> deck-b-sync-active: false;
+    in property <bool> deck-b-keylock-active: false;
+    in property <bool> deck-b-quantize-active: false;
+    in property <[float]> deck-b-overview;
+    in property <[float]> deck-b-detail;
+    in property <[color]> deck-b-overview-colors;
+    in property <[color]> deck-b-detail-colors;
+    in property <[HotCueRow]> deck-b-cues;
+    in property <[BeatLine]> deck-b-beats;
+    in property <float> deck-b-playhead: 0.5;
+    in property <float> deck-b-detail-playhead: 0.5;
+    in property <float> deck-b-detail-start: 0;
+    in property <float> deck-b-detail-end: 100;
+    in property <float> deck-b-overview-loop-start: -1;
+    in property <float> deck-b-overview-loop-end: -1;
+    in property <float> deck-b-detail-loop-start: -1;
+    in property <float> deck-b-detail-loop-end: -1;
+    in property <float> deck-b-gain: 0.5;
+    in property <float> deck-b-high: 0.667;
+    in property <float> deck-b-mid: 0.667;
+    in property <float> deck-b-low: 0.667;
+    in property <float> deck-b-filter: 0.5;
+    in property <float> deck-b-volume: 1;
+    in property <float> deck-b-meter: 0;
+    in property <bool> deck-b-monitored: false;
+    in property <bool> deck-b-monitor-available: false;
+    in property <float> deck-b-platter-angle: 0.0;
+    in property <string> deck-b-platter-time: "";
+    in property <bool> deck-b-platter-touched: false;
+    in property <float> deck-b-platter-position: 0.5;
+    in property <string> deck-b-platter-bpm: "";
+    in property <float> deck-b-platter-pitch-percent: 0.0;
+
+    // Deck C (4-slot only)
+    in property <color> deck-c-cover: #000000;
+    in property <string> deck-c-title: "";
+    in property <string> deck-c-bpm: "";
+    in property <float> deck-c-pitch-percent: 0.0;
+    in property <bool> deck-c-loaded: false;
+    in property <bool> deck-c-playing: false;
+    in property <bool> deck-c-loop-active: false;
+    in property <bool> deck-c-supported: true;
+    in property <bool> deck-c-can-control: true;
+    in property <bool> deck-c-sync-active: false;
+    in property <bool> deck-c-keylock-active: false;
+    in property <bool> deck-c-quantize-active: false;
+    in property <[float]> deck-c-overview;
+    in property <[float]> deck-c-detail;
+    in property <[color]> deck-c-overview-colors;
+    in property <[color]> deck-c-detail-colors;
+    in property <[HotCueRow]> deck-c-cues;
+    in property <[BeatLine]> deck-c-beats;
+    in property <float> deck-c-playhead: 0.5;
+    in property <float> deck-c-detail-loop-start: -1;
+        in property <float> deck-c-platter-angle: 0.0;
+    in property <string> deck-c-platter-time: "";
+    in property <bool> deck-c-platter-touched: false;
+        in property <float> deck-c-platter-position: 0.5;
+        in property <float> deck-c-detail-loop-end: -1;
+
+    // Deck D (4-slot only)
+    in property <color> deck-d-cover: #000000;
+    in property <string> deck-d-title: "";
+    in property <string> deck-d-bpm: "";
+    in property <float> deck-d-pitch-percent: 0.0;
+    in property <bool> deck-d-loaded: false;
+    in property <bool> deck-d-playing: false;
+    in property <bool> deck-d-loop-active: false;
+    in property <bool> deck-d-supported: true;
+    in property <bool> deck-d-can-control: true;
+    in property <bool> deck-d-sync-active: false;
+    in property <bool> deck-d-keylock-active: false;
+    in property <bool> deck-d-quantize-active: false;
+    in property <[float]> deck-d-overview;
+    in property <[float]> deck-d-detail;
+    in property <[color]> deck-d-overview-colors;
+    in property <[color]> deck-d-detail-colors;
+    in property <[HotCueRow]> deck-d-cues;
+    in property <[BeatLine]> deck-d-beats;
+    in property <float> deck-d-playhead: 0.5;
+    in property <float> deck-d-detail-loop-start: -1;
+        in property <float> deck-d-platter-angle: 0.0;
+    in property <string> deck-d-platter-time: "";
+    in property <bool> deck-d-platter-touched: false;
+        in property <float> deck-d-platter-position: 0.5;
+        in property <float> deck-d-detail-loop-end: -1;
+
+    // Callbacks für alle Decks
+    callback action(int, DeckAction);
+    callback hold-started(int, HoldAction, int);
+    callback hold-ended(int, HoldAction, int);
+    callback hold-canceled(int, HoldAction, int);
+    callback control-requested(int, ControlKind, float);
+    callback gesture-ended(int);
+    callback jog(int, JogPhase, float, float);
+    callback seek-requested(int, float);
+    callback detail-zoom(int, int);
+    callback toggle-library();
+    pure callback external-drop-target(float, float) -> int;
+    external-drop-target(px, py) => {
+        if px >= primary-pair.left-drop-x && px < primary-pair.left-drop-x + primary-pair.left-drop-width
+            && py >= primary-pair.left-drop-y && py < primary-pair.left-drop-y + primary-pair.left-drop-height {
+            return 0;
+        }
+        if px >= primary-pair.right-drop-x && px < primary-pair.right-drop-x + primary-pair.right-drop-width
+            && py >= primary-pair.right-drop-y && py < primary-pair.right-drop-y + primary-pair.right-drop-height {
+            return 1;
+        }
+        return -1;
+    }
+    background: ModernTheme.background;
+
+    VerticalLayout {
+        padding: 2px; spacing: 3px;
+        HorizontalLayout {
+            height: 26px; spacing: 6px;
+            Button {
+                text: root.library-open ? "HIDE LIBRARY" : "SHOW LIBRARY";
+                accessible-label: root.library-open ? "Hide track library" : "Show track library";
+                clicked => { root.toggle-library(); }
+            }
+            Text { text: "A/B supported" + (root.four-slots ? " • C/D read-only placeholders" : ""); color: ModernTheme.muted; font-size: 10px; vertical-alignment: center; }
+        }
+
+        // Primary pair (A/B or C/D)
+        primary-pair := ModernPair {
+            first-index: 0; compact: root.four-slots;
+            active-view: root.active-view;
+            show-crossfader: true;
+            external-drop-deck: root.external-drop-deck;
+            crossfader: root.crossfader;
+            left-accent: ModernTheme.green;
+            left-cover: root.deck-a-cover;
+            left-title: root.deck-a-title;
+            left-artist: root.deck-a-artist;
+            left-musical-key: root.deck-a-musical-key;
+            left-time-text: root.deck-a-time-text;
+            left-bpm: root.deck-a-bpm;
+            left-pitch-percent: root.deck-a-pitch-percent;
+            left-pitch-min: root.deck-a-pitch-min;
+            left-pitch-max: root.deck-a-pitch-max;
+            left-loaded: root.deck-a-loaded;
+            left-playing: root.deck-a-playing;
+            left-loop-active: root.deck-a-loop-active;
+            left-supported: root.deck-a-supported;
+            left-can-control: root.deck-a-can-control;
+            left-sync-active: root.deck-a-sync-active;
+            left-keylock-active: root.deck-a-keylock-active;
+            left-quantize-active: root.deck-a-quantize-active;
+            left-overview: root.deck-a-overview;
+            left-detail: root.deck-a-detail;
+            left-overview-colors: root.deck-a-overview-colors;
+            left-detail-colors: root.deck-a-detail-colors;
+            left-cues: root.deck-a-cues;
+            left-beats: root.deck-a-beats;
+            left-playhead: root.deck-a-playhead;
+            left-detail-playhead: root.deck-a-detail-playhead;
+            left-detail-start: root.deck-a-detail-start;
+            left-detail-end: root.deck-a-detail-end;
+            left-overview-loop-start: root.deck-a-overview-loop-start;
+            left-overview-loop-end: root.deck-a-overview-loop-end;
+            left-detail-loop-start: root.deck-a-detail-loop-start;
+            left-detail-loop-end: root.deck-a-detail-loop-end;
+            left-gain: root.deck-a-gain; left-high: root.deck-a-high; left-mid: root.deck-a-mid;
+            left-low: root.deck-a-low; left-filter: root.deck-a-filter; left-volume: root.deck-a-volume;
+            left-meter: root.deck-a-meter; left-monitored: root.deck-a-monitored;
+            left-monitor-available: root.deck-a-monitor-available;
+            left-platter-angle: root.deck-a-platter-angle;
+            left-platter-time: root.deck-a-platter-time;
+            left-platter-touched: root.deck-a-platter-touched;
+            left-platter-position: root.deck-a-platter-position;
+            left-platter-bpm: root.deck-a-platter-bpm;
+            left-platter-pitch-percent: root.deck-a-platter-pitch-percent;
+            right-accent: ModernTheme.blue;
+            right-cover: root.deck-b-cover;
+            right-title: root.deck-b-title;
+            right-artist: root.deck-b-artist;
+            right-musical-key: root.deck-b-musical-key;
+            right-time-text: root.deck-b-time-text;
+            right-bpm: root.deck-b-bpm;
+            right-pitch-percent: root.deck-b-pitch-percent;
+            right-pitch-min: root.deck-b-pitch-min;
+            right-pitch-max: root.deck-b-pitch-max;
+            right-loaded: root.deck-b-loaded;
+            right-playing: root.deck-b-playing;
+            right-loop-active: root.deck-b-loop-active;
+            right-supported: root.deck-b-supported;
+            right-can-control: root.deck-b-can-control;
+            right-sync-active: root.deck-b-sync-active;
+            right-keylock-active: root.deck-b-keylock-active;
+            right-quantize-active: root.deck-b-quantize-active;
+            right-overview: root.deck-b-overview;
+            right-detail: root.deck-b-detail;
+            right-overview-colors: root.deck-b-overview-colors;
+            right-detail-colors: root.deck-b-detail-colors;
+            right-cues: root.deck-b-cues;
+            right-beats: root.deck-b-beats;
+            right-playhead: root.deck-b-playhead;
+            right-detail-playhead: root.deck-b-detail-playhead;
+            right-detail-start: root.deck-b-detail-start;
+            right-detail-end: root.deck-b-detail-end;
+            right-overview-loop-start: root.deck-b-overview-loop-start;
+            right-overview-loop-end: root.deck-b-overview-loop-end;
+            right-detail-loop-start: root.deck-b-detail-loop-start;
+            right-detail-loop-end: root.deck-b-detail-loop-end;
+            right-gain: root.deck-b-gain; right-high: root.deck-b-high; right-mid: root.deck-b-mid;
+            right-low: root.deck-b-low; right-filter: root.deck-b-filter; right-volume: root.deck-b-volume;
+            right-meter: root.deck-b-meter; right-monitored: root.deck-b-monitored;
+            right-monitor-available: root.deck-b-monitor-available;
+            right-platter-angle: root.deck-b-platter-angle;
+            right-platter-time: root.deck-b-platter-time;
+            right-platter-touched: root.deck-b-platter-touched;
+            right-platter-position: root.deck-b-platter-position;
+            right-platter-bpm: root.deck-b-platter-bpm;
+            right-platter-pitch-percent: root.deck-b-platter-pitch-percent;
+            action(deck, action) => { root.action(deck, action); }
+            hold-started(deck, kind, slot) => { root.hold-started(deck, kind, slot); }
+            hold-ended(deck, kind, slot) => { root.hold-ended(deck, kind, slot); }
+            hold-canceled(deck, kind, slot) => { root.hold-canceled(deck, kind, slot); }
+            control-requested(deck, kind, value) => { root.control-requested(deck, kind, value); }
+            gesture-ended(deck) => { root.gesture-ended(deck); }
+            jog(deck, phase, x, y) => { root.jog(deck, phase, x, y); }
+            seek-requested(deck, value) => { root.seek-requested(deck, value); }
+            detail-zoom(deck, step) => { root.detail-zoom(deck, step); }
+        }
+
+        // Secondary pair (4-slot only: C/D)
+        if root.four-slots : ModernPair {
+            first-index: 2; compact: root.four-slots;
+            active-view: root.active-view;
+            show-crossfader: false;
+            crossfader: root.crossfader;
+            left-accent: ModernTheme.purple;
+            left-cover: root.deck-c-cover;
+            left-title: root.deck-c-title;
+            left-bpm: root.deck-c-bpm;
+            left-pitch-percent: root.deck-c-pitch-percent;
+            left-loaded: root.deck-c-loaded;
+            left-playing: root.deck-c-playing;
+            left-loop-active: root.deck-c-loop-active;
+            left-supported: root.deck-c-supported;
+            left-can-control: root.deck-c-can-control;
+            left-sync-active: root.deck-c-sync-active;
+            left-keylock-active: root.deck-c-keylock-active;
+            left-quantize-active: root.deck-c-quantize-active;
+            left-overview: root.deck-c-overview;
+            left-detail: root.deck-c-detail;
+            left-overview-colors: root.deck-c-overview-colors;
+            left-detail-colors: root.deck-c-detail-colors;
+            left-cues: root.deck-c-cues;
+            left-beats: root.deck-c-beats;
+            left-playhead: root.deck-c-playhead;
+            left-detail-loop-start: root.deck-c-detail-loop-start;
+            left-detail-loop-end: root.deck-c-detail-loop-end;
+            right-accent: ModernTheme.orange;
+            right-cover: root.deck-d-cover;
+            right-title: root.deck-d-title;
+            right-bpm: root.deck-d-bpm;
+            right-pitch-percent: root.deck-d-pitch-percent;
+            right-loaded: root.deck-d-loaded;
+            right-playing: root.deck-d-playing;
+            right-loop-active: root.deck-d-loop-active;
+            right-supported: root.deck-d-supported;
+            right-can-control: root.deck-d-can-control;
+            right-sync-active: root.deck-d-sync-active;
+            right-keylock-active: root.deck-d-keylock-active;
+            right-quantize-active: root.deck-d-quantize-active;
+            right-overview: root.deck-d-overview;
+            right-detail: root.deck-d-detail;
+            right-overview-colors: root.deck-d-overview-colors;
+            right-detail-colors: root.deck-d-detail-colors;
+            right-cues: root.deck-d-cues;
+            right-beats: root.deck-d-beats;
+            right-playhead: root.deck-d-playhead;
+            right-detail-loop-start: root.deck-d-detail-loop-start;
+            right-detail-loop-end: root.deck-d-detail-loop-end;
+            left-platter-angle: root.deck-c-platter-angle;
+            left-platter-time: root.deck-c-platter-time;
+            left-platter-touched: root.deck-c-platter-touched;
+            left-platter-position: root.deck-c-platter-position;
+            right-platter-angle: root.deck-d-platter-angle;
+            right-platter-time: root.deck-d-platter-time;
+            right-platter-touched: root.deck-d-platter-touched;
+            right-platter-position: root.deck-d-platter-position;
+            action(deck, action) => { root.action(deck, action); }
+            hold-started(deck, kind, slot) => { root.hold-started(deck, kind, slot); }
+            hold-ended(deck, kind, slot) => { root.hold-ended(deck, kind, slot); }
+            hold-canceled(deck, kind, slot) => { root.hold-canceled(deck, kind, slot); }
+            control-requested(deck, kind, value) => { root.control-requested(deck, kind, value); }
+            gesture-ended(deck) => { root.gesture-ended(deck); }
+            jog(deck, phase, x, y) => { root.jog(deck, phase, x, y); }
+            seek-requested(deck, value) => { root.seek-requested(deck, value); }
+            detail-zoom(deck, step) => { root.detail-zoom(deck, step); }
+        }
+
+    }
+}
+
