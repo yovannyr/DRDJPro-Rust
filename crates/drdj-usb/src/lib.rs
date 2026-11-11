@@ -1,8 +1,14 @@
 //! USB discovery without interface claims, transfers or audio-thread I/O.
 //! Native contexts are constructed and used inside the discovery worker.
+mod hid;
+mod hid_layout;
 mod io;
 mod native;
+mod native_hid;
 mod native_io;
+mod session;
+pub use hid::*;
+pub use hid_layout::ReportLayout;
 mod worker;
 pub use io::*;
 pub use native::NativeDiscovery;

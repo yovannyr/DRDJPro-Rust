@@ -1,10 +1,6 @@
 use crate::*;
 use rusb::{Context, Device, DeviceHandle, Direction, UsbContext};
-use std::{
-    collections::BTreeMap,
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 
 const MAX_SESSIONS: usize = 16;
 struct Lease {
@@ -248,6 +244,11 @@ impl Transport for NativeTransport {
         command.validate()?;
         let session = command.session();
         let result = match command {
+            IoCommand::Hid(_) => {
+                return Err(IoError::InvalidParameter(
+                    "HID request sent to USB transport",
+                ))
+            }
             IoCommand::ReadStrings { target, timeout } => self.strings(target, timeout),
             IoCommand::SetString {
                 target,
@@ -377,16 +378,11 @@ impl Transport for NativeTransport {
 // IDs are process-local and never persisted. Recreating a native worker cannot
 // make an old or another worker's ID address a different active lease.
 fn allocate_session_id() -> Result<SessionId, IoError> {
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let mut current = NEXT.load(Ordering::Relaxed);
-    loop {
-        let next = current.checked_add(1).ok_or(IoError::SessionLimit)?;
-        match NEXT.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return Ok(SessionId(current)),
-            Err(value) => current = value,
-        }
-    }
+    crate::session::next_id()
+        .map(SessionId)
+        .ok_or(IoError::SessionLimit)
 }
+
 fn string_descriptor(value: &str) -> Vec<u8> {
     let mut descriptor = Vec::with_capacity(2 + value.len() * 2);
     descriptor.extend_from_slice(&[0, 3]);

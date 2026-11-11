@@ -63,7 +63,8 @@ Crate-Formatprüfung und `git diff --check` ebenfalls bestanden.
 ## Noch offen
 
 - Vollständige Gerätefinder-UI/Composition Root und Einbindung der Geräte-Strings.
-- HID-Backend und dokumentierte Controller-Profile.
+- Kontinuierliche gepufferte HID-Eingangserfassung, Controller-Mappings und
+  dokumentierte Geräteprofile; der explizite Raw-HID-Transport steht bereit.
 - Reale DVS-Dekodierung; der vorhandene `dvs.rs`-Prototyp simuliert diese nur.
 - Vollständige FR-/SC-Abnahme und Gerätemessungen. Insbesondere werden keine
   Serato-Protokolldetails erfunden und keine Herstellerkompatibilität behauptet.
@@ -137,3 +138,55 @@ Reale Claims und Transfers wurden nicht auf angeschlossenen Geräten ausgeführt
 Die finale Test-/Clippy-/Formatprüfung nach diesen Korrekturen ist bestanden:
 18 Tests, striktes Crate-Clippy, striktes Clippy aller App-Targets
 (`--no-deps -- -D warnings`), `cargo fmt -p drdj-usb --check` und `git diff --check`.
+
+## Schritt 3: expliziter HID-Transport
+
+`HidWorker` verwendet HIDAPI 2.6.3 mit dem Standard-Backend auf einem eigenen
+Worker. Er nutzt dieselbe geprüfte begrenzte Auftrags-/Ticket-Implementierung,
+aber eine getrennte Befehlsnamensdomäne. Der USB-Backend akzeptiert keine
+HID-Befehle und umgekehrt. USB-Bulk-Transfers blockieren dadurch keinen
+separaten HID-Worker. Die APIs gehören in UI/Control-Worker, nicht in Audio-Callbacks;
+sie sind keine Behauptung einer allokations- oder lockfreien Callback-Schnittstelle.
+
+`Enumerate` liefert OS-Metadaten, Busart, Hersteller, Produkt, Seriennummer und
+exakte Pfad-/Collection-Identität, ohne einen expliziten Geräte-Open-, Input-
+oder Output-Auftrag auszulösen. Unbekannte Geräte werden nicht automatisch
+geöffnet. Tastatur-/Maus-/System-Control-Collections werden beim Open anhand
+der OS-Metadaten und zusätzlich anhand des Report-Deskriptors abgewiesen.
+
+Ein expliziter Open prüft Pfad, VID/PID, Interface und Usage erneut und liest
+den Report-Deskriptor. `ReportLayout` berechnet die Paketlängen einschließlich
+Bit-Padding, mehrerer Report-IDs, Global-Push/Pop und getrennter Input-/Output-/
+Feature-Reports. Die Maps sind für Aufrufer unveränderlich. Trunkierte Items,
+Überläufe, unausgeglichene Collections/Stacks, ungültige IDs, gemischte ID-Modi,
+übermäßige Längen und nicht unterstützte Long-Items ergeben einen Fehler.
+Der Parser ersetzt keine herstellerspezifische Zuordnung von Reportfeldern.
+
+Input-Reads sind explizite Aufträge mit `read_timeout(..., 0)`; aktuell läuft
+noch kein kontinuierlicher Input-Poller. Native API-Paddingbytes bleiben neben
+der logischen Reportlänge erhalten. Output/Feature verwenden den von HIDAPI
+geforderten Report-ID-Präfix, einschließlich ID 0 für unnummerierte Reports.
+Windows-Padding auf die maximale API-Länge wird berücksichtigt. Alle regulären
+API-Frames bleiben auf 4096 Bytes begrenzt; Input-/Feature-Lesepuffer haben ein
+zusätzliches Prüfbyte. Überlängen werden vor Annahme des Ergebnisses abgewiesen,
+statt ein von HIDAPI gekürztes Präfix als gültigen Report auszugeben.
+
+Native HID-I/O-Fehler und fehlerhafte Eingangsreports invalidieren nur die
+betroffene Session. Handles schließen vor ihrem Kontext und auf dem Worker.
+USB und HID verwenden gemeinsam prozessweit eindeutige Session-IDs; ein
+Worker-Neustart lässt alte IDs nicht auf andere Geräte zeigen. Keine Session
+wird über Prozessneustarts persistiert. HID-Feature-/Output-APIs bieten nicht
+überall frei konfigurierbare native Abbruchfristen; nur der UI-Auftrag bleibt
+nicht blockierend. Physische Latenz-/Kompatibilitätsziele bleiben ungemessen.
+
+Automatisierte Metadatenprobe am 2026-11-12: 28 HID-Collections in 208,49 ms.
+Es wurden keine Geräte für Reports geöffnet und keine Input-/Output-Reports
+angefordert. Die Ausgabe enthielt keine Seriennummern oder Gerätepfade.
+
+28 Tests prüfen USB/HID-Worker, Queue-/Session-Policies, Descriptor-Parsing,
+System-Input-Schutz, Report-ID-/Padding-Fälle und Überlängen. Das unabhängige
+GPT-6.1-Sol-Review (Mittel) fand die mögliche unbemerkte Eingangsverkürzung;
+Prüfbyte, Completion-Validierung und Lease-Invalidierung sind korrigiert und
+im Nachreview akzeptiert. Striktes Crate-Clippy und Clippy aller App-Targets
+sind bestanden. Auch die finale Crate-Formatprüfung und `git diff --check`
+sind bestanden. Reale HID-Report-/Feature-/Output-Tests bleiben offen.

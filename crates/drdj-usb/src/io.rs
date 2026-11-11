@@ -62,6 +62,8 @@ pub struct ControlSetup {
 /// Explicit operations. Nothing opens, claims, detaches or resets automatically.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IoCommand {
+    /// Separate command namespace; handled only by a HID transport worker.
+    Hid(crate::HidCommand),
     ReadStrings {
         target: DeviceTarget,
         timeout: Duration,
@@ -174,6 +176,7 @@ impl IoCommand {
                 }
             }
             Self::Close { .. } | Self::ClearHalt { .. } => return Ok(()),
+            Self::Hid(command) => return command.validate(),
             Self::ReadStrings { timeout, .. } | Self::SetString { timeout, .. } => (0, *timeout),
             Self::ControlIn {
                 length, timeout, ..
@@ -220,7 +223,10 @@ impl IoCommand {
     }
     pub(crate) fn session(&self) -> Option<SessionId> {
         match self {
-            Self::Open { .. } | Self::ReadStrings { .. } | Self::SetString { .. } => None,
+            Self::Open { .. }
+            | Self::ReadStrings { .. }
+            | Self::SetString { .. }
+            | Self::Hid(_) => None,
             Self::Close { session }
             | Self::ClearHalt { session, .. }
             | Self::ControlIn { session, .. }
@@ -264,6 +270,14 @@ pub enum IoError {
     SessionLimit,
     #[error("USB backend: {0}")]
     Backend(String),
+    #[error("HID backend: {0}")]
+    HidBackend(String),
+    #[error("HID descriptor: {0}")]
+    HidDescriptor(&'static str),
+    #[error("system keyboard/mouse/control HID collections cannot be opened as DJ input")]
+    ProtectedInput,
+    #[error("HID report does not match the descriptor")]
+    InvalidHidReport,
 }
 /// Which optional string descriptor failed; the rest can still be displayed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,6 +298,7 @@ pub struct DeviceStrings {
 /// Exactly one outcome for each accepted request. Short reads/writes are explicit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IoReply {
+    Hid(crate::HidReply),
     Strings(DeviceStrings),
     Opened(SessionId),
     Closed,
@@ -323,6 +338,8 @@ impl IoTicket {
     }
 }
 /// Native transport actor; no blocking call on submit, poll or drop.
+/// This is a control/UI API using channels and ticket allocations, not an
+/// audio-callback API or a claim of lock-free execution.
 pub struct IoWorker {
     sender: SyncSender<Pending>,
     stop: Arc<AtomicBool>,
