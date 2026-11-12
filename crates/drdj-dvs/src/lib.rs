@@ -2,6 +2,12 @@
 //! Only explicitly named upstream record editions are supported. Physical
 //! compatibility/accuracy are separate from synthetic decoder verification.
 use std::{ffi::c_void, fmt, marker::PhantomData, ptr::NonNull, sync::Mutex};
+mod input;
+mod native_input;
+pub use input::{
+    InputCapture, InputProducer, InputSnapshot, InputState, InputStream, StreamFailure,
+};
+pub use native_input::{enumerate_inputs, InputDevice, InputFormat, InputInventory};
 
 /// Maximum stereo frames submitted per worker operation.
 pub const MAX_BLOCK_FRAMES: usize = 4096;

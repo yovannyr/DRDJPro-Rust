@@ -1349,6 +1349,7 @@ name = "drdj-dvs"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "cpal",
 ]
 
 [[package]]

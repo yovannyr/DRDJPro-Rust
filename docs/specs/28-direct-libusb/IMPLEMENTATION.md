@@ -296,3 +296,42 @@ p50 2,4 µs, p99 2,9 µs. Nur Decoderzeit, keine Eingangs-/UI-/Ausgabelatenz.
 Unabhängiges Review durch GPT-6.1 Sol (Mittel): fehlender ursprünglicher
 Copyright-Vermerk im abgeleiteten Testgenerator behoben, Nachreview akzeptiert;
 Reviewer hat alle acht Tests zusätzlich selbst erfolgreich ausgeführt.
+
+## Schritt 7: Stereo-Audioeingang und Decoder-Worker
+
+Die DVS-Crate kann einen ausdrücklich ausgewählten OS-Audioeingang über CPAL
+öffnen. Enumeration läuft auf einem aufrufenden Control-Worker und startet
+keinen Stream; fehlerhafte Gerätemetadaten werden neben gesunden Einträgen
+gemeldet. Unterscheidung erfolgt über den aktuellen OS-Namen und die geprüfte
+Default-Konfiguration; doppelte Namen werden beim Öffnen abgewiesen.
+Keine automatische Geräteauswahl oder Wiedereinschaltung. Die App-Auswahl und
+Playback-Anbindung folgen im nächsten Schritt; diese API allein steuert kein Deck.
+
+Unterstützt sind f32/i16/u16, 8–192 kHz und 2–32 Eingangskanäle; verwendet wird
+ausschließlich Paar 1/2 ohne Summierung. Einmal abgefragte native Konfiguration
+bestimmt sowohl die Prüfung als auch den Streamaufbau. Ungültige Sample-Blöcke
+und nicht endliche f32-Werte melden Streamfehler. Alle nativen Calls und der
+Decoder gehören dem Worker. Zweiphasige Stream-Guards ermöglichen Fehlerpublikation
+vor potenziell blockierendem Cleanup, auch nach fehlgeschlagenem `play()`.
+
+Der einzelne Daten-Callback kopiert/konvertiert in einen vorab allokierten
+8192-Frame-SPSC-Ring aus Atomics: kein Lock, Kanalversand, Heap-Allocation,
+Logging oder Decoderaufruf in diesem Pfad. Volle Puffer zählen verworfene Frames.
+Der Worker verwirft überlaufene oder mehr als 20 ms anstehende Daten, setzt
+die Decoderhistorie zurück und erhöht eine Verbindungsepoche. Verlust nach
+gültigem Timecode erhöht ebenfalls die Epoche, damit langsame Verbraucher
+auch einen schon wiedererfassten Ausfall erkennen. Nach 50 ms ohne PCM wird
+Signalverlust veröffentlicht. Snapshots sind nicht wartend lesbar, enthalten
+Workerzeit statt Hardwareankunftszeit; Verbraucher müssen alte Snapshots
+zusätzlich zurückweisen. Drop wartet nicht auf Treiber oder Threadende.
+
+17 automatisierte Tests bestanden: Decoderfälle plus Ring-Grenzen/Stereo/Wrap,
+malforme Samples, Vorabvalidierung, Start-/Streamfehler bei blockierendem Cleanup,
+Factorypanic, Überlauf und synthetischer Producer→Decoder→Snapshot einschließlich
+Verlust/Wiedererfassung und ausbleibender PCM-Daten. Striktes Crate-Clippy grün.
+Es wurde kein echter Audioeingang geöffnet. Hardware-Latenzen und Codec-/Treiber-
+Puffer sind ungemessen; keine physische Positionsgenauigkeit behauptet.
+Unabhängiges GPT-6.1-Sol-Review (Mittel) und Nachreview akzeptiert: doppelte
+Konfigurationsabfrage und vorzeitiger Cleanup bei Startfehler sind korrigiert.
+Reviewer hat alle 17 Tests mit Doctests ebenfalls grün ausgeführt.
+Root-Clippy aller Targets mit `dvs-xwax`, Format- und Diffprüfung bestanden.
