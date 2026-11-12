@@ -997,3 +997,15 @@ Mouse input uses the same held-platter PCM renderer, Sync/loop takeover and play
 Button release (including outside the platter), pointer cancellation, focus loss, hiding the virtual view, disconnect and transport/source replacement release the mouse session. Right-click cannot start scratching; releasing a secondary button during a left drag cancels safely because Slint releases pointer capture on any button-up. Hardware touch/jog cannot alter an active mouse-owned gesture, and the mouse cannot take over a hardware-owned hold. The hardware Vinyl toggle remains an explicit cancellation. A/B use independent sessions. Tests dispatch actual pointer events into the round GUI component, render audio, verify forward/reverse source positions and the marker, and cover pause/play restoration, focus/view cancellation, secondary-button capture loss followed by release outside, angle wrapping, center re-anchoring and input ownership.
 
 The user confirmed the preceding physical-controller jog integration works (2026-11-02). This does not constitute a measured end-to-end latency qualification or native acceptance of the newly added mouse gesture.
+
+## Generic HID profiles (Spec 28)
+
+The USB/HID finder lazily enumerates HID collections. LOAD MAPPING imports a
+bounded user-authored JSON profile; ENABLE starts only the explicitly selected
+matching collection, STOP ends acquisition. The synthetic format example is
+`docs/specs/28-direct-libusb/fixtures/hid-mapping.example.json`.
+A/B transport, contact-gated absolute seek/pitch and relative pitch encoders use
+the existing controller guards. Initially held/reconnected buttons require release
+before press. One custom HID collection is enabled at a time, independently of
+existing MIDI and DVS. Profile matches are metadata matches, not device certification.
+Native visual, controller and timing acceptance remain deferred.

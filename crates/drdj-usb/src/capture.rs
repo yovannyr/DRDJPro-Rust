@@ -21,6 +21,8 @@ pub enum CaptureStatus {
     Connected {
         epoch: u64,
         session: HidSessionId,
+        /// Full profile validation must precede dispatch, even for IDs not yet received.
+        layout: Arc<ReportLayout>,
     },
     Reconnecting {
         epoch: u64,
@@ -155,7 +157,11 @@ impl HidCapture {
                         {
                             let mut queue = worker_queue.lock().unwrap_or_else(|e| e.into_inner());
                             queue.clear();
-                            queue.status = CaptureStatus::Connected { epoch, session };
+                            queue.status = CaptureStatus::Connected {
+                                epoch,
+                                session,
+                                layout: Arc::new(layout.clone()),
+                            };
                         }
                         while !worker_stop.load(Ordering::Acquire) {
                             let reply =

@@ -4,6 +4,8 @@ mod capture;
 mod hid;
 mod hid_layout;
 mod io;
+mod mapping;
+pub use mapping::*;
 mod native;
 mod native_hid;
 pub use capture::*;

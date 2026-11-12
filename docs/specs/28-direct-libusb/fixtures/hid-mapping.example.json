@@ -1,0 +1,23 @@
+{
+  "name": "Synthetic four-byte example; not a hardware profile",
+  "vendor_id": 4660,
+  "product_id": 1,
+  "interface": 1,
+  "usage_page": 65280,
+  "usage": 1,
+  "bindings": [
+    {
+      "field": { "report_id": 0, "bit_offset": 0, "bit_width": 1 },
+      "action": { "kind": "toggle", "deck": 0 }
+    },
+    {
+      "field": { "report_id": 0, "bit_offset": 8, "bit_width": 8, "signed": true },
+      "action": { "kind": "pitch_encoder", "deck": 0, "percent_per_step": 0.1 }
+    },
+    {
+      "field": { "report_id": 0, "bit_offset": 16, "bit_width": 16 },
+      "action": { "kind": "seek", "deck": 1, "minimum": 0, "maximum": 65535 },
+      "when": { "field": { "report_id": 0, "bit_offset": 7, "bit_width": 1 }, "equals": 1 }
+    }
+  ]
+}

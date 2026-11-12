@@ -9,3 +9,5 @@ description = "Worker-owned USB discovery and device contracts for DRDJPro"
 rusb = { version = "=0.9.4", features = ["vendored"] }
 thiserror = "2"
 hidapi = "=2.6.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"

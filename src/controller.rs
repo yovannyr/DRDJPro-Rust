@@ -1264,6 +1264,22 @@ impl AudioController {
         }
         controller.wire_nudge(ui);
         controller.wire_mc4000_pitch(ui);
+        let weak = Rc::downgrade(&controller);
+        ui.on_hid_pitch_delta(move |deck, delta| {
+            let Some(c) = weak.upgrade() else {
+                return;
+            };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if let Err(error) = c.queue_pitch_delta(id, delta) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+        });
         controller.wire_platters(ui);
         controller.wire_temporary_cues(ui);
         controller.wire_controller_browser(ui);
@@ -2102,6 +2118,7 @@ impl AudioController {
         Ok(())
     }
     fn change_pitch_range(&self, id: DeckId) -> Result<(), String> {
+        // Pending absolute/relative requests belong to the previous range.
         let ui = self.ui.upgrade().ok_or("Window closed")?;
         let index = match id {
             DeckId::A => ui.get_left_pitch_range_index(),
@@ -2114,6 +2131,25 @@ impl AudioController {
         self.pitch_ranges.set(ranges);
         self.disarm_pitch_pickup();
         Ok(())
+    }
+    fn queue_pitch_delta(&self, id: DeckId, delta: f32) -> Result<(), String> {
+        if !delta.is_finite() {
+            return Err("Invalid relative pitch".into());
+        }
+        if !self.can_control_deck(id) {
+            return Err("Finish loading before changing pitch".into());
+        }
+        let snapshot = self.engine.borrow().snapshot(id);
+        let source = snapshot.detail.ok_or("Load a track first")?;
+        let factor = self.desired_pitch(id, &source, snapshot.requested_speed);
+        let range = self.pitch_ranges.get()[Self::grid_index(id)];
+        if !range.contains(factor) {
+            return Err("Widen the pitch range or reset before relative adjustment".into());
+        }
+        let (low, high) = range.bounds();
+        let percent = ((factor - 1.0) * 100.0 + f64::from(delta)).clamp(low, high);
+        self.disarm_pitch_pickup();
+        self.queue_pitch(id, percent as f32)
     }
     /// Advance the pitch-range bound index for a hardware Note14 press, then apply it.
     /// The GUI ComboBox sets its own index before firing its callback, so a controller
@@ -9193,6 +9229,45 @@ mod dvs_tests {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hid_relative_pitch_accumulates_pending_requests_before_ui_refresh_and_clamps_each_step() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 2);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        assert!((c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.005).abs() < 1e-8);
+        assert_eq!(
+            ui.get_left_pitch_percent(),
+            0.0,
+            "display is intentionally not refreshed yet"
+        );
+        ui.invoke_pitch_left(2.0);
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        assert!((c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.025).abs() < 1e-8);
+        c.tick();
+        assert!((engine.snapshot(DeckId::A).requested_speed - 1.025).abs() < 1e-8);
+        ui.set_left_pitch_range_index(0);
+        ui.invoke_pitch_range_left();
+        ui.invoke_pitch_left(7.0);
+        ui.invoke_hid_pitch_delta(0, 5.0);
+        ui.invoke_hid_pitch_delta(0, -1.0);
+        assert!(
+            (c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.07).abs() < 1e-8,
+            "saturation applies per event"
+        );
+        ui.invoke_hid_pitch_delta(0, f32::NAN);
+        ui.invoke_hid_pitch_delta(99, 1.0);
+        assert!(
+            (c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.07).abs() < 1e-8,
+            "invalid deltas preserve valid pending intent"
+        );
+    }
     #[test]
     fn modern_layout_actions_preserve_transport_and_cancel_held_nudge() {
         i_slint_backend_testing::init_no_event_loop();

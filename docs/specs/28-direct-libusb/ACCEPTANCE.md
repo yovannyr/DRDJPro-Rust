@@ -1,6 +1,6 @@
 # Spec 28 acceptance ledger
 
-Status after software slice 8: **in progress**. This is not native hardware,
+Status after software slice 9: **software implemented; native acceptance deferred**. This is not native hardware,
 visual, listening or release acceptance. Spec 26 remains stopped.
 Current implementation/test details are in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
@@ -15,12 +15,12 @@ Current implementation/test details are in [IMPLEMENTATION.md](IMPLEMENTATION.md
 | FR-005 interrupt transfers | Validated interrupt endpoints and bounded deadlines | Real interrupt hardware/latency |
 | FR-006 connect/disconnect | Discovery polling + immutable snapshots, errors retain last known devices | Polling is not native callback notification; short between-scan events can be missed |
 | FR-007 DVS | Optional GPL xwax decode, CPAL input, explicit A/B ARM and renderer-bound ownership | Physical editions/position/latency/hearing tests; no broad Ink/NoiseMap claim |
-| FR-008 HID | HIDAPI metadata, descriptor validation, explicit sessions/reports and buffered acquisition | Generic controller mapping/app selection still pending; real touchpad/encoder/display tests |
+| FR-008 HID | HIDAPI metadata, explicit collection/profile selection, descriptor validation, buffered acquisition and mapped transport/absolute axes/relative pitch | Real touchpad/encoder/display tests; no undocumented vendor protocols implemented |
 | FR-009 claim/release | Worker ownership, managed alternate/endpoint state, RAII, disconnect invalidation | Device-specific driver behavior; no kernel detach or driver installation |
 | FR-010 error handling | Typed failures, bounded tickets, terminal policy failures, visible finder/input diagnostics | Native permission/firmware failures |
-| FR-011 device registry | Explicit VID/PID registry; duplicates rejected, no invented manufacturer profiles | User-configured controller profiles and their hardware verification |
-| FR-012 simultaneous devices | Unique process sessions, distinct equal-VID/PID connections, independent workers and DVS decks | Multi-device native stress/USB bandwidth |
-| FR-013 finder UI | Main composition wires lazy USB discovery and explicit strings | HID app selection/mapping still pending; native visual usability |
+| FR-011 device registry | Explicit VID/PID registry and bounded user-authored HID JSON profiles; exact collection metadata matching, no invented manufacturer profiles | Hardware verification for each actual profile |
+| FR-012 simultaneous devices | Unique process sessions, distinct equal-VID/PID connections, independent workers and DVS decks | GUI currently enables one custom HID collection alongside MIDI and two DVS inputs; multi-device native stress/USB bandwidth |
+| FR-013 finder UI | Main composition wires lazy USB/HID discovery, explicit strings, mapping import and ENABLE/STOP | Native visual usability |
 | FR-014 I/O isolation | Discovery/I/O/HID capture/DVS input own their threads; bounded nonwaiting UI reads | OS calls can block their own worker; no forced cancellation promise |
 | FR-015 hotplug | Snapshot updates and HID reconnect epochs; no app restart | Physical plug/unplug timing and documented mapped-controller recovery |
 

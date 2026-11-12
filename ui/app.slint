@@ -377,6 +377,20 @@ export component AppWindow inherits Window {
     callback usb-refresh();
     callback usb-inspect();
     callback usb-selection-changed();
+    in-out property <bool> hid-page: false;
+    in property <[string]> hid-device-names;
+    in-out property <int> hid-device-choice: -1;
+    in property <string> hid-status: "Select a HID collection and load its documented mapping";
+    in property <string> hid-profile-name;
+    in property <string> hid-device-details;
+    in property <bool> hid-active: false;
+    in property <bool> hid-profile-loading: false;
+    callback hid-refresh();
+    callback hid-selected();
+    callback hid-load-profile();
+    callback hid-start();
+    callback hid-stop();
+    callback hid-pitch-delta(int, float);
     in property <bool> dvs-available: false;
     in-out property <bool> dvs-page: false;
     in property <[string]> dvs-input-names;
@@ -1211,7 +1225,7 @@ Rectangle {
         }
         HorizontalLayout { height: 24px; spacing: 6px;
             Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
-            Button { text: "USB"; accessible-label: "Show USB device finder"; clicked => { root.usb-finder-open = !root.usb-finder-open; if root.usb-finder-open { root.audio-device-open=false; root.monitor-open=false; root.fx-open=false; root.eq-open=false; root.sampler-open=false; root.usb-refresh(); } } }
+            Button { text: "USB / HID"; accessible-label: "Show USB device finder"; clicked => { root.usb-finder-open = !root.usb-finder-open; if root.usb-finder-open { root.audio-device-open=false; root.monitor-open=false; root.fx-open=false; root.eq-open=false; root.sampler-open=false; if root.hid-page {root.hid-refresh();} else if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();} } } }
             Text { accessible-role: text; accessible-label: "Application status"; accessible-description: (root.library-performance == "" ? "" : root.library-performance + " | ") + root.controller-status + " | " + root.status; text: (root.library-performance == "" ? "" : root.library-performance + " | ") + (root.controller-status == "" ? root.status : root.controller-status + " | " + root.status); color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
         }
     }
@@ -1242,23 +1256,24 @@ Rectangle {
             padding:10px; spacing:8px;
             HorizontalLayout {
                 Text { text:"USB DEVICE FINDER"; color:DjTheme.text-primary; }
-                Button { text:"REFRESH"; accessible-label:"Refresh USB devices"; clicked=>{if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();}} }
+                Button { text:"REFRESH"; accessible-label:"Refresh USB devices"; clicked=>{if root.hid-page {root.hid-refresh();} else if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();}} }
+                Button {text:root.hid-page ? "USB LIST" : "HID";accessible-label:"Switch USB HID setup page";clicked=>{root.hid-page=!root.hid-page;root.dvs-page=false;if root.hid-page {root.hid-refresh();} else {root.usb-refresh();}}}
                 if root.dvs-available : Button { text:root.dvs-page ? "USB LIST" : "DVS AUDIO";
-                    accessible-label:"Switch USB DVS setup page"; clicked=>{root.dvs-page=!root.dvs-page;if root.dvs-page {root.dvs-refresh();}} }
+                    accessible-label:"Switch USB DVS setup page"; clicked=>{root.dvs-page=!root.dvs-page;root.hid-page=false;if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();}} }
                 Button { text:"CLOSE"; accessible-label:"Close USB device finder"; clicked=>{root.usb-finder-open=false;} }
             }
-            Text { text:root.dvs-page ? root.dvs-status : root.usb-finder-status; color:DjTheme.text-primary; wrap:word-wrap; }
-            if !root.dvs-page : ComboBox {
+            Text { text:root.hid-page ? root.hid-status : root.dvs-page ? root.dvs-status : root.usb-finder-status; color:DjTheme.text-primary; wrap:word-wrap; }
+            if !root.dvs-page && !root.hid-page : ComboBox {
                 accessible-label:"USB device selection"; model:root.usb-device-names;
                 current-index <=> root.usb-device-choice;
                 selected(_)=>{root.usb-selection-changed();}
             }
-            if !root.dvs-page : Button { text:root.usb-inspecting ? "READING…" : "READ DEVICE STRINGS";
+            if !root.dvs-page && !root.hid-page : Button { text:root.usb-inspecting ? "READING…" : "READ DEVICE STRINGS";
                 accessible-label:"Read selected USB device strings";
                 enabled:root.usb-device-choice >= 0 && !root.usb-inspecting;
                 clicked=>{root.usb-inspect();}
             }
-            if !root.dvs-page : Text { accessible-role:text; accessible-label:"USB device details";
+            if !root.dvs-page && !root.hid-page : Text { accessible-role:text; accessible-label:"USB device details";
                 text:root.usb-device-details; color:DjTheme.text-primary; wrap:word-wrap; vertical-stretch:1; }
             if root.dvs-page : Rectangle {
                 VerticalLayout { spacing:6px;
@@ -1280,6 +1295,19 @@ Rectangle {
                     Text {text:root.dvs-b-status;color:DjTheme.text-primary;wrap:word-wrap;}
                     Text {text:"Signal loss or manual transport changes require ARM again. Phono/record/offset changes apply on the next ARM.";color:#a6b4c8;wrap:word-wrap;}
                     Button {text:"xwax — GPLv3 LICENSE / SOURCE / NO WARRANTY";accessible-label:"DVS license and source";clicked=>{root.dvs-license();}}
+                }
+            }
+            if root.hid-page : Rectangle {
+                VerticalLayout {spacing:6px;
+                    ComboBox {accessible-label:"HID collection selection";model:root.hid-device-names;current-index <=> root.hid-device-choice;selected(_)=>{root.hid-selected();}}
+                    Text {text:"PROFILE: " + (root.hid-profile-name == "" ? "none" : root.hid-profile-name);color:DjTheme.text-primary;wrap:word-wrap;}
+                    HorizontalLayout {
+                        Button {text:"LOAD MAPPING";accessible-label:"Load HID mapping profile";enabled:!root.hid-profile-loading;clicked=>{root.hid-load-profile();}}
+                        Button {text:"ENABLE";accessible-label:"Enable selected HID controller";enabled:root.audio-enabled && root.hid-device-choice >= 0 && root.hid-profile-name != "" && !root.hid-active && !root.hid-profile-loading;clicked=>{root.hid-start();}}
+                        Button {text:"STOP";accessible-label:"Stop HID controller";enabled:root.hid-active;clicked=>{root.hid-stop();}}
+                    }
+                    Text {accessible-role:text;accessible-label:"HID collection details";text:root.hid-device-details;color:DjTheme.text-primary;wrap:word-wrap;}
+                    Text {text:"Use a matching documented profile. System keyboards/mice are blocked. After enabling, reconnect or loss, buttons await an observed release before a new press.";color:#a6b4c8;wrap:word-wrap;}
                 }
             }
         }

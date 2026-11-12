@@ -399,3 +399,40 @@ UI-Ziel-Stillstand, Jump-Traversal und Framezahl-Timeout sind behoben und durch
 die genannten PCM-Tests abgesichert. Auch die Zugänglichkeitskorrektur ist reviewt.
 Finales striktes Clippy aller Root-Targets mit und ohne `dvs-xwax`,
 Crate-/gezielte Rust-Formatprüfungen und `git diff --check` bestanden.
+
+## Schritt 9: generische HID-Profile und App-Anbindung
+
+Der USB/HID-Finder zeigt getrennte USB-, HID- und (optional) DVS-Seiten.
+HID-Enumeration bleibt bis zum ersten expliziten Aufruf inaktiv. LOAD MAPPING
+liest ein benutzerdefiniertes JSON-Profil auf einem Worker, ENABLE öffnet genau
+die ausgewählte HID-Collection, STOP beendet ihre Steuerung. Ein Profilvergleich
+bedeutet nur passende Metadaten, keine Herstellerzertifizierung.
+
+Das Format und ein rein synthetisches Beispiel stehen in
+`fixtures/hid-mapping.example.json`: maximal 64 Bindings/64 KiB, genaue
+VID/PID/Interface/Usage-Identität, Report-ID und LSB-basierte Felder mit 1–32 Bits.
+Offsets schließen die Report-ID aus. Signierte Felder verwenden Zweierkomplement.
+Unterstützt sind A/B-Transport-Toggle, absolute Seek-/Pitch-Achsen und relative
+Pitch-Encoder mit 0,01–10 Prozentpunkten pro Schritt. Optionale `when`-Bedingungen
+im selben Report erlauben beispielsweise die Tip-/Kontaktfreigabe eines Touchpads.
+Alle Felder und Bedingungen werden vor dem ersten Event gegen das gesamte
+Report-Layout geprüft. Systemtastaturen/Mäuse bleiben ausgeschlossen.
+
+Initial gehaltene Tasten lösen nicht aus: erst Release, dann Press. Reconnect,
+Überlauf, Sequenzlücken und veraltete Reports setzen Latches zurück. Reports über
+100 ms werden verworfen, maximal 32 pro 5-ms-Abfrage verarbeitet. Absolute Achsen
+werden zusammengefasst; relative Schritte gehen einzeln an die zentrale
+Controller-Queue und werden nicht aus einem verzögerten UI-Wert berechnet.
+Ein Profilwechsel stoppt die alte Erfassung vor dem nativen Dateidialog.
+Die GUI aktiviert eine benutzerdefinierte HID-Collection gleichzeitig; bestehendes
+MIDI und beide DVS-Eingänge sind unabhängig. Keine bestehenden MIDI-Presets geändert.
+
+45 USB/HID-Tests und sechs gezielte App-/Controller-Tests bestanden, einschließlich
+Report-Gates, vollständiger Layoutprüfung, Reconnect-Latches und mehrerer relativer
+Encoder-Abfragen ohne UI-Aktualisierung. Unabhängiges GPT-6.1-Sol-Review (Mittel)
+und Nachreview akzeptiert; der gefundene relative Pitch-Verlust ist behoben.
+Kein physischer HID-Controller geöffnet oder mit Output-Reports beschrieben.
+Zusätzliche Abschlussprüfungen: 562 App-Binärtests bestanden (sechs bestehende
+Qualifikationen ignoriert), acht Modern-Waveform- und fünf Layouttests bestanden.
+Striktes Root-Clippy mit und ohne DVS, USB-Clippy und Format-/Diffprüfung grün.
+Der zusätzliche vollständige Release-Build wird separat protokolliert.
