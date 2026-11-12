@@ -62,7 +62,8 @@ Crate-Formatprüfung und `git diff --check` ebenfalls bestanden.
 
 ## Noch offen
 
-- Vollständige Gerätefinder-UI/Composition Root und Einbindung der Geräte-Strings.
+- HID-Auswahl und Controller-Mappings im Gerätefinder; USB-Liste und explizite
+  Geräte-Stringabfragen sind seit Schritt 5 in der App angebunden.
 - Controller-Mappings und dokumentierte Geräteprofile; Transport und gepufferte
   HID-Eingangserfassung stehen bereit, die App-Verbraucher sind noch offen.
 - Reale DVS-Dekodierung; der vorhandene `dvs.rs`-Prototyp simuliert diese nur.
@@ -221,3 +222,38 @@ Unabhängiges Review durch GPT-6.1 Sol (Mittel): Befund behoben, Nachreview akze
 35 Tests und striktes Crate-Clippy bestanden.
 Der 125-Report-Burst ist keine Messung physischer 125-Hz-Hardware oder Latenz.
 Es wurden keine realen HID-Reports von angeschlossenen Geräten erfasst.
+
+## Schritt 5: Gerätefinder in der App
+
+Der Button `USB` öffnet eine Liste mit VID/PID, Bus/Adresse und explizitem
+Profilstatus. Initialisierung und Scans beginnen erst beim ersten Öffnen;
+Discovery läuft danach mit dem vorhandenen Worker weiter. Unbekannte Geräte
+bleiben `unmapped`; eine VID/PID-Zuordnung gilt nicht als Hardwareabnahme.
+`READ DEVICE STRINGS` fragt Hersteller, Produkt und Seriennummer ausdrücklich
+über einen temporären Handle ohne Interface-Claim ab. Zugriffsfehler bleiben
+sichtbar. Es gibt keine automatische Initialisierung, Treiberänderung oder Writes.
+
+Die Auswahl folgt der vollständigen zuletzt beobachteten Geräteidentität statt
+einer verschiebbaren Zeilennummer. Entfernen/Identitätswechsel verwirft Auswahl
+und ausstehendes Ticket. Bei neuer Auswahl kann eine verspätete Stringantwort
+keine falsche Beschriftung setzen. Fehlgeschlagene Scans behalten die letzte
+Liste, markieren sie als veraltet und sperren weitere Stringabfragen bis zu
+einem erfolgreichen Scan. Ein identischer Ersatz zwischen zwei Scans bleibt
+ohne zusätzliche Geräteidentität prinzipiell nicht unterscheidbar.
+
+UI-Timer verwenden ausschließlich die nicht wartenden Snapshot-/Ticket-APIs.
+Andere Einstellungen schließen den USB-Finder auch in Gegenrichtung; der Finder
+schützt vor Klickdurchgriff und sperrt Explorer-Deck-Drops solange er offen ist.
+Vier zusätzliche automatisierte Headless-Tests prüfen Hotplug-Auswahl,
+Unicode-/Serienstrings, verspätete Antworten/veraltete Listen sowie echte
+Panelaktionen ohne Deckänderungen. Kein nativer visueller oder manueller Test.
+
+Die xwax-Lizenz-/Architekturprüfung und die Freigabe für einen GPLv3-kompatiblen
+DVS-Build stehen in [DVS_DECISION.md](DVS_DECISION.md). Der Decoder ist in diesem
+UI-Schritt noch nicht integriert.
+
+Verifikation: vier Gerätefinder-Tests bestanden; striktes Clippy aller
+App-Targets, gezielte Rust-Formatprüfung und `git diff --check` bestanden.
+Unabhängiges GPT-6.1-Sol-Review (Mittel) mit akzeptiertem Nachreview nach Behebung
+der zunächst einseitigen Panel-Schließlogik. Die 35 USB/HID-Backendtests des
+vorherigen Schritts sind separat grün; keine Aussage über alle App-Regressionen.

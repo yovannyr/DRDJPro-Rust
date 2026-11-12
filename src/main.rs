@@ -299,6 +299,7 @@ fn main() -> Result<(), slint::PlatformError> {
         None
     };
     let mut midi_discovery = std::time::Instant::now();
+    let _usb_finder_timer = usb_finder::wire(&ui);
     // Track the previously observed connection so holds are released only on the
     // transition to absent, not on every absent-discovery poll.
     let mut mc4000_was_connected = midi.is_some();

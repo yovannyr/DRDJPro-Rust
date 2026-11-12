@@ -1,6 +1,7 @@
 //! Shared production UI contract for the desktop executable and integration tests.
 //! Startup, controllers and audio composition remain in the executable.
 slint::include_modules!();
+pub mod usb_finder;
 
 /// Worker-owned USB discovery. Not a claim of native device/UI acceptance.
 pub mod usb_devices {

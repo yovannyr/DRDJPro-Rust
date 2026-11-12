@@ -1,5 +1,17 @@
 # GUI component inventory and reference baseline
 
+## USB device finder (2026-11-12)
+
+The `USB` button starts worker-owned discovery lazily and displays VID/PID,
+bus/address and explicit detection-profile status. Device strings are read only
+on request, with field errors visible. Selection survives row reordering but is
+cleared on observed removal/identity change; late replies cannot label a new
+selection. Other settings panels close the finder and it blocks external deck
+drops while open. No driver changes, automatic claims or initialization are
+performed. Headless model/action tests cover this scope; native visual and
+hardware acceptance remain deferred. HID capture/controller mapping and DVS
+integration are separate subsequent slices of Spec 28.
+
 ## MC4000 S15: hardware pad modes
 
 Each deck has exactly two app-defined modes: Hot Cues (default) and Sampler.

@@ -82,7 +82,7 @@ export component AppWindow inherits Window {
             else if action == DeckAction.loop-half { root.half-loop-left(); }
             else if action == DeckAction.loop-double { root.double-loop-left(); }
             else if action == DeckAction.monitor { root.monitor-cue-a = !root.monitor-cue-a; root.monitor-cue-changed(0); }
-            else if action == DeckAction.fx { root.fx-open = true; }
+            else if action == DeckAction.fx { root.usb-finder-open=false; root.fx-open = true; }
             else if action == DeckAction.edit { root.grid-left(); }
         } else if deck == 1 {
             if action == DeckAction.load { root.load-right(); }
@@ -96,7 +96,7 @@ export component AppWindow inherits Window {
             else if action == DeckAction.loop-half { root.half-loop-right(); }
             else if action == DeckAction.loop-double { root.double-loop-right(); }
             else if action == DeckAction.monitor { root.monitor-cue-b = !root.monitor-cue-b; root.monitor-cue-changed(1); }
-            else if action == DeckAction.fx { root.fx-open = true; }
+            else if action == DeckAction.fx { root.usb-finder-open=false; root.fx-open = true; }
             else if action == DeckAction.edit { root.grid-right(); }
         }
     }
@@ -255,7 +255,7 @@ export component AppWindow inherits Window {
     in-out property <string> library-performance;
     pure callback external-drop-target(float, float) -> int;
     external-drop-target(px, py) => {
-        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open {
+        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open || root.usb-finder-open {
             return -1;
         }
         if root.view-mode == LayoutMode.Modern {
@@ -357,6 +357,15 @@ export component AppWindow inherits Window {
     in property <string> right-time: "SIMULATION";
     in property <string> status;
     in property <string> controller-status;
+    in-out property <bool> usb-finder-open: false;
+    in property <[string]> usb-device-names;
+    in-out property <int> usb-device-choice: -1;
+    in property <string> usb-finder-status: "Open the finder to scan USB devices";
+    in property <string> usb-device-details;
+    in property <bool> usb-inspecting: false;
+    callback usb-refresh();
+    callback usb-inspect();
+    callback usb-selection-changed();
     in property <bool> mc4000-connected: false;
     in-out property <int> deck-view-index: 0;
     out property <DeckView> deck-view: root.deck-view-index == 1 ? DeckView.virtual : DeckView.training;
@@ -1066,11 +1075,11 @@ Rectangle {
             HorizontalLayout {
                 padding: 4px; spacing: 8px;
                 Text { text: "A"; color: DjTheme.deck-a; vertical-alignment: center; }
-                Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.sampler-open=false;root.eq-open = !root.eq-open; } }
-                Button {text:"SAMPLER";accessible-label:"Show sampler";enabled:root.audio-enabled;clicked=>{root.sampler-open=!root.sampler-open;root.fx-open=false;root.monitor-open=false;root.audio-device-open=false;}}
-                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;root.sampler-open=false;}}
-                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.monitor-open=!root.monitor-open;root.audio-device-open=false;root.sampler-open=false;}}
-                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.sampler-open=false;root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
+                Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.usb-finder-open=false;root.sampler-open=false;root.eq-open = !root.eq-open; } }
+                Button {text:"SAMPLER";accessible-label:"Show sampler";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.sampler-open=!root.sampler-open;root.fx-open=false;root.monitor-open=false;root.audio-device-open=false;}}
+                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;root.sampler-open=false;}}
+                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.monitor-open=!root.monitor-open;root.audio-device-open=false;root.sampler-open=false;}}
+                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.sampler-open=false;root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -1177,10 +1186,11 @@ Rectangle {
         }
         HorizontalLayout { height: 24px; spacing: 6px;
             Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
+            Button { text: "USB"; accessible-label: "Show USB device finder"; clicked => { root.usb-finder-open = !root.usb-finder-open; if root.usb-finder-open { root.audio-device-open=false; root.monitor-open=false; root.fx-open=false; root.eq-open=false; root.sampler-open=false; root.usb-refresh(); } } }
             Text { accessible-role: text; accessible-label: "Application status"; accessible-description: (root.library-performance == "" ? "" : root.library-performance + " | ") + root.controller-status + " | " + root.status; text: (root.library-performance == "" ? "" : root.library-performance + " | ") + (root.controller-status == "" ? root.status : root.controller-status + " | " + root.status); color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
         }
     }
-    if root.audio-device-open : Rectangle {
+    if root.audio-device-open && !root.usb-finder-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:250px;background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Audio device settings panel";
         VerticalLayout {
@@ -1196,6 +1206,33 @@ Rectangle {
                 Button {text:"REOPEN CURRENT";accessible-label:"Reopen current audio output";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-reopen();}}
             }
             Text {text:root.audio-device-status;color:DjTheme.text-primary;wrap:word-wrap;}
+        }
+    }
+    if root.usb-finder-open : Rectangle {
+        x:16px; y:60px; width:parent.width - 32px; height:min(360px, parent.height - 90px);
+        background:DjTheme.panel-dark; border-width:1px; border-color:#53657d;
+        accessible-role:groupbox; accessible-label:"USB device finder panel";
+        TouchArea { }
+        VerticalLayout {
+            padding:10px; spacing:8px;
+            HorizontalLayout {
+                Text { text:"USB DEVICE FINDER"; color:DjTheme.text-primary; }
+                Button { text:"REFRESH"; accessible-label:"Refresh USB devices"; clicked=>{root.usb-refresh();} }
+                Button { text:"CLOSE"; accessible-label:"Close USB device finder"; clicked=>{root.usb-finder-open=false;} }
+            }
+            Text { text:root.usb-finder-status; color:DjTheme.text-primary; wrap:word-wrap; }
+            ComboBox {
+                accessible-label:"USB device selection"; model:root.usb-device-names;
+                current-index <=> root.usb-device-choice;
+                selected(_)=>{root.usb-selection-changed();}
+            }
+            Button { text:root.usb-inspecting ? "READING…" : "READ DEVICE STRINGS";
+                accessible-label:"Read selected USB device strings";
+                enabled:root.usb-device-choice >= 0 && !root.usb-inspecting;
+                clicked=>{root.usb-inspect();}
+            }
+            Text { accessible-role:text; accessible-label:"USB device details";
+                text:root.usb-device-details; color:DjTheme.text-primary; wrap:word-wrap; vertical-stretch:1; }
         }
     }
     if root.monitor-open : Rectangle {
