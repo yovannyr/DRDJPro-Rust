@@ -66,7 +66,8 @@ Crate-Formatprüfung und `git diff --check` ebenfalls bestanden.
   Geräte-Stringabfragen sind seit Schritt 5 in der App angebunden.
 - Controller-Mappings und dokumentierte Geräteprofile; Transport und gepufferte
   HID-Eingangserfassung stehen bereit, die App-Verbraucher sind noch offen.
-- Reale DVS-Dekodierung; der vorhandene `dvs.rs`-Prototyp simuliert diese nur.
+- Reale DVS-Audioeingangs-/Playback-Anbindung. Der unabhängige xwax-Decoder
+  ist seit Schritt 6 implementiert; `dvs.rs` bleibt ein nicht verwendeter Prototyp.
 - Vollständige FR-/SC-Abnahme und Gerätemessungen. Insbesondere werden keine
   Serato-Protokolldetails erfunden und keine Herstellerkompatibilität behauptet.
 
@@ -257,3 +258,41 @@ App-Targets, gezielte Rust-Formatprüfung und `git diff --check` bestanden.
 Unabhängiges GPT-6.1-Sol-Review (Mittel) mit akzeptiertem Nachreview nach Behebung
 der zunächst einseitigen Panel-Schließlogik. Die 35 USB/HID-Backendtests des
 vorherigen Schritts sind separat grün; keine Aussage über alle App-Regressionen.
+
+## Schritt 6: optionaler GPLv3-xwax-Decoder
+
+`drdj-dvs` enthält den auf `be863572137929f70aa3ff0cef3b6b76f4973005`
+gepinnten xwax-Decoder mit Herkunft, vollständiger GPL und dokumentierten
+Portabilitäts-/Überlaufkorrekturen. Die Root-Funktion `dvs-xwax` schaltet die
+Abhängigkeit explizit zu; dies ist noch keine Eingangs-/Playback-Anbindung.
+Der kombinierte DVS-Build darf nicht als MIT-only verteilt werden; Details und
+Build-Anleitung stehen in `THIRD_PARTY_NOTICES.md` und `crates/drdj-dvs/VENDOR.md`.
+Die MIT-Hinweise des eigenen Codes bleiben erhalten. Eine vollständige
+Release-Lizenzprüfung ist durch diese Hinweise nicht ersetzt.
+
+Rust besitzt einen opaken C-Decoder exklusiv auf seinem Worker; keine kopierten
+C-Strukturlayouts. Initialisierung serialisiert den Aufbau gemeinsam genutzter
+Lookup-Tabellen. Die drei angebotenen Editionen (Serato 2nd Ed. A/B, Serato CD)
+belegen zusammen rund 21 MiB für die Prozesslebensdauer; Tabellen werden nicht
+unter lebenden Decodern freigegeben. Keine allgemeine Ink-/NoiseMap-Kompatibilität
+aus einer Sammelbezeichnung abgeleitet. Keine physische Geräteabnahme behauptet.
+
+Der begrenzte Stereo-i16-Decodepfad allokiert nicht und blockiert nicht auf
+einem Mutex. Die Konstruktion kann allokieren/loggen und gehört ausdrücklich
+nicht in den Audio-Callback. Ungültige/alte Positionswörter, Stillstand und
+unsichere Plattenbereiche liefern kein Steuersignal. Bei über 20 ms altem Stamp
+wird Signalhistorie zurückgesetzt; Aufrufer müssen Verlust in einen sicheren
+Playback-Zustand übersetzen. Native Positionen verwenden den xwax-Wortursprung;
+20-Bit-Fenster identifizieren ihr erstes Bit, nicht den letzten Samplezeitpunkt.
+Kalibrierung und physische ±10-ms-Messung bleiben eigenständige Abnahmen.
+
+Acht Tests prüfen synthetisch codierte AM-Stereo-Daten: drei Editionen bei
+44,1/48/96 kHz, Geschwindigkeit 0,95, Reverse, absolute Sprünge, Silence/Noise/
+reinen Ton, Reset, Phono-Pegel, Kanaltausch, Vollbereich/DC, Safe-Area und
+Wiedererfassung. Striktes Crate-Clippy und Root-Clippy aller Targets mit
+`--features dvs-xwax --no-deps -- -D warnings` sind grün.
+Release-Probe (2026-11-12): 7.500 Blöcke à 256 Stereo-Frames/48 kHz,
+p50 2,4 µs, p99 2,9 µs. Nur Decoderzeit, keine Eingangs-/UI-/Ausgabelatenz.
+Unabhängiges Review durch GPT-6.1 Sol (Mittel): fehlender ursprünglicher
+Copyright-Vermerk im abgeleiteten Testgenerator behoben, Nachreview akzeptiert;
+Reviewer hat alle acht Tests zusätzlich selbst erfolgreich ausgeführt.

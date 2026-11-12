@@ -1345,6 +1345,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "drdj-dvs"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "drdj-keylock"
 version = "0.1.0"
 dependencies = [
@@ -1389,6 +1396,7 @@ dependencies = [
  "crash-handler",
  "crossbeam",
  "dirs",
+ "drdj-dvs",
  "drdj-keylock",
  "drdj-proto",
  "drdj-usb",

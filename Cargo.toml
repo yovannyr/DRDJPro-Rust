@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb"]
+members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs"]
 resolver = "2"
 exclude = ["vendor/minidumper"]
 
@@ -14,10 +14,16 @@ edition = "2021"
 rust-version = "1.92"
 description = "DrDJ Pro Rust desktop DJ application"
 
+[features]
+default = []
+# A binary linked with xwax must be distributed on GPLv3-compatible terms.
+dvs-xwax = ["dep:drdj-dvs"]
+
 [dependencies]
 drdj-keylock = { path = "crates/drdj-keylock" }
 drdj-proto = { path = "crates/drdj-proto" }
 drdj-usb = { path = "crates/drdj-usb" }
+drdj-dvs = { path = "crates/drdj-dvs", optional = true }
 midir = "=0.10.3"
 rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled", "backup"] }
 serde = { version = "=1.0.229", features = ["derive"] }

@@ -1,0 +1,10 @@
+[package]
+name = "drdj-dvs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+license = "GPL-3.0-only"
+description = "Worker-owned xwax DVS decoding for DRDJPro GPL-compatible builds"
+
+[build-dependencies]
+cc = "1.2"
