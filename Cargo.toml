@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs"]
+members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote"]
 resolver = "2"
 exclude = ["vendor/minidumper"]
 
@@ -20,6 +20,7 @@ default = []
 dvs-xwax = ["dep:drdj-dvs"]
 
 [dependencies]
+drdj-remote = { path = "crates/drdj-remote" }
 drdj-keylock = { path = "crates/drdj-keylock" }
 drdj-proto = { path = "crates/drdj-proto" }
 drdj-usb = { path = "crates/drdj-usb" }

@@ -1379,6 +1379,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "drdj-remote"
+version = "0.1.0"
+
+[[package]]
 name = "drdj-usb"
 version = "0.1.0"
 dependencies = [
@@ -1402,6 +1406,7 @@ dependencies = [
  "drdj-dvs",
  "drdj-keylock",
  "drdj-proto",
+ "drdj-remote",
  "drdj-usb",
  "ebur128",
  "flume",
