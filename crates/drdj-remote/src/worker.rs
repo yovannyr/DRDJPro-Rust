@@ -30,8 +30,9 @@ impl DisplayWorker {
         let thread = thread::Builder::new()
             .name("remote-display".into())
             .spawn(move || {
+                let mut deadline = Instant::now();
                 while !state.stop.load(Ordering::Acquire) {
-                    let deadline = Instant::now() + PERIOD;
+                    deadline += PERIOD;
                     let snapshot = state
                         .input
                         .lock()
@@ -39,6 +40,9 @@ impl DisplayWorker {
                         .clone();
                     let frame = Arc::new(render(&snapshot));
                     *state.output.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
+                    if deadline < Instant::now() {
+                        deadline = Instant::now() + PERIOD;
+                    }
                     while !state.stop.load(Ordering::Acquire) && Instant::now() < deadline {
                         thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
                     }

@@ -2,6 +2,8 @@
 //! Startup, controllers and audio composition remain in the executable.
 slint::include_modules!();
 pub mod hid_finder;
+pub mod remote_display;
+mod remote_input;
 pub mod usb_finder;
 
 /// Worker-owned USB discovery. Not a claim of native device/UI acceptance.

@@ -9003,6 +9003,7 @@ impl AudioController {
                         )
                     });
                     ui.set_left_position(percent);
+                    ui.set_left_duration_seconds(s.duration.as_secs_f32());
                     ui.set_left_platter_time(
                         format!(
                             "{}\n{}",
@@ -9035,6 +9036,7 @@ impl AudioController {
                         )
                     });
                     ui.set_right_position(percent);
+                    ui.set_right_duration_seconds(s.duration.as_secs_f32());
                     ui.set_right_platter_time(
                         format!(
                             "{}\n{}",
@@ -17499,6 +17501,15 @@ mod tests {
         c.hold_hot_cue(DeckId::A, 0, false, 1).unwrap();
         assert!(!engine.snapshot(DeckId::A).playing);
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
+
+        // Remote pads own input 15; their release cannot cancel MC4000 input 16.
+        ui.invoke_hold_hot_cue_left(0, true, 15);
+        ui.invoke_hold_hot_cue_left(0, true, 16);
+        ui.invoke_hold_hot_cue_left(0, false, 15);
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.invoke_hold_hot_cue_left(0, false, 16);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(ui.get_left_duration_seconds(), 8.);
 
         ui.window()
             .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });

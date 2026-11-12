@@ -1,0 +1,54 @@
+import {Button,ComboBox,CheckBox,SpinBox} from "std-widgets.slint";
+export component RemoteDisplayWindow inherits Window {
+    title:"DrDJ generic remote display";preferred-width:660px;preferred-height:570px;
+    min-width:620px;min-height:540px;background:#151515;
+    in property<image> frame;
+    in property<string> metadata;
+    in property<string> pad-status:"Optional standard MIDI input is stopped";
+    in property<[string]> pad-ports;
+    in-out property<int> pad-port:-1;
+    in-out property<int> deck:0;
+    in-out property<int> resolution:0;
+    in-out property<bool> transport-page:false;
+    in-out property<bool> track:true;
+    in-out property<bool> loops:true;
+    in-out property<bool> cues:true;
+    in-out property<bool> levels:true;
+    in-out property<bool> eq:true;
+    in-out property<bool> crossfader:true;
+    in-out property<int> channel:1;
+    in-out property<int> first-note:36;
+    in-out property<int> curve:0;
+    callback refresh-pads();callback open-pads();callback stop-pads();callback dismiss();
+    VerticalLayout {
+        padding:12px;spacing:8px;
+        HorizontalLayout {
+            ComboBox {accessible-label:"Remote deck";model:["Deck A","Deck B"];current-index <=> root.deck;}
+            ComboBox {accessible-label:"Remote resolution";model:["128 x 64","128 x 32"];current-index <=> root.resolution;}
+            CheckBox {text:"Transport page (32px)";checked <=> root.transport-page;}
+            Button {text:"CLOSE";clicked=>{root.dismiss();}}
+        }
+        Image {source:root.frame;image-fit:contain;min-height:192px;accessible-role:image;accessible-label:"Generic remote framebuffer";accessible-description:root.metadata;}
+        Text {text:root.metadata;color:#eeeeee;wrap:word-wrap;font-size:12px;max-height:46px;accessible-label:"Remote track metadata";}
+        HorizontalLayout {
+            CheckBox {text:"Track";checked <=> root.track;} CheckBox {text:"Loop";checked <=> root.loops;}
+            CheckBox {text:"Cues";checked <=> root.cues;} CheckBox {text:"Levels";checked <=> root.levels;}
+            CheckBox {text:"EQ";checked <=> root.eq;} CheckBox {text:"Crossfader";checked <=> root.crossfader;}
+        }
+        Text {text:"Optional standard MIDI pads: notes 1-8 control A cues, 9-16 B cues";color:#eeeeee;}
+        HorizontalLayout {
+            ComboBox {accessible-label:"Remote MIDI input";model:root.pad-ports;current-index <=> root.pad-port;}
+            Button {text:"REFRESH";clicked=>{root.refresh-pads();}}
+            Button {text:"OPEN PADS";clicked=>{root.open-pads();}}
+            Button {text:"STOP PADS";clicked=>{root.stop-pads();}}
+        }
+        HorizontalLayout {
+            Text {text:"Channel";color:#eeeeee;}
+            SpinBox {accessible-label:"Remote pad channel";minimum:1;maximum:16;value <=> root.channel;edited=>{root.stop-pads();}}
+            Text {text:"First note";color:#eeeeee;}
+            SpinBox {accessible-label:"Remote first pad note";minimum:0;maximum:112;value <=> root.first-note;edited=>{root.stop-pads();}}
+            ComboBox {accessible-label:"Remote velocity curve";model:["Linear","Exponential","Logarithmic"];current-index <=> root.curve;selected=>{root.stop-pads();}}
+        }
+        Text {text:root.pad-status;color:#bdbdbd;wrap:word-wrap;accessible-label:"Remote pad status";}
+    }
+}

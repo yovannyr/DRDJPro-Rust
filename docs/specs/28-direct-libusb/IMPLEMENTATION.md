@@ -436,3 +436,9 @@ Zusätzliche Abschlussprüfungen: 562 App-Binärtests bestanden (sechs bestehend
 Qualifikationen ignoriert), acht Modern-Waveform- und fünf Layouttests bestanden.
 Striktes Root-Clippy mit und ohne DVS, USB-Clippy und Format-/Diffprüfung grün.
 Der zusätzliche vollständige Release-Build wird separat protokolliert.
+
+## Release-Prüfung nach Schritt 9
+
+`cargo build -p drdjpro-ui-spike --release --features dvs-xwax --locked`
+bestand am 2026-11-12 nach 8m46s inklusive erstmals gebauter nativer Abhängigkeiten.
+Dies verifiziert den GPL-kompatiblen App-Build, keine physische DVS-/HID-Abnahme.

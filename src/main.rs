@@ -303,6 +303,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let mut midi_discovery = std::time::Instant::now();
     let _usb_finder_timer = usb_finder::wire(&ui);
     let _hid_finder_timer = hid_finder::wire(&ui);
+    let _remote_display_timer = remote_display::wire(&ui);
     #[cfg(feature = "dvs-xwax")]
     let _dvs_timer = controller
         .as_ref()

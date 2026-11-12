@@ -4,6 +4,7 @@ import "layout-fonts/LiberationSans-Bold.ttf";
 import "layout-fonts/LiberationMono-Regular.ttf";
 import { DjTheme, LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
 export { LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
+export { RemoteDisplayWindow } from "remote-display.slint";
 import { LayoutMode } from "layout-modes.slint";
 import { DeckAction, HoldAction, ControlKind, JogPhase } from "modern-state.slint";
 import { ModernView } from "modern-view.slint";
@@ -60,6 +61,9 @@ export component DvsLicenseWindow inherits Window {
     }
 }
 export component AppWindow inherits Window {
+    callback show-remote-display();
+    in property<float> left-duration-seconds;
+    in property<float> right-duration-seconds;
     init => { Palette.color-scheme = ColorScheme.dark; }
     default-font-family: DjTheme.font-ui;
     default-font-size: 12px;
@@ -1224,6 +1228,7 @@ Rectangle {
             }
         }
         HorizontalLayout { height: 24px; spacing: 6px;
+            Button {text:"REMOTE";accessible-label:"Open generic remote display";clicked=>{root.show-remote-display();}}
             Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
             Button { text: "USB / HID"; accessible-label: "Show USB device finder"; clicked => { root.usb-finder-open = !root.usb-finder-open; if root.usb-finder-open { root.audio-device-open=false; root.monitor-open=false; root.fx-open=false; root.eq-open=false; root.sampler-open=false; if root.hid-page {root.hid-refresh();} else if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();} } } }
             Text { accessible-role: text; accessible-label: "Application status"; accessible-description: (root.library-performance == "" ? "" : root.library-performance + " | ") + root.controller-status + " | " + root.status; text: (root.library-performance == "" ? "" : root.library-performance + " | ") + (root.controller-status == "" ? root.status : root.controller-status + " | " + root.status); color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }

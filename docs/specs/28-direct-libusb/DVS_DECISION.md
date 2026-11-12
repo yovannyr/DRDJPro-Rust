@@ -1,9 +1,11 @@
 # DVS: xwax integration assessment (2026-11-12)
 
-Status: source/architecture assessment, not an integrated or tested decoder.
-No xwax code has been copied into the application and no license has changed
-at this assessment checkpoint. The user has now authorized the proposed
-GPLv3-compatible DVS build (2026-11-12); implementation follows in a separate slice.
+Status: approved and implemented as the optional `dvs-xwax` build (2026-11-12).
+The user explicitly authorized GPLv3-compatible integration. The pinned vendored
+decoder, tests, native input worker and A/B app integration are documented in
+[IMPLEMENTATION.md](IMPLEMENTATION.md); the optimized app build passes.
+Physical DVS acceptance and a complete binary-distribution license audit remain
+open. The findings below record the rationale for this decision.
 
 ## Findings
 
@@ -59,5 +61,6 @@ Sources inspected:
 
 The user explicitly authorized a GPLv3-compatible DVS-enabled combined executable
 after reviewing these distribution consequences. Preserve the MIT notices for
-our own code and document the combined build's GPL obligations. FR-007 and SC-003
-remain open until implementation and the respective automated/hardware acceptance.
+our own code and document the combined build's GPL obligations. FR-007 has software
+implementation and automated evidence; SC-003 physical position accuracy remains
+unmeasured. See [ACCEPTANCE.md](ACCEPTANCE.md) for the current acceptance ledger.

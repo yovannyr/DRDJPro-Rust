@@ -1009,3 +1009,18 @@ the existing controller guards. Initially held/reconnected buttons require relea
 before press. One custom HID collection is enabled at a time, independently of
 existing MIDI and DVS. Profile matches are metadata matches, not device certification.
 Native visual, controller and timing acceptance remain deferred.
+
+## Generic remote display (Spec 29)
+
+REMOTE opens an independent movable window with a worker-rendered128x64 framebuffer
+(optional128x32 metadata/transport page), A/B selection and track/loop/cue/level/
+EQ/crossfader switches. Original metadata remains accessible; the tiny bitmap uses
+uppercase ASCII with '?' fallback. Closing it leaves normal deck playback intact.
+
+Optional standard MIDI pads require explicit port, channel, first note and curve.
+The16notes route A/B eight cues through input15 ownership; MC4000 retains input16.
+Velocity/aftertouch are displayed; they do not change deck gain. Overflow, stale
+input, close and disconnect release holds; five seconds is the intentional maximum
+pad-preview hold and requires reopen after timeout. Native refresh/appearance,
+monitor scaling, physical MIDI force/latency and short unplug/replug qualification
+remain open. No proprietary Akai or physical display protocol is claimed.

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `codex/spec29-generic-remote-display`
 **Created**: 2026-11-11
-**Status**: In progress
+**Status**: Software implemented and automatically tested; native acceptance deferred
 
 ## User scope correction (2026-11-12)
 
