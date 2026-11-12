@@ -14,6 +14,8 @@ use std::{
 const CAPACITY: usize = 8192;
 struct Ring {
     pcm: Box<[AtomicU32]>,
+    times: Box<[AtomicU64]>,
+    started: Instant,
     head: AtomicUsize,
     tail: AtomicUsize,
     lost: AtomicU64,
@@ -23,13 +25,15 @@ impl Ring {
     fn new() -> Self {
         Self {
             pcm: (0..CAPACITY).map(|_| AtomicU32::new(0)).collect(),
+            times: (0..CAPACITY).map(|_| AtomicU64::new(0)).collect(),
+            started: Instant::now(),
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
             lost: AtomicU64::new(0),
             failed: Arc::new(AtomicBool::new(false)),
         }
     }
-    fn push(&self, left: i16, right: i16) {
+    fn push(&self, left: i16, right: i16, timestamp: u64) {
         let head = self.head.load(Ordering::Relaxed);
         if head.wrapping_sub(self.tail.load(Ordering::Acquire)) == CAPACITY {
             self.lost.fetch_add(1, Ordering::Relaxed);
@@ -39,6 +43,7 @@ impl Ring {
             u32::from(left as u16) | (u32::from(right as u16) << 16),
             Ordering::Relaxed,
         );
+        self.times[head % CAPACITY].store(timestamp, Ordering::Relaxed);
         self.head.store(head.wrapping_add(1), Ordering::Release);
     }
     fn pop(&self) -> Option<[i16; 2]> {
@@ -54,6 +59,20 @@ impl Ring {
         self.head
             .load(Ordering::Acquire)
             .wrapping_sub(self.tail.load(Ordering::Relaxed))
+    }
+    fn micros(&self) -> u64 {
+        self.started.elapsed().as_micros() as u64
+    }
+    fn oldest_time(&self) -> Option<u64> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        (tail != self.head.load(Ordering::Acquire))
+            .then(|| self.times[tail % CAPACITY].load(Ordering::Relaxed))
+    }
+    fn stale(&self) -> bool {
+        self.len() == CAPACITY
+            || self
+                .oldest_time()
+                .is_some_and(|time| self.micros().saturating_sub(time) > 20000)
     }
     fn discard(&self) -> usize {
         let head = self.head.load(Ordering::Acquire);
@@ -88,8 +107,9 @@ impl InputProducer {
             self.failure().signal();
             return;
         }
+        let timestamp = self.ring.micros();
         for [left, right] in frames {
-            self.ring.push(*left, *right);
+            self.ring.push(*left, *right, timestamp);
         }
     }
     pub(crate) fn interleaved<T: Copy>(
@@ -102,12 +122,13 @@ impl InputProducer {
             self.failure().signal();
             return;
         }
+        let timestamp = self.ring.micros();
         for frame in pcm.chunks_exact(channels) {
             let (Some(left), Some(right)) = (convert(frame[0]), convert(frame[1])) else {
                 self.failure().signal();
                 return;
             };
-            self.ring.push(left, right);
+            self.ring.push(left, right, timestamp);
         }
     }
 }
@@ -230,7 +251,7 @@ impl InputCapture {
                             return Err("Audio input stream failed".into());
                         }
                         let lost = ring.lost.load(Ordering::Acquire);
-                        if lost != overflow || ring.len() > rate as usize / 50 {
+                        if lost != overflow || ring.stale() {
                             state.lost_frames = state
                                 .lost_frames
                                 .saturating_add(lost.wrapping_sub(overflow))
@@ -241,6 +262,7 @@ impl InputCapture {
                             state.state = InputState::SignalLost;
                             publish(&mut state);
                         }
+                        let oldest = ring.oldest_time();
                         let mut frames = 0;
                         for frame in pcm.as_chunks_mut::<2>().0 {
                             let Some(value) = ring.pop() else {
@@ -256,10 +278,22 @@ impl InputCapture {
                                 state.lost_frames = state.lost_frames.saturating_add(frames as u64);
                                 continue;
                             }
-                            state.state = match decoder
+                            let observation = decoder
                                 .submit(&pcm[..frames * 2])
-                                .map_err(|error| error.to_string())?
+                                .map_err(|error| error.to_string())?;
+                            if oldest.is_some_and(|time| ring.micros().saturating_sub(time) > 20000)
                             {
+                                state.lost_frames = state
+                                    .lost_frames
+                                    .saturating_add(frames as u64)
+                                    .saturating_add(ring.discard() as u64);
+                                decoder.reset();
+                                state.epoch = state.epoch.saturating_add(1);
+                                state.state = InputState::SignalLost;
+                                publish(&mut state);
+                                continue;
+                            }
+                            state.state = match observation {
                                 Some(observation) => InputState::Tracking(observation),
                                 None => {
                                     if matches!(state.state, InputState::Tracking(_)) {
@@ -312,10 +346,22 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     #[test]
+    fn old_short_input_is_rejected_by_wall_time_not_only_queue_length() {
+        let ring = Ring {
+            started: Instant::now() - Duration::from_millis(100),
+            ..Ring::new()
+        };
+        ring.push(1, 2, 0);
+        assert_eq!(ring.len(), 1);
+        assert!(ring.stale());
+        assert_eq!(ring.discard(), 1);
+        assert!(!ring.stale());
+    }
+    #[test]
     fn pcm_ring_is_bounded_preserves_stereo_order_and_reports_overflow() {
         let ring = Ring::new();
         for index in 0..CAPACITY + 9 {
-            ring.push(index as i16, !(index as i16));
+            ring.push(index as i16, !(index as i16), 0);
         }
         assert_eq!(ring.len(), CAPACITY);
         assert_eq!(ring.lost.load(Ordering::Acquire), 9);
@@ -327,7 +373,7 @@ mod tests {
         ring.head.store(usize::MAX - 1, Ordering::Relaxed);
         ring.tail.store(usize::MAX - 1, Ordering::Relaxed);
         for _ in 0..4 {
-            ring.push(i16::MIN, i16::MAX);
+            ring.push(i16::MIN, i16::MAX, 0);
         }
         assert_eq!(ring.len(), 4);
         for _ in 0..4 {

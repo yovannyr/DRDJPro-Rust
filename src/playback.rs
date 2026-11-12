@@ -289,6 +289,14 @@ struct RetiredTrack {
 }
 impl Deck {
     fn actual_speed(&self) -> f64 {
+        #[cfg(feature = "dvs-xwax")]
+        if let Some(speed) = self
+            .render
+            .as_ref()
+            .and_then(|render| render.external_speed())
+        {
+            return speed.abs();
+        }
         if self.render.as_ref().is_some_and(|r| r.sync_expired()) {
             self.track.as_ref().map_or(1., |track| {
                 PlaybackSpeed::nudged(self.base_factor, self.nudge, track.samples.sample_rate())
@@ -304,6 +312,10 @@ impl Deck {
             .as_ref()
             .zip(self.render.as_ref())
             .is_some_and(|(track, render)| {
+                #[cfg(feature = "dvs-xwax")]
+                if render.external_expired() {
+                    return false;
+                }
                 !render.is_paused() && render.position() < track.duration()
             })
     }
@@ -1056,6 +1068,51 @@ impl DualDeckEngine {
             .render
             .as_ref()
             .is_some_and(|render| render.scratching())
+    }
+    /// DVS uses the shared fixed renderer, bypassing Keylock like a real scratch.
+    /// This never reloads PCM or allocates a replacement source on each update.
+    #[cfg(feature = "dvs-xwax")]
+    fn validate_dvs_position(&self, id: DeckId, seconds: f64, speed: f64) -> Result<(), String> {
+        let deck = self.decks[id.index()].borrow();
+        let track = deck.track.as_ref().ok_or("Load a track before DVS")?;
+        if !seconds.is_finite()
+            || !speed.is_finite()
+            || !(0.01..=8.0).contains(&speed.abs())
+            || seconds < 0.0
+            || seconds >= track.duration().as_secs_f64()
+        {
+            return Err("DVS position is outside the loaded track".into());
+        }
+        if self.output_failed() {
+            return Err("Audio output unavailable".into());
+        }
+        Ok(())
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_begin(&self, id: DeckId, seconds: f64, speed: f64) -> Result<(), String> {
+        self.validate_dvs_position(id, seconds, speed)?;
+        self.play(id);
+        let result = self
+            .platter_touch(id, true)
+            .and_then(|_| self.dvs_position(id, seconds, speed));
+        if result.is_err() {
+            self.pause(id);
+        }
+        result
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_position(&self, id: DeckId, seconds: f64, speed: f64) -> Result<(), String> {
+        self.validate_dvs_position(id, seconds, speed)?;
+        let deck = self.decks[id.index()].borrow();
+        let render = deck.render.as_ref().ok_or("Missing DVS renderer")?;
+        if render.external_expired() {
+            return Err("DVS command expired; arm again".into());
+        }
+        if !render.scratching() {
+            return Err("DVS transport was changed; arm again".into());
+        }
+        render.external_position(seconds, speed);
+        Ok(())
     }
     /// Reverse the audible head while the normal source timeline advances, including loops.
     /// Release only changes an atomic command; it never seeks or restarts a paused sink.
@@ -1923,7 +1980,10 @@ impl DualDeckEngine {
             } else {
                 deck.sync_factor
             },
-            cover_color: deck.track.as_ref().and_then(|t| t.cover_data.as_ref())
+            cover_color: deck
+                .track
+                .as_ref()
+                .and_then(|t| t.cover_data.as_ref())
                 .map(|pixels| crate::cover_art::dominant_color(pixels))
                 .unwrap_or(0x00000000),
         }

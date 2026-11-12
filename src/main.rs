@@ -14,6 +14,8 @@ mod crates;
 mod cue_bus;
 mod deck_render;
 mod delay_fx;
+#[cfg(feature = "dvs-xwax")]
+mod dvs_ui;
 #[cfg(any(target_os = "windows", test))]
 mod external_drop;
 mod fx_chain;
@@ -300,6 +302,10 @@ fn main() -> Result<(), slint::PlatformError> {
     };
     let mut midi_discovery = std::time::Instant::now();
     let _usb_finder_timer = usb_finder::wire(&ui);
+    #[cfg(feature = "dvs-xwax")]
+    let _dvs_timer = controller
+        .as_ref()
+        .map(|controller| dvs_ui::wire(&ui, Rc::clone(controller)));
     // Track the previously observed connection so holds are released only on the
     // transition to absent, not on every absent-discovery poll.
     let mut mc4000_was_connected = midi.is_some();

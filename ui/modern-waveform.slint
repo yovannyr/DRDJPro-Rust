@@ -67,6 +67,7 @@ export component ModernOverviewStrip inherits Rectangle {
 
 export component ModernDetailWaveform inherits Rectangle {
     in property <string> deck-label;
+    in property <string> accessible-deck-label: root.deck-label;
     in property <brush> accent;
     in property <[float]> detail;
     in property <[color]> colors;
@@ -113,7 +114,7 @@ export component ModernDetailWaveform inherits Rectangle {
     for line in beats : Text {
         visible: line.downbeat; x: clamp(line.position,0,100)/100*max(0px,parent.width - 14px); y: 1px;
         text: "" + line.bar; color: line.first ? #ff5555 : ModernTheme.text; font-size: 10px;
-        accessible-role: text; accessible-label: root.deck-label + " bar label"; accessible-description: "Bar " + line.bar;
+        accessible-role: text; accessible-label: root.accessible-deck-label + " bar label"; accessible-description: "Bar " + line.bar;
     }
 
     for cue[i] in cues : Rectangle {
@@ -128,7 +129,7 @@ export component ModernDetailWaveform inherits Rectangle {
         width: 54px; height: 10px; text: "" + (i + 1) + " " + cue.name;
         color: cue.tint; font-size: 10px; overflow: elide;
         accessible-role: text;
-        accessible-label: root.deck-label + " detail cue label " + (i + 1);
+        accessible-label: root.accessible-deck-label + " detail cue label " + (i + 1);
         accessible-description: cue.description;
     }
 
@@ -171,7 +172,7 @@ export component ModernDetailWaveform inherits Rectangle {
         }
         enabled: root.enabled;
         accessible-role: slider;
-        accessible-label: root.deck-label + " detail waveform";
+        accessible-label: root.accessible-deck-label + " detail waveform";
         accessible-description: root.keyboard-zoom ? "Click to seek and focus; use + or - while focused to zoom this deck from 2 to 32 source seconds." : "Click to seek within the track.";
         accessible-enabled: self.enabled;
         accessible-value: root.detail-start + root.playhead * (root.detail-end - root.detail-start);

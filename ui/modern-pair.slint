@@ -247,6 +247,7 @@ export component ModernPair inherits Rectangle {
                     ModernDetailWaveform {
                         min-height: 38px; vertical-stretch: 1;
                         deck-label: root.first-index == 0 ? "A / DETAIL" : "C / DETAIL";
+                        accessible-deck-label: root.first-index == 0 ? "Deck A" : "Deck C";
                         accent: root.left-accent;
                         detail: root.left-detail; colors: root.left-detail-colors;
                         beats: root.left-beats; cues: root.left-cues;
@@ -260,6 +261,7 @@ export component ModernPair inherits Rectangle {
                     ModernDetailWaveform {
                         min-height: 38px; vertical-stretch: 1;
                         deck-label: root.first-index == 0 ? "B / DETAIL" : "D / DETAIL";
+                        accessible-deck-label: root.first-index == 0 ? "Deck B" : "Deck D";
                         accent: root.right-accent;
                         detail: root.right-detail; colors: root.right-detail-colors;
                         beats: root.right-beats; cues: root.right-cues;

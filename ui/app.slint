@@ -13,7 +13,7 @@ import { CompactDeck, DeckPlaceholder } from "deck.slint";
 import { CratePanel, TrackLibrary } from "library.slint";
 import { EqStrip, FxStrip } from "editors.slint";
 
-import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox, Palette } from "std-widgets.slint";
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox, Palette, TextEdit } from "std-widgets.slint";
 
 
 
@@ -48,6 +48,17 @@ import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox, Palett
 
 
 
+export component DvsLicenseWindow inherits Window {
+    title:"DVS decoder license and source";
+    width:680px; height:520px;
+    in property <string> license-text;
+    callback dismiss();
+    VerticalLayout {
+        padding:12px; spacing:8px;
+        TextEdit {accessible-label:"DVS decoder license and source text";read-only:true;text:root.license-text;}
+        Button {text:"CLOSE";accessible-label:"Close DVS license";clicked=>{root.dismiss();}}
+    }
+}
 export component AppWindow inherits Window {
     init => { Palette.color-scheme = ColorScheme.dark; }
     default-font-family: DjTheme.font-ui;
@@ -366,6 +377,20 @@ export component AppWindow inherits Window {
     callback usb-refresh();
     callback usb-inspect();
     callback usb-selection-changed();
+    in property <bool> dvs-available: false;
+    in-out property <bool> dvs-page: false;
+    in property <[string]> dvs-input-names;
+    in-out property <int> dvs-input-choice: -1;
+    in-out property <int> dvs-record-choice: 0;
+    in-out property <bool> dvs-phono: false;
+    in-out property <int> dvs-offset-ms: 0;
+    in property <string> dvs-status: "Choose an input, then explicitly arm a deck";
+    in property <string> dvs-a-status: "A: stopped";
+    in property <string> dvs-b-status: "B: stopped";
+    callback dvs-refresh();
+    callback dvs-arm(int);
+    callback dvs-stop(int);
+    callback dvs-license();
     in property <bool> mc4000-connected: false;
     in-out property <int> deck-view-index: 0;
     out property <DeckView> deck-view: root.deck-view-index == 1 ? DeckView.virtual : DeckView.training;
@@ -1217,22 +1242,46 @@ Rectangle {
             padding:10px; spacing:8px;
             HorizontalLayout {
                 Text { text:"USB DEVICE FINDER"; color:DjTheme.text-primary; }
-                Button { text:"REFRESH"; accessible-label:"Refresh USB devices"; clicked=>{root.usb-refresh();} }
+                Button { text:"REFRESH"; accessible-label:"Refresh USB devices"; clicked=>{if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();}} }
+                if root.dvs-available : Button { text:root.dvs-page ? "USB LIST" : "DVS AUDIO";
+                    accessible-label:"Switch USB DVS setup page"; clicked=>{root.dvs-page=!root.dvs-page;if root.dvs-page {root.dvs-refresh();}} }
                 Button { text:"CLOSE"; accessible-label:"Close USB device finder"; clicked=>{root.usb-finder-open=false;} }
             }
-            Text { text:root.usb-finder-status; color:DjTheme.text-primary; wrap:word-wrap; }
-            ComboBox {
+            Text { text:root.dvs-page ? root.dvs-status : root.usb-finder-status; color:DjTheme.text-primary; wrap:word-wrap; }
+            if !root.dvs-page : ComboBox {
                 accessible-label:"USB device selection"; model:root.usb-device-names;
                 current-index <=> root.usb-device-choice;
                 selected(_)=>{root.usb-selection-changed();}
             }
-            Button { text:root.usb-inspecting ? "READING…" : "READ DEVICE STRINGS";
+            if !root.dvs-page : Button { text:root.usb-inspecting ? "READING…" : "READ DEVICE STRINGS";
                 accessible-label:"Read selected USB device strings";
                 enabled:root.usb-device-choice >= 0 && !root.usb-inspecting;
                 clicked=>{root.usb-inspect();}
             }
-            Text { accessible-role:text; accessible-label:"USB device details";
+            if !root.dvs-page : Text { accessible-role:text; accessible-label:"USB device details";
                 text:root.usb-device-details; color:DjTheme.text-primary; wrap:word-wrap; vertical-stretch:1; }
+            if root.dvs-page : Rectangle {
+                VerticalLayout { spacing:6px;
+                    Text {text:"AUDIO INPUT — stereo channels 1/2";color:DjTheme.text-primary;}
+                    ComboBox {accessible-label:"DVS audio input";model:root.dvs-input-names;current-index <=> root.dvs-input-choice;}
+                    ComboBox {accessible-label:"DVS record edition";model:["Serato 2nd edition A", "Serato 2nd edition B", "Serato CD"];current-index <=> root.dvs-record-choice;}
+                    HorizontalLayout {
+                        CheckBox {text:"Low-level phono signal";checked <=> root.dvs-phono;}
+                        Text {text:"OFFSET ms";color:DjTheme.text-primary;vertical-alignment:center;}
+                        SpinBox {accessible-label:"DVS calibration offset milliseconds";minimum:-600000;maximum:600000;value <=> root.dvs-offset-ms;}
+                    }
+                    HorizontalLayout {
+                        Button {text:"ARM A";accessible-label:"Arm DVS deck A";enabled:root.audio-enabled && root.dvs-input-choice >= 0;clicked=>{root.dvs-arm(0);}}
+                        Button {text:"STOP A";accessible-label:"Stop DVS deck A";clicked=>{root.dvs-stop(0);}}
+                        Button {text:"ARM B";accessible-label:"Arm DVS deck B";enabled:root.audio-enabled && root.dvs-input-choice >= 0;clicked=>{root.dvs-arm(1);}}
+                        Button {text:"STOP B";accessible-label:"Stop DVS deck B";clicked=>{root.dvs-stop(1);}}
+                    }
+                    Text {text:root.dvs-a-status;color:DjTheme.text-primary;wrap:word-wrap;}
+                    Text {text:root.dvs-b-status;color:DjTheme.text-primary;wrap:word-wrap;}
+                    Text {text:"Signal loss or manual transport changes require ARM again. Phono/record/offset changes apply on the next ARM.";color:#a6b4c8;wrap:word-wrap;}
+                    Button {text:"xwax — GPLv3 LICENSE / SOURCE / NO WARRANTY";accessible-label:"DVS license and source";clicked=>{root.dvs-license();}}
+                }
+            }
         }
     }
     if root.monitor-open : Rectangle {

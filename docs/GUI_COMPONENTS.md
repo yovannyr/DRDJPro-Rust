@@ -9,8 +9,17 @@ cleared on observed removal/identity change; late replies cannot label a new
 selection. Other settings panels close the finder and it blocks external deck
 drops while open. No driver changes, automatic claims or initialization are
 performed. Headless model/action tests cover this scope; native visual and
-hardware acceptance remain deferred. HID capture/controller mapping and DVS
-integration are separate subsequent slices of Spec 28.
+hardware acceptance remain deferred. HID controller mapping is a subsequent
+slice of Spec 28.
+
+With the optional GPL-compatible DVS build, the finder includes input/record
+selection, low-level phono threshold, calibration offset and per-deck ARM/STOP.
+Loss, stale control or manual transport changes require explicit ARM again.
+The license/source action displays the bundled GPL text and provenance.
+Input enumeration/open/decode remain worker-owned. DVS controls the fixed PCM
+renderer with continuous signed speed and absolute-position corrections, bypassing
+Keylock. Native visual, hearing, record compatibility and latency acceptance are
+deferred; automated PCM/controller tests are separate evidence.
 
 ## MC4000 S15: hardware pad modes
 

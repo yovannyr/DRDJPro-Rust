@@ -40,6 +40,16 @@ struct NavigationOwner {
     version: u64,
     bounds: (Option<Duration>, Option<Duration>, bool),
 }
+/// Explicitly armed, renderer-bound DVS ownership. Replaced sources and manual
+/// transport commands revoke it; a returning signal cannot recreate this token.
+#[cfg(feature = "dvs-xwax")]
+pub struct DvsLease {
+    deck: DeckId,
+    renderer: std::sync::Weak<crate::deck_render::RenderControl>,
+    engine: std::rc::Weak<DualDeckEngine>,
+    version: u64,
+    active: bool,
+}
 struct SeekHoldSession {
     owner: NavigationOwner,
     held: [bool; 2],
@@ -2189,6 +2199,18 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Platter unavailable during loading".into());
         }
+        #[cfg(feature = "dvs-xwax")]
+        if self
+            .engine
+            .borrow()
+            .renderer_token(id)
+            .and_then(|token| token.upgrade())
+            .is_some_and(|render| render.external_active())
+        {
+            // A deliberate mouse/MIDI touch takes ownership. Its new command
+            // version revokes DVS; later DVS cleanup cannot cancel this hold.
+            self.engine.borrow().platter_touch(id, false)?;
+        }
         self.cancel_temporary_hold(id)?;
         self.seek_holds.borrow_mut()[Self::grid_index(id)] = None;
         self.loop_jogs.borrow_mut()[Self::grid_index(id)] = None;
@@ -2207,6 +2229,66 @@ impl AudioController {
         holds[index] = true;
         self.platter_holds.set(holds);
         Ok(())
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_arm(&self, deck: DeckId) -> Result<DvsLease, String> {
+        self.navigation_ready(deck)?;
+        self.prepare_navigation(deck);
+        self.engine.borrow().exit_loop(deck)?;
+        self.engine.borrow().pause(deck);
+        let engine = self.engine.borrow();
+        Ok(DvsLease {
+            deck,
+            renderer: engine.renderer_token(deck).ok_or("Missing DVS renderer")?,
+            engine: Rc::downgrade(&engine),
+            version: engine.command_version(deck).ok_or("Missing DVS renderer")?,
+            active: false,
+        })
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_apply(&self, lease: &mut DvsLease, seconds: f64, speed: f64) -> Result<(), String> {
+        let engine = self.engine.borrow();
+        let current = engine.renderer_token(lease.deck);
+        if !self.can_control_deck(lease.deck)
+            || self.pending_device_switch.borrow().is_some()
+            || !lease
+                .engine
+                .upgrade()
+                .is_some_and(|old| Rc::ptr_eq(&old, &engine))
+            || !current.is_some_and(|token| token.ptr_eq(&lease.renderer))
+            || engine.command_version(lease.deck) != Some(lease.version)
+        {
+            return Err("DVS ownership changed; arm again".into());
+        }
+        if lease.active {
+            engine.dvs_position(lease.deck, seconds, speed)?;
+        } else {
+            engine.dvs_begin(lease.deck, seconds, speed)?;
+            lease.active = true;
+        }
+        lease.version = engine
+            .command_version(lease.deck)
+            .ok_or("DVS renderer removed")?;
+        Ok(())
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_release(&self, lease: DvsLease) {
+        if let Some(render) = lease.renderer.upgrade() {
+            if render.external_active() && render.command_version() == lease.version {
+                render.external_cancel();
+                let engine = self.engine.borrow();
+                if lease
+                    .engine
+                    .upgrade()
+                    .is_some_and(|old| Rc::ptr_eq(&old, &engine))
+                    && engine
+                        .renderer_token(lease.deck)
+                        .is_some_and(|token| token.ptr_eq(&lease.renderer))
+                {
+                    engine.pause(lease.deck);
+                }
+            }
+        }
     }
     fn pointer_platter(&self, id: DeckId, action: i32, x: f32, y: f32) -> Result<(), String> {
         let index = Self::grid_index(id);
@@ -9011,6 +9093,104 @@ fn precise_time(time: std::time::Duration) -> String {
     format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, millis)
 }
 
+#[cfg(all(test, feature = "dvs-xwax"))]
+mod dvs_tests {
+    use super::*;
+    use crate::test_support::wav_file;
+    #[test]
+    fn dvs_audio_watchdog_requires_explicit_rearming_after_late_ui_update() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        let render = engine.renderer_token(DeckId::A).unwrap().upgrade().unwrap();
+        render.test_external_time(0);
+        c.dvs_apply(&mut lease, 1.0, 0.95).unwrap();
+        assert!((engine.snapshot(DeckId::A).effective_speed - 0.95).abs() < 0.0001);
+        render.test_external_time(60_000_000);
+        output.by_ref().take(2000).for_each(drop);
+        assert!(c
+            .dvs_apply(&mut lease, 1.05, 0.95)
+            .unwrap_err()
+            .contains("expired"));
+        c.dvs_release(lease);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        let mut fresh = c.dvs_arm(DeckId::A).unwrap();
+        c.dvs_apply(&mut fresh, 1.05, 0.95).unwrap();
+        output.by_ref().take(240).for_each(drop);
+        assert!(engine.snapshot(DeckId::A).playing);
+        c.dvs_release(fresh);
+    }
+    #[test]
+    fn dvs_deck_ownership_tracks_absolute_jump_reverse_and_releases_only_its_deck() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        let render = engine.renderer_token(DeckId::A).unwrap().upgrade().unwrap();
+        for (index, (seconds, speed)) in [(0.5, 1.0), (2.0, 1.0), (1.5, -1.0)]
+            .into_iter()
+            .enumerate()
+        {
+            render.test_external_time(index as u64 * 10_000_000);
+            c.dvs_apply(&mut lease, seconds, speed).unwrap();
+            output.by_ref().take(480).for_each(drop);
+            assert!(
+                (engine.snapshot(DeckId::A).position.as_secs_f64()
+                    - (seconds + speed * 480.0 / 48000.0))
+                    .abs()
+                    < 0.002
+            );
+            assert!(engine.snapshot(DeckId::A).playing);
+            assert_eq!(engine.snapshot(DeckId::B).position, Duration::ZERO);
+        }
+        c.dvs_release(lease);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!engine.snapshot(DeckId::B).playing);
+    }
+    #[test]
+    fn dvs_manual_transport_and_replaced_renderer_revoke_without_cancelling_new_owner() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        c.dvs_apply(&mut lease, 1.0, 1.0).unwrap();
+        ui.invoke_controller_platter_touch(0, true);
+        assert!(c.dvs_apply(&mut lease, 1.1, 1.0).is_err());
+        c.dvs_release(lease);
+        assert!(
+            engine.platter_touched(DeckId::A),
+            "manual touch survives stale DVS cleanup"
+        );
+        ui.invoke_controller_platter_touch(0, false);
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        c.dvs_apply(&mut lease, 1.0, 1.0).unwrap();
+        engine.pause(DeckId::A);
+        engine.load_a(file.path()).unwrap();
+        engine.play(DeckId::A);
+        assert!(c.dvs_apply(&mut lease, 1.1, 1.0).is_err());
+        c.dvs_release(lease);
+        assert!(
+            engine.snapshot(DeckId::A).playing,
+            "replacement transport survives stale cleanup"
+        );
+    }
+}
 #[cfg(test)]
 mod tests {
     #[test]

@@ -66,8 +66,8 @@ Crate-Formatprüfung und `git diff --check` ebenfalls bestanden.
   Geräte-Stringabfragen sind seit Schritt 5 in der App angebunden.
 - Controller-Mappings und dokumentierte Geräteprofile; Transport und gepufferte
   HID-Eingangserfassung stehen bereit, die App-Verbraucher sind noch offen.
-- Reale DVS-Audioeingangs-/Playback-Anbindung. Der unabhängige xwax-Decoder
-  ist seit Schritt 6 implementiert; `dvs.rs` bleibt ein nicht verwendeter Prototyp.
+- Native DVS-/USB-/HID-Hardwareabnahme; die reale DVS-Softwarepipeline ist seit
+  Schritt 8 angebunden. `dvs.rs` bleibt ein nicht verwendeter Prototyp.
 - Vollständige FR-/SC-Abnahme und Gerätemessungen. Insbesondere werden keine
   Serato-Protokolldetails erfunden und keine Herstellerkompatibilität behauptet.
 
@@ -335,3 +335,67 @@ Unabhängiges GPT-6.1-Sol-Review (Mittel) und Nachreview akzeptiert: doppelte
 Konfigurationsabfrage und vorzeitiger Cleanup bei Startfehler sind korrigiert.
 Reviewer hat alle 17 Tests mit Doctests ebenfalls grün ausgeführt.
 Root-Clippy aller Targets mit `dvs-xwax`, Format- und Diffprüfung bestanden.
+
+## Schritt 8: explizite DVS-Decksteuerung
+
+Der GPL-kompatible Build zeigt im USB-Finder eine DVS-Seite: Eingangs- und
+Record-Auswahl, Phono-Pegelerkennung, Kalibrierungs-Offset in ms sowie ARM/STOP
+für A/B. Enumeration und Streamöffnung bleiben auf Workern. Derselbe Eingang
+kann nicht gleichzeitig beiden Decks zugewiesen werden; zwei getrennte Eingänge
+können zwei Decks steuern. Es gibt keine automatische Initialisierung beim Start.
+Die Lizenz-/Quellcode-Schaltfläche öffnet einen eigenen Dialog mit dem vollständigen
+eingebetteten GPL-Text und den Herkunfts-/Buildhinweisen.
+
+ARM pausiert das Ziel zunächst; nur gültiger Timecode innerhalb von drei Sekunden
+aktiviert die Steuerung. Signalverlust, geänderte Eingangs-Epoche, ältere
+Snapshots, manuelle Transportkommandos oder Renderer-/Engine-Wechsel entziehen
+die Lease. Wiederkehrender Timecode startet kein Deck automatisch. Alte Freigaben
+können weder einen neuen Track noch einen übernommenen Maus-/MIDI-Hold stoppen.
+Bei Übernahme durch einen manuellen Platter wird die DVS-Generation entzogen.
+
+Der vorhandene feste PCM-Renderer erhält eine eigene externe Betriebsart:
+kontinuierlicher signierter Schritt aus gemessener Geschwindigkeit, kleine
+Positionskorrekturen über 5 ms, größere Sprünge/Erstposition als direkter Seek
+mit gehaltenem Sample-Dezipper. Keine Source-/PCM-Ersetzung je Update; wie beim
+Scratch wird Keylock umgangen. Die bestehenden Maus-/MIDI-Scratch-Ziele behalten
+ihre 33-ms-Interpolation. Das Audio-Rendering wartet nicht auf den 5-ms-UI-Timer.
+
+Die Ablaufprüfung verwendet 50 ms monotone Zeit, nicht gerenderte Framezahlen.
+Zeit wird bei neuem Befehl und spätestens alle 64 Frames geprüft. Eine Generation
+bleibt nach Ablauf verriegelt bis zum expliziten ARM; verspätete Updates heben
+die Verriegelung nicht auf. Große native Ausgabebursts können deshalb keine
+frischen Befehle allein durch Vorausberechnung ablaufen lassen. Positionsanker
+werden zur Zeit des aktuellen Outputframes projiziert, damit ein zwischenzeitlich
+gelieferter UI-Anker bereits vorausgerenderte Frames nicht zurückspult.
+Eine Gerätepufferlatenz-/Clock-Kalibrierung ist damit nicht gemessen oder zugesagt.
+
+PCM-Blöcke tragen zusätzlich einen einmal pro Daten-Callback bestimmten
+Zeitstempel. Der Worker verwirft auch kurze, tatsächlich über 20 ms alte Blöcke,
+nicht lediglich lange Queues; frische große OS-Callback-Blöcke bleiben nutzbar.
+Alter wird nach der Dekodierung nochmals geprüft. Beide Ring-Arrays werden vor
+Streamstart allokiert. Zeitabfrage und atomare Stores sind die zusätzliche Arbeit
+im Input-Callback; kein Lock, Logging oder neue Heap-Allokation.
+
+18 DVS-Backendtests und zehn neue Root-DVS-Tests sind grün, darunter unregelmäßige
+5/10/16-ms-Updates bei 1x, 0,95x und Reverse, 2.048-Frame-Outputbursts,
+Wanduhrablauf mit explizitem Rearming, Jump ohne Wiedergabe dazwischenliegender
+Audiodaten, A/B-Isolation und manuelle/Track-Übernahme. Der Renderer-Probelauf
+(Testprofil opt-level 0, 300×256 Mono-Frames/48 kHz) misst p50 35 µs,
+p99 68,2 µs und null Rust-Heap-Allokationen im gemessenen Pfad. Keine native
+Ausgabe-/UI-Latenz oder akustische Abnahme aus dieser Messung abgeleitet.
+
+Abschlussregression dieses Schritts: 2.255 Root-/Integrationstests bestanden,
+sechs bestehende Qualifikationstests ignoriert, Doctests bestanden. Der vollständige
+Lauf wurde mit `--test-threads=1` und einem ausschließlich auf der CLI gesetzten
+App-Testprofil `opt-level=0` ausgeführt; produktive/dev Profile blieben erhalten.
+Der erste parallele Lauf überschritt im bestehenden Crash-Prozesstest dessen
+5-s-Grenze; isoliert bestand er in 0,75 s, im vollständigen sequenziellen Lauf
+ebenfalls. Keine Spec-26-Datei geändert oder pausierte Arbeit wiederaufgenommen.
+Die breite Regression deckte außerdem bereits vorher abweichende Modern-
+Waveform-Zugänglichkeitsnamen auf: separate stabile Decknamen beheben alle acht
+betroffenen Tests, ohne sichtbare Beschriftungen zu ändern.
+Unabhängiges GPT-6.1-Sol-Review (Mittel) mit mehreren akzeptierten Nachreviews:
+UI-Ziel-Stillstand, Jump-Traversal und Framezahl-Timeout sind behoben und durch
+die genannten PCM-Tests abgesichert. Auch die Zugänglichkeitskorrektur ist reviewt.
+Finales striktes Clippy aller Root-Targets mit und ohne `dvs-xwax`,
+Crate-/gezielte Rust-Formatprüfungen und `git diff --check` bestanden.
