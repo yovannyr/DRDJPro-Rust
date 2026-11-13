@@ -40,3 +40,25 @@ adapter follow in separate slices. User confirmed no MusicKit developer token;
 live Apple API/network performance acceptance cannot be completed with current
 credentials. Local XML import is independent. Spec26 remains stopped; native
 visual/manual/listening/hardware tests remain deferred.
+
+## Slice2: transactional source catalog
+
+A separate SQLite source catalog retains complete imported metadata, stable source
+IDs, original playlist ordering and repetitions. It does not replace or mutate the
+native library schema. Sources are bounded to32; active tracks/links retain core
+limits, individual JSON records256KiB, database pages1GiB (WAL/temporary files can
+add overhead). Own app/version identifiers protect unrelated databases. Worker
+connections use strict tables, foreign keys, WAL and FULL synchronization.
+
+Only changed/new rows are written. A no-op synchronization is verified against
+SQLite total_changes, not just a reported count. Source removals archive records;
+no local app track is deleted. Cancelled writes roll back the complete transaction.
+Reads use one transaction across source, track and playlist queries, including a
+two-connection WAL regression; the independent review found and accepted this fix.
+Stored metadata/identity/references and bounded fields are validated on retrieval.
+
+Seven storage plus nine parser/inspection tests passed, doctests passed. Strict
+crate Clippy, formatting and diff checks passed. Isolated debug SQLite probe for
+50,000rows/100changed:2.09s; source XML parsing, filesystem work and UI excluded.
+Independent GPT-6.1-Sol medium review and follow-up accepted with no remaining
+findings. The next slice connects ordered sources to the app/shared library.
