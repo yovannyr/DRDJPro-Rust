@@ -1036,3 +1036,14 @@ Native SmartScreen is retained. Website audio is separate from the DJ engine.
 The user has no Beatport partner access: authorized deck streaming/OAuth provider
 integration remains blocked. Native render/history/GPU/audio-load qualification
 is deferred; headless navigation dispatch is separate evidence.
+
+## iTunes source window (Spec31)
+
+iTunes opens a separate source window with XML/media-folder selection, cached
+sources, ordered playlists, virtual track rows, complete source metadata and
+guarded LOAD A/B. Imported local files join the existing searchable library with
+stable IDs. Source ratings/play counts/date-added remain in the source catalog;
+ordinary file-tag scans retain explicitly imported title/artist/album preferences.
+Missing files remain visible and cannot load. Native save status is separate from
+source synchronization status; reopening reconciles interrupted native imports.
+Native appearance and manual workflow acceptance remain deferred.

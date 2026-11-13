@@ -187,6 +187,43 @@ fn canonical_parent(path: PathBuf, cancel: &dyn Fn() -> bool) -> Result<PathBuf,
     }
     Ok(path)
 }
+/// Recheck cached resolved paths while preserving original exported metadata.
+pub fn refresh_files(
+    records: Vec<PreparedTrack>,
+    playlists: Vec<Playlist>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Prepared, String> {
+    let mut original = HashMap::new();
+    let mut tracks = Vec::with_capacity(records.len());
+    for PreparedTrack { mut track, file } in records {
+        if cancel() {
+            return Err("iTunes import cancelled".into());
+        }
+        original.insert(
+            track.id,
+            std::mem::replace(&mut track.location, file.path_url),
+        );
+        tracks.push(track);
+    }
+    let mut refreshed = inspect(
+        Import {
+            tracks,
+            playlists,
+            ..Default::default()
+        },
+        None,
+        cancel,
+    )?;
+    for record in &mut refreshed.tracks {
+        record.track.location = original
+            .remove(&record.track.id)
+            .ok_or("Missing cached source identity")?;
+    }
+    if cancel() {
+        return Err("iTunes import cancelled".into());
+    }
+    Ok(refreshed)
+}
 /// File inspection is worker-only. OS/network filesystem calls may block that
 /// worker; cancellation is checked between calls, never in an audio callback.
 pub fn inspect(

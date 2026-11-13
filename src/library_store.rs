@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 const APPLICATION_ID: i32 = 0x4452444a;
-const SCHEMA_VERSION: i32 = 17;
+const SCHEMA_VERSION: i32 = 18;
 const DECK_SESSION_QUERY: &str = "SELECT CASE WHEN length(CAST(value AS BLOB))<=256 THEN value ELSE '' END FROM library_meta WHERE key='deck_session_v1'";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -191,6 +191,8 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
     }
     let sql = if version == 1 {
         "SELECT id,path,path_key,'','','',NULL,0,NULL,0 FROM tracks ORDER BY id LIMIT ?1"
+    } else if version >= 18 {
+        "SELECT t.id,t.path,t.path_key,COALESCE(m.title,''),COALESCE(m.artist,''),COALESCE(m.album,''),m.duration_ms,COALESCE(m.scanned,0),m.error,COALESCE(m.duration_exact,0),COALESCE(m.prefer_imported_tags,0) FROM tracks t LEFT JOIN track_metadata m ON m.track_id=t.id ORDER BY t.id LIMIT ?1"
     } else {
         "SELECT t.id,t.path,t.path_key,COALESCE(m.title,''),COALESCE(m.artist,''),COALESCE(m.album,''),m.duration_ms,COALESCE(m.scanned,0),m.error,COALESCE(m.duration_exact,0) FROM tracks t LEFT JOIN track_metadata m ON m.track_id=t.id ORDER BY t.id LIMIT ?1"
     };
@@ -211,6 +213,7 @@ fn inspect(connection: &Connection) -> Result<Option<Catalog>, InspectError> {
             id: row.get(0)?,
             path,
             metadata: crate::track_metadata::TrackMetadata {
+                prefer_imported_tags: version >= 18 && row.get(10)?,
                 analysis: None,
                 title: row.get(3)?,
                 artist: row.get(4)?,
@@ -918,8 +921,8 @@ fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String
             ])
             .map_err(|e| e.to_string())?;
     }
-    let mut meta = connection.prepare("INSERT INTO track_metadata(track_id,title,artist,album,duration_ms,scanned,error,duration_exact) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
-        ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact").map_err(|e| e.to_string())?;
+    let mut meta = connection.prepare("INSERT INTO track_metadata(track_id,title,artist,album,duration_ms,scanned,error,duration_exact,prefer_imported_tags) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+        ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact,prefer_imported_tags=excluded.prefer_imported_tags").map_err(|e| e.to_string())?;
     for track in &catalog.tracks {
         let m = &track.metadata;
         meta.execute(rusqlite::params![
@@ -930,7 +933,8 @@ fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String
             m.duration_ms.map(|ms| ms as i64),
             m.scanned,
             m.error,
-            m.duration_exact
+            m.duration_exact,
+            m.prefer_imported_tags
         ])
         .map_err(|e| e.to_string())?;
         write_analysis(connection, track)?;
@@ -945,8 +949,22 @@ fn write_tracks(connection: &Connection, catalog: &Catalog) -> Result<(), String
 fn create_metadata_schema(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("CREATE TABLE track_metadata(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
         title TEXT NOT NULL CHECK(length(title)<=512), artist TEXT NOT NULL CHECK(length(artist)<=512), album TEXT NOT NULL CHECK(length(album)<=512),
-        duration_ms INTEGER CHECK(duration_ms>=0 AND duration_ms<=604800000), scanned INTEGER NOT NULL CHECK(scanned IN (0,1)), error TEXT CHECK(length(error)<=512), duration_exact INTEGER NOT NULL CHECK(duration_exact IN (0,1)) CHECK(duration_exact=0 OR duration_ms IS NOT NULL)) STRICT;")
+        duration_ms INTEGER CHECK(duration_ms>=0 AND duration_ms<=604800000), scanned INTEGER NOT NULL CHECK(scanned IN (0,1)), error TEXT CHECK(length(error)<=512), prefer_imported_tags INTEGER NOT NULL DEFAULT 0 CHECK(prefer_imported_tags IN (0,1)), duration_exact INTEGER NOT NULL CHECK(duration_exact IN (0,1)) CHECK(duration_exact=0 OR duration_ms IS NOT NULL)) STRICT;")
         .map_err(|e| e.to_string())
+}
+fn add_imported_tag_preference(connection: &Connection) -> Result<(), String> {
+    let mut query = connection
+        .prepare("PRAGMA table_info(track_metadata)")
+        .map_err(|e| e.to_string())?;
+    let columns = query
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    if columns.iter().any(|c| c == "prefer_imported_tags") {
+        return Ok(());
+    }
+    connection.execute_batch("ALTER TABLE track_metadata ADD COLUMN prefer_imported_tags INTEGER NOT NULL DEFAULT 0 CHECK(prefer_imported_tags IN (0,1));").map_err(|e|e.to_string())
 }
 fn create_analysis_schema(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("CREATE TABLE IF NOT EXISTS track_analysis(track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,result TEXT NOT NULL CHECK(length(CAST(result AS BLOB))<=65536)) STRICT;").map_err(|e| e.to_string())
@@ -1239,6 +1257,9 @@ impl Store {
                 catalog.prep_queue = read_prep_queue(&tx)
                     .map_err(|error| format!("Prep queue migration failed: {error:?}"))?;
                 catalog.validate()?;
+            }
+            if version < 18 {
+                add_imported_tag_preference(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                 .map_err(|e| e.to_string())?;
@@ -1570,10 +1591,10 @@ impl Store {
                 }
             }
             let m = &track.metadata;
-            tx.execute("INSERT INTO track_metadata(track_id,title,artist,album,duration_ms,scanned,error,duration_exact) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
-                ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact
-                WHERE track_metadata.title IS NOT excluded.title OR track_metadata.artist IS NOT excluded.artist OR track_metadata.album IS NOT excluded.album OR track_metadata.duration_ms IS NOT excluded.duration_ms OR track_metadata.scanned IS NOT excluded.scanned OR track_metadata.error IS NOT excluded.error OR track_metadata.duration_exact IS NOT excluded.duration_exact",
-                rusqlite::params![track.id,m.title,m.artist,m.album,m.duration_ms.map(|v|v as i64),m.scanned,m.error,m.duration_exact]).map_err(|e|e.to_string())?;
+            tx.execute("INSERT INTO track_metadata(track_id,title,artist,album,duration_ms,scanned,error,duration_exact,prefer_imported_tags) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+                ON CONFLICT(track_id) DO UPDATE SET title=excluded.title,artist=excluded.artist,album=excluded.album,duration_ms=excluded.duration_ms,scanned=excluded.scanned,error=excluded.error,duration_exact=excluded.duration_exact,prefer_imported_tags=excluded.prefer_imported_tags
+                WHERE track_metadata.title IS NOT excluded.title OR track_metadata.artist IS NOT excluded.artist OR track_metadata.album IS NOT excluded.album OR track_metadata.duration_ms IS NOT excluded.duration_ms OR track_metadata.scanned IS NOT excluded.scanned OR track_metadata.error IS NOT excluded.error OR track_metadata.duration_exact IS NOT excluded.duration_exact OR track_metadata.prefer_imported_tags IS NOT excluded.prefer_imported_tags",
+                rusqlite::params![track.id,m.title,m.artist,m.album,m.duration_ms.map(|v|v as i64),m.scanned,m.error,m.duration_exact,m.prefer_imported_tags]).map_err(|e|e.to_string())?;
             write_analysis(&tx, track)?;
             // Fixed-size cue/loop sets keep per-track writes bounded, independent of catalog size.
             for sql in [
@@ -2170,6 +2191,43 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn itunes_priority_migrates_from_v17_and_survives_delta_save_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        let path = dir.path().join("missing.mp3");
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        library.insert([path.clone()]);
+        store.save_delta(&library.changes()).unwrap();
+        store.connection.execute_batch("ALTER TABLE track_metadata DROP COLUMN prefer_imported_tags;PRAGMA user_version=17;").unwrap();
+        drop(store);
+        let (mut store, mut library, _) = Store::open(db.clone()).unwrap();
+        assert!(!library.visible()[0].metadata.prefer_imported_tags);
+        library.set_metadata(
+            &path,
+            crate::track_metadata::TrackMetadata {
+                prefer_imported_tags: true,
+                title: "Imported".into(),
+                scanned: true,
+                ..Default::default()
+            },
+        );
+        store.save_delta(&library.changes()).unwrap();
+        drop(store);
+        let (_store, mut library, _) = Store::open(db).unwrap();
+        assert!(library.visible()[0].metadata.prefer_imported_tags);
+        library.set_metadata(
+            &path,
+            crate::track_metadata::TrackMetadata {
+                title: "Passive file title".into(),
+                scanned: true,
+                duration_ms: Some(2000),
+                ..Default::default()
+            },
+        );
+        assert_eq!(library.visible()[0].metadata.title, "Imported");
+        assert_eq!(library.visible()[0].metadata.duration_ms, Some(2000));
+    }
     #[test]
     fn prep_queue_migration_roundtrip_atomic_retry_and_relocation() {
         let dir = tempfile::tempdir().unwrap();

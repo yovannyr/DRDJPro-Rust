@@ -20,6 +20,7 @@ default = []
 dvs-xwax = ["dep:drdj-dvs"]
 
 [dependencies]
+drdj-itunes = { path = "crates/drdj-itunes" }
 url = "=2.5.8"
 drdj-remote = { path = "crates/drdj-remote" }
 drdj-keylock = { path = "crates/drdj-keylock" }

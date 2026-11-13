@@ -169,6 +169,7 @@ impl From<&Track> for NativeTrackMessage {
             format: track.format.clone(),
             available: track.available,
             metadata: NativeMetadataMessage {
+                prefer_imported_tags: metadata.prefer_imported_tags.then_some(true),
                 title: metadata.title.clone(),
                 artist: metadata.artist.clone(),
                 album: metadata.album.clone(),
@@ -211,6 +212,7 @@ impl From<Track> for NativeTrackMessage {
             saved_loops,
             grid: track.grid.as_ref().map(Into::into),
             metadata: NativeMetadataMessage {
+                prefer_imported_tags: m.prefer_imported_tags.then_some(true),
                 title: m.title,
                 artist: m.artist,
                 album: m.album,
@@ -244,6 +246,7 @@ impl TryFrom<NativeTrackMessage> for Track {
         }
         let m = value.metadata;
         let metadata = crate::track_metadata::TrackMetadata {
+            prefer_imported_tags: m.prefer_imported_tags.unwrap_or(false),
             title: m.title,
             artist: m.artist,
             album: m.album,
@@ -339,6 +342,7 @@ mod tests {
         track.metadata.error = Some(String::new());
         track.metadata.duration_exact = true;
         track.metadata.scanned = true;
+        track.metadata.prefer_imported_tags = true;
         track.metadata.analysis = Some(crate::audio_analyzer::TrackAnalysisResult {
             file_path: "analysis-source".into(),
             bpm: 128.125,

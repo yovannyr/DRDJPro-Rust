@@ -3,6 +3,8 @@ use std::path::Path;
 use symphonia::core::meta::{Limit, MetadataOptions, MetadataRevision, StandardTagKey};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackMetadata {
+    /// Explicit XML/API metadata wins over later passive file-tag inspection.
+    pub prefer_imported_tags: bool,
     pub analysis: Option<crate::audio_analyzer::TrackAnalysisResult>,
     pub title: String,
     pub artist: String,
@@ -15,6 +17,21 @@ pub struct TrackMetadata {
 pub const MAX_TEXT: usize = 512;
 pub const MAX_DURATION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 impl TrackMetadata {
+    /// Passive header refresh must not revoke explicitly imported tag ownership.
+    pub(crate) fn retain_imported_tags(&mut self, existing: &Self) {
+        if existing.prefer_imported_tags && !self.prefer_imported_tags {
+            if !existing.title.is_empty() {
+                self.title = existing.title.clone();
+            }
+            if !existing.artist.is_empty() {
+                self.artist = existing.artist.clone();
+            }
+            if !existing.album.is_empty() {
+                self.album = existing.album.clone();
+            }
+            self.prefer_imported_tags = true;
+        }
+    }
     /// Retry supported legacy parser failures; successful warnings remain cached.
     pub(crate) fn needs_refresh(&self, path: &Path) -> bool {
         !self.scanned

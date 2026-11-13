@@ -62,3 +62,31 @@ crate Clippy, formatting and diff checks passed. Isolated debug SQLite probe for
 50,000rows/100changed:2.09s; source XML parsing, filesystem work and UI excluded.
 Independent GPT-6.1-Sol medium review and follow-up accepted with no remaining
 findings. The next slice connects ordered sources to the app/shared library.
+
+## Slice3: native source window and shared library
+
+The lazy iTunes window provides XML/media-folder selection, cached sources,
+ordered playlists (including repetitions), complete source details and guarded
+deck loading through the existing asynchronous controller. A virtual row model
+avoids materializing 250,000 Slint rows. Worker threads own XML, SQLite, file
+inspection and pickers. Cached reads refresh file availability without writing an
+older source generation back over a concurrent synchronization.
+
+Native schema18 and compatible optional protobuf field9 retain imported-tag
+preference across restart, restore, background tag scans and deck loading.
+Existing native track IDs, analysis, cues and local tracks are retained. Source
+removals never delete shared tracks. Source SQLite commits and asynchronous native
+saves are separate phases; the window shows native save status, and reopening a
+cached source reconciles an interrupted application. Cancellation can leave an
+explicitly reported applied prefix. The application loop budgets 2ms per tick;
+publishing/model replacement is outside that budget and UI latency is unqualified.
+
+The shared catalog limit is250,000; the existing directory/picker batch limits
+remain unchanged. A regression constructs100,001 native records. Other tests cover
+actual WAV deck loading with imported title precedence, v17-to-v18 migration,
+restart/restore, protobuf compatibility, source import/reopen and filesystem
+availability changes, ordered virtual playlists, cancelled late worker results
+and an invalid media override preserving the committed source. Root strict Clippy,
+76 native SQLite tests, 21 protobuf crate tests, five native protobuf adapter tests
+and17 iTunes core tests passed. Independent GPT-6.1-Sol medium review accepted the
+slice after fixes. No native visual/manual acceptance is claimed.

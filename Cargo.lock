@@ -1578,6 +1578,7 @@ dependencies = [
  "crossbeam",
  "dirs 5.0.1",
  "drdj-dvs",
+ "drdj-itunes",
  "drdj-keylock",
  "drdj-proto",
  "drdj-remote",

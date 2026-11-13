@@ -138,6 +138,34 @@ fn encoded_drm_and_remote_locations_never_become_playable_files() {
     assert_eq!(p.skipped, 2);
 }
 #[test]
+fn cached_resolved_paths_are_rechecked_when_files_appear_or_disappear() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.mp3");
+    let b = dir.path().join("b.mp3");
+    std::fs::write(&a, b"a").unwrap();
+    let a_uri = url::Url::from_file_path(&a).unwrap().to_string();
+    let b_uri = url::Url::from_file_path(&b).unwrap().to_string();
+    let p = inspect(
+        parse_str(&doc(
+            &[track(1, &a_uri, ""), track(2, &b_uri, "")].concat(),
+            "",
+        ))
+        .unwrap(),
+        None,
+        &|| false,
+    )
+    .unwrap();
+    assert!(p.tracks[0].file.available);
+    assert!(!p.tracks[1].file.available);
+    std::fs::remove_file(a).unwrap();
+    std::fs::write(b, b"b").unwrap();
+    let p = refresh_files(p.tracks, p.playlists, &|| false).unwrap();
+    assert!(!p.tracks[0].file.available);
+    assert!(p.tracks[1].file.available);
+    assert_eq!(p.tracks[0].track.location, a_uri);
+    assert_eq!(p.tracks[1].track.location, b_uri);
+}
+#[test]
 fn cancellation_after_last_file_and_during_large_playlist_does_not_return_success() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("last.mp3"), b"x").unwrap();
