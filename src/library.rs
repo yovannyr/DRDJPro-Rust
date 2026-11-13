@@ -2628,14 +2628,14 @@ mod tests {
         );
     }
     #[test]
-    fn delta_snapshot_at_100000_tracks_only_clones_changed_records_and_acks_exact_revision() {
+    fn delta_snapshot_at_catalog_capacity_only_clones_changed_records_and_acks_exact_revision() {
         let profile = tempfile::tempdir().unwrap();
         let mut library = Library::default();
         library.insert((0..MAX_TRACKS).map(|i| profile.path().join(format!("{i}.wav"))));
-        library.set_query("99999.wav".into());
+        library.set_query(format!("{}.wav", MAX_TRACKS - 1));
         assert_eq!(
             library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec![100_000]
+            vec![i32::try_from(MAX_TRACKS).unwrap()]
         );
         library.set_query(String::new());
         library.acknowledge(library.revision());
@@ -2682,7 +2682,7 @@ mod tests {
         assert_eq!(remaining.crates.unwrap().entries[0].0, crate_id);
         library.acknowledge(library.revision());
         assert!(!library.has_changes());
-        println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
+        println!("{MAX_TRACKS}-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
     }
     #[test]
     fn indexed_selection_matches_visible_scope_and_avoids_building_large_views() {

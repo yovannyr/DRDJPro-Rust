@@ -14,7 +14,8 @@ export component ItunesWindow inherits Window {
     in property<string> status:"Choose an XML export or a cached source";
     in property<string> shared-storage;
     in property<bool> busy:false;
-    callback choose-xml();callback choose-root();callback import-source();callback source-selected();callback playlist-selected();callback row-selected();callback load-track(int);callback enrich();callback cancel();callback dismiss();
+    in property<image> artwork;
+    callback choose-xml();callback choose-root();callback import-source();callback source-selected();callback playlist-selected();callback row-selected();callback load-track(int);callback enrich();callback enrich-playlist();callback cancel();callback dismiss();
     VerticalLayout {padding:12px;spacing:6px;
         HorizontalLayout {
             LineEdit {text <=> root.xml-path;accessible-label:"iTunes XML path";enabled:!root.busy;}
@@ -42,11 +43,15 @@ export component ItunesWindow inherits Window {
                 TouchArea {clicked=>{root.selected-row=index;root.row-selected();}}
             }
         }
-        Text {text:root.details;color:#dddddd;wrap:word-wrap;min-height:140px;max-height:190px;accessible-label:"iTunes source metadata";}
+        HorizontalLayout {
+            Image {source:root.artwork;width:96px;height:96px;image-fit:contain;accessible-label:"Cached Apple album artwork";}
+            Text {text:root.details;color:#dddddd;wrap:word-wrap;min-height:140px;max-height:190px;accessible-label:"iTunes source metadata";}
+        }
         HorizontalLayout {
             Button {text:"LOAD A";enabled:!root.busy&&root.selected-row>=0;clicked=>{root.load-track(0);}}
             Button {text:"LOAD B";enabled:!root.busy&&root.selected-row>=0;clicked=>{root.load-track(1);}}
             Button {text:"APPLE METADATA";enabled:!root.busy&&root.selected-row>=0;clicked=>{root.enrich();}}
+            Button {text:"APPLE PLAYLIST";enabled:!root.busy;clicked=>{root.enrich-playlist();}}
             Button {text:"CANCEL";enabled:root.busy;clicked=>{root.cancel();}}
         }
         Text {text:root.status;color:#eeeeee;wrap:word-wrap;accessible-label:"iTunes import status";}

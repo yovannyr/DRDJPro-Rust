@@ -2,7 +2,7 @@
 
 **Feature Branch**: `31-itunes-library`  
 **Created**: 2026-11-11  
-**Status**: In progress — bounded XML import core; storage/app integration pending, live Apple API requires unavailable developer token
+**Status**: Software implemented with automated tests and independent review; native/manual acceptance and live Apple API qualification remain open (no developer token)
 **Input**: Serato DJ Pro weak-links `iTunesLibrary` for Media Library import. DRDJPro-Rust has `library.rs` and `library_manager.rs` but no iTunes/Apple Music integration.
 
 ## User Scenarios & Testing *(mandatory)*

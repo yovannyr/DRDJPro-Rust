@@ -1,4 +1,6 @@
 //! Import-only iTunes/Music XML. Never opens a binary library or modifies audio.
+pub mod apple;
+mod apple_store;
 mod paths;
 mod store;
 mod xml;

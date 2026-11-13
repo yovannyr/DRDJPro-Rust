@@ -1,6 +1,7 @@
 //! Ordered source browsing and bounded shared-library application. Filesystem,
 //! XML, SQLite and native pickers run on workers, not the audio/UI callback.
 use crate::{controller::AudioController, AppWindow, ItunesRow, ItunesWindow};
+use drdj_itunes::apple::{AppleClient, Basis, Lookup, Metadata, Thumbnail};
 use drdj_itunes::{PreparedTrack, Snapshot, Source, Store, SyncReport};
 use slint::{ComponentHandle, Model, ModelNotify, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -42,10 +43,13 @@ enum Work {
     Import(PathBuf, Option<PathBuf>),
     ChooseXml,
     ChooseRoot,
+    Enrich(Arc<Data>, Vec<u64>),
+    Artwork(i64, Basis),
 }
 struct Data {
-    snapshot: Snapshot,
+    snapshot: Arc<Snapshot>,
     views: Vec<Arc<Vec<usize>>>,
+    apple: HashMap<u64, Metadata>,
 }
 impl Data {
     fn new(snapshot: Snapshot) -> Self {
@@ -64,7 +68,26 @@ impl Data {
                     .collect(),
             ));
         }
-        Self { snapshot, views }
+        Self {
+            snapshot: Arc::new(snapshot),
+            views,
+            apple: HashMap::new(),
+        }
+    }
+    fn cached(snapshot: Snapshot, store: &Store) -> Result<Self, String> {
+        let apple = store.apple_metadata(snapshot.source.id, &snapshot.tracks)?;
+        let mut data = Self::new(snapshot);
+        data.apple = apple;
+        Ok(data)
+    }
+    fn effective<'a>(&'a self, row: &'a PreparedTrack) -> std::borrow::Cow<'a, PreparedTrack> {
+        if let Some(metadata) = self.apple.get(&row.track.id) {
+            let mut row = row.clone();
+            metadata.apply(&mut row);
+            std::borrow::Cow::Owned(row)
+        } else {
+            std::borrow::Cow::Borrowed(row)
+        }
     }
 }
 enum Output {
@@ -78,6 +101,16 @@ enum Output {
     Chosen {
         path: Option<PathBuf>,
         root: bool,
+    },
+    Enriched {
+        data: Arc<Data>,
+        changed: HashSet<u64>,
+        note: String,
+    },
+    Artwork {
+        source: i64,
+        basis: Basis,
+        thumbnail: Option<Thumbnail>,
     },
 }
 fn run(work: Work, db: PathBuf, cancel: Arc<AtomicBool>) -> Result<Output, String> {
@@ -121,6 +154,21 @@ fn run(work: Work, db: PathBuf, cancel: Arc<AtomicBool>) -> Result<Output, Strin
         .map_err(|e| e.to_string())?;
     let mut store = Store::open(&db)?;
     match work {
+        Work::Enrich(data, ids) => {
+            let client = AppleClient::from_env()?;
+            enrich(
+                &mut store,
+                data,
+                ids,
+                &|row| client.lookup(row, &cancelled),
+                &cancelled,
+            )
+        }
+        Work::Artwork(source, basis) => Ok(Output::Artwork {
+            thumbnail: store.apple_artwork(source, &basis)?,
+            source,
+            basis,
+        }),
         Work::Sources => Ok(Output::Sources(store.sources()?)),
         Work::Read(id) => {
             let snapshot = store.snapshot(id)?;
@@ -138,7 +186,7 @@ fn run(work: Work, db: PathBuf, cancel: Arc<AtomicBool>) -> Result<Output, Strin
             }
             Ok(Output::Loaded {
                 sources: store.sources()?,
-                data: Arc::new(Data::new(snapshot)),
+                data: Arc::new(Data::cached(snapshot, &store)?),
                 report: None,
                 note: "Cached source loaded; reconciling the shared library".into(),
             })
@@ -176,13 +224,87 @@ fn run(work: Work, db: PathBuf, cancel: Arc<AtomicBool>) -> Result<Output, Strin
             }
             Ok(Output::Loaded {
                 sources: store.sources()?,
-                data: Arc::new(Data::new(snapshot)),
+                data: Arc::new(Data::cached(snapshot, &store)?),
                 report: Some(report),
                 note,
             })
         }
         _ => unreachable!("picker work returned earlier"),
     }
+}
+
+fn enrich(
+    store: &mut Store,
+    data: Arc<Data>,
+    ids: Vec<u64>,
+    lookup: &dyn Fn(&PreparedTrack) -> Result<Lookup, String>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Output, String> {
+    let ids: HashSet<_> = ids.into_iter().collect();
+    if ids.is_empty() || ids.len() > 50 {
+        return Err("Select1–50 unique tracks for an Apple batch".into());
+    }
+    let snapshot = Arc::clone(&data.snapshot);
+    let mut apple = data.apple.clone();
+    let mut changed = HashSet::new();
+    let mut failed = 0;
+    let mut first_error = None;
+    for row in snapshot.tracks.iter().filter(|r| ids.contains(&r.track.id)) {
+        if cancel() {
+            return Err(
+                "Apple batch cancelled; committed successes are recovered by reopening the source"
+                    .into(),
+            );
+        }
+        let result = (|| {
+            let refreshed = drdj_itunes::refresh_files(vec![row.clone()], vec![], cancel)?
+                .tracks
+                .pop()
+                .ok_or("Local track could not be inspected")?;
+            if Basis::of(&refreshed) != Basis::of(row) {
+                return Err("Local file changed; reopen the source before lookup".into());
+            }
+            let value = lookup(&refreshed)?;
+            let after = drdj_itunes::refresh_files(vec![refreshed.clone()], vec![], cancel)?
+                .tracks
+                .pop()
+                .ok_or("Local track disappeared")?;
+            if Basis::of(&after) != Basis::of(&refreshed) {
+                return Err("Local file changed during lookup".into());
+            }
+            store.save_apple(snapshot.source.id, &after, &value, cancel)?;
+            Ok::<_, String>(value.metadata)
+        })();
+        match result {
+            Ok(metadata) => {
+                apple.insert(row.track.id, metadata);
+                changed.insert(row.track.id);
+            }
+            Err(e) => {
+                failed += 1;
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
+    }
+    // Metadata lookup changes neither source records nor playlist order. Share
+    // those immutable arrays instead of cloning/reindexing a large catalog.
+    let next = Data {
+        snapshot,
+        views: data.views.clone(),
+        apple,
+    };
+    let note = format!(
+        "Apple batch: {} succeeded, {failed} failed{}",
+        changed.len(),
+        first_error.map_or(String::new(), |e| format!(". {e}"))
+    );
+    Ok(Output::Enriched {
+        data: Arc::new(next),
+        changed,
+        note,
+    })
 }
 type Executor = Rc<dyn Fn(Work, PathBuf, Arc<AtomicBool>) -> Receiver<Result<Output, String>>>;
 fn executor() -> Executor {
@@ -216,10 +338,17 @@ impl Model for Rows {
     }
     fn row_data(&self, row: usize) -> Option<ItunesRow> {
         let t = self.data.snapshot.tracks.get(*self.order.get(row)?)?;
+        let metadata = self.data.apple.get(&t.track.id);
         Some(ItunesRow {
-            title: t.track.title.as_str().into(),
-            artist: t.track.artist.as_str().into(),
-            album: t.track.album.as_str().into(),
+            title: metadata
+                .map_or(t.track.title.as_str(), |m| m.title.as_str())
+                .into(),
+            artist: metadata
+                .map_or(t.track.artist.as_str(), |m| m.artist.as_str())
+                .into(),
+            album: metadata
+                .map_or(t.track.album.as_str(), |m| m.album.as_str())
+                .into(),
             state: if t.file.available {
                 "Available"
             } else {
@@ -237,6 +366,7 @@ struct Applying {
     index: usize,
     changed: HashSet<u64>,
     force: bool,
+    only: Option<HashSet<u64>>,
     modified: usize,
     note: String,
 }
@@ -278,6 +408,7 @@ impl Session {
             .get(*data.views.get(playlist)?.get(row)?)
     }
     fn playlist(&self) {
+        self.view.set_artwork(slint::Image::default());
         let Some(data) = &self.data else {
             return;
         };
@@ -294,6 +425,7 @@ impl Session {
         }
     }
     fn details(&self) {
+        self.view.set_artwork(slint::Image::default());
         if let Some(t) = self.selected() {
             let bpm = t
                 .track
@@ -326,6 +458,18 @@ impl Session {
                     |p| p.to_string_lossy().into_owned(),
                 );
             self.view.set_details(format!("{} — {}\nAlbum: {} | Album artist: {} | Genre: {}\nSource BPM: {bpm} | Rating: {rating}/100 | iTunes plays: {plays}\nDuration: {duration} | Added: {}\n{path}\nSize: {size} | Modified: {modified}",t.track.title,t.track.artist,t.track.album,t.track.album_artist,t.track.genre,t.track.date_added.as_deref().unwrap_or("—")).into());
+            if let Some(m) = self.data.as_ref().and_then(|d| d.apple.get(&t.track.id)) {
+                self.view.set_details(
+                    format!(
+                        "Apple: {} — {} | Album: {}\nXML source: {}",
+                        m.title,
+                        m.artist,
+                        m.album,
+                        self.view.get_details()
+                    )
+                    .into(),
+                );
+            }
         }
     }
     fn install(
@@ -382,6 +526,7 @@ impl Session {
             data,
             index: 0,
             force: report.is_none(),
+            only: None,
             changed: report.map_or_else(HashSet::new, |r| r.changed_ids),
             modified: 0,
             note,
@@ -404,6 +549,43 @@ impl Session {
                     return;
                 }
                 match result {
+                    Ok(Output::Artwork {
+                        source,
+                        basis,
+                        thumbnail,
+                    }) => {
+                        self.view.set_busy(false);
+                        if self
+                            .data
+                            .as_ref()
+                            .is_some_and(|d| d.snapshot.source.id == source)
+                            && self.selected().is_some_and(|r| Basis::of(r) == basis)
+                        {
+                            if let Some(t) = thumbnail {
+                                let pixels =
+                                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                        &t.rgba, t.width, t.height,
+                                    );
+                                self.view.set_artwork(slint::Image::from_rgba8(pixels));
+                            }
+                        }
+                        self.view.set_status("Cached artwork inspected".into());
+                    }
+                    Ok(Output::Enriched {
+                        data,
+                        changed,
+                        note,
+                    }) => {
+                        if changed.is_empty() {
+                            self.view.set_busy(false);
+                            self.view.set_status(note.into());
+                        } else {
+                            self.install(self.sources.clone(), data, None, note);
+                            if let Some(a) = self.applying.as_mut() {
+                                a.only = Some(changed);
+                            }
+                        }
+                    }
                     Ok(Output::Chosen { path, root }) => {
                         if let Some(path) = path {
                             if root {
@@ -476,8 +658,17 @@ impl Session {
             && Instant::now() < deadline
         {
             let row = &applying.data.snapshot.tracks[applying.index];
+            if applying
+                .only
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(&row.track.id))
+            {
+                applying.index += 1;
+                continue;
+            }
+            let row = applying.data.effective(row);
             match self.bridge.apply(
-                row,
+                &row,
                 applying.force || applying.changed.contains(&row.track.id),
             ) {
                 Ok(modified) => {
@@ -593,7 +784,14 @@ fn wire_with(
                 }
             }));
             view.on_playlist_selected(callback(|s| s.playlist()));
-            view.on_row_selected(callback(|s| s.details()));
+            view.on_row_selected(callback(|s| {
+                s.details();
+                if let (Some(data), Some(row)) = (&s.data, s.selected()) {
+                    if data.apple.contains_key(&row.track.id) {
+                        s.start(Work::Artwork(data.snapshot.source.id, Basis::of(row)));
+                    }
+                }
+            }));
             let loading = Rc::downgrade(&opening);
             view.on_load_track(move |deck| {
                 if let Some(state) = loading.upgrade() {
@@ -613,8 +811,35 @@ fn wire_with(
                 }
             });
             view.on_enrich(callback(|s| {
-                s.view
-                    .set_status("Apple Music metadata adapter is not yet configured".into())
+                if let (Some(data), Some(row)) = (&s.data, s.selected()) {
+                    s.start(Work::Enrich(Arc::clone(data), vec![row.track.id]));
+                }
+            }));
+            view.on_enrich_playlist(callback(|s| {
+                if let Some(data) = &s.data {
+                    let ids = usize::try_from(s.view.get_playlist_index())
+                        .ok()
+                        .and_then(|i| data.views.get(i))
+                        .map(|v| {
+                            let mut ids = HashSet::new();
+                            for i in v.iter() {
+                                ids.insert(data.snapshot.tracks[*i].track.id);
+                                if ids.len() > 50 {
+                                    break;
+                                }
+                            }
+                            ids
+                        })
+                        .unwrap_or_default();
+                    if ids.is_empty() || ids.len() > 50 {
+                        s.view.set_status(
+                            "Choose a source playlist with1–50 unique tracks for an Apple batch"
+                                .into(),
+                        );
+                    } else {
+                        s.start(Work::Enrich(Arc::clone(data), ids.into_iter().collect()));
+                    }
+                }
             }));
             view.on_cancel(callback(|s| {
                 s.cancel.store(true, Ordering::Release);
@@ -697,12 +922,14 @@ mod tests {
         ready: Cell<bool>,
         records: RefCell<HashMap<PathBuf, bool>>,
         loads: RefCell<Vec<(usize, PathBuf)>>,
+        titles: RefCell<Vec<String>>,
     }
     impl Bridge for FakeBridge {
         fn ready(&self) -> bool {
             self.ready.get()
         }
         fn apply(&self, row: &PreparedTrack, _: bool) -> Result<bool, String> {
+            self.titles.borrow_mut().push(row.track.title.clone());
             let path = row.file.path()?;
             Ok(self.records.borrow_mut().insert(path, row.file.available)
                 != Some(row.file.available))
@@ -859,5 +1086,155 @@ mod tests {
         .is_err());
         let store = Store::open(&db).unwrap();
         assert_eq!(store.snapshot(id).unwrap().tracks.len(), 2);
+    }
+    #[test]
+    fn apple_partial_batch_applies_only_success_and_cached_art_survives_reopen() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (xml, _, _) = fixture(dir.path());
+        let db = dir.path().join("source.sqlite");
+        let Output::Loaded { data, .. } = run(
+            Work::Import(xml, None),
+            db.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap() else {
+            panic!("missing source")
+        };
+        let mut art = std::io::Cursor::new(vec![]);
+        image::DynamicImage::new_rgb8(12, 12)
+            .write_to(&mut art, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = art.into_inner();
+        let mut store = Store::open(&db).unwrap();
+        let result = enrich(
+            &mut store,
+            Arc::clone(&data),
+            vec![1, 2],
+            &|row| {
+                if row.track.id == 1 {
+                    Ok(Lookup {
+                        metadata: Metadata {
+                            song_id: "123".into(),
+                            title: "APPLE First".into(),
+                            artist: "Artist".into(),
+                            album: "Apple Album".into(),
+                        },
+                        artwork: Some(bytes.clone()),
+                    })
+                } else {
+                    Err("HTTP429".into())
+                }
+            },
+            &|| false,
+        )
+        .unwrap();
+        let Output::Enriched {
+            data: enriched,
+            changed,
+            note,
+        } = result
+        else {
+            panic!("no batch")
+        };
+        assert_eq!(changed, HashSet::from([1]));
+        assert!(note.contains("1 succeeded, 1 failed"));
+        assert_eq!(
+            store.snapshot(data.snapshot.source.id).unwrap().tracks[0]
+                .track
+                .title,
+            "First"
+        );
+        let bridge = Rc::new(FakeBridge::default());
+        bridge.ready.set(true);
+        let held = Rc::new(RefCell::new(Some(Output::Enriched {
+            data: enriched,
+            changed,
+            note,
+        })));
+        let sending = Rc::clone(&held);
+        let fake: Executor = Rc::new(move |_, _, _| {
+            let (tx, rx) = mpsc::sync_channel(1);
+            tx.send(Ok(sending.borrow_mut().take().unwrap()))
+                .unwrap_or_else(|_| panic!("receiver closed"));
+            rx
+        });
+        let (_timer, state) = wire_with(&ui, bridge.clone(), db.clone(), fake);
+        ui.invoke_show_itunes();
+        let view = state.borrow().as_ref().unwrap().view.clone_strong();
+        pump(|| !view.get_busy());
+        assert_eq!(*bridge.titles.borrow(), ["APPLE First"]);
+        assert_eq!(view.get_rows().row_data(1).unwrap().title, "Second");
+        ui.invoke_close_itunes();
+        drop(store);
+        let store = Store::open(&db).unwrap();
+        let snapshot = store.snapshot(data.snapshot.source.id).unwrap();
+        let cached = Data::cached(snapshot, &store).unwrap();
+        assert_eq!(cached.apple[&1].title, "APPLE First");
+        let thumb = store
+            .apple_artwork(
+                data.snapshot.source.id,
+                &Basis::of(&data.snapshot.tracks[0]),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!((thumb.width, thumb.height), (12, 12));
+        let mut stale = Basis::of(&data.snapshot.tracks[0]);
+        stale.modified_ms = Some(0);
+        assert!(store
+            .apple_artwork(data.snapshot.source.id, &stale)
+            .unwrap()
+            .is_none());
+    }
+    #[test]
+    fn failed_or_cancelled_apple_batch_keeps_metadata_and_makes_no_native_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (xml, _, _) = fixture(dir.path());
+        let db = dir.path().join("source.sqlite");
+        let Output::Loaded { data, .. } = run(
+            Work::Import(xml, None),
+            db.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap() else {
+            panic!("missing source")
+        };
+        let mut store = Store::open(&db).unwrap();
+        let Output::Enriched {
+            data: next,
+            changed,
+            note,
+        } = enrich(
+            &mut store,
+            Arc::clone(&data),
+            vec![1],
+            &|_| Err("HTTP401".into()),
+            &|| false,
+        )
+        .unwrap()
+        else {
+            panic!("missing batch")
+        };
+        assert!(changed.is_empty());
+        assert_eq!(next.snapshot.tracks, data.snapshot.tracks);
+        assert!(note.contains("0 succeeded, 1 failed"));
+        assert!(next.apple.is_empty());
+        assert!(enrich(
+            &mut store,
+            data.clone(),
+            vec![1],
+            &|_| panic!("cancel must not call lookup"),
+            &|| true
+        )
+        .is_err());
+        assert!(enrich(
+            &mut store,
+            data,
+            (1..=51).collect(),
+            &|_| panic!("oversize batch must not call lookup"),
+            &|| false
+        )
+        .is_err());
     }
 }

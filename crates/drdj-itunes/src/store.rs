@@ -238,7 +238,7 @@ pub struct SyncReport {
 }
 /// Worker-owned SQLite connection; never pass to UI or audio callbacks.
 pub struct Store {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 fn cancelled(cancel: &dyn Fn() -> bool) -> Result<(), String> {
     if cancel() {
@@ -343,7 +343,7 @@ impl Store {
                 CREATE INDEX active_tracks ON tracks(source_id,active,position);
                 CREATE TABLE playlists(source_id INTEGER NOT NULL REFERENCES sources(id),playlist_id TEXT NOT NULL CHECK(length(playlist_id)<=512),name TEXT NOT NULL CHECK(length(name)<=512),items TEXT NOT NULL CHECK(length(CAST(items AS BLOB))<=24000000),position INTEGER NOT NULL CHECK(position>=0 AND position<4096),PRIMARY KEY(source_id,playlist_id)) STRICT;
                 PRAGMA application_id=1146243412;PRAGMA user_version=1;COMMIT;").map_err(err)?;
-        } else if app != APP_ID || version != 1 {
+        } else if app != APP_ID || !(1..=2).contains(&version) {
             return Err("Unsupported or unrelated iTunes source catalog".into());
         }
         c.pragma_update(None, "foreign_keys", true).map_err(err)?;
@@ -357,6 +357,9 @@ impl Store {
         }
         c.pragma_update(None, "max_page_count", (1024 * 1024 * 1024i64) / page_size)
             .map_err(err)?;
+        if version < 2 {
+            c.execute_batch("BEGIN IMMEDIATE; CREATE TABLE apple_metadata(source_id INTEGER NOT NULL,track_id TEXT NOT NULL,basis TEXT NOT NULL CHECK(length(CAST(basis AS BLOB))<=262144),metadata TEXT NOT NULL CHECK(length(CAST(metadata AS BLOB))<=8192),art BLOB CHECK(length(art)<=524288),PRIMARY KEY(source_id,track_id),FOREIGN KEY(source_id,track_id) REFERENCES tracks(source_id,track_id)) STRICT; PRAGMA user_version=2; COMMIT;").map_err(err)?;
+        }
         Ok(Self { connection: c })
     }
     pub fn sources(&self) -> Result<Vec<Source>, String> {

@@ -1047,3 +1047,10 @@ ordinary file-tag scans retain explicitly imported title/artist/album preference
 Missing files remain visible and cannot load. Native save status is separate from
 source synchronization status; reopening reconciles interrupted native imports.
 Native appearance and manual workflow acceptance remain deferred.
+
+APPLE METADATA enriches one selected local source track; APPLE PLAYLIST accepts
+at most50 unique tracks. Both require an externally configured MusicKit developer
+token and preserve local data on failure/ambiguity. Apple values and the original
+XML details remain distinguishable; selected cover thumbnails come from the
+bounded source cache. No background lookups, audio streaming or token entry form
+is added. Live API qualification is open because no developer token is available.
