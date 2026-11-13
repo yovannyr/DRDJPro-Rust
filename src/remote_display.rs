@@ -325,6 +325,9 @@ fn wire_state(ui: &AppWindow) -> (Timer, SessionState) {
     let closing = Rc::clone(&state);
     let weak_close = ui.as_weak();
     ui.window().on_close_requested(move || {
+        if let Some(ui) = weak_close.upgrade() {
+            ui.invoke_close_web_browsers();
+        }
         if let Some(session) = closing.borrow_mut().take() {
             if let Some(ui) = weak_close.upgrade() {
                 session.pads.borrow_mut().stop(&ui);

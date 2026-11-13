@@ -1,0 +1,22 @@
+import {Button,LineEdit} from "std-widgets.slint";
+export component WebBrowserWindow inherits Window {
+    title:"DrDJ Web";preferred-width:960px;preferred-height:680px;
+    min-width:700px;min-height:400px;background:#161616;
+    in-out property<string> address;
+    in property<string> status:"Loading browser";
+    callback navigate();callback back();callback forward();callback reload();callback home();callback dismiss();
+    VerticalLayout {
+        spacing:0px;padding:0px;
+        HorizontalLayout {height:42px;padding:4px;spacing:4px;
+            Button {text:"BACK";accessible-label:"Web back";clicked=>{root.back();}}
+            Button {text:"NEXT";accessible-label:"Web forward";clicked=>{root.forward();}}
+            Button {text:"RELOAD";clicked=>{root.reload();}}
+            Button {text:"HOME";clicked=>{root.home();}}
+            LineEdit {text <=> root.address;accessible-label:"Web address";accepted=>{root.navigate();}}
+            Button {text:"GO";clicked=>{root.navigate();}}
+            Button {text:"CLOSE";clicked=>{root.dismiss();}}
+        }
+        Rectangle {background:#202020;vertical-stretch:1;accessible-role:groupbox;accessible-label:"Native web content";}
+        Text {height:32px;text:root.status;color:#dddddd;font-size:12px;overflow:elide;accessible-label:"Web navigation status";}
+    }
+}

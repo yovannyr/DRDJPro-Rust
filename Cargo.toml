@@ -20,6 +20,7 @@ default = []
 dvs-xwax = ["dep:drdj-dvs"]
 
 [dependencies]
+url = "=2.5.8"
 drdj-remote = { path = "crates/drdj-remote" }
 drdj-keylock = { path = "crates/drdj-keylock" }
 drdj-proto = { path = "crates/drdj-proto" }
@@ -56,6 +57,7 @@ crash-handler = "=0.8.1"
 slint-build = "=1.18.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+wry = { version = "=0.57.2", default-features = false, features = ["os-webview"] }
 slint = { version = "=1.18.1", features = ["unstable-winit-030"] }
 windows = { version = "=0.54.0", features = ["Win32_Media_Audio", "Win32_Devices_Properties", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
 
