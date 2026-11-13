@@ -66,8 +66,20 @@ libc = "0.2"
 tempfile = "=3.27.0"
 i-slint-backend-testing = "=1.18.1"
 
-# Keep debug assertions/symbols while avoiding unoptimized full-track DSP/codec loops.
-# No dependency versions, features, or release settings change.
+# Keep stack locations and debug assertions without full variable/type symbols
+# or the large incremental cache. Applies to workspace members and dependencies.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
+
+# One reproducible test configuration replaces per-invocation CLI overrides.
+# Interactive dev playback and codec optimizations below remain unchanged.
+[profile.test.package.drdjpro-ui-spike]
+opt-level = 0
 
 [profile.dev.package.drdjpro-ui-spike]
 opt-level = 1
