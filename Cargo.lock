@@ -1514,6 +1514,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "drdj-itunes"
+version = "0.1.0"
+dependencies = [
+ "percent-encoding",
+ "quick-xml",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "drdj-keylock"
 version = "0.1.0"
 dependencies = [

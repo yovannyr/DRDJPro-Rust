@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote"]
+members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote", "crates/drdj-itunes"]
 resolver = "2"
 exclude = ["vendor/minidumper"]
 
