@@ -12,6 +12,10 @@ Mach IPC already specifies its own two/five-second deadlines upstream.
 
 A `socket2` dependency sets these options on the private native socket wrappers.
 The Windows connect error carries its operation name for startup diagnostics.
+On Linux/Android, `uds`0.4's existing safe timeout setters are used directly:
+its socket does not implement the `AsFd` trait required by `socket2`0.6.
+This build-compatibility adjustment retains both five-second deadlines and socket
+ownership; it adds no new crash-reporting functionality or unsafe descriptor code.
 
 `src/ipc/server.rs` retains/rearms the connection after capture on all supported
 platforms rather than consuming it. This is needed for caught/worker Rust panics:
