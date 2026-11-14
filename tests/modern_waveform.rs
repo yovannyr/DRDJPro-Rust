@@ -95,28 +95,18 @@ fn modern_detail_accessible_value_range_b_c_d() {
         .next()
         .expect("A exists");
     let val_a: f64 = a.accessible_value().unwrap().to_string().parse().unwrap();
-    assert!(
-        (val_a - 0.0).abs() < 0.01,
-        "A min-value {} ~= 0",
-        val_a
-    );
+    assert!((val_a - 0.0).abs() < 0.01, "A min-value {} ~= 0", val_a);
 
     // B: 0 + 1 * 100 = 100
     let b = ElementHandle::find_by_accessible_label(&ui, "Deck B detail waveform")
         .next()
         .expect("B exists");
     let val_b: f64 = b.accessible_value().unwrap().to_string().parse().unwrap();
-    assert!(
-        (val_b - 100.0).abs() < 0.01,
-        "B max-value {} ~= 100",
-        val_b
-    );
+    assert!((val_b - 100.0).abs() < 0.01, "B max-value {} ~= 100", val_b);
 
     // C/D detail waveform elements exist in four-decks
-    let c = ElementHandle::find_by_accessible_label(&ui, "Deck C detail waveform")
-        .next();
-    let d = ElementHandle::find_by_accessible_label(&ui, "Deck D detail waveform")
-        .next();
+    let c = ElementHandle::find_by_accessible_label(&ui, "Deck C detail waveform").next();
+    let d = ElementHandle::find_by_accessible_label(&ui, "Deck D detail waveform").next();
     assert!(
         c.is_some() && d.is_some(),
         "C and D detail waveform elements exist in four-decks"
@@ -164,27 +154,33 @@ fn modern_waveform_seek_via_pointer_click() {
     let pos = a.absolute_position();
     let size = a.size();
 
-    ui.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
-        position: LogicalPosition::new(
-            pos.x + size.width / 2.0,
-            pos.y + size.height / 2.0,
-        ),
-        button: PointerEventButton::Left,
-    });
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0),
+            button: PointerEventButton::Left,
+        });
 
-    ui.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
-        position: LogicalPosition::new(
-            pos.x + size.width / 2.0,
-            pos.y + size.height / 2.0,
-        ),
-        button: PointerEventButton::Left,
-    });
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0),
+            button: PointerEventButton::Left,
+        });
 
     // TouchArea.clicked handler invokes seek() which routes through seek-requested
-    let calls = { let mut c = seek_calls.borrow_mut(); c.drain(..).collect::<Vec<_>>() };
-    assert!(!calls.is_empty(), "seek-left was called on pointer click on A");
+    let calls = {
+        let mut c = seek_calls.borrow_mut();
+        c.drain(..).collect::<Vec<_>>()
+    };
+    assert!(
+        !calls.is_empty(),
+        "seek-left was called on pointer click on A"
+    );
     let seek_val = calls[0];
-    assert!(seek_val > 0.0 && seek_val < 100.0, "seek value {} is in range", seek_val);
+    assert!(
+        seek_val > 0.0 && seek_val < 100.0,
+        "seek value {} is in range",
+        seek_val
+    );
     seek_calls.borrow_mut().clear();
 }
 
@@ -214,26 +210,32 @@ fn modern_waveform_seek_via_pointer_click_right_deck() {
     let pos = b.absolute_position();
     let size = b.size();
 
-    ui.window().dispatch_event(slint::platform::WindowEvent::PointerPressed {
-        position: LogicalPosition::new(
-            pos.x + size.width / 2.0,
-            pos.y + size.height / 2.0,
-        ),
-        button: PointerEventButton::Left,
-    });
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0),
+            button: PointerEventButton::Left,
+        });
 
-    ui.window().dispatch_event(slint::platform::WindowEvent::PointerReleased {
-        position: LogicalPosition::new(
-            pos.x + size.width / 2.0,
-            pos.y + size.height / 2.0,
-        ),
-        button: PointerEventButton::Left,
-    });
+    ui.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0),
+            button: PointerEventButton::Left,
+        });
 
-    let calls = { let mut c = seek_calls.borrow_mut(); c.drain(..).collect::<Vec<_>>() };
-    assert!(!calls.is_empty(), "seek-right was called on pointer click on B");
+    let calls = {
+        let mut c = seek_calls.borrow_mut();
+        c.drain(..).collect::<Vec<_>>()
+    };
+    assert!(
+        !calls.is_empty(),
+        "seek-right was called on pointer click on B"
+    );
     let seek_val = calls[0];
-    assert!(seek_val > 0.0 && seek_val < 100.0, "seek value {} is in range", seek_val);
+    assert!(
+        seek_val > 0.0 && seek_val < 100.0,
+        "seek value {} is in range",
+        seek_val
+    );
     seek_calls.borrow_mut().clear();
 }
 
@@ -263,7 +265,11 @@ fn modern_zoom_zooms_left_detail_window() {
 
     // Can zoom out from min
     ui.set_left_detail_window(4);
-    assert_eq!(ui.get_left_detail_window(), 4, "detail-window zoomed out from min");
+    assert_eq!(
+        ui.get_left_detail_window(),
+        4,
+        "detail-window zoomed out from min"
+    );
 }
 
 #[test]
@@ -280,7 +286,11 @@ fn modern_zoom_zooms_right_detail_window() {
         .dispatch_event(slint::platform::WindowEvent::WindowActiveChanged(true));
 
     ui.set_right_detail_window(16);
-    assert_eq!(ui.get_right_detail_window(), 16, "detail-window doubled to 16");
+    assert_eq!(
+        ui.get_right_detail_window(),
+        16,
+        "detail-window doubled to 16"
+    );
 
     // Zoom out to max 32
     ui.set_right_detail_window(32);
@@ -288,7 +298,11 @@ fn modern_zoom_zooms_right_detail_window() {
 
     // Zoom out from max stays at 32
     ui.set_right_detail_window(32);
-    assert_eq!(ui.get_right_detail_window(), 32, "detail-window clamped at 32");
+    assert_eq!(
+        ui.get_right_detail_window(),
+        32,
+        "detail-window clamped at 32"
+    );
 }
 
 // -- four-decks C/D detail waveforms visible --
