@@ -85,6 +85,22 @@ fn wait_for_monitor_exit(pid: u32, timeout: Duration) {
     }
 }
 
+fn assert_exception_stream(
+    exception: Result<minidump::MinidumpException<'_>, minidump::Error>,
+    panic_snapshot: bool,
+) {
+    if cfg!(target_os = "macos") && panic_snapshot {
+        // macOS simulate_exception(None) captures a snapshot without exception
+        // data. Reject malformed streams as well as an unexpected present stream.
+        assert!(
+            matches!(exception, Err(minidump::Error::StreamNotFound)),
+            "macOS panic snapshot must omit the exception stream: {exception:?}"
+        );
+    } else {
+        exception.expect("Native faults and non-macOS panics need an exception stream");
+    }
+}
+
 fn assert_dump(database: &Path, expected_stack: Option<&str>) {
     let store = CrashStore::open(database.into()).unwrap();
     let reports = store.list().unwrap();
@@ -105,7 +121,10 @@ fn assert_dump(database: &Path, expected_stack: Option<&str>) {
     let dump = minidump::Minidump::read_path(&path).expect("Real minidump must parse");
     let threads = dump.get_stream::<minidump::MinidumpThreadList>().unwrap();
     assert!(!threads.threads.is_empty());
-    assert!(dump.get_stream::<minidump::MinidumpException>().is_ok());
+    assert_exception_stream(
+        dump.get_stream::<minidump::MinidumpException>(),
+        expected_stack.is_some(),
+    );
     assert!(fs::metadata(path).unwrap().len() <= 10_000_000);
 }
 
@@ -195,9 +214,19 @@ fn two_worker_panics_then_native_fault_keep_the_same_monitor_usable() {
     assert!(!status.success());
     let reports = store.list().unwrap();
     assert_eq!(reports.len(), 3);
+    // This probe joins both panic workers before the native fault. Their stack
+    // messages are consumed and cleared per capture, so exactly two have stacks.
+    assert_eq!(reports.iter().filter(|r| !r.stack.is_empty()).count(), 2);
     for report in reports {
+        let panic_snapshot = !report.stack.is_empty();
+        if panic_snapshot {
+            assert!(report.stack.contains("panic_probe"));
+        }
         let dump =
             minidump::Minidump::read_path(store.root().join(format!("{}.dmp", report.id))).unwrap();
-        assert!(dump.get_stream::<minidump::MinidumpException>().is_ok());
+        assert_exception_stream(
+            dump.get_stream::<minidump::MinidumpException>(),
+            panic_snapshot,
+        );
     }
 }
