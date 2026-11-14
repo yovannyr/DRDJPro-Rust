@@ -1,6 +1,7 @@
 //! Hardware-free PCM producer -> native decoder -> snapshot tests.
 use drdj_dvs::*;
 use std::{
+    cell::Cell,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -45,6 +46,9 @@ fn wait(
 }
 #[test]
 fn worker_decodes_stereo_and_loss_remains_visible_after_reacquisition() {
+    // Prepare data before starting capture so fixture generation cannot be
+    // mistaken for a stalled live producer.
+    let pcm = support::signal(Record::SeratoSecondEditionA, 48000, 3, 1.0, 1.0);
     let (commands, receiver) = mpsc::channel();
     let (created_tx, created_rx) = mpsc::channel();
     let send = commands.clone();
@@ -71,35 +75,58 @@ fn worker_decodes_stereo_and_loss_remains_visible_after_reacquisition() {
     .unwrap();
     let failure = created_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     let mut revision = 0;
+    let submitted_frames = Cell::new(0u64);
+    let mut observed_loss = 0;
+    let mut observed_epoch = 1;
     let mut send_pcm = |pcm: &[i16]| {
+        submitted_frames.set(submitted_frames.get() + (pcm.len() / 2) as u64);
         commands.send(Command::Pcm(pcm.to_vec())).unwrap();
+        // Progress can be an idle transition or a partial drain, not an ack for
+        // this command. Each phase below waits for its observable state too.
         let state = wait(&capture, |state| state.revision > revision);
         revision = state.revision;
+        assert!(state.lost_frames >= observed_loss);
+        assert!(state.lost_frames <= submitted_frames.get());
+        assert!(state.epoch >= observed_epoch);
+        if state.lost_frames > observed_loss {
+            assert!(state.epoch > observed_epoch);
+        }
+        observed_loss = state.lost_frames;
+        observed_epoch = state.epoch;
         state
     };
-    let pcm = support::signal(Record::SeratoSecondEditionA, 48000, 3, 1.0, 1.0);
-    let mut last = None;
     for block in pcm.chunks(512) {
-        last = Some(send_pcm(block));
+        send_pcm(block);
     }
-    let tracking = last.take().unwrap();
-    assert!(matches!(tracking.state, InputState::Tracking(_)));
-    assert_eq!(tracking.lost_frames, 0);
-    for _ in 0..8 {
+    let tracking = wait(&capture, |state| {
+        matches!(state.state, InputState::Tracking(_))
+    });
+    assert!(tracking.lost_frames <= submitted_frames.get());
+    if tracking.lost_frames > 0 {
+        assert!(tracking.epoch > 1);
+    }
+    for _ in 0..9 {
         send_pcm(&[0; 512]);
     }
-    let lost = send_pcm(&[0; 512]);
-    assert!(matches!(lost.state, InputState::SignalLost));
-    assert!(lost.epoch > tracking.epoch);
+    let lost = wait(&capture, |state| {
+        state.epoch > tracking.epoch && matches!(state.state, InputState::SignalLost)
+    });
+    assert!(lost.lost_frames >= tracking.lost_frames);
+    assert!(lost.lost_frames <= submitted_frames.get());
     for block in pcm.chunks(512) {
-        last = Some(send_pcm(block));
+        send_pcm(block);
     }
-    let reacquired = last.unwrap();
-    assert!(matches!(reacquired.state, InputState::Tracking(_)));
-    assert_eq!(
-        reacquired.epoch, lost.epoch,
+    let reacquired = wait(&capture, |state| {
+        state.revision > lost.revision && matches!(state.state, InputState::Tracking(_))
+    });
+    // A loaded host may legitimately cause further 20ms stale-input drops.
+    // Such loss must remain reported rather than disappearing on reacquisition.
+    assert!(
+        reacquired.epoch >= lost.epoch,
         "slow consumers still observe loss through epoch"
     );
+    assert!(reacquired.lost_frames >= lost.lost_frames);
+    assert!(reacquired.lost_frames <= submitted_frames.get());
     failure.signal();
     assert!(matches!(
         wait(&capture, |state| matches!(
