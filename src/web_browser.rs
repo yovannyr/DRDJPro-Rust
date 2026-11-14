@@ -391,4 +391,52 @@ mod tests {
         assert!(ui.get_left_playing());
         assert_eq!(ui.get_left_position(), 42.);
     }
+    #[test]
+    fn browser_events_update_navigation_status_and_route_popups_without_playback_changes() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        ui.set_left_playing(true);
+        ui.set_left_position(42.);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let calls = Rc::clone(&log);
+        let sender: Rc<RefCell<Option<SyncSender<Event>>>> = Rc::new(RefCell::new(None));
+        let capture = Rc::clone(&sender);
+        let (_timer, state) = wire_with(
+            &ui,
+            Rc::new(move |_, _, tx| {
+                *capture.borrow_mut() = Some(tx);
+                Ok(Box::new(Fake(Rc::clone(&calls))))
+            }),
+        );
+        ui.invoke_show_browser(false);
+        let view = state.borrow()[0].as_ref().unwrap().view.clone_strong();
+        let send = |event| {
+            assert!(sender.borrow().as_ref().unwrap().try_send(event).is_ok());
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(51));
+            slint::platform::update_timers_and_animations();
+        };
+        send(Event::Started("https://example.org/loading".into()));
+        assert_eq!(view.get_address(), "https://example.org/loading");
+        assert!(state.borrow()[0].as_ref().unwrap().loading.is_some());
+        send(Event::Finished("https://example.org/ended".into()));
+        assert_eq!(view.get_address(), "https://example.org/ended");
+        assert!(state.borrow()[0].as_ref().unwrap().loading.is_none());
+        assert!(view
+            .get_status()
+            .contains("Navigation ended; inspect the page for errors"));
+        send(Event::Popup(
+            "https://example.org/popup?state=fixture".into(),
+        ));
+        assert_eq!(
+            log.borrow().last().unwrap(),
+            "https://example.org/popup?state=fixture"
+        );
+        let loads = log.borrow().len();
+        send(Event::Blocked);
+        assert!(view.get_status().contains("Navigation blocked"));
+        assert_eq!(log.borrow().len(), loads);
+        assert!(ui.get_left_playing());
+        assert_eq!(ui.get_left_position(), 42.);
+        ui.invoke_close_web_browsers();
+    }
 }

@@ -600,11 +600,7 @@ fn is_key_compatible(key_a: &str, key_b: &str) -> bool {
 
     // Different letter but compatible (A/B pairs on Camelot wheel).
     // A and B at same number are relative major/minor.
-    if num_a == num_b {
-        return true;
-    }
-
-    false
+    num_a == num_b
 }
 
 // ---------------------------------------------------------------------------

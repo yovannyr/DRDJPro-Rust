@@ -530,6 +530,12 @@ fn cleanup_orphaned_socket_dirs(base: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // SAFETY: signal zero is an existence check, no signal is delivered.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,10 +631,4 @@ mod tests {
         assert!(live.path.exists());
         drop(another);
     }
-}
-
-#[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
-    // SAFETY: signal zero is an existence check, no signal is delivered.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
