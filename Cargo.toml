@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote"]
+members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote", "crates/drdj-itunes"]
 resolver = "2"
 exclude = ["vendor/minidumper"]
 
@@ -20,6 +20,8 @@ default = []
 dvs-xwax = ["dep:drdj-dvs"]
 
 [dependencies]
+drdj-itunes = { path = "crates/drdj-itunes" }
+url = "=2.5.8"
 drdj-remote = { path = "crates/drdj-remote" }
 drdj-keylock = { path = "crates/drdj-keylock" }
 drdj-proto = { path = "crates/drdj-proto" }
@@ -38,14 +40,12 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav
 ebur128 = "0.1"
 rustfft = "6"
 aes-gcm = { version = "0.10", features = ["std"] }
-flume = "0.11"
 thiserror = "2"
 log = "0.4"
 getrandom = "0.3"
 crossbeam = "0.8"
 rand = "0.9"
 backtrace = "0.3"
-minidump = "0.22"
 chrono = "0.4"
 dirs = "5"
 tempfile = "=3.27.0"
@@ -56,6 +56,7 @@ crash-handler = "=0.8.1"
 slint-build = "=1.18.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+wry = { version = "=0.57.2", default-features = false, features = ["os-webview"] }
 slint = { version = "=1.18.1", features = ["unstable-winit-030"] }
 windows = { version = "=0.54.0", features = ["Win32_Media_Audio", "Win32_Devices_Properties", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
 
@@ -63,11 +64,24 @@ windows = { version = "=0.54.0", features = ["Win32_Media_Audio", "Win32_Devices
 libc = "0.2"
 
 [dev-dependencies]
+minidump = "0.22"
 tempfile = "=3.27.0"
 i-slint-backend-testing = "=1.18.1"
 
-# Keep debug assertions/symbols while avoiding unoptimized full-track DSP/codec loops.
-# No dependency versions, features, or release settings change.
+# Keep stack locations and debug assertions without full variable/type symbols
+# or the large incremental cache. Applies to workspace members and dependencies.
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
+
+# One reproducible test configuration replaces per-invocation CLI overrides.
+# Interactive dev playback and codec optimizations below remain unchanged.
+[profile.test.package.drdjpro-ui-spike]
+opt-level = 0
 
 [profile.dev.package.drdjpro-ui-spike]
 opt-level = 1

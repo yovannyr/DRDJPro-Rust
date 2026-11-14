@@ -2,7 +2,7 @@
 
 **Feature Branch**: `30-web-engine`  
 **Created**: 2026-11-11  
-**Status**: Planned  
+**Status**: In progress — Windows browser/help shell; Beatport partner streaming blocked (no access); native acceptance deferred
 **Input**: Serato DJ Pro uses `QtWebEngineQuick` and `QtWebEngineCore` for an embedded browser for Beatport streaming interface, documentation, and help. DRDJPro-Rust uses Slint which has no built-in browser engine.
 
 ## User Scenarios & Testing *(mandatory)*

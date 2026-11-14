@@ -1024,3 +1024,33 @@ input, close and disconnect release holds; five seconds is the intentional maxim
 pad-preview hold and requires reopen after timeout. Native refresh/appearance,
 monitor scaling, physical MIDI force/latency and short unplug/replug qualification
 remain open. No proprietary Akai or physical display protocol is claimed.
+
+## Embedded browser (Spec30, Windows)
+
+WEB and HELP open independent OS-native child web views in separate Slint windows.
+Each has address/back/forward/reload/home controls. HELP serves embedded HTML,
+CSS and an SVG without disk paths or network. WebView2 Runtime102+ is required;
+missing/old runtimes show an error while the application keeps running.
+HTTPS browsing has no privileged app bridge, deck-load action or token extraction.
+Native SmartScreen is retained. Website audio is separate from the DJ engine.
+The user has no Beatport partner access: authorized deck streaming/OAuth provider
+integration remains blocked. Native render/history/GPU/audio-load qualification
+is deferred; headless navigation dispatch is separate evidence.
+
+## iTunes source window (Spec31)
+
+iTunes opens a separate source window with XML/media-folder selection, cached
+sources, ordered playlists, virtual track rows, complete source metadata and
+guarded LOAD A/B. Imported local files join the existing searchable library with
+stable IDs. Source ratings/play counts/date-added remain in the source catalog;
+ordinary file-tag scans retain explicitly imported title/artist/album preferences.
+Missing files remain visible and cannot load. Native save status is separate from
+source synchronization status; reopening reconciles interrupted native imports.
+Native appearance and manual workflow acceptance remain deferred.
+
+APPLE METADATA enriches one selected local source track; APPLE PLAYLIST accepts
+at most50 unique tracks. Both require an externally configured MusicKit developer
+token and preserve local data on failure/ambiguity. Apple values and the original
+XML details remain distinguishable; selected cover thumbnails come from the
+bounded source cache. No background lookups, audio streaming or token entry form
+is added. Live API qualification is open because no developer token is available.
