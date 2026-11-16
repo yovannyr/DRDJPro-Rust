@@ -31,11 +31,23 @@ fn probe(
     std::process::ExitStatus,
     Duration,
 ) {
+    probe_with("--crash-probe", mode)
+}
+
+fn probe_with(
+    flag: &str,
+    mode: &str,
+) -> (
+    tempfile::TempDir,
+    CrashStore,
+    std::process::ExitStatus,
+    Duration,
+) {
     let temp = tempfile::tempdir().unwrap();
     let store = CrashStore::open(temp.path().join("reports")).unwrap();
     let start = Instant::now();
     let mut child = Command::new(env!("CARGO_BIN_EXE_drdjpro-ui-spike"))
-        .arg("--crash-probe")
+        .arg(flag)
         .arg(store.root())
         .arg(mode)
         .stdin(Stdio::null())
@@ -51,6 +63,55 @@ fn probe(
         .unwrap();
     wait_for_monitor_exit(pid, Duration::from_secs(15));
     (temp, store, status, elapsed)
+}
+
+#[test]
+fn normal_application_startup_owns_and_stops_monitor_without_false_report() {
+    let (_temp, store, status, _) = probe_with("--crash-startup-probe", "normal");
+    assert!(status.success());
+    assert!(store.list().unwrap().is_empty());
+}
+
+#[test]
+fn application_startup_captures_early_panic_before_ui_and_audio() {
+    let (_temp, store, status, _) = probe_with("--crash-startup-probe", "panic");
+    assert!(!status.success());
+    assert_dump(store.root(), Some("panic_probe"));
+}
+
+#[test]
+fn unavailable_startup_store_does_not_abort_application() {
+    assert_startup_probe_success("unavailable");
+}
+
+#[cfg(windows)]
+#[test]
+fn startup_preserves_windows_error_flags_on_success_failure_and_shutdown() {
+    assert_startup_probe_success("error-modes");
+}
+
+fn assert_startup_probe_success(mode: &str) {
+    let temp = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_drdjpro-ui-spike"))
+        .arg("--crash-startup-probe")
+        .arg(temp.path())
+        .arg(mode)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait(&mut child, Duration::from_secs(20));
+    assert!(
+        status.success(),
+        "Startup probe {mode}: {:?}",
+        child.wait_with_output().unwrap().stderr
+    );
+    assert!(CrashStore::open(temp.path().into())
+        .unwrap()
+        .list()
+        .unwrap()
+        .is_empty());
 }
 
 #[cfg(windows)]

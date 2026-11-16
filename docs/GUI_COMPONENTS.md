@@ -1,5 +1,32 @@
 # GUI component inventory and reference baseline
 
+## Crash reports and sharing (Spec 26, 2026-11-16)
+
+`REPORTS` opens an independent report window. On GUI/demo startup, pending
+reports without valid auto-sharing consent open a nonmodal consent request.
+Closing the window leaves consent pending. `SEND TEXT` authorizes the selected
+stable report ID; `KEEP LOCAL` persists decline; `DELETE LOCAL` removes only that
+report and dump. Confirmed reports cannot be reauthorized or reclassified as
+unsent. Selection survives row reordering by ID; details show timestamp/version,
+OS/architecture and a bounded redacted stack.
+
+HTTPS settings and auto-sharing change only on `SAVE SETTINGS`. The saved
+destination is displayed separately from the editable draft. Default is no
+sharing. Auto-sharing authorizes pending/future text; turning it off does not
+revoke already queued consent. `KEEP LOCAL` prevents future attempts, but cannot
+recall an in-flight request. Binary dumps remain local. `PROCESS QUEUE` retries
+authorized reports. Known upload results remain visible across store-refresh
+errors; no success is claimed without an acknowledged transport result.
+
+Filesystem work runs on one bounded actor; HTTPS runs on the existing cancellable
+uploader. GUI callbacks only enqueue and poll. Startup retries queued consent
+even with automatic sharing off. No periodic filesystem scan; refreshes occur
+at startup, explicit actions and upload completion. Main-window close hides this
+window and cancels network independently of blocked filesystem work; no joins.
+Headless widget/action tests and real local HTTPS tests qualify these software
+paths. Visual/manual, native layout/focus and hardware/listening acceptance
+remain deferred for joint testing.
+
 ## USB device finder (2026-11-12)
 
 The `USB` button starts worker-owned discovery lazily and displays VID/PID,

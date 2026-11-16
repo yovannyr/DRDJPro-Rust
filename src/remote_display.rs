@@ -327,6 +327,7 @@ fn wire_state(ui: &AppWindow) -> (Timer, SessionState) {
     ui.window().on_close_requested(move || {
         if let Some(ui) = weak_close.upgrade() {
             ui.invoke_close_itunes();
+            ui.invoke_close_crash_reports();
             ui.invoke_close_web_browsers();
         }
         if let Some(session) = closing.borrow_mut().take() {

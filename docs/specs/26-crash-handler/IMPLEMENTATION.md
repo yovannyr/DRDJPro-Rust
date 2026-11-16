@@ -252,3 +252,121 @@ Release-Build; die vollständige Workspace-Suite bleibt unverändert Pflicht.
 FR-005/006/007/011/SC-008 benötigen weiterhin Startup-/UI-Anbindung;
 SC-001–007 benötigen die bereits beschriebenen realen Korpus-/Release-Messungen.
 Insbesondere beweist ein lokaler HTTPS-Test keinen Produktionserfolg in 10 s.
+
+## Schritt 4 — Startup und Reportverwaltung
+
+Am 16.11.2026 separat freigegeben: normaler GUI-Startup, Hintergrundanbindung
+und Slint-Reportverwaltung mit automatisierten Tests/Review; visuelle/manuelle
+Abnahme bleibt ausdrücklich offen. Dieser Abschnitt ersetzt für diesen Slice
+die früheren Hinweise „Startup/UI noch nicht implementiert“.
+
+### Lebenszyklus
+
+`CrashStartup::start()` wird nach der Dispatch-Phase interner/Console-Hilfsmodi,
+aber vor Audio- und GUI-Erzeugung aufgerufen. Es hält Monitor/Native-Handler bis
+nach Audio-/Storage-/GUI-Teardown. GUI und `--demo` sind abgedeckt; interne
+Monitor/Probe-Modi starten nicht rekursiv. Console-Decoding/Playback-Hilfsmodi
+bleiben ausdrücklich ohne diesen GUI-Lebenszyklus. Monitorinitialisierung nutzt
+die vorhandene Fünf-Sekunden-Frist. Storage-/Monitorfehler verhindern normalen
+GUI-Start nicht und werden ohne persönliche Pfade sichtbar angezeigt.
+
+Windows ergänzt nur `SEM_NOGPFAULTERRORBOX` zu bestehenden Prozessflags. Ein
+Guard stellt das vorherige Suppressionsbit bei Fehler und Shutdown wieder her,
+erhält andere spätere Flags und wird vor Freigabe des Monitor-Singletons gelöst.
+Die Tests verändern Flags ausschließlich in einem separaten Probe-Prozess.
+
+Nach GUI-Erzeugung liest ein Datei-Worker den begrenzten lokalen Store. Seine
+Startup-Antwort löst den bestehenden Upload nur bei gültigem gespeicherten HTTPS-
+Ziel und vorhandener Zustimmung aus: `Queued` auch bei deaktiviertem Auto-Modus,
+`Pending` nur mit explizitem Auto-Opt-in. Abgelehnte/bestätigte Reports bleiben
+ausgeschlossen. Unlesbare Einstellungen sperren Sharing statt Opt-in zu erfinden.
+Die Startup-/UI-Brücke verwendet echten lokalen HTTPS-Verkehr in einem Test.
+
+Die UI besitzt den Upload-Task direkt. Main-Window-Close und Session-Drop brechen
+weitere Requests sofort per Atomic ab, auch wenn der Datei-Worker auf einer
+Store-Sperre wartet. Ein bereits gestarteter Request kann nicht zurückgerufen
+werden. Es wird kein Datei-/Netzwerkthread gejoint; der Monitor bleibt während
+der nachfolgenden Audio-/Storage-Freigabe aktiv. Keine Änderung am DSP-/Audio-
+Callback, keine zusätzlichen Callback-Allokationen/Locks. Native Crash-Capture
+benötigt weiterhin den bereits dokumentierten begrenzten Speicher-Snapshot-Wait;
+eine harte Audio-Echtzeitgarantie für Crashfälle wird damit nicht behauptet.
+
+### UI und Fehlerverhalten
+
+Separates `REPORTS`-Fenster mit Liste, stabiler ID-Auswahl, Zeitstempel, Version,
+OS/Architektur, bereinigten Stackdetails und dauerhaftem Zustandsstatus. Pending-
+Reports ohne gültigen Auto-Modus öffnen beim Start eine nichtmodale Abfrage.
+Schließen ändert die Zustimmung nicht; keine Playback-/Deckaktionen werden
+ausgelöst. `SEND TEXT`, `KEEP LOCAL`, `DELETE LOCAL`, `PROCESS QUEUE`, Refresh und
+HTTPS-/Auto-Einstellungen sind über begrenzte Worker-Kommandos angebunden.
+Nur `SAVE SETTINGS` persistiert Eingaben; gespeichertes Ziel und bearbeiteter
+Entwurf werden getrennt angezeigt. Ungültige URLs oder Auto ohne gültiges Ziel
+werden nicht gespeichert. Änderung/Löschung/Ablehnung fordert zuerst Abbruch des
+aktuellen Upload-Durchlaufs an. Bereits bestätigte Transfers können nicht durch
+Ablehnen/Löschen rückgängig gemacht werden; die UI sagt das ausdrücklich.
+
+Antworten tragen Request-IDs; veraltete Antworten lösen keine Busy-Sperre.
+Pro UI nur ein ausstehender Dateibefehl. Listenupdates erhalten die Auswahl über
+Report-IDs. Unverwandte Upload-Antworten überschreiben keine Einstellungsentwürfe.
+Details/Labels sind begrenzt; es gibt keine Datei-/TLS-/Storearbeit im GUI-Timer.
+Kanäle sind begrenzt, Worker werden nicht pro Frame gestartet. Das Hauptfenster
+schließt die Reportverwaltung über den bestehenden Auxiliary-Window-Lebenszyklus.
+Ein Store-Refreshfehler behauptet weder Erfolg noch Nichtversand: bekannte
+Serverbestätigungen bleiben separat sichtbar; weitere Mutationen/Requests werden
+bis zu erfolgreichem Refresh gesperrt. Refresh kann nach Reparatur wiederholen.
+
+### Anforderungsstand, ohne native Abnahme vorzutäuschen
+
+| Anforderung | Softwarestand / verbleibende Grenze |
+|---|---|
+| FR-001 | Echte GUI-Startup-Capture mit separatem Monitor; Prozess-Panic/native Probes. Nicht für jeden möglichen System-/Datenträgerfehler garantiert. |
+| FR-002 | Funktionsnamen und bereinigte Quellorte bei verfügbaren Symbolen; Release-Symbolquote/95-%-Nachweis offen. |
+| FR-003 | Version/OS/Architektur im dauerhaften Report und Detailansicht. |
+| FR-004 | Vorgegebener Benutzerpfad am GUI-Startup; Tests verwenden isolierte temporäre Stores. |
+| FR-005 | Explizites, dauerhaftes Opt-in/Keep-local über UI; korruptes Consent fail-closed. |
+| FR-006 | Manueller autorisierter Textversand aus Reportmanager; binäre Anhänge bleiben lokal. |
+| FR-007 | Dauerhafte Queue wird beim nächsten erfolgreichen GUI-Start angefragt; Server-/Storefehler bleiben lokal. |
+| FR-008 | Pollbare Worker/keine UI-Netzwerkwartezeit; Shutdown ohne Join. |
+| FR-009 | Monitor vor GUI/Audio gestartet und als Guard bis zum Teardown gehalten. |
+| FR-010 | Main-/Worker-Panics und native Fehler im definierten Probe-Korpus; absolute Crash-Abdeckung offen. |
+| FR-011 | Nichtmodale Post-Crash-Zustimmungsabfrage für Pending ohne gültigen Auto-Modus. |
+| FR-012 | Start/Fehler/Speichern/Ablehnen/Löschen/Upload-Acknowledge/Retry-Ereignisse; keine URL/Payload-Logs. |
+| FR-013 | HTTPS-Texttransport implementiert; kein produktiver Endpoint/Auth-Vertrag vorgegeben. |
+| FR-014 | Store begrenzt auf 50 Reports und 500.000.000 echte verwaltete Bytes. |
+| FR-015 | Text-Upload gzip im Speicher ohne Archivdateien. |
+| FR-016 | Textpfade vor Persistenz/Anzeige/Upload bereinigt; binäre Dump-Privacy bleibt unqualifiziert, kein Dump-Upload. |
+
+SC-008 ist durch headless UI-/Actor-/HTTPS-Tests für die Softwareaktionen geprüft,
+aber noch nicht nativ/manuell abgenommen. SC-001/002 benötigen definierten
+Crash-Korpus/Release-Symbole; SC-003 einen realen Server. SC-004 bleibt als
+absolute Aussage unbeweisbar. SC-005/006 sind für die vorhandenen Prozess- und
+Retention-Szenarien getestet, keine Garantie bei beliebigen Systemstörungen.
+SC-007 wird durch Nicht-Join und Abbruch getestet; native Shutdown-/Lastmessungen
+stehen aus. Alle früher genannten Mess-/Privacy-Grenzen bleiben bestehen.
+
+Keine zusätzlichen Dependencies, Toolchains oder lokalen Release-Profile.
+Vorhandenes gemeinsames target und platzsparende Profile werden wiederverwendet;
+Cargo lokal seriell. Startfreiraum auf C: 46,69 GiB, nach den lokalen Checks
+45,95 GiB (Systemmessung, keine isolierte Cargo-Messung). Keine Cache-Löschung.
+
+Lokale Prüfungen, Windows am 16.11.2026:
+
+- `cargo +1.99.1 test --locked --lib crash_handler -- --test-threads=1`:
+  39 bestanden, darunter vier Headless-UI- und zwei echte HTTPS-/UI-Startup-
+  beziehungsweise Shutdown-Integrationen (innerhalb der Lib-Tests).
+- `cargo +1.99.1 test --locked --lib -- --test-threads=1 --quiet`:
+  1711 bestanden, keine Fehler/Ignorierungen.
+- `cargo +1.99.1 test --locked --test crash_process -- --test-threads=1`:
+  13 bestanden, inklusive Startup-Normalende, früher Panic vor UI/Audio,
+  unzugänglichem Store und isoliertem Windows-Flags-Readback.
+- `cargo +1.100.0 clippy --workspace --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings`:
+  Exit 0; `cargo +1.100.0 fmt --all -- --check`, `git diff --check`: Exit 0.
+- Unabhängiges Code-/Test-/Dokumentations-/Workflowreview: GPT-6.1 Sol, medium,
+  akzeptiert ohne verbleibende Befunde nach Windows-Flag-/Fehlerstatus-Korrekturen.
+
+Die frühen CI-Prüfungen bestehen aus zwei getrennten Schritten für Crash-Handler-
+Libtests und Prozessprüfungen. So verdeckt unter Windows kein zweiter erfolgreicher
+Native-Befehl einen fehlgeschlagenen ersten; die gesamte Workspace-Suite bleibt
+danach Pflicht. Plattformweite Nachweise folgen im separaten gestapelten Draft-PR
+gegen `codex/spec31-itunes-library`, in den der Upload-PR #4 bereits gemergt wurde.
+Keine native/visuelle oder produktive Serverabnahme wird aus diesen Tests abgeleitet.

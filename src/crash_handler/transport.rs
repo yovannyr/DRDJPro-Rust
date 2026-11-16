@@ -33,6 +33,10 @@ pub struct UploadTask {
 }
 
 impl UploadTask {
+    /// Request cancellation before subsequent requests; never waits for HTTP.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Release);
+    }
     /// Poll from a control/UI thread without waiting for network or file I/O.
     pub fn try_result(&self) -> Result<io::Result<UploadSummary>, TryRecvError> {
         self.result.try_recv()
@@ -41,7 +45,7 @@ impl UploadTask {
 
 impl Drop for UploadTask {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+        self.cancel();
     }
 }
 
@@ -81,7 +85,7 @@ fn client_builder() -> ClientBuilder {
         .user_agent("DRDJPro-Rust/0.1.0 crash-report")
 }
 
-fn endpoint(raw: &str) -> io::Result<url::Url> {
+pub(super) fn endpoint(raw: &str) -> io::Result<url::Url> {
     let url = url::Url::parse(raw).map_err(|_| invalid("Invalid crash HTTPS endpoint"))?;
     if url.scheme() != "https"
         || url.host_str().is_none()
