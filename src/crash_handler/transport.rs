@@ -1,5 +1,6 @@
 //! Bounded textual upload on a control worker. Never called by an audio callback
 //! or panic/signal hook. Binary dumps remain local: text consent is not dump consent.
+use super::runtime_log::{emit, Event};
 use super::{privacy::sanitize_stack, CrashReport, CrashStore, ReportStatus};
 use flate2::{write::GzEncoder, Compression};
 use reqwest::blocking::{Client, ClientBuilder};
@@ -67,7 +68,7 @@ fn spawn_with(store: CrashStore, builder: ClientBuilder) -> io::Result<UploadTas
         .spawn(move || {
             let outcome = run_queue(&store, builder, &stop);
             if outcome.is_err() {
-                log::warn!("Crash upload pass could not complete; local evidence retained");
+                emit(Event::UploadPassFailed, None, None);
             }
             let _ = sender.send(outcome);
         })?;
@@ -144,7 +145,7 @@ fn run_queue(
                     ReportStatus::Submitted,
                 )? {
                     summary.submitted += 1;
-                    log::info!("Crash report acknowledged: {}", report.id);
+                    emit(Event::UploadAcknowledged, Some(&report.id), None);
                 } else {
                     summary.skipped += 1;
                 }
@@ -154,7 +155,7 @@ fn run_queue(
                 summary.failed += 1;
                 // Errors contain only our fixed classifications, never a remote
                 // response, URL, TLS details, paths or arbitrary report payload.
-                log::warn!("Crash upload retained for retry: {} ({error})", report.id);
+                emit(Event::UploadRetry, Some(&report.id), Some(error.kind()));
             }
         }
     }

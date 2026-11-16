@@ -4,6 +4,7 @@ mod config;
 mod manager;
 mod privacy;
 mod process;
+mod runtime_log;
 mod startup;
 mod store;
 mod transport;
@@ -21,7 +22,11 @@ pub use ui::{wire_ui, CrashUiSession};
 pub fn internal_mode() -> Option<std::io::Result<()>> {
     let mut args = std::env::args_os().skip(1);
     let mode = args.next()?;
-    if mode != "--crash-monitor" && mode != "--crash-probe" && mode != "--crash-startup-probe" {
+    if mode != "--crash-monitor"
+        && mode != "--crash-probe"
+        && mode != "--crash-startup-probe"
+        && mode != "--crash-log-probe"
+    {
         return None;
     }
     Some((|| {
@@ -47,6 +52,10 @@ pub fn internal_mode() -> Option<std::io::Result<()>> {
             );
         }
         let store = CrashStore::open(database.into())?;
+        if mode == "--crash-log-probe" {
+            return runtime_log::probe(store.root(), &argument.to_string_lossy());
+        }
+        let _runtime_log = runtime_log::install(store.root(), runtime_log::Role::App).ok();
         if mode == "--crash-startup-probe" {
             #[cfg(windows)]
             if argument == "error-modes" {

@@ -27,6 +27,12 @@ Headless widget/action tests and real local HTTPS tests qualify these software
 paths. Visual/manual, native layout/focus and hardware/listening acceptance
 remain deferred for joint testing.
 
+The report window also displays crash-logger health and unconfirmed/dropped,
+write-failure, flush-timeout and recovery counters. Polling reads atomics only.
+Logs retain three 64-KiB files with a 256-KiB managed budget including staging;
+they contain typed diagnostic events, no arbitrary host-logger messages, paths
+or stack payloads. An unavailable logger does not disable capture or sharing.
+
 ## USB device finder (2026-11-12)
 
 The `USB` button starts worker-owned discovery lazily and displays VID/PID,

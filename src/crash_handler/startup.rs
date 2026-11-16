@@ -1,5 +1,9 @@
 //! Synchronous pre-audio capture setup. Failure never prevents application startup.
-use super::{default_database_dir, CrashStore, MonitorGuard};
+use super::{
+    default_database_dir,
+    runtime_log::{self, emit, Event, Role},
+    CrashStore, MonitorGuard,
+};
 use std::{io, path::Path};
 
 /// Keep alive until UI, storage and audio have shut down. Uploads/UI are owned
@@ -8,6 +12,8 @@ pub struct CrashStartup {
     store: Option<CrashStore>,
     monitor: Option<MonitorGuard>,
     notice: String,
+    // Declared after monitor: final capture/shutdown events precede log drain.
+    runtime_log: Option<runtime_log::Guard>,
 }
 
 impl CrashStartup {
@@ -21,7 +27,22 @@ impl CrashStartup {
 
     /// Explicit composition root, also used by isolated subprocess tests.
     pub fn at(executable: &Path, database: &Path) -> Self {
-        Self::with_monitor(database, |store| MonitorGuard::start(executable, store))
+        let mut logger = None;
+        let mut failed = false;
+        let mut startup = Self::with_monitor(database, |store| {
+            match runtime_log::install(store.root(), Role::App) {
+                Ok(guard) => logger = Some(guard),
+                Err(_) => failed = true,
+            }
+            MonitorGuard::start(executable, store)
+        });
+        startup.runtime_log = logger;
+        if failed {
+            startup
+                .notice
+                .push_str(" Diagnostic logging could not start.");
+        }
+        startup
     }
 
     fn with_monitor(
@@ -37,27 +58,27 @@ impl CrashStartup {
                 store: Some(store),
                 monitor: Some(monitor),
                 notice: String::new(),
+                runtime_log: None,
             },
             Err(error) => {
-                log::warn!(
-                    "Crash capture unavailable ({:?}); application continues",
-                    error.kind()
-                );
+                emit(Event::CaptureUnavailable, None, Some(error.kind()));
                 Self {
                     store: Some(store),
                     monitor: None,
                     notice: "Crash capture unavailable; saved reports remain manageable".into(),
+                    runtime_log: None,
                 }
             }
         }
     }
 
     fn unavailable() -> Self {
-        log::warn!("Crash store unavailable; application continues without capture/sharing");
+        emit(Event::StoreUnavailable, None, None);
         Self {
             store: None,
             monitor: None,
             notice: "Crash storage unavailable; capture and sharing disabled".into(),
+            runtime_log: None,
         }
     }
 

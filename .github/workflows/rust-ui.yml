@@ -50,7 +50,13 @@ jobs:
         env:
           SLINT_EMIT_DEBUG_INFO: '1'
         run: cargo test --locked --test crash_process --target ${{ matrix.target }} -- --test-threads=1
-      - name: Build release
+      - name: Verify bounded crash logging across processes
+        # Process logging is separate so a failed native command cannot be hidden.
+        # Full workspace tests below still exercise this suite again.
+        run: cargo test --locked --test crash_logging --target ${{ matrix.target }} -- --test-threads=1
+        env:
+          SLINT_EMIT_DEBUG_INFO: '1'
+      - name: Build release artifacts
         run: cargo build --workspace --locked --release --target ${{ matrix.target }}
       - name: Fetch freely licensed music sample for integration tests
         shell: bash

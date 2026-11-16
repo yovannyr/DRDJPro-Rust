@@ -1,5 +1,6 @@
 //! Slint composition. Callbacks only enqueue filesystem work and poll messages;
 //! the UI owns upload cancellation directly, including while the FS actor waits.
+use super::runtime_log;
 use super::{
     manager::{Action, Event, Request, Snapshot, Worker},
     spawn_upload_queue, CrashSettings, CrashStartup, CrashStore, ReportStatus, UploadTask,
@@ -18,6 +19,7 @@ enum SelectionAction {
 }
 
 struct State {
+    log_status: runtime_log::Status,
     app: slint::Weak<AppWindow>,
     view: Option<CrashReportsWindow>,
     store: Option<CrashStore>,
@@ -225,6 +227,7 @@ impl State {
         view.set_status(self.message.clone().into());
         view.set_delivery_status(self.delivery_status.clone().into());
         view.set_capture_notice(self.capture_notice.clone().into());
+        view.set_logging_status(runtime_log::status().text().into());
         view.set_post_crash(self.prompt);
         if let Some(data) = &self.data {
             view.set_endpoint_ready(data.endpoint_ready);
@@ -370,6 +373,7 @@ fn wire_with(
 ) -> CrashUiSession {
     let pending = worker.as_ref().map(|_| 0);
     let state = Rc::new(RefCell::new(State {
+        log_status: runtime_log::status(),
         app: ui.as_weak(),
         view: None,
         store,
@@ -419,6 +423,14 @@ fn wire_with(
 fn tick(state: &Rc<RefCell<State>>) {
     if state.borrow().closing {
         return;
+    }
+    let logging = runtime_log::status();
+    if state.borrow().log_status != logging {
+        let mut state = state.borrow_mut();
+        state.log_status = logging;
+        if let Some(view) = &state.view {
+            view.set_logging_status(logging.text().into());
+        }
     }
     for _ in 0..8 {
         let event = state.borrow().worker.as_ref().map(Worker::poll);

@@ -1,3 +1,4 @@
+use super::runtime_log::{emit, Event};
 use super::{privacy::sanitize_stack, CrashSettings};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -88,7 +89,7 @@ impl CrashStore {
         Ok(Self {
             root: root.canonicalize()?,
             max_reports: 50,
-            max_bytes: 500_000_000,
+            max_bytes: 500_000_000 - super::runtime_log::PEAK_BYTES,
         })
     }
 
@@ -135,7 +136,7 @@ impl CrashStore {
         if !self.path(&report.id, "json")?.exists() {
             return Err(invalid("Report exceeds store capacity"));
         }
-        log::info!("Crash evidence stored: {}", report.id);
+        emit(Event::ReportStored, Some(&report.id), None);
         Ok(report)
     }
 
@@ -161,7 +162,7 @@ impl CrashStore {
                     report.stack = sanitize_stack(&report.stack);
                     reports.push(report);
                 }
-                _ => log::warn!("Invalid crash metadata: {id}"),
+                _ => emit(Event::ReportInvalid, Some(id), None),
             }
         }
         reports.sort_by(|a, b| (a.created_ms, &a.id).cmp(&(b.created_ms, &b.id)));
@@ -195,6 +196,7 @@ impl CrashStore {
         }
         report.status = ReportStatus::Queued;
         self.write(&path, &report)?;
+        emit(Event::ReportQueued, Some(id), None);
         Ok(true)
     }
 
@@ -262,7 +264,7 @@ impl CrashStore {
         let metadata = self.path(id, "json")?;
         remove_if_present(&dump)?;
         remove_if_present(&metadata)?;
-        log::info!("Crash evidence deleted: {id}");
+        emit(Event::ReportDeleted, Some(id), None);
         Ok(())
     }
 
@@ -410,7 +412,7 @@ impl Capture {
         self.store
             .write(&self.store.path(&self.report.id, "json")?, &self.report)?;
         self.store.enforce_unlocked()?;
-        log::info!("Minidump finalized: {}", self.report.id);
+        emit(Event::CaptureFinalized, Some(&self.report.id), None);
         Ok(self.report)
     }
 }
@@ -441,7 +443,7 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
     serde_json::from_reader(file.take(MAX_JSON + 1)).map_err(io::Error::other)
 }
 
-fn reject_link(path: &Path) -> io::Result<()> {
+pub(super) fn reject_link(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             #[cfg(windows)]
@@ -461,7 +463,7 @@ fn reject_link(path: &Path) -> io::Result<()> {
     }
 }
 
-fn private_file(file: &File) -> io::Result<()> {
+pub(super) fn private_file(file: &File) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
