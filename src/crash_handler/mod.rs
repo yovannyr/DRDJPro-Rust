@@ -4,10 +4,12 @@ mod config;
 mod privacy;
 mod process;
 mod store;
+mod transport;
 
 pub use config::{default_database_dir, CrashSettings};
 pub use process::{run_monitor, MonitorGuard};
 pub use store::{CrashReport, CrashStore, ReportStatus};
+pub use transport::{spawn_upload_queue, UploadSummary, UploadTask};
 
 /// Dispatch internal subprocess modes before the application initializes audio.
 /// Probe modes require an explicit directory and never run in ordinary startup.
