@@ -240,6 +240,15 @@ Lokale Ergebnisse (Windows, 16.11.2026):
 
 Linux-/macOS-Nachweise für den neuen Transport folgen über CI im separaten
 gestapelten Slice-PR; keine native/visuelle Abnahme wird daraus abgeleitet.
+CI #245 bestand unter Linux vollständig (2410 Tests, 5 vorhandene Ignorierungen),
+unter macOS scheiterten zunächst sieben positive HTTPS-Fälle vor dem HTTP-Empfang.
+Die ursprüngliche 20-Jahre-Testleaf überschritt Apples dokumentierte 825-Tage-
+Grenze. Die Fixture wurde auf 730 Tage (15.11.2026–14.11.2028) mit expliziten
+Key-Usages/SKI/AKI erneuert. Laufzeit als tatsächliche Ursache bleibt bis zum
+macOS-Folgelauf eine Hypothese. Keine TLS-Prüfung wird deaktiviert; Trust und
+Hostname bleiben negative Testfälle. Rotation vor Ablauf ist dokumentiert.
+Der neue frühe CI-Transporttest lokalisiert solche Plattformfehler vor dem
+Release-Build; die vollständige Workspace-Suite bleibt unverändert Pflicht.
 FR-005/006/007/011/SC-008 benötigen weiterhin Startup-/UI-Anbindung;
 SC-001–007 benötigen die bereits beschriebenen realen Korpus-/Release-Messungen.
 Insbesondere beweist ein lokaler HTTPS-Test keinen Produktionserfolg in 10 s.
