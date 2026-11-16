@@ -1,7 +1,6 @@
 [workspace]
-members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote", "crates/drdj-itunes"]
+members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote", "crates/drdj-itunes", "vendor/minidumper"]
 resolver = "2"
-exclude = ["vendor/minidumper"]
 
 [patch.crates-io]
 # Bounded socket I/O, including the macOS startup handshake; see vendor README.

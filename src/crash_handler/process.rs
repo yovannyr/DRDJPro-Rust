@@ -89,6 +89,14 @@ impl Drop for ErrorModeGuard {
 impl MonitorGuard {
     /// Start this executable in monitor mode before creating UI/audio resources.
     pub fn start(executable: &Path, store: &CrashStore) -> io::Result<Self> {
+        Self::start_with_limit(executable, store, super::store::MAX_DUMP)
+    }
+
+    pub(super) fn start_with_limit(
+        executable: &Path,
+        store: &CrashStore,
+        limit: u64,
+    ) -> io::Result<Self> {
         if ACTIVE
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
@@ -98,14 +106,14 @@ impl MonitorGuard {
                 "Crash monitor already active",
             ));
         }
-        let result = Self::start_inner(executable, store);
+        let result = Self::start_inner(executable, store, limit);
         if result.is_err() {
             ACTIVE.store(false, Ordering::Release);
         }
         result
     }
 
-    fn start_inner(executable: &Path, store: &CrashStore) -> io::Result<Self> {
+    fn start_inner(executable: &Path, store: &CrashStore, limit: u64) -> io::Result<Self> {
         #[cfg(windows)]
         let error_mode = ErrorModeGuard::new();
         let socket_dir = SocketDirectory::new()?;
@@ -116,6 +124,7 @@ impl MonitorGuard {
             .arg(store.root())
             .arg(&socket)
             .arg(std::process::id().to_string())
+            .arg(limit.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -323,6 +332,7 @@ pub(super) fn probe_error_modes(executable: &Path, store: &CrashStore) -> io::Re
 }
 
 struct Handler {
+    limit: u64,
     store: CrashStore,
     capture: Mutex<Option<Capture>>,
     stack: Mutex<String>,
@@ -332,6 +342,9 @@ struct Handler {
 }
 
 impl ServerHandler for Handler {
+    fn minidump_size_limit(&self) -> Option<u64> {
+        Some(self.limit)
+    }
     fn create_minidump_file(&self) -> io::Result<(File, PathBuf)> {
         self.dumping.store(true, Ordering::Release);
         let stack = self
@@ -406,6 +419,18 @@ impl ServerHandler for Handler {
 /// Internal executable mode; runs outside the audio/UI process. Missing initial
 /// connection, stale clients, and a hung native writer have bounded lifetimes.
 pub fn run_monitor(database: &Path, socket: &Path, parent: Option<u32>) -> io::Result<()> {
+    run_monitor_limited(database, socket, parent, super::store::MAX_DUMP)
+}
+
+pub(super) fn run_monitor_limited(
+    database: &Path,
+    socket: &Path,
+    parent: Option<u32>,
+    limit: u64,
+) -> io::Result<()> {
+    if limit == 0 || limit > super::store::MAX_DUMP {
+        return Err(io::Error::other("Invalid minidump file limit"));
+    }
     let store = CrashStore::open(database.to_owned())?;
     let _runtime_log = runtime_log::install(store.root(), Role::Monitor).ok();
     store.enforce_limits()?;
@@ -454,6 +479,7 @@ pub fn run_monitor(database: &Path, socket: &Path, parent: Option<u32>) -> io::R
     let result = server
         .run(
             Box::new(Handler {
+                limit,
                 store,
                 capture: Mutex::new(None),
                 stack: Mutex::new(String::new()),

@@ -46,6 +46,8 @@ jobs:
         # Catch startup, headless UI and TLS regressions before the release build.
         # Full workspace tests below remain mandatory and reuse these artifacts.
         run: cargo test --locked --lib crash_handler --target ${{ matrix.target }} -- --test-threads=1
+      - name: Verify hard minidump writer bounds
+        run: cargo test --locked -p minidumper --lib --target ${{ matrix.target }} -- --test-threads=1
       - name: Verify crash-handler startup processes
         env:
           SLINT_EMIT_DEBUG_INFO: '1'

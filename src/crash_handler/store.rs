@@ -10,6 +10,7 @@ use std::{
 };
 
 const MAX_JSON: u64 = 1_048_576;
+pub(super) const MAX_DUMP: u64 = 10_000_000;
 
 /// Durable consent/delivery state. Declining preserves local evidence.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -403,7 +404,7 @@ impl Capture {
     pub(super) fn commit(self) -> io::Result<CrashReport> {
         // Native writers control their own intermediate buffers. Oversized dumps
         // are rejected, never retained/submitted as a complete capture.
-        if self.temp.as_file().metadata()?.len() > 10_000_000 {
+        if self.temp.as_file().metadata()?.len() > MAX_DUMP {
             return Err(invalid("Minidump exceeds 10 MB retention limit"));
         }
         self.temp.as_file().sync_all()?;
