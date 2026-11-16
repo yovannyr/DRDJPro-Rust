@@ -1,6 +1,11 @@
 # Spec 26: Umsetzung und Nachweise
 
-Stand: 2026-11-16. In Arbeit; keine vollständige Abnahme.
+Entwicklungsstatus: **Erledigt**, auf ausdrückliche Nutzeranweisung abgeschlossen.
+Gemeinsame visuelle/manuelle Abnahme: **gestartet**, noch nicht bestanden;
+Testprotokoll: [MANUAL_ACCEPTANCE.md](MANUAL_ACCEPTANCE.md).
+Die bestehende Anforderungsmatrix und die dokumentierten Restpunkte bleiben
+als tatsächlicher Nachweisstand erhalten. Abschluss bedeutet keine nachträgliche
+Erfüllung offener Kriterien oder Freigabe für produktive Report-Uploads.
 Scope ausschließlich Crash Handler. Specs 27–31 werden nicht umgesetzt.
 
 ## Schritte
