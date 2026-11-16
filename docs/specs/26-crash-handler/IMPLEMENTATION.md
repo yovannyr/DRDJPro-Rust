@@ -320,7 +320,7 @@ bis zu erfolgreichem Refresh gesperrt. Refresh kann nach Reparatur wiederholen.
 | Anforderung | Softwarestand / verbleibende Grenze |
 |---|---|
 | FR-001 | Echte GUI-Startup-Capture mit separatem Monitor; Prozess-Panic/native Probes. Nicht für jeden möglichen System-/Datenträgerfehler garantiert. |
-| FR-002 | Funktionsnamen und bereinigte Quellorte bei verfügbaren Symbolen; Release-Symbolquote/95-%-Nachweis offen. |
+| FR-002 | Kompakte Release-Symbole mit Build-/Modulkennung, Rust-Panic-Quellorte und explizite Offline-Symbolisierung nativer Absturzthreads (Schritt 7). Keine automatische native Text-Anreicherung der UI; allgemeiner 95-%-Nachweis bleibt offen. |
 | FR-003 | Version/OS/Architektur im dauerhaften Report und Detailansicht. |
 | FR-004 | Vorgegebener Benutzerpfad am GUI-Startup; Tests verwenden isolierte temporäre Stores. |
 | FR-005 | Explizites, dauerhaftes Opt-in/Keep-local über UI; korruptes Consent fail-closed. |
@@ -491,3 +491,82 @@ Clippy-Befunde im neuen Test/Manifest wurden behoben, ohne Warnungen zu unterdr�
 Freier Platz C: vor dem Slice 45,03 GiB, nach den lokalen Checks 43,13 GiB
 (Systemmessung, kein isolierter Cargo-Verbrauch). Keine Cache-Löschung.
 Plattformweite CI-Nachweise folgen im zugehörigen PR.
+
+## Schritt 7 — Release-Symbole und prüfbare Stacktraces
+
+Nur das Hauptpaket erhält im Release-Profil `line-tables-only` und wird nicht
+gestrippt. Abhängigkeiten behalten ihre bisherigen Release-Einstellungen, die
+platzsparenden Dev-/Testprofile bleiben unverändert. Windows-PDB und erzeugte
+macOS-dSYM werden neben dem ausgelieferten Programm mitgepackt, damit der
+vorhandene Rust-Panic-Hook Quellen auflösen kann. Linux behält eingebettete
+DWARF-Informationen. Optimierung und Unwind-Verhalten bleiben unverändert.
+
+Reports erhalten optional eine validierte `build`-Identität mit Git-Commit,
+Zielplattform und Cargo-Profil. Altberichte ohne dieses Feld bleiben lesbar und
+behalten Consent-/Delivery-Zustand. Source-Archive ohne Git melden `commit: null`.
+Die Kennung dient nur der Kandidatensuche: lokale Änderungen am selben Commit
+werden nicht unterschieden; Versions-/Commitgleichheit beweist keine Symbol-
+Kompatibilität. Die additive Build-Angabe wird auch im erlaubten Text-Payload
+übertragen; unbekannte Felder, Pfade und beliebige Freitexte werden abgewiesen.
+Ältere Programmversionen mit strengem JSON-Schema können neue Reports nicht lesen;
+ein Downgrade wird damit nicht als verlustfreier Migrationspfad zugesichert.
+
+`tools/crash_symbols.py` erzeugt ein separates Symbolpaket aus genau dem gebauten
+Programm: rohe PDB/DWARF/dSYM, Breakpad-Symbole, Build-Konfiguration, Binary-
+Prüfsumme, Dateiprüfsummen und native Modulkennung (PDB GUID/Age, ELF Debug-ID,
+Mach-O UUID). `verify-release` vergleicht das tatsächlich gepackte Binary mit
+dem Manifest. `analyze` verlangt eine passende, geladene Modulkennung und prüft
+Pflicht-Symboldatei, Header, Pfadgrenzen und Prüfsummen vor der Verarbeitung.
+Die Prüfsummen erkennen Änderungen relativ zum Manifest; sie sind keine Signatur
+gegen einen Angreifer, der das gesamte Paket samt Manifest ersetzen kann.
+
+Die Offline-Analyse benötigt ausdrücklich lokale Entwicklerwerkzeuge und ein
+ausgewähltes lokales Dump-/Symbolpaket. Sie läuft nicht im normalen App-Startup,
+Audio-/Native-Callback oder UI-Poll und fügt der Anwendung keine neuen Runtime-
+Dependencies hinzu. `dump_syms` 2.3.9 und `minidump-stackwalk` 0.27.0 werden nur
+über `fetch-tools` aus festen Hersteller-Releases mit SHA-256-Prüfung bezogen;
+keine Installerskripte oder beliebigen Archivpfade werden ausgeführt/extrahiert.
+Bei `analyze` werden keine Symbolserver-URLs oder lokalen Debuginfo-Suchfeatures
+aktiviert. Raw-Dumps, Register, Modulpfade, Threadnamen und rohe Toolausgaben
+werden weder ausgegeben noch hochgeladen. Zurückgegeben werden höchstens 256
+Frames des identifizierten Absturzthreads mit bereinigten Quellenbasenames,
+Funktion, Zeile, Modulbasename und Trust. Die bestehenden Benutzerberichte und
+deren Queue werden durch das Werkzeug nicht geändert.
+
+Native Reports erhalten in diesem Slice keine automatische symbolisierte
+Textansicht im Reportmanager: die Entwickleranalyse ist explizit offline.
+Rohe native Symbole können Buildpfade enthalten; das Symbolpaket ist kein als
+datenschutzbereinigt qualifizierter Benutzerreport. Binäre Dumps bleiben lokal.
+
+CI verwendet Python 3.11 und prüft die Python-Hilfsfunktionen ohne Netzwerk.
+Nach dem einzigen bestehenden Release-Build werden dSYM/Symbolpaket erzeugt und
+die gepackte Anwendung in drei isolierten Probes gestartet: Main-/Worker-Panic
+müssen `panic_probe` samt Quellenposition liefern; der native Absturz muss im
+tatsächlichen Context-Frame `native_probe`, `mod.rs` und eine positive Zeile aus
+den passenden lokalen Symbolen liefern. Fehlende/falsche/geänderte Symbole sind
+Fehler. macOS-Panic-Snapshots ohne Exception-Stream werden weiterhin anhand
+ihres ursprünglichen Panic-Hook-Stacks geprüft, nicht anhand irgendeines Threads.
+Das Symbolpaket samt reduzierter Verifikation ist ein separates CI-Artefakt mit
+14 Tagen Retention. Eine langfristige Release-Symbolarchivierung benötigt eine
+spätere festgelegte Release-/Aufbewahrungspolitik; CI-Retention ist kein Dauerarchiv.
+
+Die drei Fälle sind ein definierter kleiner Release-Korpus, kein statistischer
+Nachweis für 95 % aller Panics oder 99 % aller Crasharten. Allgemeine Symbolquote,
+Crashabdeckung, produktiver Server und native Last-/Shutdown-Abnahme bleiben offen.
+Visuelle/manuelle und Hardware-/Hörtests erfolgen später gemeinsam.
+
+Lokale Prüfungen am 16.11.2026 (Windows): 1719 Library-Tests einschließlich
+47 Crash-Handler-Tests, 14 Crash-Prozess- und fünf Logger-Prozesstests bestanden;
+zehn Python-Regressionen für IDs/Pfade/Integrität/Nullfelder/Redaktion und die
+Zuordnung einer Quellenzeile zum richtigen Panic-Frame bestanden.
+Eine echte Native-Probe des vorhandenen Debug-Binary wurde mit den gepinnten
+Werkzeugen gegen seine PDB auf `native_probe()` samt `mod.rs`, positiver Zeile
+und `context`-Trust aufgelöst. Das ist ein Debug-Werkzeugnachweis, kein lokaler
+Release-Nachweis. Temporäre Symbolkopien wurden nach der Probe entfernt.
+Finales Workspace-/All-Targets-Clippy mit Rust 1.100.0 und `-D warnings`, rustfmt
+und Diffcheck: Exit 0. Unabhängiges statisches Review durch GPT-6.1 Sol, medium,
+mit behobenen Pflichtdatei-/Pythonversionsbefunden und Follow-up ohne offene
+blockierende Befunde. Rust-Tests verwendeten 1.99.1 und das vorhandene gemeinsame
+target; keine neuen Crates/Toolchains oder lokalen Release-Builds. Freier Platz
+C: 43,06 GiB vor dem Slice, 42,26 GiB nach den lokalen Checks (Systemmessung).
+Der tatsächliche Release-Nachweis je Plattform wird im zugehörigen PR ausgewiesen.

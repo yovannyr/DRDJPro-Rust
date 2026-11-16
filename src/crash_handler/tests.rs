@@ -8,6 +8,28 @@ fn store() -> (tempfile::TempDir, CrashStore) {
 }
 
 #[test]
+fn report_build_identity_is_additive_and_rejects_arbitrary_strings() {
+    let (_temp, store) = store();
+    let report = store.insert("app::frame").unwrap();
+    assert_eq!(report.build, Some(BuildIdentity::current()));
+    let mut legacy = serde_json::to_value(&report).unwrap();
+    legacy.as_object_mut().unwrap().remove("build");
+    let old: CrashReport = serde_json::from_value(legacy).unwrap();
+    assert_eq!(old.build, None);
+    assert_eq!(old.id, report.id);
+    assert_eq!(old.status, report.status);
+    let valid = serde_json::to_value(BuildIdentity::current()).unwrap();
+    for key in ["commit", "target", "profile"] {
+        let mut invalid = valid.clone();
+        invalid[key] = serde_json::json!("https://SECRET/Users/private");
+        assert!(serde_json::from_value::<BuildIdentity>(invalid).is_err());
+    }
+    let mut invalid = valid;
+    invalid["unexpected"] = serde_json::json!("secret");
+    assert!(serde_json::from_value::<BuildIdentity>(invalid).is_err());
+}
+
+#[test]
 fn consent_states_and_settings_survive_restart() {
     let (_temp, store) = store();
     assert!(!store.settings().unwrap().auto_submit);

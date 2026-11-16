@@ -80,6 +80,12 @@ incremental = false
 debug = "line-tables-only"
 incremental = false
 
+# Keep release source locations for our executable without full type/variable
+# symbols or enabling debuginfo across its large dependency graph.
+[profile.release.package.drdjpro-ui-spike]
+debug = "line-tables-only"
+strip = "none"
+
 # One reproducible test configuration replaces per-invocation CLI overrides.
 # Interactive dev playback and codec optimizations below remain unchanged.
 [profile.test.package.drdjpro-ui-spike]

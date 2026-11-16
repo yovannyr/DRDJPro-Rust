@@ -5,6 +5,7 @@ use std::sync::mpsc::{Receiver, SyncSender};
 
 fn report(id: &str, state: ReportStatus) -> CrashReport {
     CrashReport {
+        build: None,
         id: id.into(),
         created_ms: 1_000,
         version: "test".into(),

@@ -164,6 +164,8 @@ fn run_queue(
 
 #[derive(Serialize)]
 struct TextReport<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build: Option<&'a super::BuildIdentity>,
     schema_version: u8,
     id: &'a str,
     created_ms: i64,
@@ -190,6 +192,7 @@ fn upload(
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     let payload = TextReport {
+        build: report.build.as_ref(),
         schema_version: 1,
         id: &report.id,
         created_ms: report.created_ms,

@@ -1,5 +1,6 @@
 //! Crash evidence storage. Filesystem operations belong on control/worker threads,
 //! never in an audio callback or a native crash signal handler.
+mod build_identity;
 mod config;
 mod manager;
 mod privacy;
@@ -10,6 +11,7 @@ mod store;
 mod transport;
 mod ui;
 
+pub use build_identity::BuildIdentity;
 pub use config::{default_database_dir, CrashSettings};
 pub use process::{run_monitor, MonitorGuard};
 pub use startup::CrashStartup;
@@ -22,6 +24,13 @@ pub use ui::{wire_ui, CrashUiSession};
 pub fn internal_mode() -> Option<std::io::Result<()>> {
     let mut args = std::env::args_os().skip(1);
     let mode = args.next()?;
+    if mode == "--crash-build-info" {
+        return Some(
+            serde_json::to_string(&BuildIdentity::current())
+                .map(|identity| println!("{identity}"))
+                .map_err(std::io::Error::other),
+        );
+    }
     if mode != "--crash-monitor"
         && mode != "--crash-probe"
         && mode != "--crash-startup-probe"

@@ -29,6 +29,9 @@ pub enum ReportStatus {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CrashReport {
+    /// Optional for reports created before build identity was introduced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<super::BuildIdentity>,
     pub id: String,
     pub created_ms: i64,
     pub version: String,
@@ -65,6 +68,7 @@ impl CrashStore {
             _lock: lock,
             temp,
             report: CrashReport {
+                build: Some(super::BuildIdentity::current()),
                 id: random_id()?,
                 created_ms: chrono::Utc::now().timestamp_millis(),
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -124,6 +128,7 @@ impl CrashStore {
     pub fn insert(&self, stack: &str) -> io::Result<CrashReport> {
         let _lock = self.lock()?;
         let report = CrashReport {
+            build: Some(super::BuildIdentity::current()),
             id: random_id()?,
             created_ms: chrono::Utc::now().timestamp_millis(),
             version: env!("CARGO_PKG_VERSION").into(),
