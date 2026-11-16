@@ -508,7 +508,7 @@ impl Server {
     fn check_mach_port(
         &mut self,
         poll: &Poller,
-        clients: &mut Vec<ClientConn>,
+        clients: &mut [ClientConn],
         handler: &dyn crate::ServerHandler,
     ) -> Result<LoopAction, Error> {
         // We use a really short timeout for receiving on the mach port since we check it
