@@ -332,7 +332,7 @@ bis zu erfolgreichem Refresh gesperrt. Refresh kann nach Reparatur wiederholen.
 | FR-011 | Nichtmodale Post-Crash-Zustimmungsabfrage für Pending ohne gültigen Auto-Modus. |
 | FR-012 | Typisierte Laufzeitereignisse aus App und Monitor mit begrenztem JSONL-Sink und automatisierten Tests (Schritt 5). Best effort: Überlauf, I/O-Fehler und hartes Prozessende können Ereignisse verlieren; Zähler machen unbestätigte/verlorene Einträge sichtbar. |
 | FR-013 | HTTPS-Texttransport implementiert; kein produktiver Endpoint/Auth-Vertrag vorgegeben. |
-| FR-014 | 50 Reports; Reportbudget 499.737.856 Bytes plus 262.144 Bytes reserviert für Logs inklusive Staging. Temporäre Capture-/Metadaten-Dateien sind kein hart begrenzter Gesamtspitzenverbrauch. |
+| FR-014 | 50 Reports; Reportbudget 499.737.856 Bytes plus 262.144 Bytes Logreserve. Temporärer Dump beim Schreiben auf 10.000.000 Bytes begrenzt (Schritt 6). Dies bleibt zusätzlich zum Retentionsbudget; keine harte 500-MB-Gesamtspitzengrenze einschließlich Metadaten/Dateisystem-Overhead. |
 | FR-015 | Text-Upload gzip im Speicher ohne Archivdateien. |
 | FR-016 | Textpfade vor Persistenz/Anzeige/Upload bereinigt; binäre Dump-Privacy bleibt unqualifiziert, kein Dump-Upload. |
 
@@ -440,3 +440,54 @@ x86_64-pc-windows-msvc -- -D warnings`, `cargo +1.100.0 fmt --all -- --check`
 und `git diff --check`: Exit 0. Plattformweite CI-Nachweise werden im zugehörigen
 PR ausgewiesen. C: vor den Checks 45,72 GiB frei, danach etwa 45,42 GiB;
 Systemmessung, kein isolierter Cargo-Verbrauch. Keine Cache-Löschung.
+
+## Schritt 6 — temporäre Dumps während des Schreibens begrenzen
+
+Der Monitor setzt eine harte Grenze von 10.000.000 Bytes pro temporärer Dumpdatei.
+Der Store-Lock serialisiert Captures pro Root: höchstens eine aktive Capture-
+Transaktion. Linux/macOS nutzen einen begrenzten Write/Seek-Adapter; Windows
+übernimmt DbgHelp-I/O-Callbacks im Monitor und gibt der API nur einen lesbaren
+Fallback-Dateihandle. Jeder Schreibbereich wird vor dem Dateizugriff geprüft,
+einschließlich Offsetüberlauf und Header-Rewrites. Fehler bleiben bis zum Ende
+der Capture gespeichert; ein vom nativen Writer ignorierter Teilfehler darf
+keinen vollständigen Report erzeugen. Partielle Dateien werden verworfen und
+der Store-Lock freigegeben. Die Größenprüfung vor Finalisierung bleibt bestehen.
+
+Die Grenze betrifft logische Dump-Dateilänge, nicht den Arbeitsspeicher des
+nativen Writers, Dateisystem-Blockrundung oder den Gesamtspeicher der Festplatte.
+Eine unterbrochene Capture kann bis zum nächsten Recovery eine eigene temporäre
+Datei hinterlassen, jetzt ebenfalls innerhalb der Schreibgrenze. Vor dieser
+Änderung erzeugte übergroße Altdateien werden durch die vorhandene Recovery
+entfernt. Das Retentionsbudget fertiger Reports und die Logreserve bleiben
+unverändert; eine Capture kann zusätzlich bis 10 MB temporär benötigen.
+
+Der Native-Callback im fehlerhaften App-Prozess und bestehende IPC-/Watchdog-
+Fristen bleiben unverändert. Die Begrenzung verursacht nur Positions-/Bereichs-
+prüfungen pro Monitor-Schreibzugriff; keine zusätzlichen Audio-Callback-Aufrufe.
+Unter Windows serialisiert ein Monitor-Mutex ausschließlich alternative I/O-
+Callbacks; kein Mutex wurde in den App-Native-Callback verschoben.
+
+Automatisierte Prüfungen decken exakte Grenze, Rewrites, Sparse-Seeks,
+Offsetüberlauf, persistierenden Fehlerzustand und Windows-Callbacks/Fallback ab.
+Ein echter Prozesstest fordert zweimal Dumps mit isolierter 1024-Byte-Testgrenze
+an: keine finalisierten Reports oder verbliebenen eigenen Staging-Dateien.
+Danach muss ein normaler Capture-Neustart einen parsebaren Dump erzeugen.
+Die neue Limit-API der vendorten Bibliothek wird als Workspace-Code mitgeprüft.
+Bestehende normale/native Crash- und Logging-Prozesstests bleiben Pflicht.
+
+Kein neuer Cache, keine lokale Release-Kompilierung, keine neuen Crate-Versionen.
+Vorhandene Windows-Bindings werden für die benötigten API-Strukturen erweitert.
+Visuelle/manuelle und Hardware-/Hörtests bleiben für die gemeinsame Abnahme offen.
+
+Lokale Nachweise (Windows, 16.11.2026): 1718 Library-Tests, 14 Crash-Prozesstests
+einschließlich des neuen Limit-/Recovery-Falls, fünf Logger-Prozesstests und acht
+Writer-Tests bestanden. Finales Workspace-/All-Targets-Clippy mit Rust 1.100.0,
+Windows-Ziel und `-D warnings`, rustfmt und Diffcheck: Exit 0. Die lokalen Tests
+nutzten Rust 1.99.1 und denselben vorhandenen target-Ordner. Unabhängiges Review
+durch GPT-6.1 Sol mit Denkaufwand Mittel, einschließlich Follow-ups, ohne offene
+Befunde. Ein erster Lauf des neuen Prozesstests scheiterte an seinem fehlenden
+PID-Marker; die Testprobe wurde korrigiert und alle 14 Prozessfälle wiederholt.
+Clippy-Befunde im neuen Test/Manifest wurden behoben, ohne Warnungen zu unterdrücken.
+Freier Platz C: vor dem Slice 45,03 GiB, nach den lokalen Checks 43,13 GiB
+(Systemmessung, kein isolierter Cargo-Verbrauch). Keine Cache-Löschung.
+Plattformweite CI-Nachweise folgen im zugehörigen PR.

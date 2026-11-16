@@ -59,8 +59,12 @@ impl Client {
         let options = &socket;
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         let options = socket2::SockRef::from(&socket);
-        options.set_read_timeout(Some(std::time::Duration::from_secs(5))).map_err(|e| std::io::Error::other(format!("IPC receive deadline: {e}")))?;
-        options.set_write_timeout(Some(std::time::Duration::from_secs(5))).map_err(|e| std::io::Error::other(format!("IPC send deadline: {e}")))?;
+        options
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .map_err(|e| std::io::Error::other(format!("IPC receive deadline: {e}")))?;
+        options
+            .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+            .map_err(|e| std::io::Error::other(format!("IPC send deadline: {e}")))?;
 
         let s = Self {
             socket,

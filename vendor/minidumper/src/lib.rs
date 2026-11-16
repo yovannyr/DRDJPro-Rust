@@ -1,6 +1,9 @@
 #![doc = include_str!("../README.md")]
 
 mod errors;
+mod limited_writer;
+#[cfg(windows)]
+mod windows_dump;
 
 pub use errors::Error;
 use std::{fs::File, path::PathBuf};
@@ -31,6 +34,13 @@ pub enum LoopAction {
 
 /// Allows user code to hook into the server to avoid hardcoding too many details
 pub trait ServerHandler: Send + Sync {
+    /// Optional hard limit on the logical backing file size, enforced during
+    /// writes. Exceeding it fails capture; partial dumps must not be finalized.
+    /// None preserves the upstream unbounded writer. Bounded Windows captures
+    /// support external processes only.
+    fn minidump_size_limit(&self) -> Option<u64> {
+        None
+    }
     /// Called when a crash request has been received and a backing file needs
     /// to be created to store it.
     fn create_minidump_file(&self) -> Result<(File, PathBuf), std::io::Error>;

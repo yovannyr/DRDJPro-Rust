@@ -451,6 +451,7 @@ impl Server {
         handler: &dyn crate::ServerHandler,
     ) -> Result<LoopAction, Error> {
         let (mut minidump_file, minidump_path) = handler.create_minidump_file()?;
+        let limit = handler.minidump_size_limit();
 
         cfg_if::cfg_if! {
             if #[cfg(any(target_os = "linux", target_os = "android"))] {
@@ -463,34 +464,44 @@ impl Server {
                     minidump_writer::minidump_writer::MinidumpWriterConfig::new(crash_context.inner.pid, crash_context.inner.tid);
 
                 writer.set_crash_context(crash_context);
-                let result = writer.write(&mut minidump_file);
+                if let Some(limit) = limit { writer.set_minidump_size_limit(limit); }
+                let result = if let Some(limit) = limit { (|| {
+                    let mut bounded = crate::limited_writer::LimitedWriter::new(&mut minidump_file, limit)?;
+                    let result = writer.write(&mut bounded).map_err(crate::Error::from);
+                    bounded.check().map_err(crate::Error::from).and(result)
+                })() } else { writer.write(&mut minidump_file).map_err(crate::Error::from) };
             } else if #[cfg(target_os = "windows")] {
                 // SAFETY: Unfortunately this is a bit dangerous since we are relying on the crashing process
                 // to still be alive and still have the interior pointers in the crash context still at the
                 // same location in memory, unfortunately it's a bit hard to communicate this through so
                 // many layers, so really, we are falling back on Windows to actually correctly handle
                 // if the interior pointers have become invalid which it should? do ok with
-                let result =
-                    minidump_writer::minidump_writer::MinidumpWriter::dump_crash_context(&crash_context, None, &mut minidump_file);
+                let result = if let Some(limit) = limit {
+                    std::fs::File::open(&minidump_path).and_then(|readonly| crate::windows_dump::dump(&crash_context, &mut minidump_file, &readonly, limit)).map_err(crate::Error::from)
+                } else {
+                    minidump_writer::minidump_writer::MinidumpWriter::dump_crash_context(&crash_context, None, &mut minidump_file).map_err(crate::Error::from)
+                };
             } else if #[cfg(target_os = "macos")] {
                 let mut writer = minidump_writer::minidump_writer::MinidumpWriter::with_crash_context(crash_context);
-                let result = writer.dump(&mut minidump_file);
+                let result = if let Some(limit) = limit { (|| {
+                    let mut bounded = crate::limited_writer::LimitedWriter::new(&mut minidump_file, limit)?;
+                    let result = writer.dump(&mut bounded).map_err(crate::Error::from);
+                    bounded.check().map_err(crate::Error::from).and(result)
+                })() } else { writer.dump(&mut minidump_file).map_err(crate::Error::from) };
             }
         }
 
         // Notify the user handler about the minidump, even if we failed to write it
-        Ok(handler.on_minidump_created(
-            result
-                .map(|_contents| crate::MinidumpBinary {
-                    file: minidump_file,
-                    path: minidump_path,
-                    #[cfg(target_os = "windows")]
-                    contents: None,
-                    #[cfg(not(target_os = "windows"))]
-                    contents: Some(_contents),
-                })
-                .map_err(crate::Error::from),
-        ))
+        Ok(
+            handler.on_minidump_created(result.map(|_contents| crate::MinidumpBinary {
+                file: minidump_file,
+                path: minidump_path,
+                #[cfg(target_os = "windows")]
+                contents: None,
+                #[cfg(not(target_os = "windows"))]
+                contents: Some(_contents),
+            })),
+        )
     }
 
     #[cfg(target_os = "macos")]

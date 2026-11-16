@@ -198,6 +198,25 @@ fn main_thread_panic_generates_parseable_dump_and_redacted_stack() {
 }
 
 #[test]
+fn write_limit_rejects_partial_captures_and_normal_capture_can_restart() {
+    let (_temp, store, status, _) = probe("limit");
+    assert!(status.success());
+    assert_dump(store.root(), Some("panic_probe"));
+    assert!(std::fs::read_dir(store.root()).unwrap().all(|entry| !entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with("crash-write-")));
+    let report = store.list().unwrap().pop().unwrap();
+    assert!(
+        std::fs::metadata(store.root().join(format!("{}.dmp", report.id)))
+            .unwrap()
+            .len()
+            <= 10_000_000
+    );
+}
+
+#[test]
 fn worker_panic_captures_without_changing_unwind_semantics() {
     let (_temp, store, status, elapsed) = probe("thread");
     assert!(status.success());
