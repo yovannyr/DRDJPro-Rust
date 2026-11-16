@@ -122,6 +122,7 @@ message NativeMetadataMessage {
   required bool duration_exact = 6;
   required bool scanned = 7;
   optional string error = 8;
+  optional bool prefer_imported_tags = 9;
 }
 message NativeTrackMessage {
   required sint32 id = 1;

@@ -31,11 +31,23 @@ fn probe(
     std::process::ExitStatus,
     Duration,
 ) {
+    probe_with("--crash-probe", mode)
+}
+
+fn probe_with(
+    flag: &str,
+    mode: &str,
+) -> (
+    tempfile::TempDir,
+    CrashStore,
+    std::process::ExitStatus,
+    Duration,
+) {
     let temp = tempfile::tempdir().unwrap();
     let store = CrashStore::open(temp.path().join("reports")).unwrap();
     let start = Instant::now();
     let mut child = Command::new(env!("CARGO_BIN_EXE_drdjpro-ui-spike"))
-        .arg("--crash-probe")
+        .arg(flag)
         .arg(store.root())
         .arg(mode)
         .stdin(Stdio::null())
@@ -51,6 +63,55 @@ fn probe(
         .unwrap();
     wait_for_monitor_exit(pid, Duration::from_secs(15));
     (temp, store, status, elapsed)
+}
+
+#[test]
+fn normal_application_startup_owns_and_stops_monitor_without_false_report() {
+    let (_temp, store, status, _) = probe_with("--crash-startup-probe", "normal");
+    assert!(status.success());
+    assert!(store.list().unwrap().is_empty());
+}
+
+#[test]
+fn application_startup_captures_early_panic_before_ui_and_audio() {
+    let (_temp, store, status, _) = probe_with("--crash-startup-probe", "panic");
+    assert!(!status.success());
+    assert_dump(store.root(), Some("panic_probe"));
+}
+
+#[test]
+fn unavailable_startup_store_does_not_abort_application() {
+    assert_startup_probe_success("unavailable");
+}
+
+#[cfg(windows)]
+#[test]
+fn startup_preserves_windows_error_flags_on_success_failure_and_shutdown() {
+    assert_startup_probe_success("error-modes");
+}
+
+fn assert_startup_probe_success(mode: &str) {
+    let temp = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_drdjpro-ui-spike"))
+        .arg("--crash-startup-probe")
+        .arg(temp.path())
+        .arg(mode)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait(&mut child, Duration::from_secs(20));
+    assert!(
+        status.success(),
+        "Startup probe {mode}: {:?}",
+        child.wait_with_output().unwrap().stderr
+    );
+    assert!(CrashStore::open(temp.path().into())
+        .unwrap()
+        .list()
+        .unwrap()
+        .is_empty());
 }
 
 #[cfg(windows)]
@@ -85,6 +146,22 @@ fn wait_for_monitor_exit(pid: u32, timeout: Duration) {
     }
 }
 
+fn assert_exception_stream(
+    exception: Result<minidump::MinidumpException<'_>, minidump::Error>,
+    panic_snapshot: bool,
+) {
+    if cfg!(target_os = "macos") && panic_snapshot {
+        // macOS simulate_exception(None) captures a snapshot without exception
+        // data. Reject malformed streams as well as an unexpected present stream.
+        assert!(
+            matches!(exception, Err(minidump::Error::StreamNotFound)),
+            "macOS panic snapshot must omit the exception stream: {exception:?}"
+        );
+    } else {
+        exception.expect("Native faults and non-macOS panics need an exception stream");
+    }
+}
+
 fn assert_dump(database: &Path, expected_stack: Option<&str>) {
     let store = CrashStore::open(database.into()).unwrap();
     let reports = store.list().unwrap();
@@ -105,7 +182,10 @@ fn assert_dump(database: &Path, expected_stack: Option<&str>) {
     let dump = minidump::Minidump::read_path(&path).expect("Real minidump must parse");
     let threads = dump.get_stream::<minidump::MinidumpThreadList>().unwrap();
     assert!(!threads.threads.is_empty());
-    assert!(dump.get_stream::<minidump::MinidumpException>().is_ok());
+    assert_exception_stream(
+        dump.get_stream::<minidump::MinidumpException>(),
+        expected_stack.is_some(),
+    );
     assert!(fs::metadata(path).unwrap().len() <= 10_000_000);
 }
 
@@ -195,9 +275,19 @@ fn two_worker_panics_then_native_fault_keep_the_same_monitor_usable() {
     assert!(!status.success());
     let reports = store.list().unwrap();
     assert_eq!(reports.len(), 3);
+    // This probe joins both panic workers before the native fault. Their stack
+    // messages are consumed and cleared per capture, so exactly two have stacks.
+    assert_eq!(reports.iter().filter(|r| !r.stack.is_empty()).count(), 2);
     for report in reports {
+        let panic_snapshot = !report.stack.is_empty();
+        if panic_snapshot {
+            assert!(report.stack.contains("panic_probe"));
+        }
         let dump =
             minidump::Minidump::read_path(store.root().join(format!("{}.dmp", report.id))).unwrap();
-        assert!(dump.get_stream::<minidump::MinidumpException>().is_ok());
+        assert_exception_stream(
+            dump.get_stream::<minidump::MinidumpException>(),
+            panic_snapshot,
+        );
     }
 }

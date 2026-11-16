@@ -8,7 +8,7 @@ use std::{
 
 pub const MAX_IMPORT: usize = 5000;
 const MAX_DIRECTORY_ENTRIES: usize = 100_000;
-pub(crate) const MAX_TRACKS: usize = 100_000;
+pub(crate) const MAX_TRACKS: usize = 250_000;
 pub const MAX_HISTORY: usize = 5_000;
 pub const HISTORY_SCOPE: i32 = -1;
 pub const PREP_SCOPE: i32 = -2;
@@ -1120,6 +1120,7 @@ impl Library {
     ) {
         if let Some(index) = self.keys.get(&identity(path)) {
             let index = *index;
+            metadata.retain_imported_tags(&self.tracks[index].metadata);
             if metadata.analysis.is_none() {
                 metadata.analysis = self.tracks[index].metadata.analysis.clone();
             }
@@ -1232,6 +1233,7 @@ impl Library {
             let enriched = available && saved.metadata.needs_refresh(&saved.path);
             let metadata = if enriched {
                 let mut metadata = crate::track_metadata::read(&saved.path);
+                metadata.retain_imported_tags(&saved.metadata);
                 metadata.analysis = saved.metadata.analysis;
                 metadata
             } else {
@@ -1371,6 +1373,45 @@ impl Library {
     }
     pub fn len(&self) -> usize {
         self.tracks.len()
+    }
+    /// Import already-inspected source records without file access on the UI.
+    /// An unchanged source leaves existing local metadata/analysis intact.
+    pub(crate) fn import_source_track(
+        &mut self,
+        path: PathBuf,
+        available: bool,
+        metadata: crate::track_metadata::TrackMetadata,
+        overwrite: bool,
+    ) -> Result<bool, String> {
+        if !path.is_absolute()
+            || path.to_str().is_none()
+            || !crate::audio_formats::supported(&path)
+            || !metadata.validate()
+        {
+            return Err("Invalid imported local track".into());
+        }
+        let exists = self.keys.contains_key(&identity(&path));
+        if !exists && self.len() >= MAX_TRACKS {
+            return Err("Shared library limit250000 reached".into());
+        }
+        let before = self.revision;
+        if !exists {
+            self.insert([path.clone()]);
+        }
+        let index = *self
+            .keys
+            .get(&identity(&path))
+            .ok_or("Cannot assign imported track identity")?;
+        if self.tracks[index].available != available {
+            self.tracks[index].available = available;
+            self.mark_search_track(index);
+            self.analysis_revision += 1;
+            self.mark_track(index);
+        }
+        if !exists || overwrite {
+            self.set_metadata(&path, metadata);
+        }
+        Ok(self.revision != before)
     }
     pub(crate) fn analysis_targets(&self) -> VecDeque<(i32, PathBuf)> {
         self.tracks
@@ -1639,6 +1680,53 @@ impl Library {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn itunes_shared_library_accepts_hundred_thousand_plus_missing_source_tracks() {
+        let mut library = Library::default();
+        let base = std::env::temp_dir();
+        for id in 1..=100_001 {
+            let metadata = crate::track_metadata::TrackMetadata {
+                prefer_imported_tags: true,
+                title: format!("Imported{id}"),
+                scanned: true,
+                ..Default::default()
+            };
+            assert!(library
+                .import_source_track(base.join(format!("source-{id}.mp3")), false, metadata, true)
+                .unwrap());
+        }
+        assert_eq!(library.len(), 100_001);
+        assert!(library
+            .tracks
+            .iter()
+            .all(|t| !t.available && t.metadata.prefer_imported_tags));
+        library.catalog().validate().unwrap();
+    }
+    #[test]
+    fn itunes_restore_header_refresh_keeps_imported_tag_ownership() {
+        let file = crate::test_support::wav_file(1000, 48000);
+        let mut library = Library::default();
+        library.insert([file.path().to_path_buf()]);
+        library.set_metadata(
+            file.path(),
+            crate::track_metadata::TrackMetadata {
+                prefer_imported_tags: true,
+                title: "Source title".into(),
+                artist: "Source artist".into(),
+                album: "Source album".into(),
+                scanned: false,
+                ..Default::default()
+            },
+        );
+        let library = Library::restore(library.catalog()).unwrap();
+        let metadata = &library.visible()[0].metadata;
+        assert!(metadata.prefer_imported_tags);
+        assert_eq!(metadata.title, "Source title");
+        assert_eq!(metadata.artist, "Source artist");
+        assert_eq!(metadata.album, "Source album");
+        assert!(metadata.scanned);
+        assert!(metadata.duration_ms.is_some());
+    }
     #[test]
     fn prep_queue_order_filter_relocation_and_revision_ack() {
         let dir = tempfile::tempdir().unwrap();
@@ -2540,14 +2628,14 @@ mod tests {
         );
     }
     #[test]
-    fn delta_snapshot_at_100000_tracks_only_clones_changed_records_and_acks_exact_revision() {
+    fn delta_snapshot_at_catalog_capacity_only_clones_changed_records_and_acks_exact_revision() {
         let profile = tempfile::tempdir().unwrap();
         let mut library = Library::default();
         library.insert((0..MAX_TRACKS).map(|i| profile.path().join(format!("{i}.wav"))));
-        library.set_query("99999.wav".into());
+        library.set_query(format!("{}.wav", MAX_TRACKS - 1));
         assert_eq!(
             library.visible().iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec![100_000]
+            vec![i32::try_from(MAX_TRACKS).unwrap()]
         );
         library.set_query(String::new());
         library.acknowledge(library.revision());
@@ -2594,7 +2682,7 @@ mod tests {
         assert_eq!(remaining.crates.unwrap().entries[0].0, crate_id);
         library.acknowledge(library.revision());
         assert!(!library.has_changes());
-        println!("100000-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
+        println!("{MAX_TRACKS}-track snapshots: delta {delta_alloc} allocations {delta_time:?}; full {full_alloc} allocations {full_time:?}");
     }
     #[test]
     fn indexed_selection_matches_visible_scope_and_avoids_building_large_views() {

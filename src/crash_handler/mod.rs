@@ -1,20 +1,27 @@
 //! Crash evidence storage. Filesystem operations belong on control/worker threads,
 //! never in an audio callback or a native crash signal handler.
 mod config;
+mod manager;
 mod privacy;
 mod process;
+mod startup;
 mod store;
+mod transport;
+mod ui;
 
 pub use config::{default_database_dir, CrashSettings};
 pub use process::{run_monitor, MonitorGuard};
+pub use startup::CrashStartup;
 pub use store::{CrashReport, CrashStore, ReportStatus};
+pub use transport::{spawn_upload_queue, UploadSummary, UploadTask};
+pub use ui::{wire_ui, CrashUiSession};
 
 /// Dispatch internal subprocess modes before the application initializes audio.
 /// Probe modes require an explicit directory and never run in ordinary startup.
 pub fn internal_mode() -> Option<std::io::Result<()>> {
     let mut args = std::env::args_os().skip(1);
     let mode = args.next()?;
-    if mode != "--crash-monitor" && mode != "--crash-probe" {
+    if mode != "--crash-monitor" && mode != "--crash-probe" && mode != "--crash-startup-probe" {
         return None;
     }
     Some((|| {
@@ -40,6 +47,32 @@ pub fn internal_mode() -> Option<std::io::Result<()>> {
             );
         }
         let store = CrashStore::open(database.into())?;
+        if mode == "--crash-startup-probe" {
+            #[cfg(windows)]
+            if argument == "error-modes" {
+                return process::probe_error_modes(&std::env::current_exe()?, &store);
+            }
+            if argument == "unavailable" {
+                let file = store.root().join("not-a-directory");
+                std::fs::write(&file, b"test")?;
+                let startup = CrashStartup::at(&std::env::current_exe()?, &file);
+                if startup.store().is_some() || startup.monitor_pid().is_some() {
+                    return Err(std::io::Error::other("Unavailable store must fail open"));
+                }
+                return Ok(());
+            }
+            let startup = CrashStartup::at(&std::env::current_exe()?, store.root());
+            let pid = startup
+                .monitor_pid()
+                .ok_or_else(|| std::io::Error::other("Startup monitor unavailable"))?;
+            std::fs::write(store.root().join("probe-monitor.pid"), pid.to_string())?;
+            match argument.to_str() {
+                Some("normal") => (),
+                Some("panic") => panic_probe(),
+                _ => return Err(std::io::Error::other("Unknown startup probe")),
+            }
+            return Ok(());
+        }
         let guard = MonitorGuard::start(&std::env::current_exe()?, &store)?;
         std::fs::write(
             store.root().join("probe-monitor.pid"),

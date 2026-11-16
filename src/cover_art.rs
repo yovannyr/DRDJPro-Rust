@@ -1,7 +1,7 @@
-use std::path::Path;
 use std::io::Cursor;
+use std::path::Path;
 
-use image::{ImageReader, ImageFormat, Limits};
+use image::{ImageFormat, ImageReader, Limits};
 
 /// Maximum allowed input size (4 MiB).
 const MAX_INPUT_SIZE: usize = 4 * 1024 * 1024;
@@ -100,9 +100,9 @@ pub(crate) fn decode(data: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         let cursor = Cursor::new(data);
         let mut reader = ImageReader::with_format(cursor, format);
         reader.limits(limits);
-        reader.decode().map_err(|e| {
-            format!("failed to decode cover image: {e}")
-        })?
+        reader
+            .decode()
+            .map_err(|e| format!("failed to decode cover image: {e}"))?
     };
 
     let width = img.width();
@@ -154,7 +154,9 @@ pub(crate) fn read_cancellable(
                 // Prefer FrontCover, fallback to first image.
                 let cover = visuals
                     .iter()
-                    .find(|img| img.usage == Some(symphonia::core::meta::StandardVisualKey::FrontCover))
+                    .find(|img| {
+                        img.usage == Some(symphonia::core::meta::StandardVisualKey::FrontCover)
+                    })
                     .or_else(|| visuals.first());
 
                 if let Some(cover) = cover {
@@ -320,8 +322,8 @@ mod tests {
 
     fn tagged_mp3_with_corrupt_cover(title: &str) -> Vec<u8> {
         let corrupt_png: Vec<u8> = [
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52,
         ]
         .to_vec();
         tagged_mp3_with_cover(title, &corrupt_png)
@@ -365,7 +367,11 @@ mod tests {
         let cancel = crate::cancellation::Cancellation::default();
         let result = read_cancellable(file.path(), &cancel);
 
-        assert!(result.is_ok(), "read_cancellable should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "read_cancellable should succeed: {:?}",
+            result
+        );
         let cover = result.unwrap();
         assert!(cover.is_some(), "should find embedded cover art");
 
@@ -433,4 +439,3 @@ mod tests {
         assert!(result.unwrap_err().contains("cancelled"));
     }
 }
-

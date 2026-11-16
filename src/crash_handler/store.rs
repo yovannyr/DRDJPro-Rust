@@ -181,6 +181,76 @@ impl CrashStore {
         self.write(&path, &report)
     }
 
+    /// Explicitly authorize textual submission and future retries. Binary dumps
+    /// are never authorized by this operation. Submitted reports are not requeued.
+    pub fn queue_report(&self, id: &str) -> io::Result<bool> {
+        let _lock = self.lock()?;
+        let path = self.path(id, "json")?;
+        let mut report: CrashReport = read_json(&path)?;
+        if report.id != id {
+            return Err(invalid("Mismatched report ID"));
+        }
+        if report.status == ReportStatus::Submitted {
+            return Ok(false);
+        }
+        report.status = ReportStatus::Queued;
+        self.write(&path, &report)?;
+        Ok(true)
+    }
+
+    // Compare under the store lock so stale worker snapshots cannot override a
+    // decline/delete. Network I/O must never hold this lock. In-flight HTTP cannot
+    // be recalled; changing consent prevents subsequent requests/state promotion.
+    pub(super) fn transition_status(
+        &self,
+        id: &str,
+        expected: ReportStatus,
+        next: ReportStatus,
+    ) -> io::Result<bool> {
+        let _lock = self.lock()?;
+        let path = self.path(id, "json")?;
+        let mut report: CrashReport = match read_json(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            result => result?,
+        };
+        if report.id != id {
+            return Err(invalid("Mismatched report ID"));
+        }
+        if report.status != expected {
+            return Ok(false);
+        }
+        report.status = next;
+        self.write(&path, &report)?;
+        Ok(true)
+    }
+
+    pub(super) fn queued_report(&self, id: &str) -> io::Result<Option<CrashReport>> {
+        let _lock = self.lock()?;
+        let path = self.path(id, "json")?;
+        let mut report: CrashReport = match read_json(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            result => result?,
+        };
+        if report.id != id {
+            return Err(invalid("Mismatched report ID"));
+        }
+        report.stack = sanitize_stack(&report.stack);
+        Ok((report.status == ReportStatus::Queued).then_some(report))
+    }
+
+    pub(super) fn try_upload_lock(&self) -> io::Result<File> {
+        let path = self.root.join(".upload.lock");
+        reject_link(&self.root)?;
+        reject_link(&path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)?;
+        file.try_lock().map_err(io::Error::other)?;
+        Ok(file)
+    }
+
     /// Delete only the ID's owned files. Failed dump removal preserves metadata.
     pub fn delete(&self, id: &str) -> io::Result<()> {
         let _lock = self.lock()?;

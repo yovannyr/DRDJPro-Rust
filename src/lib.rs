@@ -5,6 +5,13 @@ pub mod hid_finder;
 pub mod remote_display;
 mod remote_input;
 pub mod usb_finder;
+#[cfg(any(target_os = "windows", test))]
+pub mod web_browser;
+#[cfg(not(any(target_os = "windows", test)))]
+#[path = "web_unavailable.rs"]
+pub mod web_browser;
+#[cfg(any(target_os = "windows", test))]
+mod web_policy;
 
 /// Worker-owned USB discovery. Not a claim of native device/UI acceptance.
 pub mod usb_devices {

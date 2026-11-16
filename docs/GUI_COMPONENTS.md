@@ -1,5 +1,32 @@
 # GUI component inventory and reference baseline
 
+## Crash reports and sharing (Spec 26, 2026-11-16)
+
+`REPORTS` opens an independent report window. On GUI/demo startup, pending
+reports without valid auto-sharing consent open a nonmodal consent request.
+Closing the window leaves consent pending. `SEND TEXT` authorizes the selected
+stable report ID; `KEEP LOCAL` persists decline; `DELETE LOCAL` removes only that
+report and dump. Confirmed reports cannot be reauthorized or reclassified as
+unsent. Selection survives row reordering by ID; details show timestamp/version,
+OS/architecture and a bounded redacted stack.
+
+HTTPS settings and auto-sharing change only on `SAVE SETTINGS`. The saved
+destination is displayed separately from the editable draft. Default is no
+sharing. Auto-sharing authorizes pending/future text; turning it off does not
+revoke already queued consent. `KEEP LOCAL` prevents future attempts, but cannot
+recall an in-flight request. Binary dumps remain local. `PROCESS QUEUE` retries
+authorized reports. Known upload results remain visible across store-refresh
+errors; no success is claimed without an acknowledged transport result.
+
+Filesystem work runs on one bounded actor; HTTPS runs on the existing cancellable
+uploader. GUI callbacks only enqueue and poll. Startup retries queued consent
+even with automatic sharing off. No periodic filesystem scan; refreshes occur
+at startup, explicit actions and upload completion. Main-window close hides this
+window and cancels network independently of blocked filesystem work; no joins.
+Headless widget/action tests and real local HTTPS tests qualify these software
+paths. Visual/manual, native layout/focus and hardware/listening acceptance
+remain deferred for joint testing.
+
 ## USB device finder (2026-11-12)
 
 The `USB` button starts worker-owned discovery lazily and displays VID/PID,
@@ -1024,3 +1051,33 @@ input, close and disconnect release holds; five seconds is the intentional maxim
 pad-preview hold and requires reopen after timeout. Native refresh/appearance,
 monitor scaling, physical MIDI force/latency and short unplug/replug qualification
 remain open. No proprietary Akai or physical display protocol is claimed.
+
+## Embedded browser (Spec30, Windows)
+
+WEB and HELP open independent OS-native child web views in separate Slint windows.
+Each has address/back/forward/reload/home controls. HELP serves embedded HTML,
+CSS and an SVG without disk paths or network. WebView2 Runtime102+ is required;
+missing/old runtimes show an error while the application keeps running.
+HTTPS browsing has no privileged app bridge, deck-load action or token extraction.
+Native SmartScreen is retained. Website audio is separate from the DJ engine.
+The user has no Beatport partner access: authorized deck streaming/OAuth provider
+integration remains blocked. Native render/history/GPU/audio-load qualification
+is deferred; headless navigation dispatch is separate evidence.
+
+## iTunes source window (Spec31)
+
+iTunes opens a separate source window with XML/media-folder selection, cached
+sources, ordered playlists, virtual track rows, complete source metadata and
+guarded LOAD A/B. Imported local files join the existing searchable library with
+stable IDs. Source ratings/play counts/date-added remain in the source catalog;
+ordinary file-tag scans retain explicitly imported title/artist/album preferences.
+Missing files remain visible and cannot load. Native save status is separate from
+source synchronization status; reopening reconciles interrupted native imports.
+Native appearance and manual workflow acceptance remain deferred.
+
+APPLE METADATA enriches one selected local source track; APPLE PLAYLIST accepts
+at most50 unique tracks. Both require an externally configured MusicKit developer
+token and preserve local data on failure/ambiguity. Apple values and the original
+XML details remain distinguishable; selected cover thumbnails come from the
+bounded source cache. No background lookups, audio streaming or token entry form
+is added. Live API qualification is open because no developer token is available.

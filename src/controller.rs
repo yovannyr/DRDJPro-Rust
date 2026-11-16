@@ -1,4 +1,5 @@
 //! GUI control plane with injectable file selection and one bounded load worker.
+mod itunes;
 use crate::{
     playback::{DeckId, DualDeckEngine, LoopEdge, MixerLevels, PreparedTrack},
     AppWindow,
@@ -8514,6 +8515,9 @@ impl AudioController {
                     .and_then(|track_id| library.track_by_id(track_id))
                     .map(|track| {
                         (
+                            (track.metadata.prefer_imported_tags
+                                && !track.metadata.title.is_empty())
+                            .then(|| track.metadata.title.clone()),
                             track.metadata.artist.clone(),
                             track
                                 .metadata
@@ -8523,7 +8527,9 @@ impl AudioController {
                         )
                     })
             });
-            let (artist, musical_key) = metadata.unwrap_or_else(|| (String::new(), String::new()));
+            let (imported_title, artist, musical_key) =
+                metadata.unwrap_or_else(|| (None, String::new(), String::new()));
+            let title = imported_title.as_deref().unwrap_or(&s.title);
             let desired = s.detail.as_ref().map_or(s.requested_speed, |source| {
                 self.desired_pitch(id, source, s.requested_speed)
             });
@@ -8987,7 +8993,7 @@ impl AudioController {
             };
             match id {
                 DeckId::A => {
-                    ui.set_left_title(s.title.into());
+                    ui.set_left_title(title.into());
                     ui.set_left_artist(artist.into());
                     ui.set_left_musical_key(musical_key.into());
                     ui.set_left_loaded(s.loaded);
@@ -9020,7 +9026,7 @@ impl AudioController {
                     );
                 }
                 DeckId::B => {
-                    ui.set_right_title(s.title.into());
+                    ui.set_right_title(title.into());
                     ui.set_right_artist(artist.into());
                     ui.set_right_musical_key(musical_key.into());
                     ui.set_right_loaded(s.loaded);

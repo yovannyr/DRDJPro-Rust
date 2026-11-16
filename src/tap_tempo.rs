@@ -63,9 +63,15 @@ impl TapTempoManager {
 
     /// Record a tap event and return the current BPM estimate.
     pub fn record_tap(&self) -> TapTempoResult {
+        self.record_tap_with_clock(Instant::now)
+    }
+
+    // Sample the clock under the same lock as before so concurrent taps retain
+    // timestamp order. Tests supply exact times instead of assuming sleep timing.
+    fn record_tap_with_clock(&self, clock: impl FnOnce() -> Instant) -> TapTempoResult {
         let mut taps = self.taps.lock().unwrap();
 
-        let now = Instant::now();
+        let now = clock();
 
         // Clamp tap history to last 10 seconds (prevents stale taps).
         let cutoff = now - Duration::from_secs(10);
@@ -128,7 +134,11 @@ impl TapTempoManager {
 
     /// Clear taps older than the given duration.
     pub fn prune(&self, max_age: Duration) {
-        let cutoff = Instant::now() - max_age;
+        self.prune_at(max_age, Instant::now());
+    }
+
+    fn prune_at(&self, max_age: Duration, now: Instant) {
+        let cutoff = now - max_age;
         let mut taps = self.taps.lock().unwrap();
         taps.retain(|t| *t > cutoff);
     }
@@ -446,13 +456,13 @@ mod tests {
     #[test]
     fn tap_tempo_calculates_bpm() {
         let manager = TapTempoManager::new();
-
-        manager.record_tap();
-        std::thread::sleep(Duration::from_millis(500));
-        let result = manager.record_tap();
+        let start = Instant::now();
+        manager.record_tap_with_clock(|| start);
+        let result = manager.record_tap_with_clock(|| start + Duration::from_millis(500));
 
         // 500ms between taps → 120 BPM.
-        assert!(result.bpm > 100.0 && result.bpm < 140.0);
+        assert!((result.bpm - 120.0).abs() < 1e-9);
+        assert!((result.average_interval_ms - 500.0).abs() < 1e-9);
         assert!(result.confidence > 0.0);
         assert_eq!(result.tap_count, 2);
     }
@@ -460,15 +470,15 @@ mod tests {
     #[test]
     fn tap_tempo_stabilizes_with_consistent_taps() {
         let manager = TapTempoManager::new();
+        let start = Instant::now();
 
         // 60 BPM = 1000ms interval.
-        for _ in 0..5 {
-            manager.record_tap();
-            std::thread::sleep(Duration::from_millis(1000));
+        for second in 0..5 {
+            manager.record_tap_with_clock(|| start + Duration::from_secs(second));
         }
 
-        let result = manager.record_tap();
-        assert!(result.bpm > 50.0 && result.bpm < 70.0);
+        let result = manager.record_tap_with_clock(|| start + Duration::from_secs(5));
+        assert!((result.bpm - 60.0).abs() < 1e-9);
         assert!(result.confidence > 0.5);
         assert!(result.is_reliable());
     }
@@ -476,32 +486,29 @@ mod tests {
     #[test]
     fn tap_tempo_prunes_stale_taps() {
         let manager = TapTempoManager::new();
-
-        manager.record_tap();
-        std::thread::sleep(Duration::from_millis(100));
-        manager.record_tap();
+        let start = Instant::now();
+        let now = start + Duration::from_millis(100);
+        manager.record_tap_with_clock(|| start);
+        manager.record_tap_with_clock(|| now);
 
         // The fresh tap survives; only the 100 ms old tap is stale.
-        manager.prune(Duration::from_millis(10));
+        manager.prune_at(Duration::from_millis(10), now);
         assert_eq!(manager.tap_count(), 1);
-        manager.prune(Duration::ZERO);
+        manager.prune_at(Duration::ZERO, now);
         assert_eq!(manager.tap_count(), 0);
     }
 
     #[test]
     fn tap_tempo_low_confidence_for_inconsistent_taps() {
         let manager = TapTempoManager::new();
+        let start = Instant::now();
 
         // Very irregular taps.
-        manager.record_tap();
-        std::thread::sleep(Duration::from_millis(200));
-        manager.record_tap();
-        std::thread::sleep(Duration::from_millis(2000));
-        manager.record_tap();
-        std::thread::sleep(Duration::from_millis(300));
-        manager.record_tap();
+        for millis in [0, 200, 2200, 2500] {
+            manager.record_tap_with_clock(|| start + Duration::from_millis(millis));
+        }
 
-        let result = manager.record_tap();
+        let result = manager.record_tap_with_clock(|| start + Duration::from_millis(2600));
 
         // Should have lower confidence due to high variance.
         assert!(result.confidence < 0.7);

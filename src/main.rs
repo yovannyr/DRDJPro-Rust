@@ -21,6 +21,7 @@ mod external_drop;
 mod fx_chain;
 mod fx_timing;
 mod hot_cues;
+mod itunes_ui;
 mod legacy_catalog;
 mod library;
 mod library_perf;
@@ -136,6 +137,9 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     let performance_output =
         library_perf::ReportFile::from_env().map_err(slint::PlatformError::Other)?;
+    // Normal GUI/demo launches own capture before audio initialization. Internal
+    // helpers and console decoder/playback commands have already returned above.
+    let crash_startup = crash_handler::CrashStartup::start();
     let mut startup_audio_warning = String::new();
     let audio_engine = if std::env::args().nth(1).as_deref() != Some("--demo") {
         let startup = match library_store::default_path()
@@ -304,6 +308,22 @@ fn main() -> Result<(), slint::PlatformError> {
     let _usb_finder_timer = usb_finder::wire(&ui);
     let _hid_finder_timer = hid_finder::wire(&ui);
     let _remote_display_timer = remote_display::wire(&ui);
+    let crash_reports = crash_handler::wire_ui(&ui, &crash_startup);
+    let _web_browser_timer = web_browser::wire(&ui);
+    let _itunes_timer =
+        controller
+            .as_ref()
+            .and_then(|controller| match library_store::default_path() {
+                Ok(path) => Some(itunes_ui::wire(
+                    &ui,
+                    Rc::clone(controller),
+                    path.with_extension("itunes.sqlite3"),
+                )),
+                Err(e) => {
+                    ui.set_status(format!("iTunes source catalog: {e}").into());
+                    None
+                }
+            });
     #[cfg(feature = "dvs-xwax")]
     let _dvs_timer = controller
         .as_ref()
@@ -432,6 +452,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let result = ui.run();
+    crash_reports.shutdown(); // Hide auxiliary window/cancel network before audio teardown.
     let performance_result = match (performance_output, performance) {
         (Some(output), Some(recorder)) => {
             if result.is_err() {

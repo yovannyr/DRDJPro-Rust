@@ -53,6 +53,11 @@ impl Client {
 
         // DRDJ patch: bound all blocking IPC before the macOS handshake below.
         // A compromised/unresponsive monitor must not hang the faulting process.
+        // uds 0.4 exposes the timeout setters directly but does not implement
+        // AsFd, which socket2 0.6 requires for SockRef.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let options = &socket;
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         let options = socket2::SockRef::from(&socket);
         options.set_read_timeout(Some(std::time::Duration::from_secs(5))).map_err(|e| std::io::Error::other(format!("IPC receive deadline: {e}")))?;
         options.set_write_timeout(Some(std::time::Duration::from_secs(5))).map_err(|e| std::io::Error::other(format!("IPC send deadline: {e}")))?;

@@ -381,6 +381,33 @@ mod tests {
         }
     }
     #[test]
+    fn stereo_batches_are_fifo_without_overflow_loss_across_ring_wraps() {
+        let ring = Arc::new(Ring::new());
+        let mut producer = InputProducer {
+            ring: Arc::clone(&ring),
+            _single: PhantomData,
+        };
+        // More than two complete ring wraps, drained between bounded callbacks.
+        // This isolates the transport's zero-loss contract from worker scheduling
+        // and the intentional wall-clock stale-input rejection.
+        for batch in 0..64 {
+            let frames: Vec<_> = (0..257)
+                .map(|i| {
+                    let left = ((batch * 257 + i) as i16).wrapping_mul(17);
+                    [left, !left]
+                })
+                .collect();
+            let pcm: Vec<_> = frames.iter().flatten().copied().collect();
+            producer.stereo(&pcm);
+            for expected in frames {
+                assert_eq!(ring.pop(), Some(expected));
+            }
+            assert!(ring.pop().is_none());
+            assert_eq!(ring.lost.load(Ordering::Acquire), 0);
+            assert!(!ring.failed.load(Ordering::Acquire));
+        }
+    }
+    #[test]
     fn malformed_pcm_and_separate_error_callback_fail_explicitly() {
         let ring = Arc::new(Ring::new());
         let mut producer = InputProducer {

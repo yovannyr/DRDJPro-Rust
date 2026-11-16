@@ -32,12 +32,57 @@ struct PanicState {
 /// snapshot; the helper has a five-second watchdog. Rust panic symbolization uses
 /// the panic thread (not the native signal callback) and may allocate on failure.
 pub struct MonitorGuard {
+    #[cfg(windows)]
+    error_mode: Option<ErrorModeGuard>,
     child: Child,
     stop: mpsc::Sender<()>,
     heartbeat: Option<thread::JoinHandle<()>>,
     previous: Arc<PanicHook>,
     state: Option<Arc<PanicState>>,
     _socket_dir: SocketDirectory,
+}
+
+#[cfg(windows)]
+struct ErrorModeGuard {
+    was_suppressed: bool,
+}
+
+#[cfg(windows)]
+impl ErrorModeGuard {
+    fn new() -> Self {
+        use windows::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SetErrorMode, SEM_NOGPFAULTERRORBOX, THREAD_ERROR_MODE,
+        };
+        // SAFETY: process-local startup flag, preserving all unrelated bits.
+        let previous = unsafe {
+            let previous = GetErrorMode();
+            SetErrorMode(THREAD_ERROR_MODE(previous | SEM_NOGPFAULTERRORBOX.0));
+            previous
+        };
+        Self {
+            was_suppressed: previous & SEM_NOGPFAULTERRORBOX.0 != 0,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ErrorModeGuard {
+    fn drop(&mut self) {
+        use windows::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SetErrorMode, SEM_NOGPFAULTERRORBOX, THREAD_ERROR_MODE,
+        };
+        // SAFETY: restore only our suppression bit, retaining unrelated changes
+        // made by the application while capture was active.
+        unsafe {
+            let current = GetErrorMode();
+            let restored = if self.was_suppressed {
+                current | SEM_NOGPFAULTERRORBOX.0
+            } else {
+                current & !SEM_NOGPFAULTERRORBOX.0
+            };
+            SetErrorMode(THREAD_ERROR_MODE(restored));
+        }
+    }
 }
 
 impl MonitorGuard {
@@ -61,14 +106,7 @@ impl MonitorGuard {
 
     fn start_inner(executable: &Path, store: &CrashStore) -> io::Result<Self> {
         #[cfg(windows)]
-        {
-            use windows::Win32::System::Diagnostics::Debug::{SetErrorMode, SEM_NOGPFAULTERRORBOX};
-            // SAFETY: startup-only process setting suppresses WER's blocking modal
-            // dialog; capture and next-startup consent are handled by this subsystem.
-            unsafe {
-                SetErrorMode(SEM_NOGPFAULTERRORBOX);
-            }
-        }
+        let error_mode = ErrorModeGuard::new();
         let socket_dir = SocketDirectory::new()?;
         let socket = socket_dir.path.join("ipc");
         let mut command = Command::new(executable);
@@ -184,6 +222,8 @@ impl MonitorGuard {
         });
         log::info!("Crash monitor started");
         Ok(Self {
+            #[cfg(windows)]
+            error_mode: Some(error_mode),
             child,
             stop,
             heartbeat: Some(heartbeat),
@@ -225,7 +265,58 @@ impl Drop for MonitorGuard {
             }
         }
         drop(self.state.take()); // Detach even when hook restoration is forbidden during unwinding.
+        #[cfg(windows)]
+        drop(self.error_mode.take()); // Restore before another monitor can acquire ACTIVE.
         ACTIVE.store(false, Ordering::Release);
+    }
+}
+
+// Explicit disposable subprocess mode only; never alters the user's host process.
+#[cfg(windows)]
+pub(super) fn probe_error_modes(executable: &Path, store: &CrashStore) -> io::Result<()> {
+    use windows::Win32::System::Diagnostics::Debug::{
+        GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX,
+        SEM_NOOPENFILEERRORBOX, THREAD_ERROR_MODE,
+    };
+    // SAFETY: this function is dispatched only in an explicitly requested isolated
+    // probe subprocess before any UI/audio threads. Restore original flags at end.
+    unsafe {
+        let original = GetErrorMode();
+        let initial = (original | SEM_FAILCRITICALERRORS.0) & !SEM_NOGPFAULTERRORBOX.0;
+        SetErrorMode(THREAD_ERROR_MODE(initial));
+        let result = (|| {
+            {
+                let guard = MonitorGuard::start(executable, store)?;
+                if GetErrorMode() != (initial | SEM_NOGPFAULTERRORBOX.0) {
+                    return Err(io::Error::other("Startup replaced existing process flags"));
+                }
+                SetErrorMode(THREAD_ERROR_MODE(GetErrorMode() | SEM_NOOPENFILEERRORBOX.0));
+                drop(guard);
+            }
+            let after = initial | SEM_NOOPENFILEERRORBOX.0;
+            if GetErrorMode() != after {
+                return Err(io::Error::other(
+                    "Shutdown failed to restore owned process flag",
+                ));
+            }
+            let unavailable = store.root().join("missing-monitor-executable.exe");
+            if MonitorGuard::start(&unavailable, store).is_ok() || GetErrorMode() != after {
+                return Err(io::Error::other(
+                    "Failed monitor setup changed process flags",
+                ));
+            }
+            SetErrorMode(THREAD_ERROR_MODE(after | SEM_NOGPFAULTERRORBOX.0));
+            let guard = MonitorGuard::start(executable, store)?;
+            drop(guard);
+            if GetErrorMode() != (after | SEM_NOGPFAULTERRORBOX.0) {
+                return Err(io::Error::other(
+                    "Shutdown cleared caller-owned suppression",
+                ));
+            }
+            Ok(())
+        })();
+        SetErrorMode(THREAD_ERROR_MODE(original));
+        result
     }
 }
 
@@ -530,6 +621,12 @@ fn cleanup_orphaned_socket_dirs(base: &Path) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // SAFETY: signal zero is an existence check, no signal is delivered.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,10 +722,4 @@ mod tests {
         assert!(live.path.exists());
         drop(another);
     }
-}
-
-#[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
-    // SAFETY: signal zero is an existence check, no signal is delivered.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
