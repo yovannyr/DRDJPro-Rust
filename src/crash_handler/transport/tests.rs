@@ -206,6 +206,10 @@ fn real_https_gzip_ack_sends_only_redacted_text_and_preserves_dump() {
             json["id"].as_str().unwrap()
         )));
         assert_eq!(json["schema_version"], 1);
+        assert_eq!(
+            json["build"],
+            serde_json::to_value(super::super::BuildIdentity::current()).unwrap()
+        );
         assert!(json.get("status").is_none());
         assert!(json.get("minidump").is_none());
         let text = json.to_string();

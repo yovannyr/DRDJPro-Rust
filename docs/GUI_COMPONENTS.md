@@ -33,6 +33,13 @@ Logs retain three 64-KiB files with a 256-KiB managed budget including staging;
 they contain typed diagnostic events, no arbitrary host-logger messages, paths
 or stack payloads. An unavailable logger does not disable capture or sharing.
 
+Release packages carry the executable's compact runtime symbols (Windows PDB,
+macOS dSYM; Linux embedded DWARF). Reports optionally record validated build
+identity while retaining compatibility with older reports. Native dump
+symbolization is an explicit offline developer tool; its results do not
+automatically modify the report window or authorize uploads. Visual/manual
+acceptance remains deferred.
+
 ## USB device finder (2026-11-12)
 
 The `USB` button starts worker-owned discovery lazily and displays VID/PID,
