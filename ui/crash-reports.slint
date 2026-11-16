@@ -47,7 +47,15 @@ export component CrashReportsWindow inherits Window {
         Text {text:"HTTPS destination (save before sending)";color:#cccccc;}
         LineEdit {text <=> root.endpoint;enabled:root.available&&!root.busy;accessible-label:"Crash report HTTPS destination";}
         Text {text:"Saved destination: " + root.saved-destination;color:#aaaaaa;wrap:word-wrap;accessible-label:"Saved crash upload destination";}
-        CheckBox {text:"Automatically send pending and future text crash reports";checked <=> root.automatic;enabled:root.available&&!root.busy;accessible-label:"Opt in to automatic text crash sharing";}
+        HorizontalLayout {spacing:8px;
+            auto-sharing := CheckBox {checked <=> root.automatic;enabled:root.available&&!root.busy;accessible-label:"Opt in to automatic text crash sharing";width:28px;horizontal-stretch:0;}
+            Rectangle {
+                horizontal-stretch:1;
+                min-height:auto-label.preferred-height;
+                auto-label := Text {x:0px;y:0px;width:parent.width;height:parent.height;text:"Automatically send pending and future text crash reports";color:root.available&&!root.busy ? #eeeeee : #bbbbbb;wrap:word-wrap;vertical-alignment:center;}
+                TouchArea {enabled:root.available&&!root.busy;clicked=>{auto-sharing.focus();root.automatic=!root.automatic;}}
+            }
+        }
         Text {text:"Queued reports retain their prior consent even with auto-sharing off. KEEP LOCAL revokes future attempts. A request already started cannot be recalled.";color:#bbbbbb;wrap:word-wrap;}
         if root.settings-notice!="":Text {text:root.settings-notice;color:#ffcc88;wrap:word-wrap;accessible-label:"Crash sharing settings notice";}
         HorizontalLayout {

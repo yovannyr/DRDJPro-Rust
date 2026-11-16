@@ -1,11 +1,11 @@
 # Spec 26 — gemeinsame visuelle und manuelle Abnahme
 
 Entwicklungsstatus: **Erledigt auf Nutzerentscheidung**.
-Abnahmestatus: **Gestartet; noch keine gemeinsam bestätigten Ergebnisse**.
+Abnahmestatus: **Gestartet; Sichtbarkeit des Report-Fensters vom Nutzer bestätigt**.
 
 ## Testbasis
 
-- Softwarestand: `4e28f91`, lokales vorhandenes Windows-Debug-Binary.
+- Ausgangsstand: `4e28f91`; für die Kontrastkorrektur lokal neu gebautes Windows-Debug-Binary.
 - Release-Softwaretests separat: CI #254, Attempt 3, drei Plattformen grün.
 - Vorhandene Benutzerberichte und Sharing-Einstellungen werden nicht verändert.
 - Für spätere zustandsändernde Fälle werden ein isolierter Teststore und eine
@@ -18,7 +18,7 @@ Abnahmestatus: **Gestartet; noch keine gemeinsam bestätigten Ergebnisse**.
 | ID | Aktion | Erwartung | Ergebnis |
 |---|---|---|---|
 | M01 | App starten und Hauptfenster ansehen | App reagiert, Layout lesbar, kein unerwarteter Crash-Dialog | Vom Assistenten beobachtet; gemeinsame Bestätigung offen |
-| M02 | `REPORTS` öffnen | Separates Report-Fenster sichtbar; Listen-/Detail-/Statusbereiche und Schaltflächen lesbar | Fenster geöffnet; Kontrastbeobachtung unten, Nutzerbestätigung offen |
+| M02 | `REPORTS` öffnen | Separates Report-Fenster sichtbar; Listen-/Detail-/Statusbereiche und Schaltflächen lesbar | Nutzer bestätigt vollständige Sichtbarkeit; zu dunkle Auto-Sharing-Beschriftung bestätigt. Korrektur und erneute gemeinsame Sichtprüfung folgen. |
 | M03 | Fenster verkleinern/vergrößern und Tastaturfokus prüfen | Keine abgeschnittenen zentralen Aktionen; verständlicher Fokus | Offen |
 | M04 | Eigenen Testbericht auswählen und Details prüfen | Datum, Version, OS/Architektur und bereinigter Stack passen; Auswahl bleibt stabil | Offen |
 | M05 | Post-Crash-Abfrage mit eigenem Testbericht schließen | Entscheidung bleibt ausstehend; kein automatischer Versand | Offen |
@@ -35,9 +35,24 @@ Abnahmestatus: **Gestartet; noch keine gemeinsam bestätigten Ergebnisse**.
   auf die sichtbare Desktopfläche ist `REPORTS` erreichbar. M03 bleibt offen.
 - Report-Fenster geöffnet: leere Liste, `No report selected`, Logger aktiv,
   kein gespeichertes Upload-Ziel; Aktionen für einen ausgewählten Report deaktiviert.
-- Beobachtung: Die Beschriftung der Auto-Sharing-Checkbox wirkt auf dem dunklen
-  Hintergrund sehr kontrastarm. Noch keine gemeinsame Bewertung oder Korrektur.
+- Nutzer bestätigt: Das Report-Fenster ist vollständig sichtbar; die Beschriftung
+  der Auto-Sharing-Checkbox ist zu dunkel. Die Korrektur verwendet eine explizite
+  helle Textfarbe; die gemeinsame Sichtprüfung der Korrektur bleibt offen.
 - Keine Sharing-Einstellung gespeichert, kein Report versendet oder gelöscht.
+
+## Kontrastkorrektur der Auto-Sharing-Beschriftung
+
+- Explizite Textfarben `#eeeeee` (bedienbar) und `#bbbbbb` (deaktiviert)
+  auf dem Fensterhintergrund `#151515`; native Checkbox und Accessible-Label bleiben erhalten.
+- Fünf automatisierte UI-Tests bestanden. Der neue Regressionstest prüft
+  Label-Klick, Fokusübertragung mit Space-Toggle, gesperrte Zustände und keine
+  Worker-Anfrage ohne explizites Speichern.
+- `cargo fmt --all -- --check`, Workspace-Clippy für alle Windows-Targets mit
+  `-D warnings` und `git diff --check` bestanden.
+- Unabhängiges statisches Review: GPT-6.1 Sol, medium; keine blockierenden Befunde.
+- Finaler Windows-Debug-Build erfolgreich; vom Assistenten im laufenden Fenster
+  geprüft: helle Beschriftung direkt neben der Checkbox, vollständig sichtbar.
+- Gemeinsame native Sicht- und Bedienprüfung der Korrektur bleibt offen.
 
 ## Unverändert dokumentierte Restpunkte
 

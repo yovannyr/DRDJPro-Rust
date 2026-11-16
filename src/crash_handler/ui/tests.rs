@@ -48,6 +48,57 @@ fn setup(ui: &AppWindow) -> (CrashUiSession, Receiver<Request>, SyncSender<Event
 }
 
 #[test]
+fn auto_sharing_label_click_and_space_only_change_the_unsaved_draft() {
+    use i_slint_backend_testing::ElementHandle;
+    use slint::platform::{PointerEventButton, WindowEvent};
+
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = AppWindow::new().unwrap();
+    let (session, requests, events) = setup(&ui);
+    events.send(event(0, vec![], true)).unwrap();
+    tick(&session.state);
+    let view = session.state.borrow().view.as_ref().unwrap().clone_strong();
+    let label = ElementHandle::find_by_element_id(&view, "CrashReportsWindow::auto-label")
+        .next()
+        .unwrap();
+    let click_label = || {
+        let origin = label.absolute_position();
+        let size = label.size();
+        assert!(
+            origin.x < 70.,
+            "Label must stay next to the checkbox: {origin:?}"
+        );
+        assert!(size.width > 100. && size.height > 0.);
+        let position =
+            slint::LogicalPosition::new(origin.x + size.width / 2., origin.y + size.height / 2.);
+        view.window().dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        view.window().dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    };
+    assert!(!view.get_automatic());
+    click_label();
+    assert!(view.get_automatic());
+    view.window()
+        .dispatch_event(WindowEvent::KeyPressed { text: " ".into() });
+    view.window()
+        .dispatch_event(WindowEvent::KeyReleased { text: " ".into() });
+    assert!(!view.get_automatic());
+    view.set_busy(true);
+    click_label();
+    assert!(!view.get_automatic());
+    view.set_busy(false);
+    view.set_available(false);
+    click_label();
+    assert!(!view.get_automatic());
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
 fn pending_post_crash_prompt_close_and_selected_consent_are_explicit() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = AppWindow::new().unwrap();
