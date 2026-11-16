@@ -330,7 +330,7 @@ bis zu erfolgreichem Refresh gesperrt. Refresh kann nach Reparatur wiederholen.
 | FR-009 | Monitor vor GUI/Audio gestartet und als Guard bis zum Teardown gehalten. |
 | FR-010 | Main-/Worker-Panics und native Fehler im definierten Probe-Korpus; absolute Crash-Abdeckung offen. |
 | FR-011 | Nichtmodale Post-Crash-Zustimmungsabfrage für Pending ohne gültigen Auto-Modus. |
-| FR-012 | Start/Fehler/Speichern/Ablehnen/Löschen/Upload-Acknowledge/Retry-Ereignisse; keine URL/Payload-Logs. |
+| FR-012 | Teilweise: Ereignisaufrufe für Start/Fehler/Speichern/Ablehnen/Löschen/ACK/Retry vorhanden, aber Runtime-Logger/Sink und Log-Retention fehlen. Keine qualifizierte Laufzeit-Logausgabe. |
 | FR-013 | HTTPS-Texttransport implementiert; kein produktiver Endpoint/Auth-Vertrag vorgegeben. |
 | FR-014 | Store begrenzt auf 50 Reports und 500.000.000 echte verwaltete Bytes. |
 | FR-015 | Text-Upload gzip im Speicher ohne Archivdateien. |
@@ -343,6 +343,13 @@ absolute Aussage unbeweisbar. SC-005/006 sind für die vorhandenen Prozess- und
 Retention-Szenarien getestet, keine Garantie bei beliebigen Systemstörungen.
 SC-007 wird durch Nicht-Join und Abbruch getestet; native Shutdown-/Lastmessungen
 stehen aus. Alle früher genannten Mess-/Privacy-Grenzen bleiben bestehen.
+
+FR-012 bleibt zusätzlich offen: Der normale Prozess initialisiert noch keinen
+Runtime-Logger. Die vorhandene `log`-Fassade startet ohne Sink/mit Level Off;
+die instrumentierten Ereignisse belegen deshalb keine ausgegebenen/persistierten
+Laufzeitlogs. Auch der interne Monitor hat keinen qualifizierten Log-Sink.
+Dieser begrenzte UI-Slice fügt keinen Disklogger hinzu. Ein späterer Sink braucht
+eine begrenzte Retention und Tests, damit Crash-Logging die Festplatte nicht füllt.
 
 Keine zusätzlichen Dependencies, Toolchains oder lokalen Release-Profile.
 Vorhandenes gemeinsames target und platzsparende Profile werden wiederverwendet;
