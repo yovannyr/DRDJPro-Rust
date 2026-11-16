@@ -9,6 +9,7 @@ export component CrashReportsWindow inherits Window {
     in property<string> status;
     in property<string> delivery-status;
     in property<string> capture-notice;
+    in property<string> logging-status;
     in property<string> settings-notice;
     in property<string> saved-destination;
     in property<bool> busy:true;
@@ -24,6 +25,7 @@ export component CrashReportsWindow inherits Window {
     VerticalLayout {padding:12px;spacing:8px;
         if root.post-crash:Text {text:"Previous crash reports found. Would you like to send their text? Select a report and choose SEND TEXT or KEEP LOCAL. Closing leaves the decision pending.";color:#ffdd99;wrap:word-wrap;accessible-label:"Post-crash consent request";}
         if root.capture-notice!="":Text {text:root.capture-notice;color:#ffcc88;wrap:word-wrap;accessible-label:"Crash capture status";}
+        Text {text:root.logging-status;color:#bbbbbb;wrap:word-wrap;accessible-label:"Runtime crash log status";}
         Text {text:"Only redacted text is sent. Binary minidumps stay on this computer.";color:#dddddd;wrap:word-wrap;}
         ListView {min-height:130px;vertical-stretch:1;accessible-label:"Saved crash reports";
             for row[index] in root.rows:Rectangle {height:30px;background:root.selected-row==index ? #27556c : (mod(index,2)==0 ? #202020 : #181818);

@@ -1,4 +1,5 @@
 //! Filesystem actor for the report UI. No store operations run on the UI thread.
+use super::runtime_log::{emit, Event as LogEvent};
 use super::{transport::endpoint, CrashReport, CrashSettings, CrashStore, ReportStatus};
 use std::{
     io,
@@ -175,9 +176,14 @@ fn act(store: &CrashStore, request: Request) -> Event {
                     endpoint(&settings.server_url)?;
                 }
                 store.save_settings(&settings)?;
-                log::info!(
-                    "Crash sharing preferences saved; auto text sharing={}",
-                    settings.auto_submit
+                emit(
+                    if settings.auto_submit {
+                        LogEvent::SharingEnabled
+                    } else {
+                        LogEvent::SharingDisabled
+                    },
+                    None,
+                    None,
                 );
                 Ok(("Sharing settings saved".into(), settings.auto_submit))
             }
@@ -210,7 +216,7 @@ fn act(store: &CrashStore, request: Request) -> Event {
                 {
                     return Err(io::Error::other("Report changed or was already submitted"));
                 }
-                log::info!("Crash report sharing declined: {id}");
+                emit(LogEvent::SharingDeclined, Some(&id), None);
                 Ok((
                     "Kept locally. Requests already started cannot be recalled.".into(),
                     false,
@@ -229,7 +235,7 @@ fn act(store: &CrashStore, request: Request) -> Event {
     let (message, upload, successful) = match outcome {
         Ok((message, upload)) => (message, upload, true),
         Err(error) => {
-            log::warn!("Crash report action failed ({:?})", error.kind());
+            emit(LogEvent::ActionFailed, None, Some(error.kind()));
             ("Action failed. Check HTTPS settings or refresh the report; local evidence is retained.".into(), false, false)
         }
     };

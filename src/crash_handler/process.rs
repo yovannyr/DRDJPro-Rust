@@ -1,3 +1,4 @@
+use super::runtime_log::{self, emit, Event, Role};
 use super::{privacy::sanitize_stack, store::Capture, CrashStore};
 use minidumper::{Client, LoopAction, Server, ServerHandler, SocketName};
 use std::{
@@ -220,7 +221,7 @@ impl MonitorGuard {
             }
             let _ = client.send_message(SHUTDOWN, []);
         });
-        log::info!("Crash monitor started");
+        emit(Event::MonitorStarted, None, None);
         Ok(Self {
             #[cfg(windows)]
             error_mode: Some(error_mode),
@@ -268,6 +269,7 @@ impl Drop for MonitorGuard {
         #[cfg(windows)]
         drop(self.error_mode.take()); // Restore before another monitor can acquire ACTIVE.
         ACTIVE.store(false, Ordering::Release);
+        emit(Event::MonitorStopped, None, None);
     }
 }
 
@@ -365,7 +367,7 @@ impl ServerHandler for Handler {
                     .commit()
             });
         if let Err(error) = result {
-            log::error!("Minidump capture failed: {error}");
+            emit(Event::CaptureFailed, None, Some(error.kind()));
         }
         self.dumping.store(false, Ordering::Release);
         if let Ok(mut stack) = self.stack.lock() {
@@ -382,6 +384,7 @@ impl ServerHandler for Handler {
         } else if kind == SHUTDOWN {
             self.stop.store(true, Ordering::Release);
         } else if kind == BEGIN_CAPTURE {
+            emit(Event::CaptureRequested, None, None);
             self.dumping.store(true, Ordering::Release);
         }
     }
@@ -404,8 +407,10 @@ impl ServerHandler for Handler {
 /// connection, stale clients, and a hung native writer have bounded lifetimes.
 pub fn run_monitor(database: &Path, socket: &Path, parent: Option<u32>) -> io::Result<()> {
     let store = CrashStore::open(database.to_owned())?;
+    let _runtime_log = runtime_log::install(store.root(), Role::Monitor).ok();
     store.enforce_limits()?;
     let mut server = Server::with_name(SocketName::Path(socket)).map_err(io::Error::other)?;
+    emit(Event::MonitorReady, None, None);
     let stop = Arc::new(AtomicBool::new(false));
     let connected = Arc::new(AtomicBool::new(false));
     let dumping = Arc::new(AtomicBool::new(false));
@@ -421,6 +426,12 @@ pub fn run_monitor(database: &Path, socket: &Path, parent: Option<u32>) -> io::R
             // Independent of the event loop: even a stuck IPC reader cannot keep
             // a monitor alive after its owning process has disappeared.
             if parent.is_some_and(|pid| !process_alive(pid)) {
+                emit(Event::ParentExited, None, None);
+                // No live audio parent remains. Bound only our wait, never join
+                // the logger; dumping/watchdog deadlines below are unchanged.
+                if !watcher.2.load(Ordering::Acquire) {
+                    let _ = runtime_log::flush(Duration::from_secs(1));
+                }
                 std::process::exit(0);
             }
             if watcher.2.load(Ordering::Acquire) {
@@ -428,6 +439,7 @@ pub fn run_monitor(database: &Path, socket: &Path, parent: Option<u32>) -> io::R
                 // Kill before the client's five-second receive deadline, so no
                 // writer can commit using an expired crash-context pointer.
                 if start.elapsed() > Duration::from_secs(4) {
+                    emit(Event::WatchdogTimeout, None, None);
                     std::process::exit(74);
                 }
             } else {
@@ -455,6 +467,11 @@ pub fn run_monitor(database: &Path, socket: &Path, parent: Option<u32>) -> io::R
         .map_err(io::Error::other);
     stop.store(true, Ordering::Release);
     let _ = watchdog.join();
+    emit(
+        Event::MonitorExited,
+        None,
+        result.as_ref().err().map(io::Error::kind),
+    );
     result
 }
 

@@ -330,9 +330,9 @@ bis zu erfolgreichem Refresh gesperrt. Refresh kann nach Reparatur wiederholen.
 | FR-009 | Monitor vor GUI/Audio gestartet und als Guard bis zum Teardown gehalten. |
 | FR-010 | Main-/Worker-Panics und native Fehler im definierten Probe-Korpus; absolute Crash-Abdeckung offen. |
 | FR-011 | Nichtmodale Post-Crash-Zustimmungsabfrage für Pending ohne gültigen Auto-Modus. |
-| FR-012 | Teilweise: Ereignisaufrufe für Start/Fehler/Speichern/Ablehnen/Löschen/ACK/Retry vorhanden, aber Runtime-Logger/Sink und Log-Retention fehlen. Keine qualifizierte Laufzeit-Logausgabe. |
+| FR-012 | Typisierte Laufzeitereignisse aus App und Monitor mit begrenztem JSONL-Sink und automatisierten Tests (Schritt 5). Best effort: Überlauf, I/O-Fehler und hartes Prozessende können Ereignisse verlieren; Zähler machen unbestätigte/verlorene Einträge sichtbar. |
 | FR-013 | HTTPS-Texttransport implementiert; kein produktiver Endpoint/Auth-Vertrag vorgegeben. |
-| FR-014 | Store begrenzt auf 50 Reports und 500.000.000 echte verwaltete Bytes. |
+| FR-014 | 50 Reports; Reportbudget 499.737.856 Bytes plus 262.144 Bytes reserviert für Logs inklusive Staging. Temporäre Capture-/Metadaten-Dateien sind kein hart begrenzter Gesamtspitzenverbrauch. |
 | FR-015 | Text-Upload gzip im Speicher ohne Archivdateien. |
 | FR-016 | Textpfade vor Persistenz/Anzeige/Upload bereinigt; binäre Dump-Privacy bleibt unqualifiziert, kein Dump-Upload. |
 
@@ -344,7 +344,7 @@ Retention-Szenarien getestet, keine Garantie bei beliebigen Systemstörungen.
 SC-007 wird durch Nicht-Join und Abbruch getestet; native Shutdown-/Lastmessungen
 stehen aus. Alle früher genannten Mess-/Privacy-Grenzen bleiben bestehen.
 
-FR-012 bleibt zusätzlich offen: Der normale Prozess initialisiert noch keinen
+Historischer Stand nach Schritt 4, durch Schritt 5 unten ersetzt: Der normale Prozess initialisiert noch keinen
 Runtime-Logger. Die vorhandene `log`-Fassade startet ohne Sink/mit Level Off;
 die instrumentierten Ereignisse belegen deshalb keine ausgegebenen/persistierten
 Laufzeitlogs. Auch der interne Monitor hat keinen qualifizierten Log-Sink.
@@ -377,3 +377,66 @@ Native-Befehl einen fehlgeschlagenen ersten; die gesamte Workspace-Suite bleibt
 danach Pflicht. Plattformweite Nachweise folgen im separaten gestapelten Draft-PR
 gegen `codex/spec31-itunes-library`, in den der Upload-PR #4 bereits gemergt wurde.
 Keine native/visuelle oder produktive Serverabnahme wird aus diesen Tests abgeleitet.
+
+## Schritt 5 — begrenzter Runtime-Logger
+
+App-Startup und separater Monitor installieren einen dedizierten Crash-Logger.
+Er ersetzt keinen vorhandenen globalen `log`-Logger und sammelt keine beliebigen
+Nachrichten aus Audio, Bibliotheken oder Fehlertexten. Feste Ereignistypen erfassen
+Start/Stop, Capture, Store, Consent, Löschen, Upload-ACK/Retry und Watchdog.
+JSONL enthält nur Schema, Zeit, PID, Rolle, Ereignis, optional validierte
+32-stellige Report-ID, grobe I/O-Kategorie und Zähler. Keine Pfade, URLs, Tokens,
+Panic-Texte oder Stacks werden übernommen; Logs werden nicht hochgeladen.
+
+Eine feste Queue mit 256 Einträgen übergibt ohne Producer-Allokation oder
+Dateizugriff an einen Writer (256-KiB-Stack, 64er-Batches, 100-ms-Poll).
+Die Queue ist lock-free, nicht garantiert wait-free. Native Signal-/Exception-
+und Audio-Callbacks verwenden sie nicht. Dateiarbeit, Synchronisierung und
+Windows-Retries erfolgen ausschließlich im Writer. Windows-Sperren erhalten
+höchstens fünf zusätzliche Wartephasen (zusammen 155 ms pro Dateioperation);
+danach wird der Fehler gezählt. Ein blockierender OS-Aufruf selbst bleibt
+außerhalb dieser Zeitgrenze.
+
+`runtime-logs/runtime.jsonl`, `runtime.1.jsonl`, `runtime.2.jsonl` sind jeweils
+auf 65.536 Bytes begrenzt: 192 KiB dauerhaft, maximal 256 KiB verwaltete
+logische Logdaten einschließlich einer Staging-Datei. `runtime.lock` ist leer.
+Dateisystem-Blöcke/Metadaten und fremde Dateien zählen nicht zu dieser Grenze.
+Die prozessübergreifende Sperre liegt vor Recovery, Staging und Rotation;
+atomarer Austausch verhindert Anhängen in externe Hardlinks. Symlinks/Reparse-
+Punkte werden abgewiesen. Unix: Verzeichnis 0700, JSONL-/Stagingdateien 0600; Windows nutzt
+wie der Store die geerbten Rechte des Benutzer-AppData-Verzeichnisses.
+Nur reservierte Namen werden bereinigt; unbekannte Dateien bleiben erhalten.
+Ungültige/übergroße eigene Logs und unterbrochene eigene Staging-Dateien werden
+verworfen und gezählt. Ein nicht verfügbarer Sink beendet die App nicht.
+
+Report-Retention reserviert das volle 256-KiB-Logbudget innerhalb der bisherigen
+500.000.000 Bytes. Die Grenze gilt für verwaltete Reportdaten plus Logreserve;
+bereits bestehendes Capture-/Metadaten-Staging ist keine harte Gesamtspitzengrenze.
+Der Reportmanager zeigt atomar gelesene Zustands-/Verlust-/Fehler-/Recovery-Zähler,
+ohne Dateizugriff im UI-Poll. „Unconfirmed/dropped“ ist keine exakte Zahl sicher
+verlorener Einträge: Ein Batch kann vor einem I/O-Fehler teilweise persistiert sein.
+
+Mehrere/reihenweise Startup-Guards teilen denselben Prozess-Hub; nach letzter
+Freigabe ist eine erneute Anmeldung am selben Root möglich. Kein Root-Wechsel
+im laufenden Prozess. Letzter Guard fordert einen maximal 200-ms-Drain an, ohne
+Thread-Join; der Monitor versucht nach Elternende ohne laufende Capture einen
+maximal einsekündigen Drain. Das sind Wartefristen, keine Haltbarkeitsgarantie.
+Ein hartes Prozessende kann die letzten Queue-Einträge verlieren. Capture und
+Upload funktionieren unabhängig vom Log-Sink. Visuelle/manuelle Abnahme bleibt offen.
+
+Keine neuen Dependencies, Toolchains, lokalen Release-Builds oder separaten
+target-Verzeichnisse. Tests laufen seriell mit vorhandenem gemeinsamem Cache.
+
+Lokale Prüfungen (Windows, 16.11.2026): 46 Crash-Handler-Tests, alle 1718
+Libtests sowie 13 bestehende Crash-Prozess- und fünf neue Logging-Prozesstests
+bestanden. Letztere prüfen wiederholte Besitzer, Hostlogger-Koexistenz,
+prozessübergreifende Rotation, echte App-/Monitor-Capture-Ereignisse und
+unverhinderten Startup bei blockiertem Sink. Unit-Tests decken außerdem
+Producer-Allokationsfreiheit, Überlauf, begrenztes Warten, Recovery, Retention,
+Hardlinks und reserviertes Budget ab; Unix-Symlink-/Dateimodustests laufen in CI.
+Statisches unabhängiges Review durch GPT-6.1 Sol, medium, ohne offene Befunde.
+`cargo +1.100.0 clippy --workspace --locked --all-targets --target
+x86_64-pc-windows-msvc -- -D warnings`, `cargo +1.100.0 fmt --all -- --check`
+und `git diff --check`: Exit 0. Plattformweite CI-Nachweise werden im zugehörigen
+PR ausgewiesen. C: vor den Checks 45,72 GiB frei, danach etwa 45,42 GiB;
+Systemmessung, kein isolierter Cargo-Verbrauch. Keine Cache-Löschung.
