@@ -469,3 +469,140 @@ fn timeout_retains_queue_and_reports_failure() {
     );
     assert_eq!(status(&store, &report.id), ReportStatus::Queued);
 }
+
+#[test]
+fn normal_ui_startup_retries_only_consented_reports_over_real_https() {
+    i_slint_backend_testing::init_no_event_loop();
+    let server = Server::start(acknowledged);
+    let (_temp, store) = store(&server, false);
+    let queued = store.insert("authorized frame").unwrap();
+    store.queue_report(&queued.id).unwrap();
+    let pending = store.insert("needs consent").unwrap();
+    let declined = store.insert("local only").unwrap();
+    store
+        .set_status(&declined.id, ReportStatus::Declined)
+        .unwrap();
+    let app = crate::AppWindow::new().unwrap();
+    app.set_left_playing(true);
+    app.set_left_position(42.);
+    let session = super::super::ui::testing_wire(
+        &app,
+        store.clone(),
+        std::rc::Rc::new(|store| spawn_with(store, trusted())),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while status(&store, &queued.id) != ReportStatus::Submitted {
+        session.testing_tick();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Startup retry did not finish"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+    while !session
+        .testing_delivery_status()
+        .contains("Server-confirmed: 1")
+        || !session.testing_idle()
+    {
+        session.testing_tick();
+        assert!(std::time::Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(server.count(), 1);
+    assert_eq!(status(&store, &pending.id), ReportStatus::Pending);
+    assert_eq!(status(&store, &declined.id), ReportStatus::Declined);
+    assert!(app.get_left_playing());
+    assert_eq!(app.get_left_position(), 42.);
+    // Refresh failure after a real ACK must retain the known delivery result.
+    // Resolve both paths within this test's explicitly owned temporary directory.
+    let parent = std::fs::canonicalize(_temp.path()).unwrap();
+    assert_eq!(store.root().parent(), Some(parent.as_path()));
+    let moved = parent.join("unavailable");
+    assert!(moved.starts_with(&parent));
+    fs::rename(store.root(), moved).unwrap();
+    app.invoke_show_crash_reports();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while !session.testing_store_failed() {
+        session.testing_tick();
+        assert!(std::time::Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(session
+        .testing_delivery_status()
+        .contains("Server-confirmed: 1"));
+    session.shutdown();
+}
+
+#[test]
+fn main_window_shutdown_cancels_upload_while_filesystem_actor_is_blocked() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (entered, received) = mpsc::sync_channel(1);
+    let (release, gate) = mpsc::sync_channel(1);
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let server = Server::start(move |request| {
+        if calls.fetch_add(1, Ordering::AcqRel) == 0 {
+            entered.send(()).unwrap();
+            gate.recv_timeout(Duration::from_secs(15)).unwrap();
+        }
+        acknowledged(request)
+    });
+    let (_temp, store) = store(&server, false);
+    for _ in 0..2 {
+        let report = store.insert("frame").unwrap();
+        store.queue_report(&report.id).unwrap();
+    }
+    let task = spawn_with(store.clone(), trusted()).unwrap();
+    let cancelled = Arc::clone(&task.cancel);
+    received.recv_timeout(Duration::from_secs(15)).unwrap();
+    let lock = fs::OpenOptions::new()
+        .write(true)
+        .open(store.root().join(".lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let watchdog_lock = lock.try_clone().unwrap();
+    let (unlock, wait_unlock) = mpsc::sync_channel(1);
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let timeout = Arc::clone(&timed_out);
+    let watchdog = thread::spawn(move || {
+        if wait_unlock.recv_timeout(Duration::from_secs(15)).is_err() {
+            timeout.store(true, Ordering::Release);
+        }
+        watchdog_lock.unlock().unwrap();
+    });
+    let app = crate::AppWindow::new().unwrap();
+    // The actor starts with an initial FS scan, which cannot acquire the held lock.
+    let session = super::super::ui::testing_own_upload(&app, store.clone(), task);
+    app.invoke_close_crash_reports();
+    assert!(cancelled.load(Ordering::Acquire));
+    unlock.send(()).unwrap();
+    watchdog.join().unwrap();
+    assert!(
+        !timed_out.load(Ordering::Acquire),
+        "Shutdown waited for the FS actor"
+    );
+    release.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Ok(guard) = store.try_upload_lock() {
+            drop(guard);
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "Upload did not stop");
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        server.count(),
+        1,
+        "No second queued report may start after shutdown"
+    );
+    assert_eq!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .filter(|r| r.status == ReportStatus::Queued)
+            .count(),
+        1
+    );
+    session.shutdown();
+}

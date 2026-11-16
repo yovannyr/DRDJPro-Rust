@@ -1,0 +1,59 @@
+import {Button,CheckBox,LineEdit,ListView,TextEdit} from "std-widgets.slint";
+export struct CrashReportRow {time:string,version:string,state:string}
+export component CrashReportsWindow inherits Window {
+    title:"Crash reports and sharing";
+    preferred-width:760px;preferred-height:720px;min-width:620px;min-height:580px;background:#151515;
+    in property<[CrashReportRow]> rows;
+    in-out property<int> selected-row:-1;
+    in property<string> details:"No report selected";
+    in property<string> status;
+    in property<string> delivery-status;
+    in property<string> capture-notice;
+    in property<string> settings-notice;
+    in property<string> saved-destination;
+    in property<bool> busy:true;
+    in property<bool> available:false;
+    in property<bool> uploading:false;
+    in property<bool> endpoint-ready:false;
+    in property<bool> selected-submitted:false;
+    in property<bool> post-crash:false;
+    in-out property<string> endpoint;
+    in-out property<bool> automatic:false;
+    callback selected();callback send-selected();callback keep-local();callback delete-selected();
+    callback retry();callback refresh();callback save-settings();callback dismiss();
+    VerticalLayout {padding:12px;spacing:8px;
+        if root.post-crash:Text {text:"Previous crash reports found. Would you like to send their text? Select a report and choose SEND TEXT or KEEP LOCAL. Closing leaves the decision pending.";color:#ffdd99;wrap:word-wrap;accessible-label:"Post-crash consent request";}
+        if root.capture-notice!="":Text {text:root.capture-notice;color:#ffcc88;wrap:word-wrap;accessible-label:"Crash capture status";}
+        Text {text:"Only redacted text is sent. Binary minidumps stay on this computer.";color:#dddddd;wrap:word-wrap;}
+        ListView {min-height:130px;vertical-stretch:1;accessible-label:"Saved crash reports";
+            for row[index] in root.rows:Rectangle {height:30px;background:root.selected-row==index ? #27556c : (mod(index,2)==0 ? #202020 : #181818);
+                HorizontalLayout {padding:4px;spacing:8px;
+                    Text {text:row.time;color:#eeeeee;horizontal-stretch:2;overflow:elide;}
+                    Text {text:row.version;color:#cccccc;horizontal-stretch:1;overflow:elide;}
+                    Text {text:row.state;color:#dddddd;horizontal-stretch:1;overflow:elide;}
+                }
+                TouchArea {clicked=>{root.selected-row=index;root.selected();}}
+            }
+        }
+        TextEdit {text:root.details;read-only:true;min-height:140px;vertical-stretch:1;accessible-label:"Crash report details and redacted stack";}
+        HorizontalLayout {
+            Button {text:"SEND TEXT";accessible-label:"Authorize and send selected crash text";enabled:root.available&&!root.busy&&!root.uploading&&root.endpoint-ready&&root.selected-row>=0&&!root.selected-submitted;clicked=>{root.send-selected();}}
+            Button {text:"KEEP LOCAL";accessible-label:"Decline sharing selected crash report";enabled:root.available&&!root.busy&&root.selected-row>=0&&!root.selected-submitted;clicked=>{root.keep-local();}}
+            Button {text:"DELETE LOCAL";accessible-label:"Delete selected local crash report and dump";enabled:root.available&&!root.busy&&root.selected-row>=0;clicked=>{root.delete-selected();}}
+            Button {text:"REFRESH";enabled:!root.busy;clicked=>{root.refresh();}}
+        }
+        Text {text:"HTTPS destination (save before sending)";color:#cccccc;}
+        LineEdit {text <=> root.endpoint;enabled:root.available&&!root.busy;accessible-label:"Crash report HTTPS destination";}
+        Text {text:"Saved destination: " + root.saved-destination;color:#aaaaaa;wrap:word-wrap;accessible-label:"Saved crash upload destination";}
+        CheckBox {text:"Automatically send pending and future text crash reports";checked <=> root.automatic;enabled:root.available&&!root.busy;accessible-label:"Opt in to automatic text crash sharing";}
+        Text {text:"Queued reports retain their prior consent even with auto-sharing off. KEEP LOCAL revokes future attempts. A request already started cannot be recalled.";color:#bbbbbb;wrap:word-wrap;}
+        if root.settings-notice!="":Text {text:root.settings-notice;color:#ffcc88;wrap:word-wrap;accessible-label:"Crash sharing settings notice";}
+        HorizontalLayout {
+            Button {text:"SAVE SETTINGS";enabled:root.available&&!root.busy;clicked=>{root.save-settings();}}
+            Button {text:"PROCESS QUEUE";accessible-label:"Retry authorized crash reports";enabled:root.available&&!root.busy&&!root.uploading&&root.endpoint-ready;clicked=>{root.retry();}}
+            Button {text:"CLOSE";accessible-label:"Close crash reports without changing consent";clicked=>{root.dismiss();}}
+        }
+        Text {text:root.status;color:#eeeeee;wrap:word-wrap;accessible-label:"Crash report action status";}
+        if root.delivery-status!="":Text {text:root.delivery-status;color:#cccccc;wrap:word-wrap;accessible-label:"Last crash upload result";}
+    }
+}
