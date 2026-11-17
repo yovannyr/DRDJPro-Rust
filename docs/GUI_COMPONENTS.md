@@ -1,5 +1,20 @@
 # GUI component inventory and reference baseline
 
+## Embedded cover artwork (2026-11-17)
+
+The Modern A/B track headers and platters display embedded PNG/JPEG cover images.
+The shared Library table has a persistent, movable/hideable Cover column; its
+thumbnail fits the unchanged 22px row with `image-fit: contain`, preserving the
+whole image and aspect ratio. Header Cover is not sortable. Files without usable
+artwork retain the empty/background fallback; unsupported C/D slots stay empty.
+
+Artwork probing and decoding run on a separate bounded worker, outside track
+preparation and realtime callbacks. A shared RAM-only thumbnail cache serves
+decks and visible table rows; no extracted image files are written. Existing
+11-column preferences retain their order and hidden state when adding Cover.
+Resource bounds, checks and remaining native acceptance are documented in
+[cover-artwork.md](cover-artwork.md).
+
 ## Crash reports and sharing (Spec 26, 2026-11-16)
 
 `REPORTS` opens an independent report window. On GUI/demo startup, pending

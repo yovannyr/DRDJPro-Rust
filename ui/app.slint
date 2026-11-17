@@ -376,7 +376,9 @@ export component AppWindow inherits Window {
     in property <string> right-artist;
     in property <string> left-musical-key;
     in property <string> right-musical-key;
+    in property <image> left-cover-image;
     in property <color> left-cover: #00000000;
+    in property <image> right-cover-image;
     in property <color> right-cover: #00000000;
     in property <string> left-time: "SIMULATION";
     in property <string> right-time: "SIMULATION";
@@ -996,6 +998,7 @@ export component AppWindow inherits Window {
             deck-a-platter-position: root.left-position / 100;
             deck-a-platter-bpm: root.left-platter-bpm;
             deck-a-platter-pitch-percent: root.left-pitch-percent;
+            deck-a-cover-image: root.left-cover-image;
             deck-a-cover: root.left-cover;
             deck-b-title: root.right-title;
             deck-b-artist: root.right-artist;
@@ -1042,6 +1045,7 @@ export component AppWindow inherits Window {
             deck-b-platter-position: root.right-position / 100;
             deck-b-platter-bpm: root.right-platter-bpm;
             deck-b-platter-pitch-percent: root.right-pitch-percent;
+            deck-b-cover-image: root.right-cover-image;
             deck-b-cover: root.right-cover;
             deck-c-title: root.deck-c-data.title;
             deck-c-bpm: root.deck-c-data.bpm;

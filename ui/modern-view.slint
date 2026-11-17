@@ -16,6 +16,7 @@ export component ModernView inherits Rectangle {
     in property <int> external-drop-deck: -1;
 
     // Deck A (or left pair)
+    in property <image> deck-a-cover-image;
     in property <color> deck-a-cover: #000000;
     in property <string> deck-a-title: "";
     in property <string> deck-a-artist: "";
@@ -64,6 +65,7 @@ export component ModernView inherits Rectangle {
     in property <float> deck-a-platter-pitch-percent: 0.0;
 
     // Deck B (or right pair)
+    in property <image> deck-b-cover-image;
     in property <color> deck-b-cover: #000000;
     in property <string> deck-b-title: "";
     in property <string> deck-b-artist: "";
@@ -112,6 +114,7 @@ export component ModernView inherits Rectangle {
     in property <float> deck-b-platter-pitch-percent: 0.0;
 
     // Deck C (4-slot only)
+    in property <image> deck-c-cover-image;
     in property <color> deck-c-cover: #000000;
     in property <string> deck-c-title: "";
     in property <string> deck-c-bpm: "";
@@ -139,6 +142,7 @@ export component ModernView inherits Rectangle {
         in property <float> deck-c-detail-loop-end: -1;
 
     // Deck D (4-slot only)
+    in property <image> deck-d-cover-image;
     in property <color> deck-d-cover: #000000;
     in property <string> deck-d-title: "";
     in property <string> deck-d-bpm: "";
@@ -210,6 +214,7 @@ export component ModernView inherits Rectangle {
             external-drop-deck: root.external-drop-deck;
             crossfader: root.crossfader;
             left-accent: ModernTheme.green;
+            left-cover-image: root.deck-a-cover-image;
             left-cover: root.deck-a-cover;
             left-title: root.deck-a-title;
             left-artist: root.deck-a-artist;
@@ -252,6 +257,7 @@ export component ModernView inherits Rectangle {
             left-platter-bpm: root.deck-a-platter-bpm;
             left-platter-pitch-percent: root.deck-a-platter-pitch-percent;
             right-accent: ModernTheme.blue;
+            right-cover-image: root.deck-b-cover-image;
             right-cover: root.deck-b-cover;
             right-title: root.deck-b-title;
             right-artist: root.deck-b-artist;
@@ -311,6 +317,7 @@ export component ModernView inherits Rectangle {
             show-crossfader: false;
             crossfader: root.crossfader;
             left-accent: ModernTheme.purple;
+            left-cover-image: root.deck-c-cover-image;
             left-cover: root.deck-c-cover;
             left-title: root.deck-c-title;
             left-bpm: root.deck-c-bpm;
@@ -333,6 +340,7 @@ export component ModernView inherits Rectangle {
             left-detail-loop-start: root.deck-c-detail-loop-start;
             left-detail-loop-end: root.deck-c-detail-loop-end;
             right-accent: ModernTheme.orange;
+            right-cover-image: root.deck-d-cover-image;
             right-cover: root.deck-d-cover;
             right-title: root.deck-d-title;
             right-bpm: root.deck-d-bpm;
