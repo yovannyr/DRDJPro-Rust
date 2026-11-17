@@ -3,7 +3,7 @@ use crate::looping::{FrameLoop, PcmSource};
 use rodio::Source;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -44,6 +44,10 @@ struct Settings {
     scratch: bool,
     scratch_serial: u64,
     scratch_target: u64,
+    external: bool,
+    external_step: i64,
+    external_generation: u64,
+    external_command_ns: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RenderStamp {
@@ -56,6 +60,14 @@ pub(crate) struct RenderControl {
     scratch: AtomicBool,
     scratch_serial: AtomicU64,
     scratch_target: AtomicU64,
+    external: AtomicBool,
+    external_step: AtomicI64,
+    external_expired: AtomicU64,
+    external_generation: AtomicU64,
+    external_command_ns: AtomicU64,
+    external_clock_base: std::time::Instant,
+    #[cfg(test)]
+    external_test_now: AtomicU64,
     format: RenderFormat,
     sequence: AtomicU64,
     rate: AtomicU32,
@@ -108,6 +120,14 @@ impl RenderControl {
             scratch: AtomicBool::new(false),
             scratch_serial: AtomicU64::new(0),
             scratch_target: AtomicU64::new(0),
+            external: AtomicBool::new(false),
+            external_step: AtomicI64::new(0),
+            external_expired: AtomicU64::new(u64::MAX),
+            external_generation: AtomicU64::new(0),
+            external_command_ns: AtomicU64::new(0),
+            external_clock_base: std::time::Instant::now(),
+            #[cfg(test)]
+            external_test_now: AtomicU64::new(u64::MAX),
             format,
             sequence: AtomicU64::new(0),
             rate: AtomicU32::new(rate),
@@ -173,13 +193,17 @@ impl RenderControl {
     }
     /// Single control-plane writer; signed source-time motion, no audio-thread allocation.
     pub fn scratch_touch(&self, held: bool) {
-        let target = if !held && self.scratching() {
+        let target = if !held && self.scratching() && !self.external.load(Ordering::SeqCst) {
             self.scratch_target.load(Ordering::SeqCst)
         } else {
             self.current_units() as u64
         };
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.scratch.store(held, Ordering::SeqCst);
+        self.external.store(false, Ordering::SeqCst);
+        if held {
+            self.external_generation.fetch_add(1, Ordering::SeqCst);
+        }
         self.scratch_target.store(target, Ordering::SeqCst);
         self.scratch_serial.fetch_add(1, Ordering::SeqCst);
         self.trigger_at.store(0, Ordering::SeqCst);
@@ -209,6 +233,80 @@ impl RenderControl {
     /// Control-plane touch state, independent of the transport pause flag.
     pub fn scratching(&self) -> bool {
         self.scratch.load(Ordering::SeqCst)
+    }
+    /// Absolute DVS anchor and continuous signed velocity; no source replacement.
+    /// Called by the sole control-plane writer after validating DVS ownership.
+    #[cfg(any(feature = "dvs-xwax", test))]
+    pub fn external_position(&self, seconds: f64, speed: f64) {
+        let end = self.format.frames as u64 * u64::from(self.format.output_rate);
+        let target =
+            seconds * f64::from(self.format.source_rate) * f64::from(self.format.output_rate);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+        self.scratch_target
+            .store(target.clamp(0., end as f64) as u64, Ordering::SeqCst);
+        self.external.store(true, Ordering::SeqCst);
+        self.external_command_ns
+            .store(self.external_now(), Ordering::SeqCst);
+        self.external_step.store(
+            (speed * f64::from(self.format.source_rate)).round() as i64,
+            Ordering::SeqCst,
+        );
+        self.scratch_serial.fetch_add(1, Ordering::SeqCst);
+        self.sequence.fetch_add(1, Ordering::SeqCst);
+    }
+    #[cfg(any(feature = "dvs-xwax", test))]
+    pub fn external_active(&self) -> bool {
+        self.scratching() && self.external.load(Ordering::SeqCst)
+    }
+    #[cfg(any(feature = "dvs-xwax", test))]
+    pub fn external_expired(&self) -> bool {
+        self.external_active()
+            && self.external_expired.load(Ordering::Acquire)
+                == self.external_generation.load(Ordering::SeqCst)
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn external_speed(&self) -> Option<f64> {
+        (self.external_active() && !self.external_expired()).then(|| {
+            self.external_step.load(Ordering::SeqCst) as f64 / f64::from(self.format.source_rate)
+        })
+    }
+    fn external_now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let now = self.external_test_now.load(Ordering::Relaxed);
+            if now != u64::MAX {
+                return now;
+            }
+        }
+        self.external_clock_base
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64
+    }
+    #[cfg(test)]
+    pub fn test_external_time(&self, nanoseconds: u64) {
+        self.external_test_now.store(nanoseconds, Ordering::Relaxed);
+    }
+    /// Stop only our external overlay, preserving a later manual takeover.
+    #[cfg(any(feature = "dvs-xwax", test))]
+    pub fn external_cancel(&self) {
+        if self.external_active() {
+            let target = self.current_units() as u64;
+            self.sequence.fetch_add(1, Ordering::SeqCst);
+            self.scratch.store(false, Ordering::SeqCst);
+            self.scratch_target.store(target, Ordering::SeqCst);
+            self.external.store(false, Ordering::SeqCst);
+            self.paused.store(true, Ordering::SeqCst);
+            self.scratch_serial.fetch_add(1, Ordering::SeqCst);
+            self.trigger_at.store(0, Ordering::SeqCst);
+            self.seek_units.store(target, Ordering::SeqCst);
+            self.seek_ns.store(
+                self.time_at(u128::from(target)).as_nanos() as u64,
+                Ordering::SeqCst,
+            );
+            self.seek_serial.fetch_add(1, Ordering::SeqCst);
+            self.sequence.fetch_add(1, Ordering::SeqCst);
+        }
     }
     /// Momentary reverse overlay; the published source timeline keeps moving forward.
     pub fn censor(&self, held: bool) {
@@ -265,6 +363,7 @@ impl RenderControl {
             });
         self.sequence.fetch_add(1, Ordering::SeqCst);
         self.scratch.store(false, Ordering::SeqCst);
+        self.external.store(false, Ordering::SeqCst);
         self.censor.store(false, Ordering::SeqCst);
         self.trigger_at.store(0, Ordering::SeqCst);
         self.rate.store(rate, Ordering::SeqCst);
@@ -311,6 +410,10 @@ impl RenderControl {
             scratch: self.scratch.load(Ordering::SeqCst),
             scratch_serial: self.scratch_serial.load(Ordering::SeqCst),
             scratch_target: self.scratch_target.load(Ordering::SeqCst),
+            external: self.external.load(Ordering::SeqCst),
+            external_step: self.external_step.load(Ordering::SeqCst),
+            external_generation: self.external_generation.load(Ordering::SeqCst),
+            external_command_ns: self.external_command_ns.load(Ordering::SeqCst),
         };
         // Do not spin on the real-time path: an overlapping command is retried next frame.
         (self.sequence.load(Ordering::SeqCst) == first).then_some(settings)
@@ -400,6 +503,15 @@ pub(crate) struct DeckRenderer {
     reverse_exhausted: bool,
     scratch_serial: u64,
     scratch_remaining: u32,
+    external_live: bool,
+    external_clock_remaining: u8,
+    external_anchor_ns: u64,
+    external_frames: u64,
+    external_error: i128,
+    external_correction: u32,
+    external_fade: u32,
+    external_fade_frames: u32,
+    external_offsets: [f32; 2],
     handoff: Option<Handoff>,
     keylock: Option<Arc<drdj_keylock::PreparedKeylock>>,
     keylock_rate: u32,
@@ -432,6 +544,15 @@ impl DeckRenderer {
             reverse_exhausted: false,
             scratch_serial: 0,
             scratch_remaining: 0,
+            external_live: false,
+            external_clock_remaining: 0,
+            external_anchor_ns: 0,
+            external_frames: 0,
+            external_error: 0,
+            external_correction: 0,
+            external_fade: 0,
+            external_fade_frames: (rate / 200).max(2),
+            external_offsets: [0.; 2],
             handoff: None,
             keylock: None,
             keylock_rate: rate,
@@ -502,13 +623,83 @@ impl DeckRenderer {
         let prior_seek = self.applied_seek;
         let prior_phase = self.phase;
         let prior_censor = self.settings.censor;
+        let prior_external = self.settings.external;
+        let prior_external_generation = self.settings.external_generation;
         if let Some(settings) = self.control.read(Some(self.settings.sequence)) {
             self.settings = settings;
         }
         let settings = self.settings;
         if settings.scratch_serial != self.scratch_serial {
             self.scratch_serial = settings.scratch_serial;
-            self.scratch_remaining = (self.output_rate / 30).max(1);
+            if settings.external && settings.scratch {
+                let now = self.control.external_now();
+                let fresh_generation =
+                    !prior_external || prior_external_generation != settings.external_generation;
+                if fresh_generation {
+                    self.external_anchor_ns = now;
+                    self.external_frames = 0;
+                }
+                // Predict the incoming anchor at this output frame, including
+                // frames rendered ahead in a large native output callback.
+                let render_ns = i128::from(self.external_anchor_ns)
+                    + i128::from(self.external_frames) * 1_000_000_000
+                        / i128::from(self.output_rate);
+                let delta_ns = render_ns - i128::from(settings.external_command_ns);
+                let prediction =
+                    (delta_ns as f64 * settings.external_step as f64 * f64::from(self.output_rate)
+                        / 1_000_000_000.0)
+                        .round() as i128;
+                let end =
+                    i128::from(self.control.format.frames as u64) * i128::from(self.output_rate);
+                let target = (i128::from(settings.scratch_target) + prediction).clamp(0, end);
+                let error = target - self.phase as i128;
+                let jump_limit =
+                    i128::from(self.control.format.source_rate) * i128::from(self.output_rate) / 40;
+                let revoked = self.control.external_expired.load(Ordering::Acquire)
+                    == settings.external_generation;
+                self.external_live =
+                    !revoked && now.saturating_sub(settings.external_command_ns) < 50_000_000;
+                self.external_clock_remaining = 0;
+                if !self.external_live {
+                    self.control
+                        .external_expired
+                        .store(settings.external_generation, Ordering::Release);
+                    self.external_correction = 0;
+                    self.external_error = 0;
+                } else if fresh_generation || error.abs() > jump_limit {
+                    // Needle jumps seek directly; blend from the prior output
+                    // sample rather than sweeping intervening track contents.
+                    self.phase = target as u128;
+                    self.external_error = 0;
+                    self.external_correction = 0;
+                    self.external_fade = self.external_fade_frames;
+                } else {
+                    self.external_error = error;
+                    self.external_correction = (self.output_rate / 200).max(1);
+                }
+            } else {
+                self.scratch_remaining = (self.output_rate / 30).max(1);
+                self.external_live = false;
+                self.external_fade = 0;
+            }
+        }
+        if settings.external
+            && settings.scratch
+            && self.external_live
+            && self.external_clock_remaining == 0
+        {
+            self.external_clock_remaining = 64;
+            if self
+                .control
+                .external_now()
+                .saturating_sub(settings.external_command_ns)
+                >= 50_000_000
+            {
+                self.external_live = false;
+                self.control
+                    .external_expired
+                    .store(settings.external_generation, Ordering::Release);
+            }
         }
         if self.applied_seek != settings.seek_serial {
             if let Some(handoff) = &mut self.handoff {
@@ -516,7 +707,9 @@ impl DeckRenderer {
                     handoff.elapsed = handoff.frames;
                 }
             }
-            self.phase = u128::from(settings.seek_units);
+            if !settings.external || !settings.scratch {
+                self.phase = u128::from(settings.seek_units);
+            }
             self.applied_seek = settings.seek_serial;
         }
         if !settings.paused
@@ -574,8 +767,13 @@ impl Iterator for DeckRenderer {
             self.phase
         };
         let scratch_moving = scratch
-            && self.scratch_remaining > 0
-            && self.phase != u128::from(self.settings.scratch_target);
+            && if self.settings.external {
+                self.external_live
+                    && self.settings.external_step != 0
+                    && !(self.settings.external_step < 0 && self.phase == 0)
+            } else {
+                self.scratch_remaining > 0 && self.phase != u128::from(self.settings.scratch_target)
+            };
         let paused = if scratch {
             !scratch_moving
         } else {
@@ -641,6 +839,22 @@ impl Iterator for DeckRenderer {
             })
         };
         let mut value = value;
+        if self.settings.external && self.external_fade > 0 && !paused && !finished {
+            if let Some(offset) = self.external_offsets.get_mut(usize::from(self.channel)) {
+                if self.external_fade == self.external_fade_frames {
+                    let previous = self
+                        .control
+                        .last_sample
+                        .get(usize::from(self.channel))
+                        .map(|sample| f32::from_bits(sample.load(Ordering::Relaxed)))
+                        .unwrap_or(0.);
+                    *offset = previous - value;
+                }
+                let weight =
+                    (self.external_fade - 1) as f32 / (self.external_fade_frames - 1) as f32;
+                value += *offset * weight;
+            }
+        }
         if let Some(handoff) = &mut self.handoff {
             if handoff.elapsed < handoff.frames && !paused && !finished && !scratch {
                 if let Some(offset) = handoff.offsets.get_mut(usize::from(self.channel)) {
@@ -668,7 +882,22 @@ impl Iterator for DeckRenderer {
                 handoff.elapsed = handoff.elapsed.saturating_add(1).min(handoff.frames);
             }
             self.channel = 0;
-            if scratch {
+            self.external_fade = self.external_fade.saturating_sub(1);
+            if scratch && self.settings.external {
+                self.external_frames = self.external_frames.saturating_add(1);
+                self.external_clock_remaining = self.external_clock_remaining.saturating_sub(1);
+                if self.external_live {
+                    let mut step = i128::from(self.settings.external_step);
+                    if self.external_correction > 0 {
+                        let correction = self.external_error / i128::from(self.external_correction);
+                        step += correction;
+                        self.external_error -= correction;
+                        self.external_correction -= 1;
+                    }
+                    self.phase = (self.phase as i128 + step).clamp(0, end as i128) as u128;
+                    self.publish_position();
+                }
+            } else if scratch {
                 if self.scratch_remaining > 0 {
                     let target = u128::from(self.settings.scratch_target);
                     let remaining = u128::from(self.scratch_remaining);
@@ -723,6 +952,229 @@ impl Source for DeckRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dvs_absolute_targets_seek_dezipper_and_preserve_manual_takeover_without_allocations() {
+        let pcm = PcmSource::new(
+            1,
+            48000,
+            (0..96000).map(|frame| frame as f32 / 96000.0).collect(),
+        );
+        let control = RenderControl::new(
+            48000,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::ZERO,
+                frame: 0,
+            },
+            RenderFormat {
+                source_rate: 48000,
+                output_rate: 48000,
+                frames: 96000,
+            },
+        );
+        let mut render = DeckRenderer::new(pcm, Arc::clone(&control), 1, 48000);
+        control.test_external_time(0);
+        render.next();
+        control.scratch_touch(true);
+        control.external_position(1.0, 1.0);
+        let allocations = crate::looping::counted_allocations(|| {
+            for _ in 0..240 {
+                render.next();
+            }
+        });
+        assert_eq!(allocations, 0);
+        assert!((control.position().as_secs_f64() - 1.005).abs() < 0.0001);
+        control.test_external_time(5_000_000);
+        control.external_position(0.5, -1.0);
+        let first = render.next().unwrap();
+        let last = render.by_ref().take(239).last().unwrap();
+        assert!(first > last);
+        assert!((control.position().as_secs_f64() - 0.495).abs() < 0.0001);
+        control.external_cancel();
+        assert!(control.is_paused());
+        assert!(!control.external_active());
+        assert!(render.by_ref().take(240).all(|sample| sample == 0.0));
+        control.scratch_touch(true); // manual owner
+        control.external_cancel();
+        assert!(
+            control.scratching(),
+            "DVS cleanup must preserve a manual hold"
+        );
+    }
+    #[test]
+    fn dvs_continuous_speed_survives_irregular_control_intervals_and_expires_silent() {
+        for speed in [1.0, 0.95, -1.0] {
+            let pcm = PcmSource::new(1, 48000, vec![0.5; 240000]);
+            let control = RenderControl::new(
+                48000,
+                true,
+                None,
+                SeekFrame {
+                    time: Duration::ZERO,
+                    frame: 0,
+                },
+                RenderFormat {
+                    source_rate: 48000,
+                    output_rate: 48000,
+                    frames: 240000,
+                },
+            );
+            let mut render = DeckRenderer::new(pcm, Arc::clone(&control), 1, 48000);
+            control.test_external_time(0);
+            render.next();
+            control.scratch_touch(true);
+            let mut elapsed = 0;
+            let allocations = crate::looping::counted_allocations(|| {
+                for frames in [240, 480, 768, 432, 768, 240, 480, 768] {
+                    control.test_external_time(elapsed as u64 * 1_000_000_000 / 48000);
+                    control.external_position(1.0 + elapsed as f64 / 48000.0 * speed, speed);
+                    for _ in 0..frames {
+                        assert!(
+                            render.next().unwrap() > 0.49,
+                            "valid steady vinyl must not contain silence gaps"
+                        );
+                    }
+                    elapsed += frames;
+                    assert!(
+                        (control.position().as_secs_f64()
+                            - (1.0 + elapsed as f64 / 48000.0 * speed))
+                            .abs()
+                            < 0.0001
+                    );
+                    assert!(!control.external_expired());
+                }
+            });
+            assert_eq!(allocations, 0);
+            control.test_external_time(elapsed as u64 * 1_000_000_000 / 48000 + 60_000_000);
+            render.by_ref().take(960).for_each(drop);
+            assert!(control.external_expired());
+            assert!(render.by_ref().take(480).all(|sample| sample == 0.0));
+            control.external_position(1.0, speed);
+            assert!(
+                render.by_ref().take(240).all(|sample| sample == 0.0),
+                "a late command cannot rearm an expired generation"
+            );
+        }
+    }
+    #[test]
+    fn dvs_needle_jump_does_not_audibly_traverse_intervening_content() {
+        let samples = (0..144000)
+            .map(|frame| {
+                if frame < 48000 {
+                    0.0
+                } else if frame < 96000 {
+                    -1.0
+                } else {
+                    1.0
+                }
+            })
+            .collect();
+        let pcm = PcmSource::new(1, 48000, samples);
+        let control = RenderControl::new(
+            48000,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::ZERO,
+                frame: 0,
+            },
+            RenderFormat {
+                source_rate: 48000,
+                output_rate: 48000,
+                frames: 144000,
+            },
+        );
+        let mut render = DeckRenderer::new(pcm, Arc::clone(&control), 1, 48000);
+        control.test_external_time(0);
+        render.next();
+        control.scratch_touch(true);
+        control.external_position(2.1, 1.0);
+        assert_eq!(render.next(), Some(0.0));
+        assert!(control.position() >= Duration::from_secs_f64(2.1));
+        for _ in 0..239 {
+            assert!(
+                render.next().unwrap() >= 0.0,
+                "middle section must not be played"
+            );
+        }
+        assert_eq!(render.next(), Some(1.0));
+    }
+    #[test]
+    fn dvs_large_native_output_bursts_do_not_expire_or_rewind_healthy_control() {
+        let pcm = PcmSource::new(1, 48000, vec![0.5; 240000]);
+        let control = RenderControl::new(
+            48000,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::ZERO,
+                frame: 0,
+            },
+            RenderFormat {
+                source_rate: 48000,
+                output_rate: 48000,
+                frames: 240000,
+            },
+        );
+        let mut render = DeckRenderer::new(pcm, Arc::clone(&control), 1, 48000);
+        render.next();
+        control.test_external_time(0);
+        control.scratch_touch(true);
+        control.external_position(1.0, 1.0);
+        assert!(render.by_ref().take(2048).all(|sample| sample > 0.49));
+        assert!(!control.external_expired());
+        assert!((control.position().as_secs_f64() - (1.0 + 2048.0 / 48000.0)).abs() < 0.0001);
+        // A fresh UI command can arrive while native output is rendered ahead.
+        control.test_external_time(10_000_000);
+        control.external_position(1.01, 1.0);
+        assert!(render.by_ref().take(2048).all(|sample| sample > 0.49));
+        assert!((control.position().as_secs_f64() - (1.0 + 4096.0 / 48000.0)).abs() < 0.0001);
+        control.test_external_time(100_000_000);
+        render.by_ref().take(64).for_each(drop);
+        assert!(control.external_expired());
+        assert!(render.by_ref().take(128).all(|sample| sample == 0.0));
+    }
+    #[test]
+    fn dvs_render_processing_measurement_and_realtime_budget() {
+        let pcm = PcmSource::new(1, 48000, vec![0.5; 240000]);
+        let control = RenderControl::new(
+            48000,
+            true,
+            None,
+            SeekFrame {
+                time: Duration::ZERO,
+                frame: 0,
+            },
+            RenderFormat {
+                source_rate: 48000,
+                output_rate: 48000,
+                frames: 240000,
+            },
+        );
+        let mut render = DeckRenderer::new(pcm, Arc::clone(&control), 1, 48000);
+        control.scratch_touch(true);
+        let mut times = Vec::with_capacity(300);
+        let mut sum = 0.0;
+        let start = std::time::Instant::now();
+        let allocations = crate::looping::counted_allocations(|| {
+            for _ in 0..300 {
+                control
+                    .external_position(1.0 + control.external_now() as f64 / 1_000_000_000.0, 1.0);
+                let begin = std::time::Instant::now();
+                for _ in 0..256 {
+                    sum += render.next().unwrap();
+                }
+                times.push(begin.elapsed());
+            }
+        });
+        let elapsed = start.elapsed();
+        times.sort_unstable();
+        assert!(sum > 0.0);
+        assert_eq!(allocations, 0);
+        assert!(elapsed < Duration::from_secs_f64(300.0 * 256.0 / 48000.0));
+        println!("DVS raw renderer, 300x256 mono frames/48k: p50={:?}, p99={:?}; zero Rust allocations; no native output/UI latency",times[150],times[297]);
+    }
     fn censor_renderer(
         rate: u32,
         step: u32,

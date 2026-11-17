@@ -47,7 +47,7 @@ export struct CrateRow { id: int, name: string, count: int, depth: int, smart: b
 
 export struct BeatLine { position: float, downbeat: bool, first: bool, warp-marker: bool, bar: int }
 
-export struct LibraryRow { id: int, name: string, artist: string, album: string, duration: string, prepare-duration: string, bpm: string, key: string, gain: string, analysis-status: string, metadata-error: string, format: string, path: string, available: bool }
+export struct LibraryRow { cover: image, id: int, name: string, artist: string, album: string, duration: string, prepare-duration: string, bpm: string, key: string, gain: string, analysis-status: string, metadata-error: string, format: string, path: string, available: bool }
 
 export struct TableColumn { id: int, title: string, sort-label: string, visible: bool, width: float }
 

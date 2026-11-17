@@ -42,6 +42,7 @@ impl Routing {
         self.cues[deck] = 0;
     }
 
+    #[cfg(any(target_os = "windows", test))]
     pub fn cancel_cues(&mut self) {
         self.cues = [0; 2];
     }

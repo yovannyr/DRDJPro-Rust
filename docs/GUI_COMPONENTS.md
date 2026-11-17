@@ -1,5 +1,81 @@
 # GUI component inventory and reference baseline
 
+## Embedded cover artwork (2026-11-17)
+
+The Modern A/B track headers and platters display embedded PNG/JPEG cover images.
+The shared Library table has a persistent, movable/hideable Cover column; its
+thumbnail fits the unchanged 22px row with `image-fit: contain`, preserving the
+whole image and aspect ratio. Header Cover is not sortable. Files without usable
+artwork retain the empty/background fallback; unsupported C/D slots stay empty.
+
+Artwork probing and decoding run on a separate bounded worker, outside track
+preparation and realtime callbacks. A shared RAM-only thumbnail cache serves
+decks and visible table rows; no extracted image files are written. Existing
+11-column preferences retain their order and hidden state when adding Cover.
+Resource bounds, checks and remaining native acceptance are documented in
+[cover-artwork.md](cover-artwork.md).
+
+## Crash reports and sharing (Spec 26, 2026-11-16)
+
+`REPORTS` opens an independent report window. On GUI/demo startup, pending
+reports without valid auto-sharing consent open a nonmodal consent request.
+Closing the window leaves consent pending. `SEND TEXT` authorizes the selected
+stable report ID; `KEEP LOCAL` persists decline; `DELETE LOCAL` removes only that
+report and dump. Confirmed reports cannot be reauthorized or reclassified as
+unsent. Selection survives row reordering by ID; details show timestamp/version,
+OS/architecture and a bounded redacted stack.
+
+HTTPS settings and auto-sharing change only on `SAVE SETTINGS`. The saved
+destination is displayed separately from the editable draft. Default is no
+sharing. Auto-sharing authorizes pending/future text; turning it off does not
+revoke already queued consent. `KEEP LOCAL` prevents future attempts, but cannot
+recall an in-flight request. Binary dumps remain local. `PROCESS QUEUE` retries
+authorized reports. Known upload results remain visible across store-refresh
+errors; no success is claimed without an acknowledged transport result.
+
+Filesystem work runs on one bounded actor; HTTPS runs on the existing cancellable
+uploader. GUI callbacks only enqueue and poll. Startup retries queued consent
+even with automatic sharing off. No periodic filesystem scan; refreshes occur
+at startup, explicit actions and upload completion. Main-window close hides this
+window and cancels network independently of blocked filesystem work; no joins.
+Headless widget/action tests and real local HTTPS tests qualify these software
+paths. Visual/manual, native layout/focus and hardware/listening acceptance
+remain deferred for joint testing.
+
+The report window also displays crash-logger health and unconfirmed/dropped,
+write-failure, flush-timeout and recovery counters. Polling reads atomics only.
+Logs retain three 64-KiB files with a 256-KiB managed budget including staging;
+they contain typed diagnostic events, no arbitrary host-logger messages, paths
+or stack payloads. An unavailable logger does not disable capture or sharing.
+
+Release packages carry the executable's compact runtime symbols (Windows PDB,
+macOS dSYM; Linux embedded DWARF). Reports optionally record validated build
+identity while retaining compatibility with older reports. Native dump
+symbolization is an explicit offline developer tool; its results do not
+automatically modify the report window or authorize uploads. Visual/manual
+acceptance remains deferred.
+
+## USB device finder (2026-11-12)
+
+The `USB` button starts worker-owned discovery lazily and displays VID/PID,
+bus/address and explicit detection-profile status. Device strings are read only
+on request, with field errors visible. Selection survives row reordering but is
+cleared on observed removal/identity change; late replies cannot label a new
+selection. Other settings panels close the finder and it blocks external deck
+drops while open. No driver changes, automatic claims or initialization are
+performed. Headless model/action tests cover this scope; native visual and
+hardware acceptance remain deferred. HID controller mapping is a subsequent
+slice of Spec 28.
+
+With the optional GPL-compatible DVS build, the finder includes input/record
+selection, low-level phono threshold, calibration offset and per-deck ARM/STOP.
+Loss, stale control or manual transport changes require explicit ARM again.
+The license/source action displays the bundled GPL text and provenance.
+Input enumeration/open/decode remain worker-owned. DVS controls the fixed PCM
+renderer with continuous signed speed and absolute-position corrections, bypassing
+Keylock. Native visual, hearing, record compatibility and latency acceptance are
+deferred; automated PCM/controller tests are separate evidence.
+
 ## MC4000 S15: hardware pad modes
 
 Each deck has exactly two app-defined modes: Hot Cues (default) and Sampler.
@@ -976,3 +1052,60 @@ Mouse input uses the same held-platter PCM renderer, Sync/loop takeover and play
 Button release (including outside the platter), pointer cancellation, focus loss, hiding the virtual view, disconnect and transport/source replacement release the mouse session. Right-click cannot start scratching; releasing a secondary button during a left drag cancels safely because Slint releases pointer capture on any button-up. Hardware touch/jog cannot alter an active mouse-owned gesture, and the mouse cannot take over a hardware-owned hold. The hardware Vinyl toggle remains an explicit cancellation. A/B use independent sessions. Tests dispatch actual pointer events into the round GUI component, render audio, verify forward/reverse source positions and the marker, and cover pause/play restoration, focus/view cancellation, secondary-button capture loss followed by release outside, angle wrapping, center re-anchoring and input ownership.
 
 The user confirmed the preceding physical-controller jog integration works (2026-11-02). This does not constitute a measured end-to-end latency qualification or native acceptance of the newly added mouse gesture.
+
+## Generic HID profiles (Spec 28)
+
+The USB/HID finder lazily enumerates HID collections. LOAD MAPPING imports a
+bounded user-authored JSON profile; ENABLE starts only the explicitly selected
+matching collection, STOP ends acquisition. The synthetic format example is
+`docs/specs/28-direct-libusb/fixtures/hid-mapping.example.json`.
+A/B transport, contact-gated absolute seek/pitch and relative pitch encoders use
+the existing controller guards. Initially held/reconnected buttons require release
+before press. One custom HID collection is enabled at a time, independently of
+existing MIDI and DVS. Profile matches are metadata matches, not device certification.
+Native visual, controller and timing acceptance remain deferred.
+
+## Generic remote display (Spec 29)
+
+REMOTE opens an independent movable window with a worker-rendered128x64 framebuffer
+(optional128x32 metadata/transport page), A/B selection and track/loop/cue/level/
+EQ/crossfader switches. Original metadata remains accessible; the tiny bitmap uses
+uppercase ASCII with '?' fallback. Closing it leaves normal deck playback intact.
+
+Optional standard MIDI pads require explicit port, channel, first note and curve.
+The16notes route A/B eight cues through input15 ownership; MC4000 retains input16.
+Velocity/aftertouch are displayed; they do not change deck gain. Overflow, stale
+input, close and disconnect release holds; five seconds is the intentional maximum
+pad-preview hold and requires reopen after timeout. Native refresh/appearance,
+monitor scaling, physical MIDI force/latency and short unplug/replug qualification
+remain open. No proprietary Akai or physical display protocol is claimed.
+
+## Embedded browser (Spec30, Windows)
+
+WEB and HELP open independent OS-native child web views in separate Slint windows.
+Each has address/back/forward/reload/home controls. HELP serves embedded HTML,
+CSS and an SVG without disk paths or network. WebView2 Runtime102+ is required;
+missing/old runtimes show an error while the application keeps running.
+HTTPS browsing has no privileged app bridge, deck-load action or token extraction.
+Native SmartScreen is retained. Website audio is separate from the DJ engine.
+The user has no Beatport partner access: authorized deck streaming/OAuth provider
+integration remains blocked. Native render/history/GPU/audio-load qualification
+is deferred; headless navigation dispatch is separate evidence.
+
+## iTunes source window (Spec31)
+
+iTunes opens a separate source window with XML/media-folder selection, cached
+sources, ordered playlists, virtual track rows, complete source metadata and
+guarded LOAD A/B. Imported local files join the existing searchable library with
+stable IDs. Source ratings/play counts/date-added remain in the source catalog;
+ordinary file-tag scans retain explicitly imported title/artist/album preferences.
+Missing files remain visible and cannot load. Native save status is separate from
+source synchronization status; reopening reconciles interrupted native imports.
+Native appearance and manual workflow acceptance remain deferred.
+
+APPLE METADATA enriches one selected local source track; APPLE PLAYLIST accepts
+at most50 unique tracks. Both require an externally configured MusicKit developer
+token and preserve local data on failure/ambiguity. Apple values and the original
+XML details remain distinguishable; selected cover thumbnails come from the
+bounded source cache. No background lookups, audio streaming or token entry form
+is added. Live API qualification is open because no developer token is available.

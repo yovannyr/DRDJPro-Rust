@@ -24,22 +24,82 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Install Linux GUI build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libfontconfig1-dev libfreetype-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev
+          sudo apt-get install -y pkg-config libudev-dev libssl-dev libasound2-dev libfontconfig1-dev libfreetype-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Verify offline symbol tooling
+        run: python -m unittest discover -s tools -p "test_crash_symbols.py"
       - name: Lint Rust
         run: cargo clippy --workspace --locked --all-targets --target ${{ matrix.target }} -- -D warnings
-      - name: Build release
+      - name: Verify crash-handler UI and HTTPS transport
+        env:
+          SLINT_EMIT_DEBUG_INFO: '1'
+        # Catch startup, headless UI and TLS regressions before the release build.
+        # Full workspace tests below remain mandatory and reuse these artifacts.
+        run: cargo test --locked --lib crash_handler --target ${{ matrix.target }} -- --test-threads=1
+      - name: Verify hard minidump writer bounds
+        run: cargo test --locked -p minidumper --lib --target ${{ matrix.target }} -- --test-threads=1
+      - name: Verify crash-handler startup processes
+        env:
+          SLINT_EMIT_DEBUG_INFO: '1'
+        run: cargo test --locked --test crash_process --target ${{ matrix.target }} -- --test-threads=1
+      - name: Verify bounded crash logging across processes
+        # Process logging is separate so a failed native command cannot be hidden.
+        # Full workspace tests below still exercise this suite again.
+        run: cargo test --locked --test crash_logging --target ${{ matrix.target }} -- --test-threads=1
+        env:
+          SLINT_EMIT_DEBUG_INFO: '1'
+      - name: Build release artifacts
         run: cargo build --workspace --locked --release --target ${{ matrix.target }}
+      - name: Pack macOS release debug information
+        if: runner.os == 'macOS'
+        run: dsymutil target/${{ matrix.target }}/release/drdjpro-ui-spike -o target/${{ matrix.target }}/release/drdjpro-ui-spike.dSYM
+      - name: Fetch pinned offline symbol tools
+        run: python tools/crash_symbols.py fetch-tools --directory target/crash-symbol-tools --target ${{ matrix.target }}
+      - name: Package release executable and runtime symbols
+        shell: bash
+        run: |
+          mkdir -p dist
+          release="target/${{ matrix.target }}/release"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp "$release/drdjpro-ui-spike.exe" "$release/drdjpro_ui_spike.pdb" dist/
+          else
+            cp "$release/drdjpro-ui-spike" dist/
+            if [[ "$RUNNER_OS" == "macOS" ]]; then cp -R "$release/drdjpro-ui-spike.dSYM" dist/; fi
+          fi
+      - name: Bundle exact release symbols
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/drdjpro-ui-spike"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then binary="$binary.exe"; fi
+          python tools/crash_symbols.py bundle --binary "$binary" --tools target/crash-symbol-tools --bundle release-symbols
+      - name: Verify release Rust and native crash stacks
+        shell: bash
+        run: |
+          binary="dist/drdjpro-ui-spike"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then binary="$binary.exe"; fi
+          python tools/crash_symbols.py verify-release --binary "$binary" --tools target/crash-symbol-tools --bundle release-symbols --output release-symbols/verification.json
+      - name: Archive matching symbols and redacted verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-symbols
+          path: release-symbols/
+          if-no-files-found: error
+          retention-days: 14
       - name: Fetch freely licensed music sample for integration tests
         shell: bash
         run: |
@@ -52,25 +112,15 @@ jobs:
         env:
           SLINT_EMIT_DEBUG_INFO: '1'
           DRDJ_AUDIO_TEST_FILE: tests/fixtures/sample-9s.mp3
-        run: cargo test --workspace --locked --target ${{ matrix.target }}
+        # Isolate process/dump wall-clock tests from other harness cases.
+        # Tests which exercise concurrency still create their own threads.
+        run: cargo test --workspace --locked --target ${{ matrix.target }} -- --test-threads=1
       - name: Verify release decoder on real MP3
         run: cargo run --locked --release --target ${{ matrix.target }} -- --analyze tests/fixtures/sample-9s.mp3
       - name: Archive audio fixture source
         shell: bash
         run: |
           echo "Music fixture: https://samplelib.com/mp3/sample-9s.mp3 (Samplelib license https://samplelib.com/license.html)" > tests/fixtures/SOURCE.txt
-      - name: Package binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist
-          Copy-Item "target/${{ matrix.target }}/release/drdjpro-ui-spike.exe" dist/
-      - name: Package binary (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/drdjpro-ui-spike" dist/
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

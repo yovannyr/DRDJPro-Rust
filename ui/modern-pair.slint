@@ -8,6 +8,7 @@ import { HoldButton, ValueRail } from "modern-controls.slint";
 
 export component ModernPair inherits Rectangle {
     // Left deck primitive properties (replaces ModernDeckData)
+    in property <image> left-cover-image;
     in property <color> left-cover;
     in property <string> left-title: "";
     in property <string> left-artist: "";
@@ -32,6 +33,7 @@ export component ModernPair inherits Rectangle {
     in property <string> left-platter-bpm: "";
     in property <float> left-platter-pitch-percent: 0.0;
     // Right deck primitive properties
+    in property <image> right-cover-image;
     in property <color> right-cover;
     in property <string> right-title: "";
     in property <string> right-artist: "";
@@ -134,7 +136,7 @@ export component ModernPair inherits Rectangle {
         HorizontalLayout {
             spacing: 2px;
             ModernTrackHeader {
-                cover: root.left-cover; title: root.left-title; artist: root.left-artist;
+                cover-image: root.left-cover-image; cover: root.left-cover; title: root.left-title; artist: root.left-artist;
                 musical-key: root.left-musical-key; time-text: root.left-time-text;
                 loaded: root.left-loaded; label: root.first-index == 0 ? "A" : "C";
                 accent: root.left-accent; peaks: root.left-overview; colors: root.left-overview-colors;
@@ -143,7 +145,7 @@ export component ModernPair inherits Rectangle {
                 seek(position) => { root.seek-requested(root.first-index, position); }
             }
             ModernTrackHeader {
-                cover: root.right-cover; title: root.right-title; artist: root.right-artist;
+                cover-image: root.right-cover-image; cover: root.right-cover; title: root.right-title; artist: root.right-artist;
                 musical-key: root.right-musical-key; time-text: root.right-time-text;
                 loaded: root.right-loaded; label: root.first-index == 0 ? "B" : "D";
                 accent: root.right-accent; peaks: root.right-overview; colors: root.right-overview-colors;
@@ -157,7 +159,7 @@ export component ModernPair inherits Rectangle {
             spacing: 2px;
             // Left deck
             left-performance-deck := PerformanceDeck {
-                cover: root.left-cover; title: root.left-title; bpm: root.left-bpm;
+                cover-image: root.left-cover-image; cover: root.left-cover; title: root.left-title; bpm: root.left-bpm;
                 pitch-percent: root.left-pitch-percent; pitch-min: root.left-pitch-min; pitch-max: root.left-pitch-max;
                 loaded: root.left-loaded; playing: root.left-playing; loop-active: root.left-loop-active;
                 supported: root.left-supported; can-control: root.left-can-control;
@@ -247,6 +249,7 @@ export component ModernPair inherits Rectangle {
                     ModernDetailWaveform {
                         min-height: 38px; vertical-stretch: 1;
                         deck-label: root.first-index == 0 ? "A / DETAIL" : "C / DETAIL";
+                        accessible-deck-label: root.first-index == 0 ? "Deck A" : "Deck C";
                         accent: root.left-accent;
                         detail: root.left-detail; colors: root.left-detail-colors;
                         beats: root.left-beats; cues: root.left-cues;
@@ -260,6 +263,7 @@ export component ModernPair inherits Rectangle {
                     ModernDetailWaveform {
                         min-height: 38px; vertical-stretch: 1;
                         deck-label: root.first-index == 0 ? "B / DETAIL" : "D / DETAIL";
+                        accessible-deck-label: root.first-index == 0 ? "Deck B" : "Deck D";
                         accent: root.right-accent;
                         detail: root.right-detail; colors: root.right-detail-colors;
                         beats: root.right-beats; cues: root.right-cues;
@@ -297,7 +301,7 @@ export component ModernPair inherits Rectangle {
             }
             // Right deck
             right-performance-deck := PerformanceDeck {
-                cover: root.right-cover; title: root.right-title; bpm: root.right-bpm;
+                cover-image: root.right-cover-image; cover: root.right-cover; title: root.right-title; bpm: root.right-bpm;
                 pitch-percent: root.right-pitch-percent; pitch-min: root.right-pitch-min; pitch-max: root.right-pitch-max;
                 loaded: root.right-loaded; playing: root.right-playing; loop-active: root.right-loop-active;
                 supported: root.right-supported; can-control: root.right-can-control;

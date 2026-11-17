@@ -1,6 +1,22 @@
 //! Shared production UI contract for the desktop executable and integration tests.
 //! Startup, controllers and audio composition remain in the executable.
 slint::include_modules!();
+pub mod hid_finder;
+pub mod remote_display;
+mod remote_input;
+pub mod usb_finder;
+#[cfg(any(target_os = "windows", test))]
+pub mod web_browser;
+#[cfg(not(any(target_os = "windows", test)))]
+#[path = "web_unavailable.rs"]
+pub mod web_browser;
+#[cfg(any(target_os = "windows", test))]
+mod web_policy;
+
+/// Worker-owned USB discovery. Not a claim of native device/UI acceptance.
+pub mod usb_devices {
+    pub use drdj_usb::*;
+}
 
 mod energy;
 mod harmonie_wheel;
@@ -88,6 +104,8 @@ pub mod mixing;
 mod library_manager;
 
 mod playlist_manager;
+/// Lossless conversions for the existing playlist contract, outside audio callbacks.
+pub mod protobuf_playlist;
 
 mod smart_playlist;
 
@@ -191,7 +209,7 @@ pub mod presentation;
 mod atomic_float;
 mod harmony;
 
-/// Crash handler: minidump generation, stack trace capture, and upload queuing.
+/// Local crash evidence, sharing preferences and retention.
 pub mod crash_handler;
 
 /// Chroma-based key detection on caller-supplied PCM.

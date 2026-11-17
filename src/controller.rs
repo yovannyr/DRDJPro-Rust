@@ -1,4 +1,5 @@
 //! GUI control plane with injectable file selection and one bounded load worker.
+mod itunes;
 use crate::{
     playback::{DeckId, DualDeckEngine, LoopEdge, MixerLevels, PreparedTrack},
     AppWindow,
@@ -39,6 +40,16 @@ struct NavigationOwner {
     engine: std::rc::Weak<DualDeckEngine>,
     version: u64,
     bounds: (Option<Duration>, Option<Duration>, bool),
+}
+/// Explicitly armed, renderer-bound DVS ownership. Replaced sources and manual
+/// transport commands revoke it; a returning signal cannot recreate this token.
+#[cfg(feature = "dvs-xwax")]
+pub struct DvsLease {
+    deck: DeckId,
+    renderer: std::sync::Weak<crate::deck_render::RenderControl>,
+    engine: std::rc::Weak<DualDeckEngine>,
+    version: u64,
+    active: bool,
 }
 struct SeekHoldSession {
     owner: NavigationOwner,
@@ -142,6 +153,9 @@ pub type TrackPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub type LibraryPicker = Arc<dyn Fn() -> Option<Vec<PathBuf>> + Send + Sync>;
 pub type LibraryFolderPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 struct LibraryRows {
+    covers: Rc<RefCell<crate::cover_cache::CoverCache>>,
+    cover_visible: Rc<Cell<bool>>,
+    notify: slint::ModelNotify,
     library: std::rc::Weak<std::cell::RefCell<crate::library::Library>>,
     generation: std::rc::Weak<std::cell::Cell<u64>>,
     expected_generation: u64,
@@ -167,11 +181,15 @@ impl slint::Model for LibraryRows {
         let library = self.library.upgrade()?;
         let library = library.try_borrow().ok()?;
         let track = library.track_by_id(id)?;
-        Some(library_row(track))
+        let mut row = library_row(track);
+        if self.cover_visible.get() && track.available {
+            row.cover = self.covers.borrow_mut().get(&track.path).image;
+        }
+        Some(row)
     }
 
     fn model_tracker(&self) -> &dyn slint::ModelTracker {
-        &()
+        &self.notify
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -180,6 +198,7 @@ impl slint::Model for LibraryRows {
 fn library_row(track: &crate::library::Track) -> crate::LibraryRow {
     let analysis = track.metadata.analysis.as_ref();
     crate::LibraryRow {
+        cover: Default::default(),
         bpm: analysis
             .filter(|a| a.bpm > 0.)
             .map_or("—".into(), |a| format!("{:.1}", a.bpm).into()),
@@ -306,6 +325,8 @@ impl SearchWorker {
 }
 
 pub struct AudioController {
+    covers: Rc<RefCell<crate::cover_cache::CoverCache>>,
+    cover_visible: Rc<Cell<bool>>,
     device_opener: DeviceOpener,
     pending_device_switch: RefCell<Option<crate::audio_devices::StartupSelection>>,
     recovery_key: RefCell<Option<crate::output_preferences::OutputDeviceKey>>,
@@ -480,6 +501,8 @@ impl AudioController {
         device_opener: DeviceOpener,
     ) -> Rc<Self> {
         let controller = Rc::new(Self {
+            covers: Rc::new(RefCell::new(Default::default())),
+            cover_visible: Rc::new(Cell::new(true)),
             device_opener,
             pending_device_switch: RefCell::new(None),
             recovery_key: RefCell::new(None),
@@ -1254,6 +1277,22 @@ impl AudioController {
         }
         controller.wire_nudge(ui);
         controller.wire_mc4000_pitch(ui);
+        let weak = Rc::downgrade(&controller);
+        ui.on_hid_pitch_delta(move |deck, delta| {
+            let Some(c) = weak.upgrade() else {
+                return;
+            };
+            let id = match deck {
+                0 => DeckId::A,
+                1 => DeckId::B,
+                _ => return,
+            };
+            if let Err(error) = c.queue_pitch_delta(id, delta) {
+                if let Some(ui) = c.ui.upgrade() {
+                    ui.set_status(error.into());
+                }
+            }
+        });
         controller.wire_platters(ui);
         controller.wire_temporary_cues(ui);
         controller.wire_controller_browser(ui);
@@ -2092,6 +2131,7 @@ impl AudioController {
         Ok(())
     }
     fn change_pitch_range(&self, id: DeckId) -> Result<(), String> {
+        // Pending absolute/relative requests belong to the previous range.
         let ui = self.ui.upgrade().ok_or("Window closed")?;
         let index = match id {
             DeckId::A => ui.get_left_pitch_range_index(),
@@ -2104,6 +2144,25 @@ impl AudioController {
         self.pitch_ranges.set(ranges);
         self.disarm_pitch_pickup();
         Ok(())
+    }
+    fn queue_pitch_delta(&self, id: DeckId, delta: f32) -> Result<(), String> {
+        if !delta.is_finite() {
+            return Err("Invalid relative pitch".into());
+        }
+        if !self.can_control_deck(id) {
+            return Err("Finish loading before changing pitch".into());
+        }
+        let snapshot = self.engine.borrow().snapshot(id);
+        let source = snapshot.detail.ok_or("Load a track first")?;
+        let factor = self.desired_pitch(id, &source, snapshot.requested_speed);
+        let range = self.pitch_ranges.get()[Self::grid_index(id)];
+        if !range.contains(factor) {
+            return Err("Widen the pitch range or reset before relative adjustment".into());
+        }
+        let (low, high) = range.bounds();
+        let percent = ((factor - 1.0) * 100.0 + f64::from(delta)).clamp(low, high);
+        self.disarm_pitch_pickup();
+        self.queue_pitch(id, percent as f32)
     }
     /// Advance the pitch-range bound index for a hardware Note14 press, then apply it.
     /// The GUI ComboBox sets its own index before firing its callback, so a controller
@@ -2189,6 +2248,18 @@ impl AudioController {
         if !self.can_control_deck(id) {
             return Err("Platter unavailable during loading".into());
         }
+        #[cfg(feature = "dvs-xwax")]
+        if self
+            .engine
+            .borrow()
+            .renderer_token(id)
+            .and_then(|token| token.upgrade())
+            .is_some_and(|render| render.external_active())
+        {
+            // A deliberate mouse/MIDI touch takes ownership. Its new command
+            // version revokes DVS; later DVS cleanup cannot cancel this hold.
+            self.engine.borrow().platter_touch(id, false)?;
+        }
         self.cancel_temporary_hold(id)?;
         self.seek_holds.borrow_mut()[Self::grid_index(id)] = None;
         self.loop_jogs.borrow_mut()[Self::grid_index(id)] = None;
@@ -2207,6 +2278,66 @@ impl AudioController {
         holds[index] = true;
         self.platter_holds.set(holds);
         Ok(())
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_arm(&self, deck: DeckId) -> Result<DvsLease, String> {
+        self.navigation_ready(deck)?;
+        self.prepare_navigation(deck);
+        self.engine.borrow().exit_loop(deck)?;
+        self.engine.borrow().pause(deck);
+        let engine = self.engine.borrow();
+        Ok(DvsLease {
+            deck,
+            renderer: engine.renderer_token(deck).ok_or("Missing DVS renderer")?,
+            engine: Rc::downgrade(&engine),
+            version: engine.command_version(deck).ok_or("Missing DVS renderer")?,
+            active: false,
+        })
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_apply(&self, lease: &mut DvsLease, seconds: f64, speed: f64) -> Result<(), String> {
+        let engine = self.engine.borrow();
+        let current = engine.renderer_token(lease.deck);
+        if !self.can_control_deck(lease.deck)
+            || self.pending_device_switch.borrow().is_some()
+            || !lease
+                .engine
+                .upgrade()
+                .is_some_and(|old| Rc::ptr_eq(&old, &engine))
+            || !current.is_some_and(|token| token.ptr_eq(&lease.renderer))
+            || engine.command_version(lease.deck) != Some(lease.version)
+        {
+            return Err("DVS ownership changed; arm again".into());
+        }
+        if lease.active {
+            engine.dvs_position(lease.deck, seconds, speed)?;
+        } else {
+            engine.dvs_begin(lease.deck, seconds, speed)?;
+            lease.active = true;
+        }
+        lease.version = engine
+            .command_version(lease.deck)
+            .ok_or("DVS renderer removed")?;
+        Ok(())
+    }
+    #[cfg(feature = "dvs-xwax")]
+    pub fn dvs_release(&self, lease: DvsLease) {
+        if let Some(render) = lease.renderer.upgrade() {
+            if render.external_active() && render.command_version() == lease.version {
+                render.external_cancel();
+                let engine = self.engine.borrow();
+                if lease
+                    .engine
+                    .upgrade()
+                    .is_some_and(|old| Rc::ptr_eq(&old, &engine))
+                    && engine
+                        .renderer_token(lease.deck)
+                        .is_some_and(|token| token.ptr_eq(&lease.renderer))
+                {
+                    engine.pause(lease.deck);
+                }
+            }
+        }
     }
     fn pointer_platter(&self, id: DeckId, action: i32, x: f32, y: f32) -> Result<(), String> {
         let index = Self::grid_index(id);
@@ -5102,6 +5233,14 @@ impl AudioController {
             }
             all.push(column);
         }
+        let visible = !preferences.hidden.contains(&11);
+        if self.cover_visible.replace(visible) != visible {
+            if let Some(model) = ui.get_library_rows().as_any().downcast_ref::<LibraryRows>() {
+                for row in 0..model.row_count() {
+                    model.notify.row_changed(row);
+                }
+            }
+        }
         ui.set_table_columns(ModelRc::new(Rc::new(VecModel::from(columns))));
         ui.set_all_table_columns(ModelRc::new(Rc::new(VecModel::from(all))));
         ui.set_table_width(width);
@@ -6434,6 +6573,7 @@ impl AudioController {
         ui.set_loading(false);
         match result {
             Some(Ok((path, track, metadata))) => {
+                self.covers.borrow_mut().invalidate(&path);
                 self.library.borrow_mut().insert([path.clone()]);
                 self.library.borrow_mut().set_metadata(&path, metadata);
                 self.library_changed();
@@ -6847,6 +6987,19 @@ impl AudioController {
         }
     }
     pub fn tick(&self) {
+        if self.covers.borrow_mut().poll() {
+            if let Some(ui) = self.ui.upgrade() {
+                let rows = ui.get_library_rows();
+                if let Some(model) = rows.as_any().downcast_ref::<LibraryRows>() {
+                    // The search worker publishes at most LIBRARY_PAGE_SIZE (200)
+                    // IDs, never the entire library. Notify also lets visible rows
+                    // retry requests that previously met the bounded queue limit.
+                    for row in 0..model.row_count() {
+                        model.notify.row_changed(row);
+                    }
+                }
+            }
+        }
         self.poll_sampler();
         if let Some(perf) = self.library_perf.borrow().as_ref() {
             let (tracks, both_playing) = self.library_perf_context();
@@ -8251,6 +8404,9 @@ impl AudioController {
             .into(),
         );
         ui.set_library_rows(ModelRc::new(Rc::new(LibraryRows {
+            covers: self.covers.clone(),
+            cover_visible: self.cover_visible.clone(),
+            notify: Default::default(),
             rows,
             library: Rc::downgrade(&self.library),
             generation: Rc::downgrade(&self.library_generation),
@@ -8396,6 +8552,9 @@ impl AudioController {
                     .and_then(|track_id| library.track_by_id(track_id))
                     .map(|track| {
                         (
+                            (track.metadata.prefer_imported_tags
+                                && !track.metadata.title.is_empty())
+                            .then(|| track.metadata.title.clone()),
                             track.metadata.artist.clone(),
                             track
                                 .metadata
@@ -8405,7 +8564,9 @@ impl AudioController {
                         )
                     })
             });
-            let (artist, musical_key) = metadata.unwrap_or_else(|| (String::new(), String::new()));
+            let (imported_title, artist, musical_key) =
+                metadata.unwrap_or_else(|| (None, String::new(), String::new()));
+            let title = imported_title.as_deref().unwrap_or(&s.title);
             let desired = s.detail.as_ref().map_or(s.requested_speed, |source| {
                 self.desired_pitch(id, source, s.requested_speed)
             });
@@ -8869,12 +9030,18 @@ impl AudioController {
             };
             match id {
                 DeckId::A => {
-                    ui.set_left_title(s.title.into());
+                    ui.set_left_title(title.into());
                     ui.set_left_artist(artist.into());
                     ui.set_left_musical_key(musical_key.into());
                     ui.set_left_loaded(s.loaded);
                     ui.set_left_playing(s.playing);
-                    let cc = s.cover_color;
+                    let artwork = s
+                        .path
+                        .as_ref()
+                        .map(|path| self.covers.borrow_mut().get(path))
+                        .unwrap_or_default();
+                    ui.set_left_cover_image(artwork.image);
+                    let cc = artwork.color;
                     ui.set_left_cover(if cc == 0x00000000 {
                         slint::Color::from_rgb_u8(0, 0, 0)
                     } else {
@@ -8885,6 +9052,7 @@ impl AudioController {
                         )
                     });
                     ui.set_left_position(percent);
+                    ui.set_left_duration_seconds(s.duration.as_secs_f32());
                     ui.set_left_platter_time(
                         format!(
                             "{}\n{}",
@@ -8901,12 +9069,18 @@ impl AudioController {
                     );
                 }
                 DeckId::B => {
-                    ui.set_right_title(s.title.into());
+                    ui.set_right_title(title.into());
                     ui.set_right_artist(artist.into());
                     ui.set_right_musical_key(musical_key.into());
                     ui.set_right_loaded(s.loaded);
                     ui.set_right_playing(s.playing);
-                    let cc = s.cover_color;
+                    let artwork = s
+                        .path
+                        .as_ref()
+                        .map(|path| self.covers.borrow_mut().get(path))
+                        .unwrap_or_default();
+                    ui.set_right_cover_image(artwork.image);
+                    let cc = artwork.color;
                     ui.set_right_cover(if cc == 0x00000000 {
                         slint::Color::from_rgb_u8(0, 0, 0)
                     } else {
@@ -8917,6 +9091,7 @@ impl AudioController {
                         )
                     });
                     ui.set_right_position(percent);
+                    ui.set_right_duration_seconds(s.duration.as_secs_f32());
                     ui.set_right_platter_time(
                         format!(
                             "{}\n{}",
@@ -9011,8 +9186,145 @@ fn precise_time(time: std::time::Duration) -> String {
     format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, millis)
 }
 
+#[cfg(all(test, feature = "dvs-xwax"))]
+mod dvs_tests {
+    use super::*;
+    use crate::test_support::wav_file;
+    #[test]
+    fn dvs_audio_watchdog_requires_explicit_rearming_after_late_ui_update() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        let render = engine.renderer_token(DeckId::A).unwrap().upgrade().unwrap();
+        render.test_external_time(0);
+        c.dvs_apply(&mut lease, 1.0, 0.95).unwrap();
+        assert!((engine.snapshot(DeckId::A).effective_speed - 0.95).abs() < 0.0001);
+        render.test_external_time(60_000_000);
+        output.by_ref().take(2000).for_each(drop);
+        assert!(c
+            .dvs_apply(&mut lease, 1.05, 0.95)
+            .unwrap_err()
+            .contains("expired"));
+        c.dvs_release(lease);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        let mut fresh = c.dvs_arm(DeckId::A).unwrap();
+        c.dvs_apply(&mut fresh, 1.05, 0.95).unwrap();
+        output.by_ref().take(240).for_each(drop);
+        assert!(engine.snapshot(DeckId::A).playing);
+        c.dvs_release(fresh);
+    }
+    #[test]
+    fn dvs_deck_ownership_tracks_absolute_jump_reverse_and_releases_only_its_deck() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, mut output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        engine.load_b(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        assert!(!engine.snapshot(DeckId::A).playing);
+        let render = engine.renderer_token(DeckId::A).unwrap().upgrade().unwrap();
+        for (index, (seconds, speed)) in [(0.5, 1.0), (2.0, 1.0), (1.5, -1.0)]
+            .into_iter()
+            .enumerate()
+        {
+            render.test_external_time(index as u64 * 10_000_000);
+            c.dvs_apply(&mut lease, seconds, speed).unwrap();
+            output.by_ref().take(480).for_each(drop);
+            assert!(
+                (engine.snapshot(DeckId::A).position.as_secs_f64()
+                    - (seconds + speed * 480.0 / 48000.0))
+                    .abs()
+                    < 0.002
+            );
+            assert!(engine.snapshot(DeckId::A).playing);
+            assert_eq!(engine.snapshot(DeckId::B).position, Duration::ZERO);
+        }
+        c.dvs_release(lease);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert!(!engine.platter_touched(DeckId::A));
+        assert!(!engine.snapshot(DeckId::B).playing);
+    }
+    #[test]
+    fn dvs_manual_transport_and_replaced_renderer_revoke_without_cancelling_new_owner() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 8);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        c.dvs_apply(&mut lease, 1.0, 1.0).unwrap();
+        ui.invoke_controller_platter_touch(0, true);
+        assert!(c.dvs_apply(&mut lease, 1.1, 1.0).is_err());
+        c.dvs_release(lease);
+        assert!(
+            engine.platter_touched(DeckId::A),
+            "manual touch survives stale DVS cleanup"
+        );
+        ui.invoke_controller_platter_touch(0, false);
+        let mut lease = c.dvs_arm(DeckId::A).unwrap();
+        c.dvs_apply(&mut lease, 1.0, 1.0).unwrap();
+        engine.pause(DeckId::A);
+        engine.load_a(file.path()).unwrap();
+        engine.play(DeckId::A);
+        assert!(c.dvs_apply(&mut lease, 1.1, 1.0).is_err());
+        c.dvs_release(lease);
+        assert!(
+            engine.snapshot(DeckId::A).playing,
+            "replacement transport survives stale cleanup"
+        );
+    }
+}
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hid_relative_pitch_accumulates_pending_requests_before_ui_refresh_and_clamps_each_step() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(1, 48000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48000));
+        let file = wav_file(8192, 48000 * 2);
+        engine.load_a(file.path()).unwrap();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        assert!((c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.005).abs() < 1e-8);
+        assert_eq!(
+            ui.get_left_pitch_percent(),
+            0.0,
+            "display is intentionally not refreshed yet"
+        );
+        ui.invoke_pitch_left(2.0);
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        ui.invoke_hid_pitch_delta(0, 0.25);
+        assert!((c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.025).abs() < 1e-8);
+        c.tick();
+        assert!((engine.snapshot(DeckId::A).requested_speed - 1.025).abs() < 1e-8);
+        ui.set_left_pitch_range_index(0);
+        ui.invoke_pitch_range_left();
+        ui.invoke_pitch_left(7.0);
+        ui.invoke_hid_pitch_delta(0, 5.0);
+        ui.invoke_hid_pitch_delta(0, -1.0);
+        assert!(
+            (c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.07).abs() < 1e-8,
+            "saturation applies per event"
+        );
+        ui.invoke_hid_pitch_delta(0, f32::NAN);
+        ui.invoke_hid_pitch_delta(99, 1.0);
+        assert!(
+            (c.pending_pitch.borrow()[0].as_ref().unwrap().factor - 1.07).abs() < 1e-8,
+            "invalid deltas preserve valid pending intent"
+        );
+    }
     #[test]
     fn modern_layout_actions_preserve_transport_and_cancel_held_nudge() {
         i_slint_backend_testing::init_no_event_loop();
@@ -17245,6 +17557,15 @@ mod tests {
         assert!(!engine.snapshot(DeckId::A).playing);
         assert_eq!(engine.snapshot(DeckId::A).position, Duration::from_secs(1));
 
+        // Remote pads own input 15; their release cannot cancel MC4000 input 16.
+        ui.invoke_hold_hot_cue_left(0, true, 15);
+        ui.invoke_hold_hot_cue_left(0, true, 16);
+        ui.invoke_hold_hot_cue_left(0, false, 15);
+        assert!(engine.snapshot(DeckId::A).playing);
+        ui.invoke_hold_hot_cue_left(0, false, 16);
+        assert!(!engine.snapshot(DeckId::A).playing);
+        assert_eq!(ui.get_left_duration_seconds(), 8.);
+
         ui.window()
             .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });
         for _ in 0..2400 {
@@ -18013,6 +18334,22 @@ mod tests {
         i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
     }
 
+    fn scroll_column_preferences(ui: &AppWindow, delta_y: f32) {
+        let list = control(ui, "Track column preferences");
+        let origin = list.absolute_position();
+        let size = list.size();
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    origin.x + size.width / 2.,
+                    origin.y + size.height / 2.,
+                ),
+                delta_x: 0.,
+                delta_y,
+            });
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+    }
+
     #[test]
     fn prepare_headers_sort_and_column_controls_preserve_settings_after_restart() {
         i_slint_backend_testing::init_no_event_loop();
@@ -18078,11 +18415,15 @@ mod tests {
         ui.set_table_scroll_x(0.);
         ui.invoke_select_library(1);
         control(&ui, "Configure track columns").invoke_accessible_default_action();
+        scroll_column_preferences(&ui, -72.);
         control(&ui, "Show column BPM").invoke_accessible_default_action();
         assert!(!ui.get_table_columns().iter().any(|column| column.id == 7));
+        scroll_column_preferences(&ui, 200.);
+        control(&ui, "Move column name left").invoke_accessible_default_action();
         control(&ui, "Move column name left").invoke_accessible_default_action();
         assert_eq!(ui.get_table_columns().row_data(0).unwrap().id, 0);
         assert_eq!(ui.get_selected_track(), 1);
+        scroll_column_preferences(&ui, -72.);
         control(&ui, "Show column BPM").invoke_accessible_default_action();
         assert!(ui.get_table_columns().iter().any(|column| column.id == 7));
         control(&ui, "Show column BPM").invoke_accessible_default_action();
@@ -21176,6 +21517,101 @@ mod tests {
                 output.by_ref().take(256).for_each(drop);
             }
         }
+    }
+
+    #[test]
+    fn covers_appear_after_showing_column_share_with_deck_and_clear_on_eject() {
+        i_slint_backend_testing::init_no_event_loop();
+        let file = crate::cover_art::tests::embedded_cover_file();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 44100);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 44100));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.table_columns.borrow_mut().hidden.push(11);
+        c.publish_table_columns();
+        c.library
+            .borrow_mut()
+            .insert([file.path().canonicalize().unwrap()]);
+        c.publish_library();
+        finish_search(&c);
+        let rows = ui.get_library_rows();
+        let model = rows.as_any().downcast_ref::<LibraryRows>().unwrap();
+        assert!(model.row_count() <= LIBRARY_PAGE_SIZE);
+        assert_eq!(rows.row_data(0).unwrap().cover.size().width, 0);
+        ui.set_view_mode(crate::LayoutMode::Modern);
+        ui.show().unwrap();
+        control(&ui, "Library track 1");
+        let reads_before_show = model.row_data_calls.get();
+        c.table_columns.borrow_mut().hidden.clear();
+        c.publish_table_columns();
+        let cell = control(&ui, "Track 1 cover art");
+        assert!(
+            model.row_data_calls.get() > reads_before_show,
+            "Showing covers must invalidate the existing delegate's row data"
+        );
+        assert!(cell.size().height <= 22. && cell.size().width <= 36.);
+        assert!(std::ptr::eq(rows.as_any(), ui.get_library_rows().as_any()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while rows.row_data(0).unwrap().cover.size().width == 0 {
+            assert!(Instant::now() < deadline, "cover worker completed");
+            c.tick();
+            thread::yield_now();
+        }
+        assert_eq!(
+            (
+                rows.row_data(0).unwrap().cover.size().width,
+                rows.row_data(0).unwrap().cover.size().height
+            ),
+            (4, 2)
+        );
+        engine
+            .try_install(DeckId::A, PreparedTrack::open(file.path()).unwrap())
+            .unwrap();
+        let loaded_path = engine.snapshot(DeckId::A).path.unwrap();
+        assert_eq!(
+            c.covers.borrow_mut().get(&loaded_path).image.size().width,
+            4,
+            "Library path {:?} and deck path {:?} should share the thumbnail",
+            file.path(),
+            loaded_path
+        );
+        c.tick();
+        assert_eq!(
+            (
+                ui.get_left_cover_image().size().width,
+                ui.get_left_cover_image().size().height
+            ),
+            (4, 2)
+        );
+        assert_eq!(ui.get_right_cover_image().size().width, 0);
+        control(&ui, "Deck A cover art");
+        assert!(engine.eject(DeckId::A));
+        c.tick();
+        assert_eq!(ui.get_left_cover_image().size().width, 0);
+    }
+
+    #[test]
+    fn stalled_cover_worker_cannot_delay_track_load_completion() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 44100);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 44100));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let (started, observed) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        *c.covers.borrow_mut() = crate::cover_cache::CoverCache::with_loader(Box::new(move |_| {
+            started.send(()).ok()?;
+            wait.recv().ok()?;
+            None
+        }));
+        c.covers.borrow_mut().get(Path::new("blocked-cover"));
+        observed.recv_timeout(Duration::from_secs(5)).unwrap();
+        let path = fixture();
+        c.start_load(DeckId::A, Arc::new(move || Some(path.clone())), 0.);
+        finish(&c);
+        assert!(engine.snapshot(DeckId::A).loaded);
+        assert!(!ui.get_loading());
+        release.send(()).unwrap();
     }
 
     #[test]

@@ -4,6 +4,10 @@ import "layout-fonts/LiberationSans-Bold.ttf";
 import "layout-fonts/LiberationMono-Regular.ttf";
 import { DjTheme, LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
 export { LoopRange, SavedLoopRow, HotCueRow, CrateRow, BeatLine, LibraryRow, TableColumn, DeckView, SamplerRow, DeckSlotData } from "theme.slint";
+export { RemoteDisplayWindow } from "remote-display.slint";
+export { WebBrowserWindow } from "web_view.slint";
+export { ItunesWindow,ItunesRow } from "itunes.slint";
+export { CrashReportsWindow,CrashReportRow } from "crash-reports.slint";
 import { LayoutMode } from "layout-modes.slint";
 import { DeckAction, HoldAction, ControlKind, JogPhase } from "modern-state.slint";
 import { ModernView } from "modern-view.slint";
@@ -13,7 +17,7 @@ import { CompactDeck, DeckPlaceholder } from "deck.slint";
 import { CratePanel, TrackLibrary } from "library.slint";
 import { EqStrip, FxStrip } from "editors.slint";
 
-import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox, Palette } from "std-widgets.slint";
+import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox, Palette, TextEdit } from "std-widgets.slint";
 
 
 
@@ -48,7 +52,28 @@ import { Button, Slider, SpinBox, LineEdit, ListView, ComboBox, CheckBox, Palett
 
 
 
+export component DvsLicenseWindow inherits Window {
+    title:"DVS decoder license and source";
+    width:680px; height:520px;
+    in property <string> license-text;
+    callback dismiss();
+    VerticalLayout {
+        padding:12px; spacing:8px;
+        TextEdit {accessible-label:"DVS decoder license and source text";read-only:true;text:root.license-text;}
+        Button {text:"CLOSE";accessible-label:"Close DVS license";clicked=>{root.dismiss();}}
+    }
+}
 export component AppWindow inherits Window {
+    callback show-remote-display();
+    callback show-browser(bool);
+    callback close-web-browsers();
+    callback show-itunes();
+    callback close-itunes();
+    callback show-crash-reports();
+    callback close-crash-reports();
+    in property<string> crash-notice;
+    in property<float> left-duration-seconds;
+    in property<float> right-duration-seconds;
     init => { Palette.color-scheme = ColorScheme.dark; }
     default-font-family: DjTheme.font-ui;
     default-font-size: 12px;
@@ -82,7 +107,7 @@ export component AppWindow inherits Window {
             else if action == DeckAction.loop-half { root.half-loop-left(); }
             else if action == DeckAction.loop-double { root.double-loop-left(); }
             else if action == DeckAction.monitor { root.monitor-cue-a = !root.monitor-cue-a; root.monitor-cue-changed(0); }
-            else if action == DeckAction.fx { root.fx-open = true; }
+            else if action == DeckAction.fx { root.usb-finder-open=false; root.fx-open = true; }
             else if action == DeckAction.edit { root.grid-left(); }
         } else if deck == 1 {
             if action == DeckAction.load { root.load-right(); }
@@ -96,7 +121,7 @@ export component AppWindow inherits Window {
             else if action == DeckAction.loop-half { root.half-loop-right(); }
             else if action == DeckAction.loop-double { root.double-loop-right(); }
             else if action == DeckAction.monitor { root.monitor-cue-b = !root.monitor-cue-b; root.monitor-cue-changed(1); }
-            else if action == DeckAction.fx { root.fx-open = true; }
+            else if action == DeckAction.fx { root.usb-finder-open=false; root.fx-open = true; }
             else if action == DeckAction.edit { root.grid-right(); }
         }
     }
@@ -255,7 +280,7 @@ export component AppWindow inherits Window {
     in-out property <string> library-performance;
     pure callback external-drop-target(float, float) -> int;
     external-drop-target(px, py) => {
-        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open {
+        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open || root.usb-finder-open {
             return -1;
         }
         if root.view-mode == LayoutMode.Modern {
@@ -351,12 +376,51 @@ export component AppWindow inherits Window {
     in property <string> right-artist;
     in property <string> left-musical-key;
     in property <string> right-musical-key;
+    in property <image> left-cover-image;
     in property <color> left-cover: #00000000;
+    in property <image> right-cover-image;
     in property <color> right-cover: #00000000;
     in property <string> left-time: "SIMULATION";
     in property <string> right-time: "SIMULATION";
     in property <string> status;
     in property <string> controller-status;
+    in-out property <bool> usb-finder-open: false;
+    in property <[string]> usb-device-names;
+    in-out property <int> usb-device-choice: -1;
+    in property <string> usb-finder-status: "Open the finder to scan USB devices";
+    in property <string> usb-device-details;
+    in property <bool> usb-inspecting: false;
+    callback usb-refresh();
+    callback usb-inspect();
+    callback usb-selection-changed();
+    in-out property <bool> hid-page: false;
+    in property <[string]> hid-device-names;
+    in-out property <int> hid-device-choice: -1;
+    in property <string> hid-status: "Select a HID collection and load its documented mapping";
+    in property <string> hid-profile-name;
+    in property <string> hid-device-details;
+    in property <bool> hid-active: false;
+    in property <bool> hid-profile-loading: false;
+    callback hid-refresh();
+    callback hid-selected();
+    callback hid-load-profile();
+    callback hid-start();
+    callback hid-stop();
+    callback hid-pitch-delta(int, float);
+    in property <bool> dvs-available: false;
+    in-out property <bool> dvs-page: false;
+    in property <[string]> dvs-input-names;
+    in-out property <int> dvs-input-choice: -1;
+    in-out property <int> dvs-record-choice: 0;
+    in-out property <bool> dvs-phono: false;
+    in-out property <int> dvs-offset-ms: 0;
+    in property <string> dvs-status: "Choose an input, then explicitly arm a deck";
+    in property <string> dvs-a-status: "A: stopped";
+    in property <string> dvs-b-status: "B: stopped";
+    callback dvs-refresh();
+    callback dvs-arm(int);
+    callback dvs-stop(int);
+    callback dvs-license();
     in property <bool> mc4000-connected: false;
     in-out property <int> deck-view-index: 0;
     out property <DeckView> deck-view: root.deck-view-index == 1 ? DeckView.virtual : DeckView.training;
@@ -934,6 +998,7 @@ export component AppWindow inherits Window {
             deck-a-platter-position: root.left-position / 100;
             deck-a-platter-bpm: root.left-platter-bpm;
             deck-a-platter-pitch-percent: root.left-pitch-percent;
+            deck-a-cover-image: root.left-cover-image;
             deck-a-cover: root.left-cover;
             deck-b-title: root.right-title;
             deck-b-artist: root.right-artist;
@@ -980,6 +1045,7 @@ export component AppWindow inherits Window {
             deck-b-platter-position: root.right-position / 100;
             deck-b-platter-bpm: root.right-platter-bpm;
             deck-b-platter-pitch-percent: root.right-pitch-percent;
+            deck-b-cover-image: root.right-cover-image;
             deck-b-cover: root.right-cover;
             deck-c-title: root.deck-c-data.title;
             deck-c-bpm: root.deck-c-data.bpm;
@@ -1066,11 +1132,11 @@ Rectangle {
             HorizontalLayout {
                 padding: 4px; spacing: 8px;
                 Text { text: "A"; color: DjTheme.deck-a; vertical-alignment: center; }
-                Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.sampler-open=false;root.eq-open = !root.eq-open; } }
-                Button {text:"SAMPLER";accessible-label:"Show sampler";enabled:root.audio-enabled;clicked=>{root.sampler-open=!root.sampler-open;root.fx-open=false;root.monitor-open=false;root.audio-device-open=false;}}
-                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;root.sampler-open=false;}}
-                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.monitor-open=!root.monitor-open;root.audio-device-open=false;root.sampler-open=false;}}
-                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.sampler-open=false;root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
+                Button { text: "EQ"; accessible-label: "Show mixer EQ"; enabled: root.audio-enabled; clicked => { root.usb-finder-open=false;root.sampler-open=false;root.eq-open = !root.eq-open; } }
+                Button {text:"SAMPLER";accessible-label:"Show sampler";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.sampler-open=!root.sampler-open;root.fx-open=false;root.monitor-open=false;root.audio-device-open=false;}}
+                Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;root.sampler-open=false;}}
+                Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.monitor-open=!root.monitor-open;root.audio-device-open=false;root.sampler-open=false;}}
+                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.sampler-open=false;root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -1176,11 +1242,18 @@ Rectangle {
             }
         }
         HorizontalLayout { height: 24px; spacing: 6px;
+            Button {text:"REMOTE";accessible-label:"Open generic remote display";clicked=>{root.show-remote-display();}}
+            Button {text:"WEB";accessible-label:"Open web browser";clicked=>{root.show-browser(false);}}
+            Button {text:"HELP";accessible-label:"Open bundled help";clicked=>{root.show-browser(true);}}
+            Button {text:"iTunes";accessible-label:"Open iTunes Music XML library";clicked=>{root.show-itunes();}}
+            Button {text:"REPORTS";accessible-label:"Open crash report manager";clicked=>{root.show-crash-reports();}}
+            if root.crash-notice!="":Text {text:root.crash-notice;color:#ffcc88;max-width:240px;overflow:elide;accessible-label:"Crash reporting notice";}
             Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
+            Button { text: "USB / HID"; accessible-label: "Show USB device finder"; clicked => { root.usb-finder-open = !root.usb-finder-open; if root.usb-finder-open { root.audio-device-open=false; root.monitor-open=false; root.fx-open=false; root.eq-open=false; root.sampler-open=false; if root.hid-page {root.hid-refresh();} else if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();} } } }
             Text { accessible-role: text; accessible-label: "Application status"; accessible-description: (root.library-performance == "" ? "" : root.library-performance + " | ") + root.controller-status + " | " + root.status; text: (root.library-performance == "" ? "" : root.library-performance + " | ") + (root.controller-status == "" ? root.status : root.controller-status + " | " + root.status); color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
         }
     }
-    if root.audio-device-open : Rectangle {
+    if root.audio-device-open && !root.usb-finder-open : Rectangle {
         x:16px;y:60px;width:parent.width - 32px;height:250px;background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Audio device settings panel";
         VerticalLayout {
@@ -1196,6 +1269,71 @@ Rectangle {
                 Button {text:"REOPEN CURRENT";accessible-label:"Reopen current audio output";enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;clicked=>{root.audio-device-reopen();}}
             }
             Text {text:root.audio-device-status;color:DjTheme.text-primary;wrap:word-wrap;}
+        }
+    }
+    if root.usb-finder-open : Rectangle {
+        x:16px; y:60px; width:parent.width - 32px; height:min(360px, parent.height - 90px);
+        background:DjTheme.panel-dark; border-width:1px; border-color:#53657d;
+        accessible-role:groupbox; accessible-label:"USB device finder panel";
+        TouchArea { }
+        VerticalLayout {
+            padding:10px; spacing:8px;
+            HorizontalLayout {
+                Text { text:"USB DEVICE FINDER"; color:DjTheme.text-primary; }
+                Button { text:"REFRESH"; accessible-label:"Refresh USB devices"; clicked=>{if root.hid-page {root.hid-refresh();} else if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();}} }
+                Button {text:root.hid-page ? "USB LIST" : "HID";accessible-label:"Switch USB HID setup page";clicked=>{root.hid-page=!root.hid-page;root.dvs-page=false;if root.hid-page {root.hid-refresh();} else {root.usb-refresh();}}}
+                if root.dvs-available : Button { text:root.dvs-page ? "USB LIST" : "DVS AUDIO";
+                    accessible-label:"Switch USB DVS setup page"; clicked=>{root.dvs-page=!root.dvs-page;root.hid-page=false;if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();}} }
+                Button { text:"CLOSE"; accessible-label:"Close USB device finder"; clicked=>{root.usb-finder-open=false;} }
+            }
+            Text { text:root.hid-page ? root.hid-status : root.dvs-page ? root.dvs-status : root.usb-finder-status; color:DjTheme.text-primary; wrap:word-wrap; }
+            if !root.dvs-page && !root.hid-page : ComboBox {
+                accessible-label:"USB device selection"; model:root.usb-device-names;
+                current-index <=> root.usb-device-choice;
+                selected(_)=>{root.usb-selection-changed();}
+            }
+            if !root.dvs-page && !root.hid-page : Button { text:root.usb-inspecting ? "READING…" : "READ DEVICE STRINGS";
+                accessible-label:"Read selected USB device strings";
+                enabled:root.usb-device-choice >= 0 && !root.usb-inspecting;
+                clicked=>{root.usb-inspect();}
+            }
+            if !root.dvs-page && !root.hid-page : Text { accessible-role:text; accessible-label:"USB device details";
+                text:root.usb-device-details; color:DjTheme.text-primary; wrap:word-wrap; vertical-stretch:1; }
+            if root.dvs-page : Rectangle {
+                VerticalLayout { spacing:6px;
+                    Text {text:"AUDIO INPUT — stereo channels 1/2";color:DjTheme.text-primary;}
+                    ComboBox {accessible-label:"DVS audio input";model:root.dvs-input-names;current-index <=> root.dvs-input-choice;}
+                    ComboBox {accessible-label:"DVS record edition";model:["Serato 2nd edition A", "Serato 2nd edition B", "Serato CD"];current-index <=> root.dvs-record-choice;}
+                    HorizontalLayout {
+                        CheckBox {text:"Low-level phono signal";checked <=> root.dvs-phono;}
+                        Text {text:"OFFSET ms";color:DjTheme.text-primary;vertical-alignment:center;}
+                        SpinBox {accessible-label:"DVS calibration offset milliseconds";minimum:-600000;maximum:600000;value <=> root.dvs-offset-ms;}
+                    }
+                    HorizontalLayout {
+                        Button {text:"ARM A";accessible-label:"Arm DVS deck A";enabled:root.audio-enabled && root.dvs-input-choice >= 0;clicked=>{root.dvs-arm(0);}}
+                        Button {text:"STOP A";accessible-label:"Stop DVS deck A";clicked=>{root.dvs-stop(0);}}
+                        Button {text:"ARM B";accessible-label:"Arm DVS deck B";enabled:root.audio-enabled && root.dvs-input-choice >= 0;clicked=>{root.dvs-arm(1);}}
+                        Button {text:"STOP B";accessible-label:"Stop DVS deck B";clicked=>{root.dvs-stop(1);}}
+                    }
+                    Text {text:root.dvs-a-status;color:DjTheme.text-primary;wrap:word-wrap;}
+                    Text {text:root.dvs-b-status;color:DjTheme.text-primary;wrap:word-wrap;}
+                    Text {text:"Signal loss or manual transport changes require ARM again. Phono/record/offset changes apply on the next ARM.";color:#a6b4c8;wrap:word-wrap;}
+                    Button {text:"xwax — GPLv3 LICENSE / SOURCE / NO WARRANTY";accessible-label:"DVS license and source";clicked=>{root.dvs-license();}}
+                }
+            }
+            if root.hid-page : Rectangle {
+                VerticalLayout {spacing:6px;
+                    ComboBox {accessible-label:"HID collection selection";model:root.hid-device-names;current-index <=> root.hid-device-choice;selected(_)=>{root.hid-selected();}}
+                    Text {text:"PROFILE: " + (root.hid-profile-name == "" ? "none" : root.hid-profile-name);color:DjTheme.text-primary;wrap:word-wrap;}
+                    HorizontalLayout {
+                        Button {text:"LOAD MAPPING";accessible-label:"Load HID mapping profile";enabled:!root.hid-profile-loading;clicked=>{root.hid-load-profile();}}
+                        Button {text:"ENABLE";accessible-label:"Enable selected HID controller";enabled:root.audio-enabled && root.hid-device-choice >= 0 && root.hid-profile-name != "" && !root.hid-active && !root.hid-profile-loading;clicked=>{root.hid-start();}}
+                        Button {text:"STOP";accessible-label:"Stop HID controller";enabled:root.hid-active;clicked=>{root.hid-stop();}}
+                    }
+                    Text {accessible-role:text;accessible-label:"HID collection details";text:root.hid-device-details;color:DjTheme.text-primary;wrap:word-wrap;}
+                    Text {text:"Use a matching documented profile. System keyboards/mice are blocked. After enabling, reconnect or loss, buttons await an observed release before a new press.";color:#a6b4c8;wrap:word-wrap;}
+                }
+            }
         }
     }
     if root.monitor-open : Rectangle {

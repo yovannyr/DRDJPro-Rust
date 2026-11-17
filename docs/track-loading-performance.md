@@ -64,7 +64,7 @@ beide die vorhandene selbständige Test-Fixture.
 
 ```powershell
 $env:DRDJ_LOAD_BENCH_FILES = 'E:\DJ_Music\08_DJ_Remixes\Deto\01 ritmo latino- Unbekannter Titel.mp3;E:\DJ_Music\08_DJ_Remixes\Deto\02 -variado desconocido.mp3;E:\DJ_Music\08_DJ_Remixes\Deto\bachata especial.mp3'
-cargo test --bin drdjpro-ui-spike --locked selected_file -- --nocapture --test-threads=1
+cargo test --profile dev --bin drdjpro-ui-spike --locked selected_file -- --nocapture --test-threads=1
 ```
 
 Timing erst nach dem Build bewerten und dabei keine weiteren Compiler-/Testjobs
@@ -72,6 +72,12 @@ starten. Protokolle: `C:/Temp/drdj-load-debug-baseline.log`,
 `C:/Temp/drdj-load-user-debug-baseline.log`, `C:/Temp/drdj-load-release-baseline.log`,
 `C:/Temp/drdj-load-optimized1.log`. Die finale Artefaktwiederholung wird im
 Prüfstand der UI-Migration ergänzt.
+
+Profilhinweis (2026-11-17): Das inzwischen für reproduzierbare CI-Prüfungen
+explizit unoptimierte Testprofil verwendet App-Level 0. Für Ladezeitmessungen der
+interaktiven App ist deshalb `--profile dev` mit App-Level 1 erforderlich. Die
+Fünf-Sekunden-Assertion bleibt unverändert. Der direkte Vorher-/Nachher-Vergleich
+für die Cover-Anzeige steht in [cover-artwork.md](cover-artwork.md).
 
 ## Finale Wiederholung nach allen Builds
 

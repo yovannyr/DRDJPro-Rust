@@ -1,0 +1,60 @@
+import {Button,ComboBox,LineEdit,ListView} from "std-widgets.slint";
+export struct ItunesRow {title:string,artist:string,album:string,state:string}
+export component ItunesWindow inherits Window {
+    title:"iTunes / Music XML library";preferred-width:920px;preferred-height:700px;min-width:700px;min-height:560px;background:#151515;
+    in-out property<string> xml-path;
+    in-out property<string> media-root;
+    in property<[string]> sources;
+    in property<[string]> playlists;
+    in-out property<int> source-index:-1;
+    in-out property<int> playlist-index:0;
+    in-out property<int> selected-row:-1;
+    in property<[ItunesRow]> rows;
+    in property<string> details;
+    in property<string> status:"Choose an XML export or a cached source";
+    in property<string> shared-storage;
+    in property<bool> busy:false;
+    in property<image> artwork;
+    callback choose-xml();callback choose-root();callback import-source();callback source-selected();callback playlist-selected();callback row-selected();callback load-track(int);callback enrich();callback enrich-playlist();callback cancel();callback dismiss();
+    VerticalLayout {padding:12px;spacing:6px;
+        HorizontalLayout {
+            LineEdit {text <=> root.xml-path;accessible-label:"iTunes XML path";enabled:!root.busy;}
+            Button {text:"CHOOSE XML";enabled:!root.busy;clicked=>{root.choose-xml();}}
+            Button {text:"IMPORT / SYNC";enabled:!root.busy;clicked=>{root.import-source();}}
+            Button {text:"CLOSE";clicked=>{root.dismiss();}}
+        }
+        HorizontalLayout {
+            Text {text:"Optional media-folder override";color:#cccccc;}
+            LineEdit {text <=> root.media-root;accessible-label:"iTunes media folder override";enabled:!root.busy;}
+            Button {text:"FOLDER";enabled:!root.busy;clicked=>{root.choose-root();}}
+        }
+        HorizontalLayout {
+            ComboBox {model:root.sources;current-index <=> root.source-index;enabled:!root.busy;accessible-label:"iTunes cached source";selected=>{root.source-selected();}}
+            ComboBox {model:root.playlists;current-index <=> root.playlist-index;enabled:!root.busy;accessible-label:"iTunes source playlist";selected=>{root.playlist-selected();}}
+        }
+        ListView {min-height:180px;vertical-stretch:1;accessible-label:"Ordered iTunes tracks";
+            for row[index] in root.rows:Rectangle {height:28px;background:root.selected-row==index ? #27556c : (mod(index,2)==0 ? #202020 : #181818);
+                HorizontalLayout {padding-left:4px;spacing:8px;
+                    Text {text:row.title;color:#eeeeee;overflow:elide;horizontal-stretch:2;}
+                    Text {text:row.artist;color:#cccccc;overflow:elide;horizontal-stretch:1;}
+                    Text {text:row.album;color:#aaaaaa;overflow:elide;horizontal-stretch:1;}
+                    Text {text:row.state;color:#cccccc;min-width:64px;}
+                }
+                TouchArea {clicked=>{root.selected-row=index;root.row-selected();}}
+            }
+        }
+        HorizontalLayout {
+            Image {source:root.artwork;width:96px;height:96px;image-fit:contain;accessible-label:"Cached Apple album artwork";}
+            Text {text:root.details;color:#dddddd;wrap:word-wrap;min-height:140px;max-height:190px;accessible-label:"iTunes source metadata";}
+        }
+        HorizontalLayout {
+            Button {text:"LOAD A";enabled:!root.busy&&root.selected-row>=0;clicked=>{root.load-track(0);}}
+            Button {text:"LOAD B";enabled:!root.busy&&root.selected-row>=0;clicked=>{root.load-track(1);}}
+            Button {text:"APPLE METADATA";enabled:!root.busy&&root.selected-row>=0;clicked=>{root.enrich();}}
+            Button {text:"APPLE PLAYLIST";enabled:!root.busy;clicked=>{root.enrich-playlist();}}
+            Button {text:"CANCEL";enabled:root.busy;clicked=>{root.cancel();}}
+        }
+        Text {text:root.status;color:#eeeeee;wrap:word-wrap;accessible-label:"iTunes import status";}
+        Text {text:root.shared-storage;color:#bbbbbb;overflow:elide;accessible-label:"Shared library save status";}
+    }
+}

@@ -1,19 +1,13 @@
-//! Track Analysis — Metadaten, Cue Points, Beat Grid, Batch-Analyse.
+//! Legacy track-analysis data and editing contracts.
 //!
-//! Implements track analysis including metadata extraction, cue point
-//! management, beat grid editing, and batch analysis jobs. Part of
-//! the Track Analysis feature (P14a).
-//!
-//! ## Design principles
-//!
-//! * **Metadata extraction** — ID3/ Vorbis Comment parsing.
-//! * **Cue management** — Create, edit, delete, color, label.
-//! * **Beat grid** — Editable with downbeat locking.
-//! * **Batch analysis** — Queue multiple tracks for analysis.
+//! Holds caller-supplied metadata, cue points, grids and batch state. Automatic
+//! file analysis is unavailable here and returns an explicit error rather than
+//! inventing BPM, key or grid markers. The application uses its independent
+//! Controller/AudioAnalyzer pipeline.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -383,17 +377,18 @@ impl TrackAnalysis {
         }
     }
 
-    /// Mark analysis as complete.
+    /// Store caller-supplied BPM/key values without inventing confidence or energy.
+    /// Confidence and energy remain unknown (zero); completion alone is not reliability.
     pub fn mark_complete(&mut self, duration: Duration, bpm: f64, key: String) {
         self.bpm = bpm;
-        self.bpm_confidence = 0.85;
+        self.bpm_confidence = 0.0;
         self.key = key;
-        self.key_confidence = 0.80;
-        self.energy = 0.5;
+        self.key_confidence = 0.0;
+        self.energy = 0.0;
         self.state = AnalysisState::Analyzed;
         self.analyzed_at = Some(duration);
         self.analysis_duration = duration;
-        self.reliable = self.bpm_confidence > 0.5 && self.key_confidence > 0.5;
+        self.reliable = false;
     }
 
     /// Get track preparation status.
@@ -503,43 +498,15 @@ impl TrackAnalysisManager {
         }
     }
 
-    /// Analyze a track.
+    /// This legacy contract has no file-analysis backend. The application uses
+    /// its independent Controller/AudioAnalyzer pipeline instead.
     pub fn analyze(
         &self,
-        path: String,
-        metadata: TrackMetadata,
+        _path: String,
+        _metadata: TrackMetadata,
     ) -> Result<TrackAnalysis, AnalysisError> {
-        let start = Instant::now();
-
-        // Simulate analysis.
-        let mut analysis = TrackAnalysis::new(metadata);
-
-        // Generate beat grid from assumed BPM.
-        let assumed_bpm = 128.0;
-        let sample_rate = analysis.metadata.sample_rate;
-        let samples_per_beat = (sample_rate as f64 * 60.0 / assumed_bpm) as usize;
-        let total_beats = analysis.metadata.duration_samples / samples_per_beat;
-
-        for i in 0..total_beats {
-            let beat_num = (i + 1) as u64;
-            let bar_num = ((i / 4) + 1) as u16;
-            let beat_in_bar = ((i % 4) + 1) as u8;
-            analysis.beat_grid.push(BeatGridMarker::new(
-                i * samples_per_beat,
-                beat_num,
-                bar_num,
-                beat_in_bar,
-            ));
-        }
-
-        let duration = start.elapsed();
-        analysis.mark_complete(duration, assumed_bpm, "8A".to_string());
-
-        let mut analyses = self.analyses.lock().unwrap();
-        analyses.insert(path.clone(), analysis.clone());
-        self.tracks_analyzed.fetch_add(1, Ordering::Relaxed);
-
-        Ok(analysis)
+        self.analysis_errors.fetch_add(1, Ordering::Relaxed);
+        Err(AnalysisError::NotImplemented)
     }
 
     /// Get analysis for a track.
@@ -634,16 +601,18 @@ impl TrackAnalysisManager {
         path: String,
         metadata: TrackMetadata,
     ) -> Result<(), AnalysisError> {
-        let mut current = self.current_job.lock().unwrap();
-        if let Some(job) = current.as_mut() {
-            job.track_progress();
+        let result = self.analyze(path, metadata);
+        if let Some(job) = self.current_job.lock().unwrap().as_mut() {
+            match &result {
+                Ok(_) => job.track_progress(),
+                Err(error) => {
+                    job.errors.push(error.to_string());
+                    job.running = false;
+                    job.complete = false;
+                }
+            }
         }
-        drop(current);
-
-        // Analyze the track.
-        let _ = self.analyze(path, metadata);
-
-        Ok(())
+        result.map(|_| ())
     }
 
     /// Get current batch job status.
@@ -707,6 +676,8 @@ impl Default for TrackAnalysisManager {
 /// Analysis errors.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnalysisError {
+    /// No real analysis backend is attached to this legacy manager.
+    NotImplemented,
     /// Track not found.
     TrackNotFound(String),
     /// Cue point not found.
@@ -722,6 +693,7 @@ pub enum AnalysisError {
 impl std::fmt::Display for AnalysisError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NotImplemented => write!(f, "Track analysis backend is not available"),
             Self::TrackNotFound(path) => write!(f, "Track not found: {}", path),
             Self::CueNotFound(id) => write!(f, "Cue point {} not found", id),
             Self::FileError(msg) => write!(f, "File error: {}", msg),
@@ -746,6 +718,17 @@ mod tests {
         metadata.duration_samples = 44100 * 10;
         metadata.duration_seconds = 10.0;
         metadata
+    }
+
+    fn seed_manual_analysis(manager: &TrackAnalysisManager, path: &str, metadata: TrackMetadata) {
+        let mut analysis = TrackAnalysis::new(metadata);
+        analysis.mark_complete(Duration::ZERO, 120.0, "8A".into());
+        analysis.beat_grid.push(BeatGridMarker::new(0, 1, 1, 1));
+        manager
+            .analyses
+            .lock()
+            .unwrap()
+            .insert(path.into(), analysis);
     }
 
     #[test]
@@ -853,9 +836,11 @@ mod tests {
 
         assert_eq!(analysis.state, AnalysisState::Analyzed);
         assert_eq!(analysis.bpm, 128.0);
-        assert_eq!(analysis.bpm_confidence, 0.85);
+        assert_eq!(analysis.bpm_confidence, 0.0);
+        assert_eq!(analysis.key_confidence, 0.0);
+        assert_eq!(analysis.energy, 0.0);
         assert_eq!(analysis.key, "8A");
-        assert!(analysis.reliable);
+        assert!(!analysis.reliable);
     }
 
     #[test]
@@ -883,21 +868,20 @@ mod tests {
     #[test]
     fn track_analysis_manager_analyze() {
         let manager = TrackAnalysisManager::new();
-        let metadata = make_test_metadata();
-
-        let result = manager.analyze("/test/track.wav".to_string(), metadata);
-        assert!(result.is_ok());
-
-        let analysis = result.unwrap();
-        assert_eq!(analysis.state, AnalysisState::Analyzed);
-        assert!(!analysis.beat_grid.is_empty());
+        let path = "tests/fixtures/tone-9s.mp3";
+        let result = manager.analyze(path.into(), make_test_metadata());
+        assert_eq!(result.unwrap_err(), AnalysisError::NotImplemented);
+        assert!(manager.get_analysis(path).is_none());
+        assert!(!manager.is_analyzed(path));
+        assert_eq!(manager.tracks_analyzed(), 0);
+        assert_eq!(manager.error_count(), 1);
     }
 
     #[test]
     fn track_analysis_manager_get() {
         let manager = TrackAnalysisManager::new();
         let metadata = make_test_metadata();
-        let _ = manager.analyze("/test/track.wav".to_string(), metadata);
+        seed_manual_analysis(&manager, "/test/track.wav", metadata);
 
         let got = manager.get_analysis("/test/track.wav");
         assert!(got.is_some());
@@ -905,10 +889,29 @@ mod tests {
     }
 
     #[test]
+    fn failed_analysis_preserves_existing_manual_data() {
+        let manager = TrackAnalysisManager::new();
+        let path = "/test/track.wav";
+        seed_manual_analysis(&manager, path, make_test_metadata());
+        manager
+            .add_cue(path, 44100, CuePointType::HotCue, "Manual drop".into())
+            .unwrap();
+        let before = format!("{:?}", manager.get_analysis(path));
+        assert_eq!(
+            manager
+                .analyze(path.into(), make_test_metadata())
+                .unwrap_err(),
+            AnalysisError::NotImplemented
+        );
+        assert_eq!(format!("{:?}", manager.get_analysis(path)), before);
+        assert_eq!(manager.error_count(), 1);
+    }
+
+    #[test]
     fn track_analysis_manager_add_cue() {
         let manager = TrackAnalysisManager::new();
         let metadata = make_test_metadata();
-        let _ = manager.analyze("/test/track.wav".to_string(), metadata);
+        seed_manual_analysis(&manager, "/test/track.wav", metadata);
 
         let cue_id = manager.add_cue(
             "/test/track.wav",
@@ -930,7 +933,7 @@ mod tests {
     fn track_analysis_manager_remove_cue() {
         let manager = TrackAnalysisManager::new();
         let metadata = make_test_metadata();
-        let _ = manager.analyze("/test/track.wav".to_string(), metadata);
+        seed_manual_analysis(&manager, "/test/track.wav", metadata);
 
         let cue_id = manager
             .add_cue(
@@ -950,7 +953,7 @@ mod tests {
     fn track_analysis_manager_remove_missing_cue() {
         let manager = TrackAnalysisManager::new();
         let metadata = make_test_metadata();
-        let _ = manager.analyze("/test/track.wav".to_string(), metadata);
+        seed_manual_analysis(&manager, "/test/track.wav", metadata);
 
         let result = manager.remove_cue("/test/track.wav", 9999);
         assert!(result.is_err());
@@ -960,7 +963,7 @@ mod tests {
     fn track_analysis_manager_lock_downbeat() {
         let manager = TrackAnalysisManager::new();
         let metadata = make_test_metadata();
-        let _ = manager.analyze("/test/track.wav".to_string(), metadata);
+        seed_manual_analysis(&manager, "/test/track.wav", metadata);
 
         assert!(manager.lock_downbeat("/test/track.wav").is_ok());
 
@@ -989,27 +992,35 @@ mod tests {
         assert!(running);
         assert!(!complete);
 
-        // Process tracks.
-        for track in &tracks {
-            let metadata = TrackMetadata::new(track.clone());
-            let _ = manager.process_batch_track(track.clone(), metadata);
-        }
-
-        let status = manager.batch_status();
-        let (id, progress, running, complete, current, total) = status.unwrap();
+        let error = manager
+            .process_batch_track(tracks[0].clone(), TrackMetadata::new(tracks[0].clone()))
+            .unwrap_err();
+        assert_eq!(error, AnalysisError::NotImplemented);
+        let (id, progress, running, complete, current, total) = manager.batch_status().unwrap();
         assert_eq!(id, 1);
-        assert_eq!(progress, 100);
+        assert_eq!(progress, 0);
         assert!(!running);
-        assert!(complete);
-        assert_eq!(current, 3);
-        assert_eq!(total, 3);
+        assert!(!complete);
+        assert_eq!((current, total), (0, 3));
+        assert_eq!(
+            manager
+                .current_job
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .errors
+                .len(),
+            1
+        );
+        assert!(manager.analyzed_tracks().is_empty());
     }
 
     #[test]
     fn track_analysis_manager_is_analyzed() {
         let manager = TrackAnalysisManager::new();
         let metadata = make_test_metadata();
-        let _ = manager.analyze("/test/track.wav".to_string(), metadata);
+        seed_manual_analysis(&manager, "/test/track.wav", metadata);
 
         assert!(manager.is_analyzed("/test/track.wav"));
         assert!(!manager.is_analyzed("/unknown/track.wav"));
@@ -1020,10 +1031,10 @@ mod tests {
         let manager = TrackAnalysisManager::new();
 
         let m1 = make_test_metadata();
-        let _ = manager.analyze("/test/1.wav".to_string(), m1);
+        seed_manual_analysis(&manager, "/test/1.wav", m1);
 
         let m2 = make_test_metadata();
-        let _ = manager.analyze("/test/2.wav".to_string(), m2);
+        seed_manual_analysis(&manager, "/test/2.wav", m2);
 
         let analyzed = manager.analyzed_tracks();
         assert_eq!(analyzed.len(), 2);
@@ -1040,7 +1051,8 @@ mod tests {
         let _ = manager.analyze("/test/1.wav".to_string(), metadata.clone());
         let _ = manager.analyze("/test/2.wav".to_string(), metadata);
 
-        assert_eq!(manager.tracks_analyzed(), 2);
+        assert_eq!(manager.tracks_analyzed(), 0);
+        assert_eq!(manager.error_count(), 2);
     }
 
     #[test]

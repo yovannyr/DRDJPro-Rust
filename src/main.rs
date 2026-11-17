@@ -1,4 +1,4 @@
-﻿use slint::{ModelRc, Timer, TimerMode, VecModel};
+use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
 mod audio;
@@ -9,15 +9,20 @@ mod audio_identity;
 mod beatgrid;
 mod cancellation;
 mod controller;
+mod cover_art;
+mod cover_cache;
 mod crates;
 mod cue_bus;
 mod deck_render;
 mod delay_fx;
+#[cfg(feature = "dvs-xwax")]
+mod dvs_ui;
 #[cfg(any(target_os = "windows", test))]
 mod external_drop;
 mod fx_chain;
 mod fx_timing;
 mod hot_cues;
+mod itunes_ui;
 mod legacy_catalog;
 mod library;
 mod library_perf;
@@ -42,7 +47,6 @@ mod saved_loops;
 mod sync_control;
 mod table_columns;
 mod tempo;
-mod cover_art;
 #[cfg(test)]
 mod test_support;
 mod track_metadata;
@@ -53,6 +57,14 @@ mod waveform_color;
 use drdjpro_ui_spike::*;
 
 fn main() -> Result<(), slint::PlatformError> {
+    // Internal monitor/probe modes are dispatched before any UI/audio creation.
+    if let Some(result) = crash_handler::internal_mode() {
+        if let Err(error) = result {
+            eprintln!("Crash subsystem failed: {error}");
+            std::process::exit(70);
+        }
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("--analyze") {
         let Some(path) = std::env::args().nth(2) else {
             eprintln!("Usage: drdjpro-ui-spike --analyze <music.mp3|music.wav>");
@@ -126,6 +138,9 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     let performance_output =
         library_perf::ReportFile::from_env().map_err(slint::PlatformError::Other)?;
+    // Normal GUI/demo launches own capture before audio initialization. Internal
+    // helpers and console decoder/playback commands have already returned above.
+    let crash_startup = crash_handler::CrashStartup::start();
     let mut startup_audio_warning = String::new();
     let audio_engine = if std::env::args().nth(1).as_deref() != Some("--demo") {
         let startup = match library_store::default_path()
@@ -291,6 +306,29 @@ fn main() -> Result<(), slint::PlatformError> {
         None
     };
     let mut midi_discovery = std::time::Instant::now();
+    let _usb_finder_timer = usb_finder::wire(&ui);
+    let _hid_finder_timer = hid_finder::wire(&ui);
+    let _remote_display_timer = remote_display::wire(&ui);
+    let crash_reports = crash_handler::wire_ui(&ui, &crash_startup);
+    let _web_browser_timer = web_browser::wire(&ui);
+    let _itunes_timer =
+        controller
+            .as_ref()
+            .and_then(|controller| match library_store::default_path() {
+                Ok(path) => Some(itunes_ui::wire(
+                    &ui,
+                    Rc::clone(controller),
+                    path.with_extension("itunes.sqlite3"),
+                )),
+                Err(e) => {
+                    ui.set_status(format!("iTunes source catalog: {e}").into());
+                    None
+                }
+            });
+    #[cfg(feature = "dvs-xwax")]
+    let _dvs_timer = controller
+        .as_ref()
+        .map(|controller| dvs_ui::wire(&ui, Rc::clone(controller)));
     // Track the previously observed connection so holds are released only on the
     // transition to absent, not on every absent-discovery poll.
     let mut mc4000_was_connected = midi.is_some();
@@ -415,6 +453,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let result = ui.run();
+    crash_reports.shutdown(); // Hide auxiliary window/cancel network before audio teardown.
     let performance_result = match (performance_output, performance) {
         (Some(output), Some(recorder)) => {
             if result.is_err() {

@@ -1,7 +1,7 @@
 //! Persisted track-table presentation, independent of track identities.
 use serde::{Deserialize, Serialize};
 
-pub const COLUMN_COUNT: usize = 11;
+pub const COLUMN_COUNT: usize = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -15,13 +15,36 @@ impl Default for TableColumns {
     fn default() -> Self {
         Self {
             version: 1,
-            order: vec![6, 0, 3, 7, 8, 4, 5, 9, 10, 2, 1],
+            order: vec![6, 11, 0, 3, 7, 8, 4, 5, 9, 10, 2, 1],
             hidden: vec![],
         }
     }
 }
 
 impl TableColumns {
+    /// Preserve the relative order and hidden state of the original 11 columns.
+    pub fn upgrade(mut self) -> Result<Self, String> {
+        if self.order.len() == 11 && !self.order.contains(&11) {
+            let mut old = self.order.clone();
+            old.sort_unstable();
+            if self.version != 1
+                || old != (0..11).collect::<Vec<_>>()
+                || self.hidden.len() >= 11
+                || self.hidden.iter().any(|id| !self.order.contains(id))
+                || self
+                    .hidden
+                    .iter()
+                    .enumerate()
+                    .any(|(i, id)| self.hidden[..i].contains(id))
+            {
+                return Err("Invalid legacy track-table column preferences".into());
+            }
+            let position = self.order.iter().position(|id| *id == 6).unwrap_or(0) + 1;
+            self.order.insert(position, 11);
+        }
+        self.validate()?;
+        Ok(self)
+    }
     pub fn validate(&self) -> Result<(), String> {
         let mut sorted = self.order.clone();
         sorted.sort_unstable();
@@ -78,6 +101,7 @@ pub fn label(id: i32) -> &'static str {
         8 => "Key",
         9 => "Gain dB",
         10 => "Analysis",
+        11 => "Cover",
         _ => "Unknown",
     }
 }
@@ -95,6 +119,7 @@ pub fn sort_label(id: i32) -> &'static str {
         8 => "key",
         9 => "gain",
         10 => "analysis",
+        11 => "cover",
         _ => "unknown",
     }
 }
@@ -108,6 +133,7 @@ pub fn width(id: i32) -> f32 {
         6 => 60.,
         7 | 8 | 1 => 70.,
         10 => 100.,
+        11 => 36.,
         _ => 70.,
     }
 }
@@ -119,16 +145,40 @@ mod tests {
     fn preferences_validate_visibility_order_and_last_visible_column() {
         let mut columns = TableColumns::default();
         columns.change(7, -1).unwrap();
-        assert_eq!(&columns.order[..4], &[6, 0, 7, 3]);
+        assert_eq!(&columns.order[..5], &[6, 11, 0, 7, 3]);
         columns.change(7, 0).unwrap();
         assert!(columns.hidden.contains(&7));
         columns.change(7, 0).unwrap();
-        for id in 0..10 {
+        for id in 0..11 {
             columns.change(id, 0).unwrap();
         }
-        assert!(columns.change(10, 0).is_err());
+        assert!(columns.change(11, 0).is_err());
         assert!(columns.change(99, 0).is_err());
         columns.order[0] = columns.order[1];
         assert!(columns.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_columns_preserve_custom_order_and_hidden_state() {
+        let old = TableColumns {
+            version: 1,
+            order: vec![0, 6, 3, 1, 2, 4, 5, 7, 8, 9, 10],
+            hidden: vec![3, 7],
+        };
+        let upgraded = old.clone().upgrade().unwrap();
+        assert_eq!(
+            upgraded
+                .order
+                .iter()
+                .copied()
+                .filter(|id| *id != 11)
+                .collect::<Vec<_>>(),
+            old.order
+        );
+        assert_eq!(upgraded.hidden, old.hidden);
+        assert_eq!(upgraded.clone().upgrade().unwrap(), upgraded);
+        let mut bad = old;
+        bad.order[0] = 99;
+        assert!(bad.upgrade().is_err());
     }
 }
