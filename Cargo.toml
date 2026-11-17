@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote", "crates/drdj-itunes", "vendor/minidumper"]
+members = [".", "crates/drdj-keylock", "crates/drdj-proto", "crates/drdj-usb", "crates/drdj-dvs", "crates/drdj-remote", "crates/drdj-itunes", "crates/drdj-ml", "vendor/minidumper"]
 resolver = "2"
 
 [patch.crates-io]
@@ -90,6 +90,14 @@ strip = "none"
 # Interactive dev playback and codec optimizations below remain unchanged.
 [profile.test.package.drdjpro-ui-spike]
 opt-level = 0
+
+# Explicit ML spike only: optimized dependencies, compact artifacts, no app build.
+[profile.ml-spike]
+inherits = "release"
+debug = 0
+incremental = false
+lto = false
+codegen-units = 16
 
 [profile.dev.package.drdjpro-ui-spike]
 opt-level = 1

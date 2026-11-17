@@ -1,0 +1,144 @@
+{
+  "scope": "A0 synthetic Conv/GRU CPU experiment; not real-audio throughput",
+  "date": "2026-11-17",
+  "base_commit": "fed04d86cea51414de30e1fe198540a673c1d0f8",
+  "host": {
+    "os": "Windows x64",
+    "cpu": "Intel i7-11850H",
+    "cores": 8,
+    "logical_processors": 16,
+    "physical_ram_gib": 31.7,
+    "background_apps_controlled": false
+  },
+  "rust": "1.99.1-x86_64-pc-windows-msvc",
+  "profile": "ml-spike",
+  "cargo_build_jobs": 1,
+  "fixture_sha256": "33e4a9e3ae47e5e710414ca9a553ac00c471bb79f87c27dfcd8b60701dc31388",
+  "fixture_bytes": 489,
+  "absolute_tolerance": 1e-05,
+  "timing_batches": 10,
+  "inferences_per_batch": 75,
+  "synthetic_frame_rate_hz": 10,
+  "frames_per_inference": 8,
+  "cold_compilation": {
+    "ort": {
+      "cold_target": true,
+      "seconds": 75.2527831,
+      "offline": true,
+      "profile": "ml-spike",
+      "backend": "ort",
+      "exit": 0
+    },
+    "tract": {
+      "cold_target": true,
+      "offline": true,
+      "profile": "ml-spike",
+      "exit": 0,
+      "seconds": 957.936339,
+      "backend": "tract"
+    }
+  },
+  "artifact_snapshots": {
+    "ort": {
+      "backend": "ort",
+      "stage": "after backend-only build and tests",
+      "target_file_bytes": 80889119.0
+    },
+    "tract": {
+      "stage": "after backend-only build and tests",
+      "target_file_bytes": 836017277.0,
+      "backend": "tract"
+    }
+  },
+  "ort_runtime": {
+    "version": "1.31.0",
+    "archive_bytes": 82887349,
+    "archive_sha256": "3958d8a44984160692c1b4ffd0de3cb48f8c39f9d34bb31e433db06e30b82195",
+    "retained_bytes": 17620543,
+    "dlls": [
+      "onnxruntime.dll",
+      "onnxruntime_providers_shared.dll"
+    ],
+    "licenses": [
+      "LICENSE",
+      "ThirdPartyNotices.txt"
+    ]
+  },
+  "measurements": [
+    {
+      "backend": "ort",
+      "binary_bytes": 452608,
+      "first_load_ms": 80.3862,
+      "max_absolute_error": 2.2351741790771484e-08,
+      "model_bytes": 489,
+      "synthetic_minute_median_ms": 1.0754000000000001,
+      "threads": 1,
+      "warm_load_ms": 1.1083,
+      "process_peak_working_set_bytes": 36057088
+    },
+    {
+      "backend": "ort",
+      "binary_bytes": 452608,
+      "first_load_ms": 57.8421,
+      "max_absolute_error": 2.2351741790771484e-08,
+      "model_bytes": 489,
+      "synthetic_minute_median_ms": 0.9713499999999999,
+      "threads": 2,
+      "warm_load_ms": 1.113,
+      "process_peak_working_set_bytes": 36335616
+    },
+    {
+      "backend": "ort",
+      "binary_bytes": 452608,
+      "first_load_ms": 60.1344,
+      "max_absolute_error": 2.2351741790771484e-08,
+      "model_bytes": 489,
+      "synthetic_minute_median_ms": 1.0380500000000001,
+      "threads": 4,
+      "warm_load_ms": 1.4392999999999998,
+      "process_peak_working_set_bytes": 36507648
+    },
+    {
+      "backend": "tract",
+      "binary_bytes": 26324480,
+      "first_load_ms": 61.598800000000004,
+      "max_absolute_error": 1.4901161193847656e-08,
+      "model_bytes": 489,
+      "synthetic_minute_median_ms": 3.36005,
+      "threads": 1,
+      "warm_load_ms": 40.449400000000004,
+      "process_peak_working_set_bytes": 17047552
+    },
+    {
+      "backend": "tract",
+      "binary_bytes": 26324480,
+      "first_load_ms": 44.5831,
+      "max_absolute_error": 1.4901161193847656e-08,
+      "model_bytes": 489,
+      "synthetic_minute_median_ms": 3.3787,
+      "threads": 2,
+      "warm_load_ms": 40.203,
+      "process_peak_working_set_bytes": 16760832
+    },
+    {
+      "backend": "tract",
+      "binary_bytes": 26324480,
+      "first_load_ms": 44.1708,
+      "max_absolute_error": 1.4901161193847656e-08,
+      "model_bytes": 489,
+      "synthetic_minute_median_ms": 3.49425,
+      "threads": 4,
+      "warm_load_ms": 43.2739,
+      "process_peak_working_set_bytes": 16945152
+    }
+  ],
+  "limits": [
+    "No OS file cache purge",
+    "One fresh process per backend/thread configuration",
+    "First load includes runtime/environment initialization; warm load reuses runtime state",
+    "Rust sources cached before isolated cold compilation; no application release build",
+    "Windows peak working set read before ACK/child exit",
+    "Synthetic timings do not qualify real-music or real-model performance",
+    "No native/manual/listening/hardware or ML GPU/platform acceptance"
+  ]
+}

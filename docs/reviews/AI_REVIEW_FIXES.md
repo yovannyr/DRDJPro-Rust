@@ -88,3 +88,11 @@ auf C: frei (Momentaufnahme, keine zugesicherte Speicherobergrenze).
 
 Der echte Controller-/AudioAnalyzer-Pfad ist davon getrennt. Visuelle, manuelle,
 Hardware- und Hörabnahmen werden nicht aus diesen Softwaretests abgeleitet.
+
+## Fortschreibung — A0
+
+Nach Abschluss und Main-Integration von Slice 0 folgt der isolierte
+[CPU-Backend-Spike A0](../adr/ML-BACKEND.md). Seine Messungen und Prüfungen sind
+separat dokumentiert; die obigen Zahlen gehören zu den früheren Kritik-Fixes.
+Optionale Runtime-Adapter und ein synthetischer Testgraph bedeuten weiterhin
+keine produktive Stem-, Beat- oder Phrasenerkennung. A1 ist noch nicht gestartet.
