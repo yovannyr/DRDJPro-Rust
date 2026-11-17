@@ -1,7 +1,9 @@
 # Spec 26 — gemeinsame visuelle und manuelle Abnahme
 
 Entwicklungsstatus: **Erledigt auf Nutzerentscheidung**.
-Abnahmestatus: **Gestartet; Sichtbarkeit des Report-Fensters vom Nutzer bestätigt**.
+Abnahmestatus: **Teilweise bestätigt; M02 und M03 vom Nutzer bestätigt**.
+Fortschreibung am 2026-11-17 anhand der ausdrücklichen Rückmeldungen im Chat.
+Die weiteren visuellen und manuellen Tests übernimmt der Nutzer selbst.
 
 ## Testbasis
 
@@ -18,8 +20,8 @@ Abnahmestatus: **Gestartet; Sichtbarkeit des Report-Fensters vom Nutzer bestäti
 | ID | Aktion | Erwartung | Ergebnis |
 |---|---|---|---|
 | M01 | App starten und Hauptfenster ansehen | App reagiert, Layout lesbar, kein unerwarteter Crash-Dialog | Vom Assistenten beobachtet; gemeinsame Bestätigung offen |
-| M02 | `REPORTS` öffnen | Separates Report-Fenster sichtbar; Listen-/Detail-/Statusbereiche und Schaltflächen lesbar | Nutzer bestätigt vollständige Sichtbarkeit; zu dunkle Auto-Sharing-Beschriftung bestätigt. Korrektur und erneute gemeinsame Sichtprüfung folgen. |
-| M03 | Fenster verkleinern/vergrößern und Tastaturfokus prüfen | Keine abgeschnittenen zentralen Aktionen; verständlicher Fokus | Offen |
+| M02 | `REPORTS` öffnen | Separates Report-Fenster sichtbar; Listen-/Detail-/Statusbereiche und Schaltflächen lesbar | Nutzer bestätigt vollständige Sichtbarkeit und nach Kontrastkorrektur gut lesbare Auto-Sharing-Beschriftung. |
+| M03 | Fenster verkleinern/vergrößern und Tastaturfokus prüfen | Keine abgeschnittenen zentralen Aktionen; verständlicher Fokus | Nutzer bestätigt: auch bei kleinster Fenstergröße alles sichtbar, keine Überlappung; Fokus bei Tab/Umschalt+Tab klar sichtbar, deaktivierte Schaltflächen werden übersprungen. |
 | M04 | Eigenen Testbericht auswählen und Details prüfen | Datum, Version, OS/Architektur und bereinigter Stack passen; Auswahl bleibt stabil | Offen |
 | M05 | Post-Crash-Abfrage mit eigenem Testbericht schließen | Entscheidung bleibt ausstehend; kein automatischer Versand | Offen |
 | M06 | Nutzer wählt `KEEP LOCAL`, danach App neu starten | Testbericht bleibt lokal und abgelehnt; Entscheidung bleibt erhalten | Offen |
@@ -32,12 +34,13 @@ Abnahmestatus: **Gestartet; Sichtbarkeit des Report-Fensters vom Nutzer bestäti
 
 - Vorhandene App ohne Neukompilierung gestartet. Beide Decks bleiben pausiert.
 - Hauptfenster bei etwa 1280 × 850: unterer Rand abgeschnitten; nach Maximieren
-  auf die sichtbare Desktopfläche ist `REPORTS` erreichbar. M03 bleibt offen.
+  auf die sichtbare Desktopfläche ist `REPORTS` erreichbar. Dies ist die erste
+  Beobachtung; die spätere Nutzerbestätigung von M03 steht in der Tabelle.
 - Report-Fenster geöffnet: leere Liste, `No report selected`, Logger aktiv,
   kein gespeichertes Upload-Ziel; Aktionen für einen ausgewählten Report deaktiviert.
 - Nutzer bestätigt: Das Report-Fenster ist vollständig sichtbar; die Beschriftung
   der Auto-Sharing-Checkbox ist zu dunkel. Die Korrektur verwendet eine explizite
-  helle Textfarbe; die gemeinsame Sichtprüfung der Korrektur bleibt offen.
+  helle Textfarbe; der Nutzer hat die Lesbarkeit anschließend bestätigt.
 - Keine Sharing-Einstellung gespeichert, kein Report versendet oder gelöscht.
 
 ## Kontrastkorrektur der Auto-Sharing-Beschriftung
@@ -52,7 +55,9 @@ Abnahmestatus: **Gestartet; Sichtbarkeit des Report-Fensters vom Nutzer bestäti
 - Unabhängiges statisches Review: GPT-6.1 Sol, medium; keine blockierenden Befunde.
 - Finaler Windows-Debug-Build erfolgreich; vom Assistenten im laufenden Fenster
   geprüft: helle Beschriftung direkt neben der Checkbox, vollständig sichtbar.
-- Gemeinsame native Sicht- und Bedienprüfung der Korrektur bleibt offen.
+- Nutzer bestätigt anschließend die gute Lesbarkeit der korrigierten Beschriftung.
+  Die ebenfalls bestätigten Größen-/Fokusprüfungen sind unter M03 dokumentiert;
+  daraus folgt keine Abnahme der übrigen Report-Aktionen.
 
 ## Unverändert dokumentierte Restpunkte
 
