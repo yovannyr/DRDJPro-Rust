@@ -1,15 +1,10 @@
 //! Stems — Track separation, Cache, Voices (Drums/Bass/Melody/Vocals).
 //!
-//! Implements audio stem separation for DJ applications, allowing
-//! individual control of instrument groups from stereo audio.
-//! Part of the Stems feature (P12a).
-//!
-//! ## Design principles
-//!
-//! * **Voice separation** — Drums, Bass, Melody, Vocals.
-//! * **Cache management** — Efficient storage of separated stems.
-//! * **Non-blocking** — Separation runs asynchronously.
-//! * **Real-time** — Stem mixing in real-time audio callbacks.
+//! Provides manually supplied stem data, mixing and bounded cache contracts.
+//! Automatic voice separation has no implemented backend: requests fail
+//! explicitly instead of returning copies of the original mix or quality scores.
+//! Separation status is control-thread state, not a claim of asynchronous
+//! inference or a guarantee that mixing helpers are realtime-safe.
 
 use crate::atomic_float::AtomicF32;
 use std::collections::HashMap;
@@ -545,6 +540,8 @@ pub enum StemError {
     SourceUnavailable,
     /// Model not loaded (for ML methods).
     ModelNotLoaded,
+    /// The requested separation backend is not implemented.
+    NotImplemented,
     /// Insufficient memory.
     InsufficientMemory,
     /// Cache full.
@@ -560,6 +557,7 @@ impl std::fmt::Display for StemError {
         match self {
             Self::SourceUnavailable => write!(f, "Source audio unavailable"),
             Self::ModelNotLoaded => write!(f, "ML model not loaded"),
+            Self::NotImplemented => write!(f, "Stem separation is not implemented"),
             Self::InsufficientMemory => write!(f, "Insufficient memory for separation"),
             Self::CacheFull => write!(f, "Stem cache full"),
             Self::InvalidParameters(msg) => write!(f, "Invalid parameters: {}", msg),
@@ -596,107 +594,41 @@ impl StemSeparator {
         }
     }
 
-    /// Separate stems from audio samples.
+    /// Reject unavailable separation backends without fabricating stems or quality.
     ///
-    /// This is a simplified implementation using frequency band splitting.
-    /// Production would use ML models (Demucs, Spleeter, etc.).
+    /// This control-thread API currently has no separation backend. Manual stem
+    /// data, mixing and cache contracts remain available independently. A cache
+    /// entry must never turn an unavailable method into a successful operation.
     pub fn separate(
         &self,
-        source_path: PathBuf,
+        _source_path: PathBuf,
         samples: &[f32],
         sample_rate: u32,
         method: SeparationMethod,
     ) -> Result<StemSeparation, StemError> {
+        self.separating.store(false, Ordering::Relaxed);
+        self.separation_complete.store(false, Ordering::Relaxed);
+        self.progress.store(0.0, Ordering::Relaxed);
         if samples.is_empty() {
             return Err(StemError::SourceUnavailable);
         }
-
-        self.separating.store(true, Ordering::Relaxed);
-        self.progress.store(0.1, Ordering::Relaxed);
-        *self.method.lock().unwrap() = method;
-
-        // Check cache first.
-        let hash = self.hash_samples(samples);
-        if let Some(cached) = self.cache.get(hash) {
-            self.separating.store(false, Ordering::Relaxed);
-            self.separation_complete.store(true, Ordering::Relaxed);
-            self.progress.store(1.0, Ordering::Relaxed);
-            return Ok(cached);
+        if sample_rate == 0 {
+            return Err(StemError::InvalidParameters(
+                "Sample rate must be positive".into(),
+            ));
         }
-
-        self.progress.store(0.3, Ordering::Relaxed);
-
-        // Perform separation (simplified).
-        let stems = self.perform_separation(samples, sample_rate, method)?;
-
-        self.progress.store(0.8, Ordering::Relaxed);
-
-        let mut separation = StemSeparation::new(source_path.clone(), stems, method);
-        separation.quality = 0.75; // Simplified quality estimate.
-
-        // Store in cache.
-        let _ = self
-            .cache
-            .put(hash, source_path.clone(), separation.clone());
-
-        self.progress.store(1.0, Ordering::Relaxed);
-        self.separating.store(false, Ordering::Relaxed);
-        self.separation_complete.store(true, Ordering::Relaxed);
-
-        Ok(separation)
-    }
-
-    /// Perform frequency band split separation.
-    fn perform_separation(
-        &self,
-        samples: &[f32],
-        sample_rate: u32,
-        method: SeparationMethod,
-    ) -> Result<Vec<Stem>, StemError> {
-        if method != SeparationMethod::BandSplit {
-            return Err(StemError::ModelNotLoaded);
-        }
-
-        // Simplified band split.
-        // Drums: < 150 Hz (kick, snare) + some higher transients.
-        // Bass: 60 - 250 Hz.
-        // Melody: 250 Hz - 4 kHz.
-        // Vocals: 300 Hz - 3.4 kHz.
-
-        let drums = Self::extract_band(samples, 0, 150, sample_rate);
-        let bass = Self::extract_band(samples, 60, 250, sample_rate);
-        let melody = Self::extract_band(samples, 250, 4000, sample_rate);
-        let vocals = Self::extract_band(samples, 300, 3400, sample_rate);
-
-        Ok(vec![
-            Stem::new(VoiceCategory::Drums, drums, sample_rate),
-            Stem::new(VoiceCategory::Bass, bass, sample_rate),
-            Stem::new(VoiceCategory::Melody, melody, sample_rate),
-            Stem::new(VoiceCategory::Vocals, vocals, sample_rate),
-        ])
-    }
-
-    /// Extract frequency band from samples (simplified).
-    fn extract_band(samples: &[f32], _low_hz: u32, _high_hz: u32, _sample_rate: u32) -> Vec<f32> {
-        // Simplified: just return samples (production would use FFT filtering).
-        // Real implementation would:
-        // 1. Apply FFT to blocks
-        // 2. Zero out bins outside low_hz-high_hz range
-        // 3. Inverse FFT
-        samples.to_vec()
-    }
-
-    /// Hash audio samples for cache lookup.
-    fn hash_samples(&self, samples: &[f32]) -> u64 {
-        // Simple hash — production would use a proper hash like xxHash.
-        let mut hash: u64 = 0xcbf29ce484222325;
-        for chunk in samples.chunks(8) {
-            for &sample in chunk {
-                hash ^= u64::from(sample.to_bits());
-                hash = hash.wrapping_mul(0x100000001b3);
+        *self
+            .method
+            .lock()
+            .map_err(|_| StemError::ProcessingError("Separation state unavailable".into()))? =
+            method;
+        Err(match method {
+            SeparationMethod::BandSplit | SeparationMethod::PhaseSplit => StemError::NotImplemented,
+            SeparationMethod::MLBased => StemError::ModelNotLoaded,
+            SeparationMethod::Unknown => {
+                StemError::InvalidParameters("Unknown separation method".into())
             }
-        }
-        hash
+        })
     }
 
     /// Get current progress.
@@ -748,12 +680,26 @@ impl Default for StemSeparator {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn cache_hash_distinguishes_equal_length_pcm() {
-        let separator = super::StemSeparator::new(super::StemCache::new(1));
-        let a = [0.0f32, 0.25, -0.5, 0.75];
-        let b = [0.0f32, 0.25, -0.5, 0.875];
-        assert_ne!(separator.hash_samples(&a), separator.hash_samples(&b));
-        assert_eq!(separator.hash_samples(&a), separator.hash_samples(&a));
+    fn manually_supplied_cache_keys_keep_sources_distinct() {
+        let cache = super::StemCache::new(512);
+        let a = PathBuf::from("/a.wav");
+        let b = PathBuf::from("/b.wav");
+        cache
+            .put(
+                1,
+                a.clone(),
+                StemSeparation::new(a.clone(), vec![], SeparationMethod::BandSplit),
+            )
+            .unwrap();
+        cache
+            .put(
+                2,
+                b.clone(),
+                StemSeparation::new(b.clone(), vec![], SeparationMethod::BandSplit),
+            )
+            .unwrap();
+        assert_eq!(cache.get(1).unwrap().source_path, a);
+        assert_eq!(cache.get(2).unwrap().source_path, b);
     }
 
     use super::*;
@@ -1029,99 +975,74 @@ mod tests {
     }
 
     #[test]
-    fn stem_separator_separate() {
+    fn unavailable_methods_never_return_mix_copies_or_claim_completion() {
         let separator = StemSeparator::new(StemCache::new(512));
-        let samples = make_test_samples(44100); // 1 second.
-
-        let result = separator.separate(
-            PathBuf::from("/test.wav"),
-            &samples,
-            44100,
+        let samples = make_test_samples(4410);
+        for method in [
             SeparationMethod::BandSplit,
-        );
-
-        assert!(result.is_ok());
-        let separation = result.unwrap();
-        assert!(separation.has_all_voices());
+            SeparationMethod::PhaseSplit,
+            SeparationMethod::MLBased,
+            SeparationMethod::Unknown,
+        ] {
+            let error = separator
+                .separate(PathBuf::from("/test.wav"), &samples, 44100, method)
+                .unwrap_err();
+            match method {
+                SeparationMethod::BandSplit | SeparationMethod::PhaseSplit => {
+                    assert!(matches!(error, StemError::NotImplemented))
+                }
+                SeparationMethod::MLBased => assert!(matches!(error, StemError::ModelNotLoaded)),
+                SeparationMethod::Unknown => {
+                    assert!(matches!(error, StemError::InvalidParameters(_)))
+                }
+            }
+            assert!(!separator.is_separating());
+            assert!(!separator.is_complete());
+            assert_eq!(separator.progress(), 0.0);
+            assert_eq!(separator.cache_stats(), (0, 0, 0, 0));
+            assert_eq!(separator.current_method(), method);
+        }
     }
 
     #[test]
-    fn stem_separator_empty_samples() {
-        let separator = StemSeparator::new(StemCache::new(512));
-
-        let result = separator.separate(
-            PathBuf::from("/test.wav"),
-            &[],
-            44100,
-            SeparationMethod::BandSplit,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn stem_separator_progress() {
-        let separator = StemSeparator::new(StemCache::new(512));
-
-        assert_eq!(separator.progress(), 0.0);
+    fn failed_separation_clears_state_and_validates_input() {
+        let separator = StemSeparator::default();
+        separator.separating.store(true, Ordering::Relaxed);
+        separator.separation_complete.store(true, Ordering::Relaxed);
+        separator.progress.store(1.0, Ordering::Relaxed);
+        assert!(matches!(
+            separator.separate(PathBuf::new(), &[], 44100, SeparationMethod::BandSplit),
+            Err(StemError::SourceUnavailable)
+        ));
         assert!(!separator.is_separating());
         assert!(!separator.is_complete());
-
-        let samples = make_test_samples(4410);
-        let _ = separator.separate(
-            PathBuf::from("/test.wav"),
-            &samples,
-            44100,
-            SeparationMethod::BandSplit,
-        );
-
-        assert_eq!(separator.progress(), 1.0);
-        assert!(!separator.is_separating());
-        assert!(separator.is_complete());
+        assert_eq!(separator.progress(), 0.0);
+        assert!(matches!(
+            separator.separate(PathBuf::new(), &[0.5], 0, SeparationMethod::BandSplit),
+            Err(StemError::InvalidParameters(_))
+        ));
     }
 
     #[test]
-    fn stem_separator_caching() {
-        let separator = StemSeparator::new(StemCache::new(512));
-        let samples = make_test_samples(4410);
-
-        // First call — cache miss.
-        let _ = separator.separate(
-            PathBuf::from("/test.wav"),
-            &samples,
-            44100,
-            SeparationMethod::BandSplit,
-        );
-
-        // Second call with same data — should hit cache.
-        let _ = separator.separate(
-            PathBuf::from("/test.wav"),
-            &samples,
-            44100,
-            SeparationMethod::BandSplit,
-        );
-
-        let (_, _, entries, _) = separator.cache_stats();
-        assert_eq!(entries, 1); // Only one entry cached.
-
-        let rate = separator.cache_hit_rate();
-        assert!(rate > 0.0);
-    }
-
-    #[test]
-    fn stem_separator_invalid_method() {
-        let separator = StemSeparator::new(StemCache::new(512));
-        let samples = make_test_samples(4410);
-
-        let result = separator.separate(
-            PathBuf::from("/test.wav"),
-            &samples,
-            44100,
-            SeparationMethod::MLBased,
-        );
-
-        // ML-Based requires model → should fail without it.
-        assert!(result.is_err());
+    fn unavailable_method_does_not_read_or_overwrite_preexisting_cache() {
+        let cache = StemCache::new(512);
+        let path = PathBuf::from("/manual.wav");
+        cache
+            .put(
+                123,
+                path.clone(),
+                StemSeparation::new(path.clone(), vec![], SeparationMethod::BandSplit),
+            )
+            .unwrap();
+        let separator = StemSeparator::new(cache);
+        for _ in 0..2 {
+            assert!(matches!(
+                separator.separate(path.clone(), &[0.5; 32], 44100, SeparationMethod::BandSplit),
+                Err(StemError::NotImplemented)
+            ));
+        }
+        let (hits, misses, entries, _) = separator.cache_stats();
+        assert_eq!((hits, misses, entries), (0, 0, 1));
     }
 
     #[test]
