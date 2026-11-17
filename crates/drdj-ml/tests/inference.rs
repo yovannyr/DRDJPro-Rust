@@ -4,6 +4,16 @@ use drdj_ml::{load_backend, BackendKind, InferenceError, Threads, INPUT_LEN};
 use sha2::{Digest, Sha256};
 use std::{env, path::PathBuf};
 
+fn enabled_backends() -> impl Iterator<Item = BackendKind> {
+    [
+        #[cfg(feature = "ort")]
+        BackendKind::Ort,
+        #[cfg(feature = "tract")]
+        BackendKind::Tract,
+    ]
+    .into_iter()
+}
+
 #[test]
 fn generated_conv_gru_matches_independent_scalar_reference_and_resets_state() {
     let model = PathBuf::from(
@@ -18,13 +28,7 @@ fn generated_conv_gru_matches_independent_scalar_reference_and_resets_state() {
         format!("{:x}", Sha256::digest(std::fs::read(&model).unwrap())),
         reference["model_sha256"].as_str().unwrap()
     );
-    let kinds = [
-        #[cfg(feature = "ort")]
-        BackendKind::Ort,
-        #[cfg(feature = "tract")]
-        BackendKind::Tract,
-    ];
-    for kind in kinds {
+    for kind in enabled_backends() {
         for threads in [1, 2, 4] {
             let mut backend = load_backend(
                 kind,
@@ -71,24 +75,19 @@ fn corrupt_or_oversized_graph_never_yields_a_backend() {
     let dir = tempfile::tempdir().unwrap();
     let model = dir.path().join("corrupt.onnx");
     std::fs::write(&model, b"invalid graph").unwrap();
-    for kind in [
-        #[cfg(feature = "ort")]
-        BackendKind::Ort,
-        #[cfg(feature = "tract")]
-        BackendKind::Tract,
-    ] {
-        assert!(load_backend(kind, &model, Threads::new(1).unwrap(), runtime.as_deref()).is_err());
+    for kind in enabled_backends() {
+        assert!(matches!(
+            load_backend(kind, &model, Threads::new(1).unwrap(), runtime.as_deref()),
+            Err(InferenceError::Backend(_))
+        ));
     }
     std::fs::write(&model, vec![0u8; 65_537]).unwrap();
-    assert!(matches!(
-        load_backend(
-            BackendKind::Ort,
-            &model,
-            Threads::new(1).unwrap(),
-            runtime.as_deref()
-        ),
-        Err(InferenceError::ModelUnavailable)
-    ));
+    for kind in enabled_backends() {
+        assert!(matches!(
+            load_backend(kind, &model, Threads::new(1).unwrap(), runtime.as_deref()),
+            Err(InferenceError::ModelUnavailable)
+        ));
+    }
 }
 
 #[cfg(feature = "ort")]
