@@ -1,0 +1,48 @@
+name: Isolated ML backend parity
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/drdj-ml/**'
+      - 'tools/ml_*.py'
+      - 'tools/test_ml_*.py'
+      - '.github/workflows/ml-backend-spike.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+jobs:
+  parity:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [ort, tract]
+    env:
+      CARGO_BUILD_JOBS: '1'
+      DRDJ_ML_FIXTURE: ${{ github.workspace }}/target/ml-a0/conv-gru.onnx
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting and fixture tooling
+        run: |
+          cargo fmt --all -- --check
+          python -m unittest discover -s tools -p "test_ml_*.py"
+          python tools/ml_fixture.py --model $env:DRDJ_ML_FIXTURE
+      - name: Explicitly fetch checksum-pinned CPU runtime
+        if: matrix.backend == 'ort'
+        run: |
+          python tools/ml_spike.py fetch-ort --destination target/ml-a0/ort-runtime
+          "DRDJ_ORT_LIBRARY=$((Get-Location).Path)/target/ml-a0/ort-runtime/onnxruntime.dll" | Add-Content -LiteralPath $env:GITHUB_ENV
+      - name: Test real backend and scalar parity at 1, 2 and 4 threads
+        run: cargo test -p drdj-ml --features ${{ matrix.backend }} --locked
+      - name: Verify cached source offline reproducibility
+        run: cargo test -p drdj-ml --features ${{ matrix.backend }} --locked --offline
+      - name: Strict backend lint
+        run: cargo clippy -p drdj-ml --features ${{ matrix.backend }} --locked --all-targets -- -D warnings

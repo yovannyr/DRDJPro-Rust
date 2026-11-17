@@ -1,0 +1,41 @@
+"""No-network regressions for the explicitly requested runtime fetch."""
+import hashlib
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+import ml_spike
+
+
+class RuntimeTests(unittest.TestCase):
+    def test_verified_archive_extracts_only_fixed_files_and_preserves_neighbors(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            archive = base / "runtime.zip"
+            prefix = "onnxruntime-win-x64-1.31.0/"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr(prefix + "lib/onnxruntime.dll", b"fixture")
+                zipped.writestr(prefix + "LICENSE", b"license")
+                zipped.writestr(prefix + "lib/../../escape.dll", b"reject")
+                zipped.writestr(prefix + "lib/unexpected.dll", b"reject")
+            data = archive.read_bytes()
+            destination = base / "runtime"
+            with patch.object(ml_spike, "ORT_BYTES", len(data)), patch.object(
+                    ml_spike, "ORT_SHA256", hashlib.sha256(data).hexdigest()):
+                result = ml_spike.extract_verified_runtime(archive, destination)
+                self.assertEqual(result.read_bytes(), b"fixture")
+                self.assertEqual({p.name for p in destination.iterdir()}, {"onnxruntime.dll", "LICENSE"})
+                archive.write_bytes(b"x" * len(data))
+                with self.assertRaisesRegex(ValueError, "SHA256"):
+                    ml_spike.extract_verified_runtime(archive, destination)
+                self.assertEqual(result.read_bytes(), b"fixture")
+                archive.write_bytes(b"x")
+                with self.assertRaisesRegex(ValueError, "size"):
+                    ml_spike.extract_verified_runtime(archive, destination)
+            self.assertFalse((base / "escape.dll").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

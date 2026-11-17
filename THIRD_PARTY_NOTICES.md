@@ -23,3 +23,17 @@ Rust 1.92 or newer, the platform C/C++ toolchain/SDK and the normal application'
 system dependencies are required; the decoder subset is vendored and built by
 Cargo, not downloaded at runtime. Manual/hardware acceptance is separate from
 buildability and license notices. No claim of a completed legal release audit.
+
+## Isolated optional ML backend experiment
+
+`crates/drdj-ml` has no application dependency and no backend enabled by default.
+Its optional `ort` 2.0.0-rc.15 and `tract` 0.23.8 dependencies carry MIT/Apache-2.0
+notices in their upstream source packages. The explicit Windows CPU runtime fetch
+uses Microsoft's ONNX Runtime 1.31.0 release and retains its `LICENSE` and
+`ThirdPartyNotices.txt` beside the DLL. These downloads are not bundled in this
+repository or ordinary app builds. Retain those upstream notices and inventory
+transitive components if distributing a runtime-enabled binary.
+
+The generated A0 Conv/GRU fixture uses our synthetic constants and no trained or
+third-party weights. No rights for future beat/stem models or training datasets
+are established by this experiment. See `docs/adr/ML-BACKEND.md`.

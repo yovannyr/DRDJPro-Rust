@@ -1,5 +1,14 @@
 # DrDJ Pro product and migration plan
 
+## Isolated ML runtime evaluation (A0)
+
+`crates/drdj-ml` is an optional-backend experiment, not an application dependency.
+It compares CPU ORT/tract on a generated synthetic Conv/GRU fixture with scalar
+parity and explicit resource measurements. No UI, decoder, real-time callback or
+production analysis path is connected. A1 (registry/service/cache) and real-model
+quality qualification remain separate. Decision and evidence:
+[ML-BACKEND.md](adr/ML-BACKEND.md).
+
 ## Product goal and release gate
 
 Der konkrete MC4000-Funktionsabgleich fuer Handbuchseiten 24-27 und die
