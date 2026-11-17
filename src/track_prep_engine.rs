@@ -1,19 +1,9 @@
-//! Track Preparation Engine (P21b) — Cue Jump, Key Detection, Metadata,
-//! Waveform Overlays, Batch Analysis, Re-Analyze, Prep Status.
+//! Legacy track-preparation contracts: cue-request validation, in-memory
+//! metadata edits, manual keys, supplied overlays and externally driven jobs.
 //!
-//! Extends the existing track analysis (P21a / P14a: `track_analysis.rs`,
-//! `beat_grid.rs`, `hot_cues.rs`) with:
-//! 1. Cue-Jump playback
-//! 2. Musical key detection with confidence scores
-//! 3. Manual key override
-//! 4. Metadata editing UI types
-//! 5. Waveform overlays (cue markers, beat markers)
-//! 6. Persistent analysis/cue storage
-//! 7. Preparation status display
-//! 8. Batch analysis with progress tracking
-//! 9. Re-analyze with override flags
-//!
-//! Part of the Track Preparation feature (P21b).
+//! Automatic key detection, file re-analysis and analysis persistence have no
+//! backend here and return explicit errors. These contracts do not replace the
+//! real Controller/AudioAnalyzer/SQLite pipeline used by the application.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -757,30 +747,20 @@ impl TrackPrepEngine {
         }
     }
 
-    /// Detect musical key.
+    /// Automatic key detection is unavailable in this legacy prep contract.
+    /// The application uses its independent real AudioAnalyzer pipeline.
     pub fn detect_key(
         &mut self,
-        track_path: &str,
-        _audio_data: &[f32],
-        _sample_rate: u32,
-    ) -> KeyDetection {
-        // Simplified key detection — in production this uses spectral analysis.
-        // This is a placeholder that returns a mock result.
-        let start = Instant::now();
-
-        let key = MusicalKey::Major(Note::C);
-        let confidence = 0.85;
-
-        let mut detection = KeyDetection::new(key, confidence);
-        detection.add_alternative(MusicalKey::Minor(Note::A), 0.62);
-        detection.add_alternative(MusicalKey::Major(Note::G), 0.38);
-        detection.analysis_time = start.elapsed();
-
-        // Cache result.
-        self.key_cache
-            .insert(track_path.to_string(), detection.clone());
-
-        detection
+        _track_path: &str,
+        audio_data: &[f32],
+        sample_rate: u32,
+    ) -> Result<KeyDetection, PrepError> {
+        if audio_data.is_empty() || sample_rate == 0 {
+            return Err(PrepError::InvalidValue(
+                "Audio and a positive sample rate are required".into(),
+            ));
+        }
+        Err(PrepError::NotImplemented("Automatic key detection"))
     }
 
     /// Get cached key detection.
@@ -796,7 +776,9 @@ impl TrackPrepEngine {
             .get(track_path)
             .cloned()
             .unwrap_or_else(|| KeyDetection::new(key, 1.0));
-        detection.confidence = 1.0; // Override is certain.
+        detection.key = key;
+        detection.alternatives.clear();
+        detection.confidence = 1.0; // Explicit user choice, not model confidence.
         self.key_cache.insert(track_path.to_string(), detection);
     }
 
@@ -973,22 +955,8 @@ impl TrackPrepEngine {
             );
         }
 
-        // Add phrase markers (every 16 beats = 4 bars).
-        for i in (0..beat_positions.len()).step_by(16) {
-            if i + 16 < beat_positions.len() {
-                self.add_overlay(
-                    track_path,
-                    WaveformOverlay {
-                        overlay_type: OverlayType::Phrase,
-                        start_sample: beat_positions[i],
-                        end_sample: Some(beat_positions[i + 16]),
-                        color: 0x00ff00,
-                        alpha: 64,
-                        label: Some(format!("Phrase {}", i / 16 + 1)),
-                    },
-                );
-            }
-        }
+        // Beats and meter grouping do not establish phrase boundaries. Phrase
+        // overlays can only be supplied explicitly by a caller with evidence.
     }
 
     /// Create new batch analysis job.
@@ -1065,71 +1033,41 @@ impl TrackPrepEngine {
         Ok(())
     }
 
-    /// Re-analyze track.
+    /// No re-analysis backend is attached; preserve existing user data on error.
     pub fn re_analyze_track(
         &mut self,
-        track_path: &str,
+        _track_path: &str,
         config: ReAnalysisConfig,
     ) -> Result<bool, PrepError> {
         if config.is_empty() {
             return Err(PrepError::NoAnalysisRequested);
         }
-
-        // Mark as re-analysis requested.
-        self.key_cache.remove(track_path); // Clear cached detection.
-
-        // Simulate re-analysis.
-        if config.force {
-            // In production, this would invalidate caches and re-read audio.
-        }
-
-        Ok(true)
+        Err(PrepError::NotImplemented("Track re-analysis"))
     }
 
-    /// Save analysis data.
+    /// Analysis persistence is unavailable here; the application uses SQLite.
     pub fn save_analysis(
         &self,
-        track_path: &str,
-        format: SaveFormat,
+        _track_path: &str,
+        _format: SaveFormat,
         _data: &str,
     ) -> Result<PathBuf, PrepError> {
-        match format {
-            SaveFormat::Json => {
-                let path = PathBuf::from(format!("{}.analysis.json", track_path));
-                // In production, write to filesystem.
-                Ok(path)
-            }
-            SaveFormat::Xml => {
-                let path = PathBuf::from(format!("{}.analysis.xml", track_path));
-                Ok(path)
-            }
-            SaveFormat::Embedded => {
-                // In production, write to audio file tags.
-                Ok(PathBuf::from(track_path))
-            }
-        }
+        Err(PrepError::NotImplemented("Analysis persistence"))
     }
 
-    /// Load analysis data.
+    /// Never fabricate file contents for an unavailable persistence backend.
     pub fn load_analysis(
         &mut self,
-        track_path: &str,
-        format: SaveFormat,
+        _track_path: &str,
+        _format: SaveFormat,
     ) -> Result<String, PrepError> {
-        let path = match format {
-            SaveFormat::Json => format!("{}.analysis.json", track_path),
-            SaveFormat::Xml => format!("{}.analysis.xml", track_path),
-            SaveFormat::Embedded => track_path.to_string(),
-        };
-
-        // In production, read from file.
-        Ok(format!("{{\"track\": \"{}\"}}", path))
+        Err(PrepError::NotImplemented("Analysis persistence"))
     }
 
     /// Get preparation status for track.
     pub fn get_prep_status(&self, track_path: &str) -> PrepStatus {
         if self.key_cache.contains_key(track_path) {
-            PrepStatus::Prepared
+            PrepStatus::KeyDetected
         } else {
             PrepStatus::Unprepared
         }
@@ -1180,6 +1118,8 @@ pub struct MetadataEdit {
 /// Track preparation error.
 #[derive(Debug, Clone)]
 pub enum PrepError {
+    /// No backend is attached to this legacy operation.
+    NotImplemented(&'static str),
     /// Invalid cue position.
     InvalidCuePosition(String),
     /// Job not found.
@@ -1199,6 +1139,7 @@ pub enum PrepError {
 impl std::fmt::Display for PrepError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NotImplemented(operation) => write!(f, "{operation} is not implemented"),
             Self::InvalidCuePosition(msg) => write!(f, "Invalid cue position: {}", msg),
             Self::JobNotFound(id) => write!(f, "Batch job not found: {}", id),
             Self::NoTracksToAnalyze => write!(f, "No tracks to analyze"),
@@ -1560,12 +1501,18 @@ mod tests {
     #[test]
     fn prep_engine_key_detection() {
         let mut engine = TrackPrepEngine::new();
-        let audio = vec![0.5f32; 44100]; // 1 second at 44.1kHz.
-        let detection = engine.detect_key("test.mp3", &audio, 44100);
-
-        assert_eq!(detection.key, MusicalKey::Major(Note::C));
-        assert!(detection.is_confident());
-        assert!(!detection.alternatives.is_empty());
+        for audio in [vec![0.5; 44100], vec![0.0; 44100]] {
+            assert!(matches!(
+                engine.detect_key("test.mp3", &audio, 44100),
+                Err(PrepError::NotImplemented(_))
+            ));
+            assert!(engine.get_cached_key("test.mp3").is_none());
+            assert_eq!(engine.get_prep_status("test.mp3"), PrepStatus::Unprepared);
+        }
+        assert!(matches!(
+            engine.detect_key("test.mp3", &[], 0),
+            Err(PrepError::InvalidValue(_))
+        ));
     }
 
     #[test]
@@ -1575,7 +1522,7 @@ mod tests {
         let _ = engine.detect_key("test.mp3", &audio, 44100);
 
         let cached = engine.get_cached_key("test.mp3");
-        assert!(cached.is_some());
+        assert!(cached.is_none());
     }
 
     #[test]
@@ -1584,10 +1531,13 @@ mod tests {
         let audio = vec![0.5f32; 44100];
         let _ = engine.detect_key("test.mp3", &audio, 44100);
 
+        engine.set_key_override("test.mp3", MusicalKey::Major(Note::C));
         engine.set_key_override("test.mp3", MusicalKey::Minor(Note::A));
         let override_key = engine.get_effective_key("test.mp3");
         assert!(override_key.is_some());
-        assert_eq!(override_key.unwrap().confidence, 1.0); // Override is certain.
+        let override_key = override_key.unwrap();
+        assert_eq!(override_key.key, MusicalKey::Minor(Note::A));
+        assert_eq!(override_key.confidence, 1.0); // Explicit manual choice.
     }
 
     #[test]
@@ -1700,7 +1650,10 @@ mod tests {
         engine.generate_beat_overlays("test.mp3", &beats, 16);
 
         let overlays = engine.get_overlays("test.mp3");
-        assert!(overlays.len() > 64); // Beats + phrases.
+        assert_eq!(overlays.len(), beats.len());
+        assert!(overlays
+            .iter()
+            .all(|overlay| overlay.overlay_type != OverlayType::Phrase));
     }
 
     #[test]
@@ -1745,8 +1698,15 @@ mod tests {
     #[test]
     fn prep_engine_re_analyze() {
         let mut engine = TrackPrepEngine::new();
-        let config = ReAnalysisConfig::bpm_only();
-        assert!(engine.re_analyze_track("test.mp3", config).is_ok());
+        engine.set_key_override("test.mp3", MusicalKey::Minor(Note::A));
+        assert!(matches!(
+            engine.re_analyze_track("test.mp3", ReAnalysisConfig::full()),
+            Err(PrepError::NotImplemented(_))
+        ));
+        assert_eq!(
+            engine.get_effective_key("test.mp3").unwrap().key,
+            MusicalKey::Minor(Note::A)
+        );
     }
 
     #[test]
@@ -1765,18 +1725,22 @@ mod tests {
 
     #[test]
     fn prep_engine_save_analysis() {
-        let engine = TrackPrepEngine::new();
-        let path = engine
-            .save_analysis("test.mp3", SaveFormat::Json, "{}")
-            .unwrap();
-        assert!(path.to_string_lossy().ends_with(".analysis.json"));
-    }
-
-    #[test]
-    fn prep_engine_load_analysis() {
         let mut engine = TrackPrepEngine::new();
-        let data = engine.load_analysis("test.mp3", SaveFormat::Json).unwrap();
-        assert!(data.contains("test.mp3"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("track.mp3");
+        std::fs::write(&path, b"unchanged source").unwrap();
+        for format in [SaveFormat::Json, SaveFormat::Xml, SaveFormat::Embedded] {
+            assert!(matches!(
+                engine.save_analysis(path.to_str().unwrap(), format, "{}"),
+                Err(PrepError::NotImplemented(_))
+            ));
+            assert!(matches!(
+                engine.load_analysis(path.to_str().unwrap(), format),
+                Err(PrepError::NotImplemented(_))
+            ));
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"unchanged source");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -1790,7 +1754,9 @@ mod tests {
         let mut engine = TrackPrepEngine::new();
         let audio = vec![0.5f32; 44100];
         let _ = engine.detect_key("known.mp3", &audio, 44100);
-        assert_eq!(engine.get_prep_status("known.mp3"), PrepStatus::Prepared);
+        assert_eq!(engine.get_prep_status("known.mp3"), PrepStatus::Unprepared);
+        engine.set_key_override("known.mp3", MusicalKey::Minor(Note::A));
+        assert_eq!(engine.get_prep_status("known.mp3"), PrepStatus::KeyDetected);
     }
 
     #[test]

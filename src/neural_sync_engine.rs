@@ -1,11 +1,9 @@
-//! Neural Sync Engine (P22b) — Phrase Tracking, Energy Matching, Key Sync,
-//! Phrase Scoring, Tolerance Settings, Performance Metrics, Waveform Rendering,
-//! Settings Persistence.
+//! Legacy rule-based sync suggestion contracts.
 //!
-//! Integrates harmony.rs, energy.rs, beat_grid.rs, and waveform.rs into a
-//! unified sync recommendation system.
-//!
-//! Part of the Neural Sync Engine feature (P22b).
+//! Scores caller-supplied phrase/energy annotations. This module performs no
+//! neural inference, automatic phrase-boundary detection or key compatibility
+//! detection. Missing evidence produces no harmonic suggestion. Settings
+//! persistence has no backend and returns explicit errors.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1116,16 +1114,8 @@ impl NeuralSyncEngine {
             }
         }
 
-        if self.settings.key_sync_enabled {
-            // Harmonic suggestions would use harmony.rs here.
-            // Placeholder: always add a harmonic suggestion at base compatibility.
-            suggestions.push(SyncSuggestion {
-                suggestion_type: SuggestionType::HarmonicMatch,
-                score: 0.75,
-                label: "Harmonically Compatible".to_string(),
-                details: "Key sync compatible".to_string(),
-            });
-        }
+        // No track-key data/backend is attached here. Enabling key sync must
+        // not fabricate compatibility from absent evidence.
 
         if self.settings.energy_matching_enabled {
             if let (Some(pos_a), Some(pos_b)) = (
@@ -1197,7 +1187,8 @@ impl NeuralSyncEngine {
         self.metrics.total_sync_ops += 1;
     }
 
-    /// Update metrics from sync result.
+    /// Record externally supplied detection metrics. Suggestions/positions do
+    /// not constitute phrase detection; callers must supply verified counts.
     pub fn update_metrics(&mut self, phrases_detected: u32, confidence: f32) {
         self.metrics.record_analysis(
             self.last_sync.map_or(0, |t| t.elapsed().as_millis() as u64),
@@ -1216,32 +1207,14 @@ impl NeuralSyncEngine {
         &mut self.metrics
     }
 
-    /// Save settings.
-    pub fn save_settings(&self, format: SettingsFormat) -> Result<PathBuf, SyncError> {
-        match format {
-            SettingsFormat::Json => {
-                let path = PathBuf::from("sync_settings.json");
-                Ok(path)
-            }
-            SettingsFormat::Binary => {
-                let path = PathBuf::from("sync_settings.bin");
-                Ok(path)
-            }
-        }
+    /// This legacy contract has no settings persistence backend.
+    pub fn save_settings(&self, _format: SettingsFormat) -> Result<PathBuf, SyncError> {
+        Err(SyncError::NotImplemented("Sync settings persistence"))
     }
 
-    /// Load settings.
-    pub fn load_settings(&mut self, format: SettingsFormat) -> Result<(), SyncError> {
-        match format {
-            SettingsFormat::Json => {
-                // Would deserialize JSON file.
-                Ok(())
-            }
-            SettingsFormat::Binary => {
-                // Would deserialize binary config.
-                Ok(())
-            }
-        }
+    /// Report unavailability without claiming to have read or applied a file.
+    pub fn load_settings(&mut self, _format: SettingsFormat) -> Result<(), SyncError> {
+        Err(SyncError::NotImplemented("Sync settings persistence"))
     }
 
     /// Record historical transition.
@@ -1348,9 +1321,15 @@ impl SyncMetrics {
     /// Record suggestions generation.
     pub fn record_suggestions(&mut self, _elapsed: Duration, suggestions: &[SyncSuggestion]) {
         self.suggestion_count += suggestions.len() as u32;
-        if let Some(best) = suggestions.iter().map(|s| s.score).reduce(f32::max) {
-            if best > self.best_phrase_score {
-                self.best_phrase_score = best;
+        for suggestion in suggestions {
+            match suggestion.suggestion_type {
+                SuggestionType::PhraseAlignment => {
+                    self.best_phrase_score = self.best_phrase_score.max(suggestion.score)
+                }
+                SuggestionType::EnergyMatch => {
+                    self.best_energy_score = self.best_energy_score.max(suggestion.score)
+                }
+                _ => (),
             }
         }
     }
@@ -1359,6 +1338,8 @@ impl SyncMetrics {
 /// Sync engine error.
 #[derive(Debug, Clone)]
 pub enum SyncError {
+    /// The legacy operation has no backend.
+    NotImplemented(&'static str),
     /// Settings file not found.
     FileNotFound(String),
     /// Invalid settings format.
@@ -1372,6 +1353,7 @@ pub enum SyncError {
 impl std::fmt::Display for SyncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NotImplemented(operation) => write!(f, "{operation} is not implemented"),
             Self::FileNotFound(path) => write!(f, "Settings file not found: {}", path),
             Self::InvalidFormat(msg) => write!(f, "Invalid format: {}", msg),
             Self::IoError(msg) => write!(f, "IO error: {}", msg),
@@ -1854,9 +1836,57 @@ mod tests {
 
     #[test]
     fn sync_engine_save_load_settings() {
-        let engine = NeuralSyncEngine::new();
-        let json_path = engine.save_settings(SettingsFormat::Json).unwrap();
-        assert!(json_path.to_string_lossy().ends_with("sync_settings.json"));
+        let mut engine = NeuralSyncEngine::new();
+        let settings_before = format!("{:?}", engine.get_settings());
+        for format in [SettingsFormat::Json, SettingsFormat::Binary] {
+            assert!(matches!(
+                engine.save_settings(format),
+                Err(SyncError::NotImplemented(_))
+            ));
+            assert!(matches!(
+                engine.load_settings(format),
+                Err(SyncError::NotImplemented(_))
+            ));
+        }
+        assert_eq!(format!("{:?}", engine.get_settings()), settings_before);
+    }
+
+    #[test]
+    fn missing_evidence_never_generates_harmonic_or_detected_phrase_claims() {
+        let mut engine = NeuralSyncEngine::new();
+        assert!(engine.generate_suggestions("a", "b").is_empty());
+        assert_eq!(engine.get_metrics().phrases_detected, 0);
+        assert_eq!(engine.get_metrics().avg_confidence, 0.0);
+        engine.update_phrase_position(
+            "a",
+            PhrasePosition::new(PhraseType::Verse, 1, 8, 120., None, 0.5),
+        );
+        engine.update_phrase_position(
+            "b",
+            PhrasePosition::new(PhraseType::Chorus, 1, 8, 120., None, 0.7),
+        );
+        let suggestions = engine.generate_suggestions("a", "b");
+        assert!(suggestions
+            .iter()
+            .all(|s| s.suggestion_type != SuggestionType::HarmonicMatch));
+        assert_eq!(engine.get_metrics().phrases_detected, 0);
+    }
+
+    #[test]
+    fn energy_suggestion_does_not_populate_phrase_quality() {
+        let mut metrics = SyncMetrics::new();
+        metrics.record_suggestions(
+            Duration::ZERO,
+            &[SyncSuggestion {
+                suggestion_type: SuggestionType::EnergyMatch,
+                score: 0.9,
+                label: "annotated energy".into(),
+                details: String::new(),
+            }],
+        );
+        assert_eq!(metrics.best_phrase_score, 0.0);
+        assert_eq!(metrics.best_energy_score, 0.9);
+        assert_eq!(metrics.phrases_detected, 0);
     }
 
     #[test]
