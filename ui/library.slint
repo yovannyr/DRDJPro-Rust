@@ -200,9 +200,9 @@ export component TrackLibrary inherits Rectangle {
             spacing: 0px; horizontal-stretch: 0;
             for column in root.columns : LibraryButton {
                 width: column.width * 1px;
-                enabled: root.tab != 5;
+                enabled: root.tab != 5 && column.id != 11;
                 text: (column.id == 0 && root.tab != 4 ? "Title" : column.title) + (root.tab != 5 && root.sort-field == column.id ? (root.sort-descending ? " ▼" : " ▲") : "");
-                accessible-label: "Sort library by " + column.sort-label;
+                accessible-label: column.id == 11 ? "Cover thumbnails" : "Sort library by " + column.sort-label;
                 clicked => { root.sort-column(column.id); }
             }
             Rectangle { horizontal-stretch: 1; }
@@ -223,12 +223,16 @@ export component TrackLibrary inherits Rectangle {
                     accessible-action-default => { root.select-track(row.id); nav.focus(); }
                     HorizontalLayout {
                         spacing: 0px;
-                        for column in root.columns : Text {
-                            width: column.width * 1px;
+                        for column in root.columns : Rectangle {
+                            width: column.width * 1px; height: 22px;
+                            if column.id == 11 : Image { x:1px; y:1px; width:parent.width - 2px; height:parent.height - 2px; source:row.cover; image-fit:contain; accessible-label:"Track " + row.id + " cover art"; }
+                        if column.id != 11 : Text {
+                            width: parent.width; height: parent.height;
                             text: column.id == 6 ? "" + row.id : column.id == 0 ? row.name : column.id == 3 ? (row.artist == "" ? "—" : row.artist) : column.id == 4 ? (row.album == "" ? "—" : row.album) : column.id == 7 ? row.bpm : column.id == 8 ? row.key : column.id == 9 ? row.gain : column.id == 10 ? (row.available ? row.analysis-status : "Missing") : column.id == 5 ? row.prepare-duration : column.id == 2 ? row.path : (row.available ? row.format : "MISSING");
                             font-size: 11px; vertical-alignment: center; color: column.id == 7 ? #4fc2ed : column.id == 8 ? #d597ed : #cccccc; overflow: elide;
                             accessible-role: text; accessible-label: "Track " + row.id + " " + column.sort-label;
                             accessible-description: self.text;
+                        }
                         }
                         Rectangle { horizontal-stretch: 1; }
                     }
@@ -268,6 +272,7 @@ export component TrackLibrary inherits Rectangle {
                     LibraryButton { text: "Close"; accessible-label: "Close track columns"; clicked => { root.columns-open = false; } }
                 }
                 ListView {
+                    accessible-label: "Track column preferences";
                     for column[index] in root.all-columns : HorizontalLayout {
                         height: 24px;
                         CheckBox { text: column.title; checked: column.visible; enabled: root.columns-enabled; accessible-label: "Show column " + column.sort-label; toggled => { root.change-column(column.id, 0); } }

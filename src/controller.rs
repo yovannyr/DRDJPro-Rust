@@ -153,6 +153,9 @@ pub type TrackPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub type LibraryPicker = Arc<dyn Fn() -> Option<Vec<PathBuf>> + Send + Sync>;
 pub type LibraryFolderPicker = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 struct LibraryRows {
+    covers: Rc<RefCell<crate::cover_cache::CoverCache>>,
+    cover_visible: Rc<Cell<bool>>,
+    notify: slint::ModelNotify,
     library: std::rc::Weak<std::cell::RefCell<crate::library::Library>>,
     generation: std::rc::Weak<std::cell::Cell<u64>>,
     expected_generation: u64,
@@ -178,11 +181,15 @@ impl slint::Model for LibraryRows {
         let library = self.library.upgrade()?;
         let library = library.try_borrow().ok()?;
         let track = library.track_by_id(id)?;
-        Some(library_row(track))
+        let mut row = library_row(track);
+        if self.cover_visible.get() && track.available {
+            row.cover = self.covers.borrow_mut().get(&track.path).image;
+        }
+        Some(row)
     }
 
     fn model_tracker(&self) -> &dyn slint::ModelTracker {
-        &()
+        &self.notify
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -191,6 +198,7 @@ impl slint::Model for LibraryRows {
 fn library_row(track: &crate::library::Track) -> crate::LibraryRow {
     let analysis = track.metadata.analysis.as_ref();
     crate::LibraryRow {
+        cover: Default::default(),
         bpm: analysis
             .filter(|a| a.bpm > 0.)
             .map_or("—".into(), |a| format!("{:.1}", a.bpm).into()),
@@ -317,6 +325,8 @@ impl SearchWorker {
 }
 
 pub struct AudioController {
+    covers: Rc<RefCell<crate::cover_cache::CoverCache>>,
+    cover_visible: Rc<Cell<bool>>,
     device_opener: DeviceOpener,
     pending_device_switch: RefCell<Option<crate::audio_devices::StartupSelection>>,
     recovery_key: RefCell<Option<crate::output_preferences::OutputDeviceKey>>,
@@ -491,6 +501,8 @@ impl AudioController {
         device_opener: DeviceOpener,
     ) -> Rc<Self> {
         let controller = Rc::new(Self {
+            covers: Rc::new(RefCell::new(Default::default())),
+            cover_visible: Rc::new(Cell::new(true)),
             device_opener,
             pending_device_switch: RefCell::new(None),
             recovery_key: RefCell::new(None),
@@ -5221,6 +5233,14 @@ impl AudioController {
             }
             all.push(column);
         }
+        let visible = !preferences.hidden.contains(&11);
+        if self.cover_visible.replace(visible) != visible {
+            if let Some(model) = ui.get_library_rows().as_any().downcast_ref::<LibraryRows>() {
+                for row in 0..model.row_count() {
+                    model.notify.row_changed(row);
+                }
+            }
+        }
         ui.set_table_columns(ModelRc::new(Rc::new(VecModel::from(columns))));
         ui.set_all_table_columns(ModelRc::new(Rc::new(VecModel::from(all))));
         ui.set_table_width(width);
@@ -6553,6 +6573,7 @@ impl AudioController {
         ui.set_loading(false);
         match result {
             Some(Ok((path, track, metadata))) => {
+                self.covers.borrow_mut().invalidate(&path);
                 self.library.borrow_mut().insert([path.clone()]);
                 self.library.borrow_mut().set_metadata(&path, metadata);
                 self.library_changed();
@@ -6966,6 +6987,19 @@ impl AudioController {
         }
     }
     pub fn tick(&self) {
+        if self.covers.borrow_mut().poll() {
+            if let Some(ui) = self.ui.upgrade() {
+                let rows = ui.get_library_rows();
+                if let Some(model) = rows.as_any().downcast_ref::<LibraryRows>() {
+                    // The search worker publishes at most LIBRARY_PAGE_SIZE (200)
+                    // IDs, never the entire library. Notify also lets visible rows
+                    // retry requests that previously met the bounded queue limit.
+                    for row in 0..model.row_count() {
+                        model.notify.row_changed(row);
+                    }
+                }
+            }
+        }
         self.poll_sampler();
         if let Some(perf) = self.library_perf.borrow().as_ref() {
             let (tracks, both_playing) = self.library_perf_context();
@@ -8370,6 +8404,9 @@ impl AudioController {
             .into(),
         );
         ui.set_library_rows(ModelRc::new(Rc::new(LibraryRows {
+            covers: self.covers.clone(),
+            cover_visible: self.cover_visible.clone(),
+            notify: Default::default(),
             rows,
             library: Rc::downgrade(&self.library),
             generation: Rc::downgrade(&self.library_generation),
@@ -8998,7 +9035,13 @@ impl AudioController {
                     ui.set_left_musical_key(musical_key.into());
                     ui.set_left_loaded(s.loaded);
                     ui.set_left_playing(s.playing);
-                    let cc = s.cover_color;
+                    let artwork = s
+                        .path
+                        .as_ref()
+                        .map(|path| self.covers.borrow_mut().get(path))
+                        .unwrap_or_default();
+                    ui.set_left_cover_image(artwork.image);
+                    let cc = artwork.color;
                     ui.set_left_cover(if cc == 0x00000000 {
                         slint::Color::from_rgb_u8(0, 0, 0)
                     } else {
@@ -9031,7 +9074,13 @@ impl AudioController {
                     ui.set_right_musical_key(musical_key.into());
                     ui.set_right_loaded(s.loaded);
                     ui.set_right_playing(s.playing);
-                    let cc = s.cover_color;
+                    let artwork = s
+                        .path
+                        .as_ref()
+                        .map(|path| self.covers.borrow_mut().get(path))
+                        .unwrap_or_default();
+                    ui.set_right_cover_image(artwork.image);
+                    let cc = artwork.color;
                     ui.set_right_cover(if cc == 0x00000000 {
                         slint::Color::from_rgb_u8(0, 0, 0)
                     } else {
@@ -18285,6 +18334,22 @@ mod tests {
         i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
     }
 
+    fn scroll_column_preferences(ui: &AppWindow, delta_y: f32) {
+        let list = control(ui, "Track column preferences");
+        let origin = list.absolute_position();
+        let size = list.size();
+        ui.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    origin.x + size.width / 2.,
+                    origin.y + size.height / 2.,
+                ),
+                delta_x: 0.,
+                delta_y,
+            });
+        i_slint_backend_testing::testing_backend::mock_elapsed_time(0);
+    }
+
     #[test]
     fn prepare_headers_sort_and_column_controls_preserve_settings_after_restart() {
         i_slint_backend_testing::init_no_event_loop();
@@ -18350,11 +18415,15 @@ mod tests {
         ui.set_table_scroll_x(0.);
         ui.invoke_select_library(1);
         control(&ui, "Configure track columns").invoke_accessible_default_action();
+        scroll_column_preferences(&ui, -72.);
         control(&ui, "Show column BPM").invoke_accessible_default_action();
         assert!(!ui.get_table_columns().iter().any(|column| column.id == 7));
+        scroll_column_preferences(&ui, 200.);
+        control(&ui, "Move column name left").invoke_accessible_default_action();
         control(&ui, "Move column name left").invoke_accessible_default_action();
         assert_eq!(ui.get_table_columns().row_data(0).unwrap().id, 0);
         assert_eq!(ui.get_selected_track(), 1);
+        scroll_column_preferences(&ui, -72.);
         control(&ui, "Show column BPM").invoke_accessible_default_action();
         assert!(ui.get_table_columns().iter().any(|column| column.id == 7));
         control(&ui, "Show column BPM").invoke_accessible_default_action();
@@ -21448,6 +21517,101 @@ mod tests {
                 output.by_ref().take(256).for_each(drop);
             }
         }
+    }
+
+    #[test]
+    fn covers_appear_after_showing_column_share_with_deck_and_clear_on_eject() {
+        i_slint_backend_testing::init_no_event_loop();
+        let file = crate::cover_art::tests::embedded_cover_file();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 44100);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 44100));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        c.table_columns.borrow_mut().hidden.push(11);
+        c.publish_table_columns();
+        c.library
+            .borrow_mut()
+            .insert([file.path().canonicalize().unwrap()]);
+        c.publish_library();
+        finish_search(&c);
+        let rows = ui.get_library_rows();
+        let model = rows.as_any().downcast_ref::<LibraryRows>().unwrap();
+        assert!(model.row_count() <= LIBRARY_PAGE_SIZE);
+        assert_eq!(rows.row_data(0).unwrap().cover.size().width, 0);
+        ui.set_view_mode(crate::LayoutMode::Modern);
+        ui.show().unwrap();
+        control(&ui, "Library track 1");
+        let reads_before_show = model.row_data_calls.get();
+        c.table_columns.borrow_mut().hidden.clear();
+        c.publish_table_columns();
+        let cell = control(&ui, "Track 1 cover art");
+        assert!(
+            model.row_data_calls.get() > reads_before_show,
+            "Showing covers must invalidate the existing delegate's row data"
+        );
+        assert!(cell.size().height <= 22. && cell.size().width <= 36.);
+        assert!(std::ptr::eq(rows.as_any(), ui.get_library_rows().as_any()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while rows.row_data(0).unwrap().cover.size().width == 0 {
+            assert!(Instant::now() < deadline, "cover worker completed");
+            c.tick();
+            thread::yield_now();
+        }
+        assert_eq!(
+            (
+                rows.row_data(0).unwrap().cover.size().width,
+                rows.row_data(0).unwrap().cover.size().height
+            ),
+            (4, 2)
+        );
+        engine
+            .try_install(DeckId::A, PreparedTrack::open(file.path()).unwrap())
+            .unwrap();
+        let loaded_path = engine.snapshot(DeckId::A).path.unwrap();
+        assert_eq!(
+            c.covers.borrow_mut().get(&loaded_path).image.size().width,
+            4,
+            "Library path {:?} and deck path {:?} should share the thumbnail",
+            file.path(),
+            loaded_path
+        );
+        c.tick();
+        assert_eq!(
+            (
+                ui.get_left_cover_image().size().width,
+                ui.get_left_cover_image().size().height
+            ),
+            (4, 2)
+        );
+        assert_eq!(ui.get_right_cover_image().size().width, 0);
+        control(&ui, "Deck A cover art");
+        assert!(engine.eject(DeckId::A));
+        c.tick();
+        assert_eq!(ui.get_left_cover_image().size().width, 0);
+    }
+
+    #[test]
+    fn stalled_cover_worker_cannot_delay_track_load_completion() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _output) = rodio::mixer::mixer(2, 44100);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 44100));
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        let (started, observed) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        *c.covers.borrow_mut() = crate::cover_cache::CoverCache::with_loader(Box::new(move |_| {
+            started.send(()).ok()?;
+            wait.recv().ok()?;
+            None
+        }));
+        c.covers.borrow_mut().get(Path::new("blocked-cover"));
+        observed.recv_timeout(Duration::from_secs(5)).unwrap();
+        let path = fixture();
+        c.start_load(DeckId::A, Arc::new(move || Some(path.clone())), 0.);
+        finish(&c);
+        assert!(engine.snapshot(DeckId::A).loaded);
+        assert!(!ui.get_loading());
+        release.send(()).unwrap();
     }
 
     #[test]

@@ -1432,8 +1432,7 @@ impl Store {
         };
         let columns: crate::table_columns::TableColumns =
             serde_json::from_str(&raw).map_err(|e| format!("Invalid saved table columns: {e}"))?;
-        columns.validate()?;
-        Ok(columns)
+        columns.upgrade()
     }
     fn save_session_state_with_columns(
         &mut self,
@@ -2312,6 +2311,34 @@ mod tests {
         assert_eq!(store.read_table_columns().unwrap(), columns);
         store.connection.execute_batch("DROP TRIGGER reject_columns; UPDATE library_meta SET value='{}' WHERE key='track_columns_v1';").unwrap();
         assert!(store.read_table_columns().is_err());
+    }
+
+    #[test]
+    fn legacy_table_columns_upgrade_and_persist_without_losing_visibility() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _, _) = Store::open(dir.path().join("library.sqlite3")).unwrap();
+        let old = r#"{"version":1,"order":[0,6,3,1,2,4,5,7,8,9,10],"hidden":[3,7]}"#;
+        store
+            .connection
+            .execute(
+                "INSERT INTO library_meta(key,value) VALUES('track_columns_v1',?1)",
+                [old],
+            )
+            .unwrap();
+        let upgraded = store.read_table_columns().unwrap();
+        assert_eq!(upgraded.order.len(), 12);
+        assert_eq!(upgraded.hidden, vec![3, 7]);
+        store
+            .save_session_state_with_columns(
+                &Library::default().changes(),
+                None,
+                None,
+                None,
+                None,
+                Some(upgraded.clone()),
+            )
+            .unwrap();
+        assert_eq!(store.read_table_columns().unwrap(), upgraded);
     }
 
     #[test]

@@ -10,6 +10,7 @@ mod beatgrid;
 mod cancellation;
 mod controller;
 mod cover_art;
+mod cover_cache;
 mod crates;
 mod cue_bus;
 mod deck_render;
