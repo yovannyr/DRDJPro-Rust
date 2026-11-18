@@ -1,4 +1,4 @@
-//! A0 CPU backend experiment, deliberately absent from the application's dependencies.
+//! A0 CPU backend experiment, optionally used by the application's import worker.
 //!
 //! Only the generated, trusted Conv/GRU fixture contract is supported: eight f32
 //! inputs, twelve f32 outputs. This is neither a beat detector nor a realtime API.

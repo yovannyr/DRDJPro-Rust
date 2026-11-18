@@ -15,10 +15,14 @@ description = "DrDJ Pro Rust desktop DJ application"
 
 [features]
 default = []
+ml-import = ["dep:drdj-ml", "dep:sha2", "dep:bytemuck"]
 # A binary linked with xwax must be distributed on GPLv3-compatible terms.
 dvs-xwax = ["dep:drdj-dvs"]
 
 [dependencies]
+drdj-ml = { path = "crates/drdj-ml", features = ["ort"], optional = true }
+sha2 = { version = "=0.10.9", optional = true }
+bytemuck = { version = "=1.25.2", optional = true }
 drdj-itunes = { path = "crates/drdj-itunes" }
 url = "=2.5.8"
 drdj-remote = { path = "crates/drdj-remote" }
