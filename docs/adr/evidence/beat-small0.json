@@ -1,0 +1,234 @@
+[
+  {
+    "excerpt": "46",
+    "pcm_sha256": "1ba71317a8255b579b495fb8c662b3fdd60911f3c9abb185dac5fb2c76089453",
+    "classical_bpm": 131.8,
+    "neural_beat": {
+      "matched": 75,
+      "reference": 76,
+      "predicted": 77,
+      "f1": 0.9803921568627451
+    },
+    "neural_downbeat": {
+      "matched": 19,
+      "reference": 19,
+      "predicted": 19,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 2,
+      "reference": 76,
+      "predicted": 80,
+      "f1": 0.02564102564102564
+    },
+    "classical_downbeat": {
+      "matched": 0,
+      "reference": 19,
+      "predicted": 20,
+      "f1": 0.0
+    }
+  },
+  {
+    "excerpt": "48",
+    "pcm_sha256": "ac893a06fd66b19e2105abb1976a6be9354c66e7f8df36962ce1a8cc22739d6a",
+    "classical_bpm": 131.8,
+    "neural_beat": {
+      "matched": 78,
+      "reference": 78,
+      "predicted": 80,
+      "f1": 0.9873417721518988
+    },
+    "neural_downbeat": {
+      "matched": 20,
+      "reference": 20,
+      "predicted": 20,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 51,
+      "reference": 78,
+      "predicted": 80,
+      "f1": 0.6455696202531646
+    },
+    "classical_downbeat": {
+      "matched": 0,
+      "reference": 20,
+      "predicted": 20,
+      "f1": 0.0
+    }
+  },
+  {
+    "excerpt": "extra-drummer1-105",
+    "pcm_sha256": "40f4bdab1311ae430f64ac4d70a9a1ea6c23fc040397afbb810223a0f78acfd0",
+    "classical_bpm": 104.9,
+    "neural_beat": {
+      "matched": 63,
+      "reference": 63,
+      "predicted": 63,
+      "f1": 1.0
+    },
+    "neural_downbeat": {
+      "matched": 16,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 63,
+      "reference": 63,
+      "predicted": 63,
+      "f1": 1.0
+    },
+    "classical_downbeat": {
+      "matched": 16,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 1.0
+    }
+  },
+  {
+    "excerpt": "extra-drummer1-87",
+    "pcm_sha256": "038d4d101843a6380f34797fac43f80ebf15f209f4866fb5578f54fd9c330b84",
+    "classical_bpm": 117,
+    "neural_beat": {
+      "matched": 53,
+      "reference": 53,
+      "predicted": 53,
+      "f1": 1.0
+    },
+    "neural_downbeat": {
+      "matched": 14,
+      "reference": 14,
+      "predicted": 14,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 13,
+      "reference": 53,
+      "predicted": 71,
+      "f1": 0.20967741935483872
+    },
+    "classical_downbeat": {
+      "matched": 1,
+      "reference": 14,
+      "predicted": 18,
+      "f1": 0.0625
+    }
+  },
+  {
+    "excerpt": "extra-drummer7-96",
+    "pcm_sha256": "e9e22bdd0414fc404d742473e96085709a04aa179fbc94084f11d6d721bef115",
+    "classical_bpm": 130.7,
+    "neural_beat": {
+      "matched": 57,
+      "reference": 58,
+      "predicted": 58,
+      "f1": 0.9827586206896551
+    },
+    "neural_downbeat": {
+      "matched": 15,
+      "reference": 15,
+      "predicted": 15,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 17,
+      "reference": 58,
+      "predicted": 79,
+      "f1": 0.24817518248175183
+    },
+    "classical_downbeat": {
+      "matched": 2,
+      "reference": 15,
+      "predicted": 20,
+      "f1": 0.11428571428571428
+    }
+  },
+  {
+    "excerpt": "gmd-drummer1",
+    "pcm_sha256": "2a40b39d286f30af73a9fcc9c176901c9cbaf8e2f42bc719ff9daa6f0148349f",
+    "classical_bpm": 101.7,
+    "neural_beat": {
+      "matched": 62,
+      "reference": 62,
+      "predicted": 62,
+      "f1": 1.0
+    },
+    "neural_downbeat": {
+      "matched": 16,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 41,
+      "reference": 62,
+      "predicted": 62,
+      "f1": 0.6612903225806451
+    },
+    "classical_downbeat": {
+      "matched": 11,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 0.6875
+    }
+  },
+  {
+    "excerpt": "gmd-drummer5",
+    "pcm_sha256": "d99bc13655d3e353d46c349474258ae5bb90b804272cd39375f0fb0ad84760df",
+    "classical_bpm": 101.5,
+    "neural_beat": {
+      "matched": 62,
+      "reference": 62,
+      "predicted": 62,
+      "f1": 1.0
+    },
+    "neural_downbeat": {
+      "matched": 16,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 25,
+      "reference": 62,
+      "predicted": 61,
+      "f1": 0.4065040650406504
+    },
+    "classical_downbeat": {
+      "matched": 7,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 0.4375
+    }
+  },
+  {
+    "excerpt": "gmd-drummer7",
+    "pcm_sha256": "b465ff6bb7319e2d439637a15016121db4cafc84be091ab40a4b25190680b38f",
+    "classical_bpm": 102.8,
+    "neural_beat": {
+      "matched": 62,
+      "reference": 62,
+      "predicted": 62,
+      "f1": 1.0
+    },
+    "neural_downbeat": {
+      "matched": 16,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 1.0
+    },
+    "classical_beat": {
+      "matched": 16,
+      "reference": 62,
+      "predicted": 62,
+      "f1": 0.25806451612903225
+    },
+    "classical_downbeat": {
+      "matched": 4,
+      "reference": 16,
+      "predicted": 16,
+      "f1": 0.25
+    }
+  }
+]

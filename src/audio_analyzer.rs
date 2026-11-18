@@ -702,6 +702,24 @@ impl AudioAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Use exactly the same decoded excerpt for the classical and neural comparison.
+    #[test]
+    #[ignore = "requires DRDJ_BEAT_EVAL_FILES path list of annotated audio excerpts"]
+    fn report_classical_bpm_for_beat_evaluation() {
+        let files = std::env::var_os("DRDJ_BEAT_EVAL_FILES").expect("set DRDJ_BEAT_EVAL_FILES");
+        let paths: Vec<_> = std::env::split_paths(&files).collect();
+        assert!(!paths.is_empty());
+        for path in paths {
+            let result = AudioAnalyzer::analyze_file(&path).unwrap();
+            assert!(result.validate() && !result.is_corrupt);
+            eprintln!(
+                "classical {:?} BPM {}",
+                path.file_name().unwrap(),
+                result.bpm
+            );
+        }
+    }
+
     #[test]
     fn analyzer_supports_library_formats_including_mono_and_stereo_opus() {
         let mut paths: Vec<_> = [
