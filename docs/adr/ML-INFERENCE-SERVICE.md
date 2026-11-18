@@ -1,7 +1,7 @@
 # A1 inference service
 
 The optional ORT feature provides an isolated worker for the A0 synthetic fixture.
-The application does not instantiate the service. The worker uses sequential CPU
+The application can instantiate the service through A2. The worker uses sequential CPU
 ORT with one requested intra-op thread and disabled spinning. On Windows it runs
 below normal priority. Playback protection starts enabled and requests a 1 ms
 pause after each chunk, including the last. A future controller can update this policy
@@ -115,3 +115,30 @@ latest-command behavior through a fade. Optimization, render scheduling and EQ
 changed together, so their individual timing effects are unknown. This pair
 passes the headless timing gate for the synthetic model on this host. Constant
 PCM verifies the expected level but cannot expose a duplicated identical sample.
+
+## A2 library worker integration
+
+Build the app with `--features ml-import`. Before launch, set
+`DRDJ_ML_IMPORT_CACHE` to an absolute dedicated cache directory and
+`DRDJ_ML_FIXTURE` and `DRDJ_ORT_LIBRARY` to the trusted absolute model and
+runtime paths used in the checks above. Omit the cache setting to disable this
+path. Configuration is read once per process. No downloads occur.
+
+Configured file and folder imports perform full classical analysis on the import
+worker. This increases import time. Explicit track analysis uses the same
+single decode. The worker hashes decoded PCM plus its format and pools the
+waveform overview to at most 256 eight-value peak tensors, zero-padding the
+last one. The synthetic model output is cached for diagnostics. Library BPM,
+key and gain remain classical. Queue pressure, model and cache errors skip
+the optional result. Cancellation abandons the ticket. Deck loading, playback,
+relocation and passive tag reads use their existing paths.
+
+To repeat the A2 integration check with the fixture and runtime paths set above:
+
+```powershell
+cargo test --bin drdjpro-ui-spike --features ml-import --locked --offline import_and_analysis_use_optional_inference -- --ignored
+```
+
+The test isolates runtime configuration in child processes and uses a temporary
+cache. The A1 timing evidence above covers its synthetic inference load. It
+does not measure the end-to-end cost of decoding and hashing during A2 imports.

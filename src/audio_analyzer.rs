@@ -426,6 +426,9 @@ impl AudioAnalyzer {
         if cancel.is_cancelled() {
             return Err(AnalyzerError::Cancelled);
         }
+        #[cfg(feature = "ml-import")]
+        let mut inference =
+            crate::import_inference::configured().map(crate::import_inference::Pass::new);
         let path_str = path_ref.to_string_lossy().to_string();
 
         let opus = crate::opus_audio::is_opus(path_ref).map_err(AnalyzerError::IoError)?;
@@ -485,6 +488,10 @@ impl AudioAnalyzer {
                 return Err(AnalyzerError::DecoderError(
                     "Audio format changed during analysis".into(),
                 ));
+            }
+            #[cfg(feature = "ml-import")]
+            if let Some(pass) = inference.as_mut() {
+                pass.samples(samples);
             }
             if let Some(m) = meter.as_mut() {
                 m.add_frames_f32(samples)
@@ -670,6 +677,17 @@ impl AudioAnalyzer {
         };
         let is_corrupt = sample_count == 0 || warning || error_ratio > CORRUPT_ERROR_RATIO;
 
+        #[cfg(feature = "ml-import")]
+        if let (Some(pass), Some(spec)) = (inference, first_spec) {
+            if !is_corrupt && !peaks.is_empty() {
+                if let Err(error) = pass.finish(spec, &peaks, cancel) {
+                    log::warn!("Optional import inference skipped: {error}");
+                }
+            }
+        }
+        if cancel.is_cancelled() {
+            return Err(AnalyzerError::Cancelled);
+        }
         Ok(TrackAnalysisResult {
             file_path: path_str,
             bpm,

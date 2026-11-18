@@ -7492,7 +7492,7 @@ impl AudioController {
         let picker = Arc::clone(&self.library_picker);
         self.pending_relocation_id.set(Some(track_id));
         self.start_import_work(move |cancel| {
-            picker().map(|paths| crate::library::inspect_paths_cancellable(paths, cancel))
+            picker().map(|paths| crate::library::inspect_files(paths, cancel, false))
         });
         if self.pending_import.borrow().is_none() {
             self.pending_relocation_id.set(None);

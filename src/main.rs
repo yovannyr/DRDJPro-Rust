@@ -22,6 +22,8 @@ mod external_drop;
 mod fx_chain;
 mod fx_timing;
 mod hot_cues;
+#[cfg(feature = "ml-import")]
+mod import_inference;
 mod itunes_ui;
 mod legacy_catalog;
 mod library;

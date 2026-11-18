@@ -1660,6 +1660,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "backtrace",
+ "bytemuck",
  "chrono",
  "crash-handler",
  "crossbeam",
@@ -1667,6 +1668,7 @@ dependencies = [
  "drdj-dvs",
  "drdj-itunes",
  "drdj-keylock",
+ "drdj-ml",
  "drdj-proto",
  "drdj-remote",
  "drdj-usb",
@@ -1690,6 +1692,7 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
+ "sha2",
  "slint",
  "slint-build",
  "symphonia",

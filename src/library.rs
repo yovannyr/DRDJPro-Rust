@@ -126,6 +126,14 @@ pub(crate) fn inspect_paths_cancellable(
     paths: Vec<PathBuf>,
     cancel: &crate::cancellation::Cancellation,
 ) -> Result<ImportBatch, String> {
+    inspect_files(paths, cancel, true)
+}
+
+pub(crate) fn inspect_files(
+    paths: Vec<PathBuf>,
+    cancel: &crate::cancellation::Cancellation,
+    _analyze_import: bool,
+) -> Result<ImportBatch, String> {
     cancel.check()?;
     let mut result = ImportBatch {
         paths: Vec::new(),
@@ -142,10 +150,23 @@ pub(crate) fn inspect_paths_cancellable(
                     result.rejected += 1;
                     continue;
                 }
-                result.metadata.push((
-                    path.clone(),
-                    crate::track_metadata::read_cancellable(&path, cancel)?,
-                ));
+                let metadata = crate::track_metadata::read_cancellable(&path, cancel)?;
+                #[cfg(feature = "ml-import")]
+                let metadata = if _analyze_import && crate::import_inference::configured().is_some()
+                {
+                    let mut metadata = metadata;
+                    match crate::audio_analyzer::AudioAnalyzer::analyze_cancellable(&path, cancel) {
+                        Ok(analysis) if analysis.validate() => metadata.analysis = Some(analysis),
+                        Err(crate::audio_analyzer::AnalyzerError::Cancelled) => {
+                            return Err("Operation cancelled".into())
+                        }
+                        _ => log::warn!("Optional analysis unavailable for imported track"),
+                    }
+                    metadata
+                } else {
+                    metadata
+                };
+                result.metadata.push((path.clone(), metadata));
                 result.paths.push(path);
             }
             _ => result.rejected += 1,
