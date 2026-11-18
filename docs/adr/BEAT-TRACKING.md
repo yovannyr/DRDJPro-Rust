@@ -85,3 +85,92 @@ It cannot establish full-song or mixed-genre accuracy. Before enabling neural
 grid proposals in the application, compare a broader held-out corpus and
 approved Serato grids, measure concurrent playback cost, and preserve explicit
 user edits and the classical fallback.
+
+## Full recordings on Windows
+
+Both analyzers received all samples through EOF, decoded by FFmpeg to mono
+22,050 Hz. The classical comparator used the import analyzer on a float WAV,
+then projected the measured BPM from zero to the audio duration in 4/4.
+The table uses the same 70 ms one-to-one scorer as the excerpt evaluation.
+Counts are matched / reference / predicted for the neural tracker.
+
+| Recording | Audio seconds | Classical BPM | Classical F1 beat / downbeat | Neural F1 beat / downbeat | Beat counts | Downbeat counts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Candombe 46 | 116.63 | 132.1 | .249 / .094 | .992 / 1.000 | 248/249/251 | 63/63/63 |
+| Candombe 48 | 151.12 | 133.6 | .469 / .000 | .996 / 1.000 | 333/333/336 | 84/84/84 |
+| GMD progressive rock, 190 BPM | 95.99 | 94.7 | .281 / .158 | .881 / .918 | 289/304/352 | 73/76/83 |
+| GMD funk, 96 BPM | 160.00 | 96.1 | .421 / .419 | 1.000 / 1.000 | 256/256/256 | 64/64/64 |
+| GMD jazz-funk, 116 BPM | 76.49 | 115.9 | 1.000 / 1.000 | .997 / .973 | 147/148/147 | 36/37/37 |
+
+Candombe uses every published human annotation. For the Groove MIDI Dataset
+test split we selected the longest available 4/4 beat recordings between 35
+and 180 seconds in rock, funk and jazz, excluding IDs from the excerpt trial.
+The IDs in table order are `drummer1/session2/110`, `drummer8/session1/8`
+and `drummer1/session1/4`. To reproduce the reference, generate quarter notes
+from time zero through the published `info.csv` duration inclusive at the
+listed BPM, taking every fourth beat as a downbeat. Score **all** predictions
+through audio EOF, including any tail beyond the last reference beat. These
+are tempo-derived percussion references. In progressive rock there were 63
+unmatched beat predictions and 15 missed grid beats. On jazz-funk the
+classical projection scored higher. This sample supports keeping neural grid
+proposals experimental.
+
+### Concurrent two-deck playback
+
+The ignored `b_headless_render_with_full_track_load` test reuses the A1
+renderer. Each phase loops two known signals through the real Rodio mixer and
+checks every sample. Each 480-frame block at 48 kHz must finish by its
+scheduled start plus 10 ms. The Windows render thread uses the WASAPI callback
+priority. In the second phase a separate process repeatedly decodes and tracks
+complete songs, one at a time. Each analysis starts a fresh CPU tracker and
+streams FFmpeg output directly into it. Only songs that reach EOF in both
+processes count. The test requires at least two completions and coverage of
+every listed song within the loaded phase.
+
+To repeat, build the offline tracker as described above. Set
+`DRDJ_B_TRACKER` to its absolute executable path, `DRDJ_BEAT_TEST_DIR` to
+the model directory, `DRDJ_ORT_LIBRARY` to the CPU runtime and
+`DRDJ_B_TRACK_LIST` to a UTF-8 JSON array file containing absolute song
+paths. Python 3 and FFmpeg must be on PATH. Use a shared Cargo target to reuse
+the application dependencies. The default phase length is 600 seconds.
+
+```text
+cargo --config 'profile.test.package.drdjpro-ui-spike.opt-level=1' test -j1 --bin drdjpro-ui-spike --locked b_headless_render_with_full_track_load -- --ignored --nocapture
+python -B -m unittest discover -s tools -p "test_beat*.py"
+```
+
+The Windows measurement used an Intel Core i7-11850H, Rust 1.99.1, application
+package opt-level 1, the debug offline tracker with one ORT thread and the
+1.31.0 CPU runtime. The load manifest contained the first MP3 in filename
+order with duration between 2 and 6 minutes in each of five genre folders.
+Only anonymized statistics are reported. The timing includes decoder, process
+startup, model load and analysis. A new process for each song makes this a
+host contention test of the offline tracker. In-device playback, analysis
+within the application process and comparison with Serato grids are separate
+qualification steps.
+
+| Local genre | Audio seconds | Beats / downbeats | First / last beat (s) | Longest interval (s) | Median interval as BPM |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Bachata | 211.82 | 457 / 115 | 0.08 / 211.74 | 0.48 | 130.4 |
+| Salsa | 281.59 | 499 / 161 | 0.42 / 277.26 | 0.70 | 93.8 |
+| Kizomba | 334.53 | 484 / 126 | 0.16 / 329.48 | 0.70 | 88.2 |
+| Merengue | 255.52 | 565 / 150 | 0.28 / 252.74 | 0.50 | 136.4 |
+| Reggaeton | 203.50 | 471 / 120 | 0.00 / 201.64 | 0.64 | 136.4 |
+
+These five library tracks have no reference labels in this evaluation.
+Sorted timestamps, downbeat membership and detections near the end verify
+output coverage. The greater downbeat density on the salsa track (499 beats
+and 161 downbeats) is a concrete case for later bar-alignment inspection.
+
+| Phase | Blocks in 600 s | Render p99 / max (µs) | Dispatch lateness p99 / max (µs) | 10 ms deadline misses | Wrong-output blocks | Render allocations |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Two decks alone | 60,000 | 1,211 / 3,163 | 654 / 1,702 | 0 | 0 | 0 |
+| Two decks with full-track analysis | 60,000 | 1,802 / 2,764 | 620 / 1,883 | 0 | 0 | 0 |
+
+The tracker finished 37 songs across seven complete passes plus two songs.
+Individual full analyses took 11.48–25.86 seconds. The next analysis was
+interrupted at the phase boundary and excluded from the count. Render p99
+increased by 591 µs. Neither phase recorded a late start beyond 10 ms or a
+render overrun. This measures mixer output and scheduling on one host with a
+known constant signal. Hardware underruns and audible glitches require a
+device-based check.

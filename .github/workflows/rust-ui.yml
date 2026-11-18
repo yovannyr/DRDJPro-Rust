@@ -43,6 +43,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Verify offline symbol tooling
         run: python -m unittest discover -s tools -p "test_crash_symbols.py"
+      - name: Test beat scoring and full-track load tooling
+        run: python -B -m unittest discover -s tools -p "test_beat*.py"
       - name: Lint Rust
         run: cargo clippy --workspace --locked --all-targets --target ${{ matrix.target }} -- -D warnings
       - name: Verify crash-handler UI and HTTPS transport
