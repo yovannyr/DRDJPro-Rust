@@ -58,13 +58,16 @@ GetProcessMemoryInfo reads its process peak working set while the backend remain
 alive. This includes runtime, graph and executable state; it is not allocator-only
 RAM, GPU RAM, total machine RAM or an audio-thread allocation measurement.
 
-ORT is fetched only by an explicit tool invocation from the
-[official 1.31.0 Windows CPU release](https://github.com/microsoft/onnxruntime/releases/tag/v1.31.0).
-Archive: 82,887,349 bytes, SHA256
-`3958d8a44984160692c1b4ffd0de3cb48f8c39f9d34bb31e433db06e30b82195`.
-Only CPU DLLs and license notices are extracted (17,620,543 bytes retained);
-temporary archive staging is removed by the tool. No automatic Cargo binary
-fetch is enabled. The fixed archive digest was read from the release metadata.
+The original measurements used the 82,887,349-byte GitHub release ZIP
+(SHA-256 `3958d8a44984160692c1b4ffd0de3cb48f8c39f9d34bb31e433db06e30b82195`;
+17,620,543 bytes retained). Its download URL returned HTTP 404 during A1 CI.
+
+The explicit fetch tool now reads the Windows x64 CPU wheel from the
+[ONNX Runtime 1.31.0 PyPI release](https://pypi.org/project/onnxruntime/1.31.0/#files).
+It checks the 14,885,750-byte archive against its published SHA-256
+`317608967b03807ed4661113b08293fac02a1db6496a6863a07d9f19232936ad`
+and extracts the two native DLLs and both license files (19,656,295 bytes).
+The temporary download is removed. The Python package is never installed.
 
 ## Results and decision
 

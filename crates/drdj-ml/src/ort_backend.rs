@@ -16,11 +16,10 @@ fn error(error: impl fmt::Display) -> InferenceError {
     InferenceError::Backend(error.to_string())
 }
 
-pub(super) fn load(
-    model: &Path,
+fn builder(
     threads: Threads,
     runtime_library: Option<&Path>,
-) -> Result<Box<dyn InferenceBackend>, InferenceError> {
+) -> Result<(ort::session::builder::SessionBuilder, Environment), InferenceError> {
     let library = runtime_library
         .filter(|p| p.is_file())
         .ok_or(InferenceError::RuntimeUnavailable)?;
@@ -53,15 +52,42 @@ pub(super) fn load(
         }
     };
     drop(loaded);
-    let session = Session::builder(&environment)
+    let builder = Session::builder(&environment)
         .map_err(error)?
         .with_intra_threads(threads.get())
         .map_err(error)?
         .with_inter_threads(1)
         .map_err(error)?
         .with_parallel_execution(false)
+        .map_err(error)?;
+    Ok((builder, environment))
+}
+
+pub(super) fn load(
+    model: &Path,
+    threads: Threads,
+    runtime_library: Option<&Path>,
+) -> Result<Box<dyn InferenceBackend>, InferenceError> {
+    let (mut builder, environment) = builder(threads, runtime_library)?;
+    let session = builder.commit_from_file(model).map_err(error)?;
+    Ok(Box::new(OrtBackend {
+        session,
+        _environment: environment,
+    }))
+}
+
+pub(super) fn load_bytes(
+    model: &[u8],
+    threads: Threads,
+    runtime_library: Option<&Path>,
+) -> Result<Box<dyn InferenceBackend>, InferenceError> {
+    let (builder, environment) = builder(threads, runtime_library)?;
+    let session = builder
+        .with_intra_op_spinning(false)
         .map_err(error)?
-        .commit_from_file(model)
+        .with_inter_op_spinning(false)
+        .map_err(error)?
+        .commit_from_memory(model)
         .map_err(error)?;
     Ok(Box::new(OrtBackend {
         session,

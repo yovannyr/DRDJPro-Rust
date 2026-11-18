@@ -7,7 +7,19 @@
 use std::{fmt, path::Path};
 
 #[cfg(feature = "ort")]
+mod cache;
+#[cfg(feature = "ort")]
 mod ort_backend;
+#[cfg(feature = "ort")]
+mod registry;
+#[cfg(feature = "ort")]
+mod service;
+#[cfg(feature = "ort")]
+pub use registry::{ModelId, ModelRegistry, ModelSpec, ModelUse};
+#[cfg(feature = "ort")]
+pub use service::{
+    InferenceJob, InferenceService, JobError, JobOutput, Priority, Ticket, MAX_CHUNKS, MAX_PENDING,
+};
 #[cfg(feature = "tract")]
 mod tract_backend;
 

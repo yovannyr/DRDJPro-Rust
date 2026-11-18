@@ -12,9 +12,12 @@ import threading
 import urllib.request
 import zipfile
 
-ORT_URL = "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-win-x64-1.31.0.zip"
-ORT_SHA256 = "3958d8a44984160692c1b4ffd0de3cb48f8c39f9d34bb31e433db06e30b82195"
-ORT_BYTES = 82_887_349
+# Official CPU wheel used solely as a ZIP container; no Python package installation.
+ORT_URL = ("https://files.pythonhosted.org/packages/37/de/"
+           "6cab7e39917cc87728d2f00abe97c81fe86b29f9e1f758627864c28f0c21/"
+           "onnxruntime-1.31.0-cp311-cp311-win_amd64.whl")
+ORT_SHA256 = "317608967b03807ed4661113b08293fac02a1db6496a6863a07d9f19232936ad"
+ORT_BYTES = 14_885_750
 
 
 def extract_verified_runtime(archive, destination):
@@ -25,13 +28,13 @@ def extract_verified_runtime(archive, destination):
         digest = hashlib.file_digest(source, "sha256").hexdigest()
     if digest != ORT_SHA256:
         raise ValueError("runtime archive SHA256 mismatch")
-    root = "onnxruntime-win-x64-1.31.0/"
+    root = "onnxruntime/"
     allowed = {root + name for name in ("LICENSE", "ThirdPartyNotices.txt",
-                                       "lib/onnxruntime.dll", "lib/onnxruntime_providers_shared.dll")}
+                                       "capi/onnxruntime.dll", "capi/onnxruntime_providers_shared.dll")}
     with zipfile.ZipFile(archive) as zipped:
         selected = [entry for entry in zipped.infolist() if entry.filename in allowed]
-        if not any(e.filename == root + "lib/onnxruntime.dll" for e in selected):
-            raise ValueError("archive lacks CPU runtime")
+        if {entry.filename for entry in selected} != allowed or len(selected) != len(allowed):
+            raise ValueError("runtime archive lacks the exact DLL and license set")
         if sum(e.file_size for e in selected) > 200 * 1024 * 1024:
             raise ValueError("extracted runtime exceeds budget")
         destination.mkdir(parents=True, exist_ok=True)

@@ -1617,6 +1617,7 @@ dependencies = [
  "tempfile",
  "tract-linalg",
  "tract-onnx",
+ "windows 0.54.0",
 ]
 
 [[package]]
