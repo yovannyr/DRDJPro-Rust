@@ -16,7 +16,7 @@ fn error(error: impl fmt::Display) -> InferenceError {
     InferenceError::Backend(error.to_string())
 }
 
-fn builder(
+pub(super) fn builder(
     threads: Threads,
     runtime_library: Option<&Path>,
 ) -> Result<(ort::session::builder::SessionBuilder, Environment), InferenceError> {

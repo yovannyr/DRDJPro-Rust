@@ -7,6 +7,8 @@
 use std::{fmt, path::Path};
 
 #[cfg(feature = "ort")]
+pub mod beat_tracking;
+#[cfg(feature = "ort")]
 mod cache;
 #[cfg(feature = "ort")]
 mod ort_backend;
