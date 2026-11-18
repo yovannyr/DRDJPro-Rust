@@ -358,6 +358,7 @@ pub struct AudioController {
     perf_status_updated: Cell<std::time::Instant>,
     hardware_meter_clock: RefCell<crate::render_bus::ClockObserver>,
     persistence: RefCell<Option<crate::library_store::Worker>>,
+    assistant_library: RefCell<Option<PathBuf>>,
     storage_ready: Cell<bool>,
     dirty: Cell<bool>,
     saving: Cell<bool>,
@@ -534,6 +535,7 @@ impl AudioController {
             perf_status_updated: Cell::new(std::time::Instant::now()),
             hardware_meter_clock: RefCell::new(Default::default()),
             persistence: RefCell::new(None),
+            assistant_library: RefCell::default(),
             storage_ready: Cell::new(true),
             dirty: Cell::new(false),
             saving: Cell::new(false),
@@ -1340,6 +1342,67 @@ impl AudioController {
         ui.on_analyze_library(move || {
             if let Some(c) = weak.upgrade() {
                 c.start_analysis();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        ui.on_add_phrase_cues(move || {
+            if let Some(c) = weak.upgrade() {
+                let Some(ui) = c.ui.upgrade() else { return };
+                if !c.storage_ready.get() || c.pending_import.borrow().is_some() {
+                    return;
+                }
+                let result = c.library.borrow_mut().add_selected_phrase_cues();
+                if let Ok(n) = result {
+                    if n > 0 {
+                        c.library_changed();
+                    }
+                    ui.set_status(format!("Added {n} phrase cues").into());
+                } else if let Err(error) = result {
+                    ui.set_status(error.into());
+                }
+                c.refresh();
+            }
+        });
+        let script = std::env::var_os("DRDJ_LIBRARY_ASSISTANT")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute());
+        ui.set_assistant_enabled(script.is_some());
+        let weak = Rc::downgrade(self);
+        ui.on_suggest_track(move |transition| {
+            let (Some(c), Some(script)) = (weak.upgrade(), script.clone()) else {
+                return;
+            };
+            let Some(ui) = c.ui.upgrade() else {
+                return;
+            };
+            let Some(db) = c.assistant_library.borrow().clone() else {
+                return;
+            };
+            if ui.get_assistant_running() || !c.storage_ready.get() {
+                return;
+            }
+            let id = ui.get_selected_track();
+            if id <= 0 {
+                return;
+            }
+            ui.set_assistant_running(true);
+            ui.set_status("Searching saved library…".into());
+            let view = ui.as_weak();
+            let spawned = std::thread::Builder::new()
+                .name("library-suggestion".into())
+                .spawn(move || {
+                    let message = crate::assistant_ui::suggest(&script, &db, id, transition)
+                        .unwrap_or_else(|e| e);
+                    let _ = view.upgrade_in_event_loop(move |ui| {
+                        ui.set_assistant_running(false);
+                        if ui.get_selected_track() == id {
+                            ui.set_status(message.into());
+                        }
+                    });
+                });
+            if spawned.is_err() {
+                ui.set_assistant_running(false);
+                ui.set_status("Could not start library search".into());
             }
         });
         let previous_scope = Rc::new(Cell::new(0));
@@ -4522,12 +4585,23 @@ impl AudioController {
             DeckId::A => ui.get_left_grid_bpm(),
             DeckId::B => ui.get_right_grid_bpm(),
         };
-        let draft = crate::beatgrid::GridDraft::new(
-            snapshot.grid,
-            f64::from(seed),
-            snapshot.position,
-            snapshot.duration,
-        )?;
+        let proposal = {
+            let library = self.library.borrow();
+            library
+                .track_id_for_path(&path)
+                .and_then(|id| library.track_by_id(id))
+                .and_then(|track| track.metadata.analysis.as_ref())
+                .and_then(|a| {
+                    Some((
+                        f64::from(a.bpm),
+                        Duration::from_millis(u64::from(a.beat_anchor_ms?)),
+                    ))
+                })
+                .filter(|(_, anchor)| *anchor <= snapshot.duration && snapshot.grid.is_none())
+        };
+        let (seed, position) = proposal.unwrap_or((f64::from(seed), snapshot.position));
+        let draft =
+            crate::beatgrid::GridDraft::new(snapshot.grid, seed, position, snapshot.duration)?;
         let text = draft.bpm().to_string().into();
         match id {
             DeckId::A => ui.set_left_grid_draft_bpm(text),
@@ -4873,6 +4947,7 @@ impl AudioController {
         if let Some(ui) = self.ui.upgrade() {
             ui.set_fx_status("FX session only".into());
         }
+        *self.assistant_library.borrow_mut() = path.as_ref().ok().cloned();
         let result = path.and_then(crate::library_store::Worker::start);
         match result {
             Ok(worker) => {
@@ -8439,12 +8514,36 @@ impl AudioController {
             t.metadata.title.clone().into()
         }));
         if update {
-            ui.set_analysis_summary(result.map_or("Not analyzed. Select a track and use Analyze Files.".into(), |a| format!(
-            "BPM estimate: {}   Camelot estimate: {}   Recommended gain: {:+.1} dB   {}",
-            if a.bpm == 0. { "Unavailable".into() } else { format!("{:.1}",a.bpm) },
-            if a.musical_key.is_empty() { "Unavailable" } else { &a.musical_key },
-            20. * a.gain.log10(), if a.is_corrupt { "Decode warning / possible corruption" } else { "Decode threshold OK" }
-        ).into()));
+            ui.set_analysis_summary(result.map_or(
+                "Not analyzed. Select a track and use Analyze Files.".into(),
+                |a| {
+                    format!(
+                        "{}: {}   Camelot estimate: {}   Recommended gain: {:+.1} dB   {}",
+                        if a.beat_anchor_ms.is_some() {
+                            "Neural grid BPM proposal"
+                        } else {
+                            "BPM estimate"
+                        },
+                        if a.bpm == 0. {
+                            "Unavailable".into()
+                        } else {
+                            format!("{:.1}", a.bpm)
+                        },
+                        if a.musical_key.is_empty() {
+                            "Unavailable"
+                        } else {
+                            &a.musical_key
+                        },
+                        20. * a.gain.log10(),
+                        if a.is_corrupt {
+                            "Decode warning / possible corruption"
+                        } else {
+                            "Decode threshold OK"
+                        }
+                    )
+                    .into()
+                },
+            ));
             ui.set_analysis_waveform(result.map_or_else(ModelRc::default, |a| {
                 ModelRc::new(VecModel::from(
                     a.waveform_overview
@@ -18866,6 +18965,8 @@ mod tests {
             duration_exact: true,
             scanned: true,
             analysis: Some(crate::audio_analyzer::TrackAnalysisResult {
+                beat_anchor_ms: None,
+                analyzed_ms: None,
                 file_path: path.to_string_lossy().into_owned(),
                 bpm: 127.,
                 musical_key: "10A".into(),
@@ -19530,6 +19631,77 @@ mod tests {
             assert_eq!(engine.snapshot(id).position, before);
             assert!(engine.snapshot(id).playing);
         }
+    }
+
+    #[test]
+    fn prepare_actions_seed_only_new_grid_drafts_and_preserve_existing_cue_slots() {
+        i_slint_backend_testing::init_no_event_loop();
+        let ui = AppWindow::new().unwrap();
+        let (mixer, _) = rodio::mixer::mixer(1, 48_000);
+        let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 1, 48_000));
+        let file = wav_file(8192, 48_000 * 20);
+        engine.load_a(file.path()).unwrap();
+        let path = engine.snapshot(DeckId::A).path.unwrap().to_path_buf();
+        let c = AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+        {
+            let mut lib = c.library.borrow_mut();
+            lib.insert([path.clone()]);
+            let id = lib.track_id_for_path(&path).unwrap();
+            lib.select(id);
+            lib.set_metadata(
+                &path,
+                crate::track_metadata::TrackMetadata {
+                    duration_ms: Some(20_000),
+                    analysis: Some(crate::audio_analyzer::TrackAnalysisResult {
+                        file_path: path.to_string_lossy().into_owned(),
+                        bpm: 120.,
+                        beat_anchor_ms: Some(250),
+                        analyzed_ms: Some(20_000),
+                        musical_key: String::new(),
+                        gain: 1.,
+                        is_corrupt: false,
+                        waveform_overview: [40, 180, 55, 190, 35]
+                            .into_iter()
+                            .flat_map(|p| std::iter::repeat_n(p, 32))
+                            .collect(),
+                    }),
+                    ..Default::default()
+                },
+            );
+            lib.set_hot_cue(
+                &path,
+                0,
+                Some(crate::hot_cues::HotCue::new(Duration::ZERO, "Keep".into(), 0).unwrap()),
+            )
+            .unwrap();
+        }
+        ui.invoke_grid_left();
+        assert_eq!(
+            c.grid_editors.borrow()[0]
+                .as_ref()
+                .unwrap()
+                .draft
+                .value()
+                .unwrap()
+                .anchor(),
+            Duration::from_millis(250)
+        );
+        assert!(engine.snapshot(DeckId::A).grid.is_none());
+        ui.invoke_cancel_grid_left();
+        let manual = crate::beatgrid::BeatGrid::new(100., Duration::from_millis(750)).unwrap();
+        engine.set_grid(DeckId::A, Some(manual)).unwrap();
+        ui.invoke_grid_left();
+        assert_eq!(
+            c.grid_editors.borrow()[0].as_ref().unwrap().draft.value(),
+            Some(manual)
+        );
+        ui.invoke_cancel_grid_left();
+        ui.invoke_add_phrase_cues();
+        let cues = c.library.borrow().hot_cues(&path);
+        assert_eq!(cues.slots()[0].as_ref().unwrap().name(), "Keep");
+        assert!(cues.slots()[1].is_some());
+        ui.invoke_add_phrase_cues();
+        assert_eq!(cues, c.library.borrow().hot_cues(&path));
     }
 
     #[test]

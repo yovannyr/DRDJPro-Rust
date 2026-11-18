@@ -3458,6 +3458,8 @@ mod tests {
         let (mut store, restored, _) = Store::open(db.clone()).unwrap();
         assert!(restored.catalog().tracks[0].metadata.analysis.is_none());
         let analysis = crate::audio_analyzer::TrackAnalysisResult {
+            beat_anchor_ms: Some(420),
+            analyzed_ms: None,
             file_path: data.tracks[0].path.to_string_lossy().into_owned(),
             bpm: 123.4,
             musical_key: "8A".into(),

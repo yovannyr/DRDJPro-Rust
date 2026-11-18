@@ -1,6 +1,7 @@
 use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 
+mod assistant_ui;
 mod audio;
 mod audio_analyzer;
 mod audio_devices;
@@ -64,6 +65,14 @@ fn main() -> Result<(), slint::PlatformError> {
         if let Err(error) = result {
             eprintln!("Crash subsystem failed: {error}");
             std::process::exit(70);
+        }
+        return Ok(());
+    }
+    #[cfg(feature = "ml-import")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--stem-mix")) {
+        if let Err(e) = prepared_stems::mix_command(std::env::args_os().skip(2)) {
+            eprintln!("Stem mix failed: {e}");
+            std::process::exit(1);
         }
         return Ok(());
     }

@@ -112,6 +112,8 @@ message AnalysisMessage {
   required float gain = 4;
   required bytes waveform_overview = 5;
   required bool is_corrupt = 6;
+  optional uint32 beat_anchor_ms = 7;
+  optional uint32 analyzed_ms = 8;
 }
 message NativeMetadataMessage {
   optional AnalysisMessage analysis = 1;

@@ -6,7 +6,8 @@ A0 selected a CPU backend. A1 supplies the bounded service and cache. A2
 connects them to file and folder imports and explicit library analysis through
 the optional application feature `ml-import`. See the
 [backend decision](adr/ML-BACKEND.md) and [service and activation guide](adr/ML-INFERENCE-SERVICE.md).
-The [Slice B offline evaluation](adr/BEAT-TRACKING.md) measures a trained beat/downbeat model before any change to the application grid.
+The [Slice B offline evaluation](adr/BEAT-TRACKING.md) measures a trained beat/downbeat model on annotated excerpts and full songs under playback load.
+[Track preparation and library assistance](adr/AI-PREPARATION.md) describes the B–G integration, settings, measurements and acceptance work.
 
 ## Product goal and release gate
 

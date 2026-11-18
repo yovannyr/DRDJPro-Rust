@@ -17,6 +17,8 @@ mod registry;
 #[cfg(feature = "ort")]
 mod service;
 #[cfg(feature = "ort")]
+pub mod stem_tracking;
+#[cfg(feature = "ort")]
 pub use registry::{ModelId, ModelRegistry, ModelSpec, ModelUse};
 #[cfg(feature = "ort")]
 pub use service::{

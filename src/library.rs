@@ -152,7 +152,10 @@ pub(crate) fn inspect_files(
                 }
                 let metadata = crate::track_metadata::read_cancellable(&path, cancel)?;
                 #[cfg(feature = "ml-import")]
-                let metadata = if _analyze_import && crate::import_inference::configured().is_some()
+                let metadata = if _analyze_import
+                    && (crate::import_inference::configured().is_some()
+                        || std::env::var_os("DRDJ_BEAT_MODELS").is_some()
+                        || std::env::var_os("DRDJ_STEM_MODELS").is_some())
                 {
                     let mut metadata = metadata;
                     match crate::audio_analyzer::AudioAnalyzer::analyze_cancellable(&path, cancel) {
@@ -911,6 +914,82 @@ impl Library {
         self.tracks[index].saved_loops.set(slot, value)?;
         self.mark_track(index);
         Ok(())
+    }
+
+    pub(crate) fn add_selected_phrase_cues(&mut self) -> Result<usize, String> {
+        let track = self
+            .track_by_id(self.selected_id())
+            .ok_or("Select a track first")?;
+        let a = track
+            .metadata
+            .analysis
+            .as_ref()
+            .filter(|a| !a.is_corrupt)
+            .ok_or("Analyze the track first")?;
+        let duration = a
+            .analyzed_ms
+            .map(u64::from)
+            .or_else(|| {
+                track
+                    .metadata
+                    .duration_ms
+                    .filter(|_| track.metadata.duration_exact)
+            })
+            .ok_or("Reanalyze the track to measure its duration")?;
+        let (bpm, anchor) = if let Some(grid) = track.grid {
+            if grid.beats_per_bar() != 4
+                || grid.meter_denominator() != 4
+                || !grid.meter_changes().is_empty()
+                || !grid.tempo_changes().is_empty()
+                || !grid.warp_markers().is_empty()
+            {
+                return Err("Phrase cues require a constant 4/4 grid".into());
+            }
+            (
+                grid.bpm() as f32,
+                Some(
+                    u32::try_from(grid.anchor().as_millis())
+                        .map_err(|_| "Grid anchor is too large")?,
+                ),
+            )
+        } else {
+            (a.bpm, a.beat_anchor_ms)
+        };
+        let proposals = drdjpro_ui_spike::preparation::phrases::detect(
+            &a.waveform_overview,
+            duration,
+            bpm,
+            anchor,
+        );
+        let path = track.path.clone();
+        let existing = &track.hot_cues;
+        let mut slots = existing
+            .slots()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.is_none().then_some(i));
+        let mut additions = Vec::new();
+        for (ms, kind) in proposals {
+            let position = std::time::Duration::from_millis(ms);
+            if existing
+                .slots()
+                .iter()
+                .flatten()
+                .any(|c| c.position().abs_diff(position) < std::time::Duration::from_millis(250))
+            {
+                continue;
+            }
+            let Some(slot) = slots.next() else { break };
+            additions.push((
+                slot,
+                crate::hot_cues::HotCue::new(position, kind.name().into(), 0x209ac4)?,
+            ));
+        }
+        let count = additions.len();
+        for (slot, cue) in additions {
+            self.set_hot_cue(&path, slot, Some(cue))?;
+        }
+        Ok(count)
     }
 
     pub fn hot_cues(&self, path: &Path) -> crate::hot_cues::HotCues {
@@ -1926,6 +2005,8 @@ mod tests {
                     index as i32 + 1,
                     path,
                     crate::audio_analyzer::TrackAnalysisResult {
+                        beat_anchor_ms: None,
+                        analyzed_ms: None,
                         file_path: path.to_string_lossy().into_owned(),
                         bpm: if index == 0 { 100. } else { 90. },
                         musical_key: if index == 0 { "10A" } else { "2A" }.into(),

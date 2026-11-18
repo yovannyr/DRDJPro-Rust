@@ -1,5 +1,12 @@
 # GUI component inventory and reference baseline
 
+## Track preparation
+
+The Prepare tab can add phrase cues to free slots of the selected analyzed track.
+The grid editor previews a stable beat proposal when the track has no saved grid.
+With the local library assistant enabled, Similar and Transition show one ranked
+candidate with the available tempo, key and cue evidence. [Setup and qualification](adr/AI-PREPARATION.md).
+
 ## Embedded cover artwork (2026-11-17)
 
 The Modern A/B track headers and platters display embedded PNG/JPEG cover images.

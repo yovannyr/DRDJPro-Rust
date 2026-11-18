@@ -1,6 +1,9 @@
 //! Reusable preparation candidate contracts, independent of desktop startup.
 //! Models and mock/stub adapters here do not imply desktop or external-service integration.
 
+#[path = "../phrase_detection.rs"]
+pub mod phrases;
+
 /// Contracts from the library_manager implementation.
 pub mod library_manager {
     pub use crate::library_manager::{
