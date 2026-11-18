@@ -1,13 +1,14 @@
 # DrDJ Pro product and migration plan
 
-## Isolated ML runtime evaluation (A0)
+## Isolated ML runtime and inference service (A0/A1)
 
 `crates/drdj-ml` is an optional-backend experiment, not an application dependency.
 It compares CPU ORT/tract on a generated synthetic Conv/GRU fixture with scalar
 parity and explicit resource measurements. No UI, decoder, real-time callback or
-production analysis path is connected. A1 (registry/service/cache) and real-model
-quality qualification remain separate. Decision and evidence:
-[ML-BACKEND.md](adr/ML-BACKEND.md).
+production analysis path is connected. A1 adds the opt-in ORT worker, bounded
+priority queue, verified model registry and local result cache for the synthetic
+fixture. Real-model qualification remains future work. See the
+[backend decision](adr/ML-BACKEND.md) and the [A1 contract](adr/ML-INFERENCE-SERVICE.md).
 
 ## Product goal and release gate
 

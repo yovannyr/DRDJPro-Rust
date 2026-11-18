@@ -177,7 +177,7 @@ pub(crate) struct EqSource<S> {
     control: Arc<EqControl>,
     active: Bank,
     next: Bank,
-    wanted: [f64; COEFFICIENTS],
+    wanted: Option<[f64; COEFFICIENTS]>,
     identity: [f64; COEFFICIENTS],
     channel: usize,
     channels: usize,
@@ -211,7 +211,7 @@ impl<S: Source> EqSource<S> {
                 states,
             },
             next,
-            wanted: coefficients,
+            wanted: None,
             identity,
             channel: 0,
             channels,
@@ -240,13 +240,19 @@ impl<S: Source> Iterator for EqSource<S> {
                 .is_some_and(|(c, d)| c[*d].rendered_cue() || c.iter().any(|c| c.monitor_mode()));
             if let Some((command, values)) = self.control.read(Some(self.command)) {
                 self.command = command;
-                self.wanted = values;
+                self.wanted = Some(values);
             }
-            if self.fade == 0 && self.wanted != self.active.coefficients {
-                self.next.coefficients = self.wanted;
-                self.next.bypass = self.wanted == self.identity;
-                self.next.states.fill([[0.; 2]; STAGES]);
-                self.fade = 1;
+            if self.fade == 0 {
+                if let Some(values) = self
+                    .wanted
+                    .take()
+                    .filter(|v| *v != self.active.coefficients)
+                {
+                    self.next.coefficients = values;
+                    self.next.bypass = values == self.identity;
+                    self.next.states.fill([[0.; 2]; STAGES]);
+                    self.fade = 1;
+                }
             }
         }
         let input = if sample.is_finite() { sample } else { 0. };
