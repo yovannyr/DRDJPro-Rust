@@ -955,11 +955,12 @@ impl Library {
         } else {
             (a.bpm, a.beat_anchor_ms)
         };
-        let proposals = drdjpro_ui_spike::preparation::phrases::detect(
+        let proposals = drdjpro_ui_spike::preparation::phrases::detect_with_boundaries(
             &a.waveform_overview,
             duration,
             bpm,
             anchor,
+            &a.phrase_boundaries_ms,
         );
         let path = track.path.clone();
         let existing = &track.hot_cues;
@@ -980,9 +981,14 @@ impl Library {
                 continue;
             }
             let Some(slot) = slots.next() else { break };
+            let label = if kind == drdjpro_ui_spike::preparation::phrases::PhraseType::Custom {
+                "Section"
+            } else {
+                kind.name()
+            };
             additions.push((
                 slot,
-                crate::hot_cues::HotCue::new(position, kind.name().into(), 0x209ac4)?,
+                crate::hot_cues::HotCue::new(position, label.into(), 0x209ac4)?,
             ));
         }
         let count = additions.len();
@@ -2007,6 +2013,7 @@ mod tests {
                     crate::audio_analyzer::TrackAnalysisResult {
                         beat_anchor_ms: None,
                         analyzed_ms: None,
+                        phrase_boundaries_ms: vec![],
                         file_path: path.to_string_lossy().into_owned(),
                         bpm: if index == 0 { 100. } else { 90. },
                         musical_key: if index == 0 { "10A" } else { "2A" }.into(),

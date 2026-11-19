@@ -114,6 +114,7 @@ message AnalysisMessage {
   required bool is_corrupt = 6;
   optional uint32 beat_anchor_ms = 7;
   optional uint32 analyzed_ms = 8;
+  repeated uint32 phrase_boundaries_ms = 9 [packed=true];
 }
 message NativeMetadataMessage {
   optional AnalysisMessage analysis = 1;

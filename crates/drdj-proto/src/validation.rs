@@ -199,6 +199,12 @@ contract!(LoopMessage, self, {
 });
 
 contract!(AnalysisMessage, self, {
+    if !crate::valid_phrase_boundaries(&self.phrase_boundaries_ms, self.analyzed_ms) {
+        return Err(invalid(
+            "phrase_boundaries_ms",
+            "invalid internal phrase boundaries",
+        ));
+    }
     if self
         .analyzed_ms
         .is_some_and(|ms| ms > 3_600_000 || self.beat_anchor_ms.is_some_and(|anchor| anchor > ms))

@@ -3459,7 +3459,8 @@ mod tests {
         assert!(restored.catalog().tracks[0].metadata.analysis.is_none());
         let analysis = crate::audio_analyzer::TrackAnalysisResult {
             beat_anchor_ms: Some(420),
-            analyzed_ms: None,
+            analyzed_ms: Some(45000),
+            phrase_boundaries_ms: vec![16000, 32000],
             file_path: data.tracks[0].path.to_string_lossy().into_owned(),
             bpm: 123.4,
             musical_key: "8A".into(),

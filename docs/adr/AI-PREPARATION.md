@@ -17,29 +17,47 @@ explicit action. Otherwise the classical estimate is available. The import
 test uses the complete 96 BPM Groove MIDI Dataset funk recording
 `drummer8/session1/8` and checks BPM and the first grid anchor.
 
-**Add phrase cues** uses bar-aligned changes in the analyzed amplitude envelope.
-A rising section can produce Buildup or Chorus / Drop, a falling section Break
-or Outro, and a quieter opening Intro. Flat or insufficient evidence yields no
-cues. A saved constant 4/4 grid takes precedence. The action fills empty slots
-and can be repeated. The synthetic 80 s fixture checks four internal boundaries
-at 16 s intervals and their labels. For recorded references, set
+**Add phrase cues** uses the spectra already computed for key analysis. The
+offline analyzer averages log power in eight frequency bands per source second
+and reduces the influence of overall loudness. It compares the four seconds on
+either side of each candidate and checks the change again over up to twelve
+seconds per side. Local maxima must reach a 2 dB contrast on both scales.
+It retains up to seven changes at least twelve seconds apart. The Library
+snaps their source times to the selected constant 4/4 grid when adding cues.
+The waveform supplies the Intro/Build/Chorus/Break/Outro labels; a timbral
+change with little amplitude evidence is labelled **Section**.
+
+Old analyses, sample rates below 16 kHz and tracks with no spectral candidates
+use the existing amplitude detector. Analyze Files refreshes old analyses.
+The action fills empty slots and can be repeated. A one-hour track needs
+about 128 KiB for the temporary spectral profiles. Only the final timestamps
+(at most seven integers) are saved. The audio callback and deck loader do
+no phrase analysis.
+
+For recorded references, set
 `DRDJ_PHRASE_FILES` to an OS path list of audio files alongside same-stem
 `.txt` SALAMI uppercase annotations and run the ignored application test
-`score_recorded_phrase_boundaries`. It counts one-to-one internal boundary
+`score_recorded_phrase_boundaries`. It scores both detectors on one decode
+with identical BPM, grid and cue budget. It counts one-to-one internal boundary
 matches within three seconds. Personal annotated tracks and Serato grids
 are pending. [SALAMI annotations and recording identifiers](https://github.com/DDMAL/salami-data-public).
 
-| SALAMI ID | Internal proposals | Annotated boundaries | Matches within 3 s |
+| SALAMI recording | Annotated boundaries | Amplitude hits / proposals | Spectral hits / proposals |
 | --- | ---: | ---: | ---: |
-| 956 | 7 | 9 | 1 |
-| 958 | 6 | 9 | 0 |
-| 960 | 7 | 8 | 2 |
+| [956, Revolution](https://archive.org/download/brdnhand2005-07-27.shnf/brdnhand2005-07-27d1t03.mp3) | 9 | 1 / 7 | 4 / 7 |
+| [958, Rap Medley](https://archive.org/download/5point2008-10-23/2008-10-23d01t03.mp3) | 9 | 0 / 6 | 2 / 7 |
+| [960, Woman Across the River](https://archive.org/download/ag2008-12-31.WYE.flac16/ag2008-12-31d1t09.WYE.mp3) | 8 | 2 / 7 | 2 / 6 |
+| **Pooled** | **26** | **3 / 20** | **8 / 20** |
 
-On these three complete concert recordings the pooled precision was 15.0%
-and recall was 11.5% (F1 13.0%). These are experimental cue suggestions:
-amplitude changes alone missed most of the human song boundaries. The counts
-use annotator 1, exclude the first and last three seconds, and measure times
-only. [Annotation revision](https://github.com/DDMAL/salami-data-public/tree/8e4f95d18a3ab628c53011fa5a43e9d3be27965d).
+The baseline on commit `1ca5786` and the paired amplitude run produced identical
+counts on every track. Pooled precision rose from **15.0% to 40.0%**, recall
+from **11.5% to 30.8%**, and F1 from **13.0% to 34.8%**. On recording 960
+the hit count stayed at two with one fewer false proposal. Across the three
+recordings 18 annotated boundaries were still missed. These figures measure
+boundary times alone. They do not establish label accuracy or performance on
+other genres. Both runs used classical BPM with the neural grid disabled,
+annotator 1's `parsed/textfile1_uppercase.txt` and excluded boundaries within
+the first and last three seconds. [Annotation revision](https://github.com/DDMAL/salami-data-public/tree/8e4f95d18a3ab628c53011fa5a43e9d3be27965d).
 
 ## Four-stem preparation
 

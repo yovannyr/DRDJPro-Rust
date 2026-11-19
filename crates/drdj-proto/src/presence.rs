@@ -26,7 +26,7 @@ impl Shape {
         let mut required = 0;
         let mut fields = Vec::new();
         for (index, field) in descriptor.fields().enumerate() {
-            if field.is_packed() || field.is_group() {
+            if field.is_group() {
                 return None;
             }
             if field.cardinality() == Cardinality::Required {
@@ -97,7 +97,12 @@ impl State {
                 continue;
             };
             let field = &shape.fields[index];
-            if wire != field.wire {
+            // Repeated numeric scalars accept either protobuf representation.
+            // Prost validates the packed elements during the subsequent decode.
+            let packed = wire == WireType::LengthDelimited
+                && field.repeated
+                && field.wire != WireType::LengthDelimited;
+            if wire != field.wire && !packed {
                 return Err(invalid(&field.name, "incorrect wire type"));
             }
             if let Some(child_shape) = &field.child {
