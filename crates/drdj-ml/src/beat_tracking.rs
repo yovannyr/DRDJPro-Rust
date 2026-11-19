@@ -32,6 +32,47 @@ pub struct Events {
     pub downbeats_ms: Vec<u32>,
 }
 
+impl Events {
+    /// Fit a constant four-beat grid only when timing and bar phase agree
+    /// across the recording. Variable-tempo material keeps the classical result.
+    pub fn stable_grid(&self, duration_ms: u32) -> Option<(f32, u32)> {
+        let beats = &self.beats_ms;
+        let anchor = *self.downbeats_ms.first()?;
+        if beats.len() < 32
+            || self.downbeats_ms.len() < 8
+            || beats.windows(2).any(|w| w[0] >= w[1])
+            || self.downbeats_ms.windows(2).any(|w| w[0] >= w[1])
+        {
+            return None;
+        }
+        let phase = beats.binary_search(&anchor).ok()?;
+        let span = beats.last()? - beats[0];
+        if *beats.last()? > duration_ms || u64::from(span) * 10 < u64::from(duration_ms) * 9 {
+            return None;
+        }
+        let period = f64::from(span) / (beats.len() - 1) as f64;
+        let bpm = (60_000. / period) as f32;
+        let aligned = beats
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| {
+                (f64::from(**t) - f64::from(anchor) - (*i as f64 - phase as f64) * period).abs()
+                    <= 70.
+            })
+            .count();
+        let bars = self
+            .downbeats_ms
+            .iter()
+            .filter(|t| beats.binary_search(t).is_ok_and(|i| i % 4 == phase % 4))
+            .count();
+        ((40.0..=240.0).contains(&bpm)
+            && aligned * 100 >= beats.len() * 95
+            && bars * 100 >= self.downbeats_ms.len() * 95
+            && bars * 4 * 100 >= beats.len() * 90)
+            .then_some((bpm, anchor))
+    }
+}
+
 /// One single-thread CPU session per graph. Call only from an offline worker.
 pub struct Tracker {
     front: Session,
@@ -200,6 +241,23 @@ fn events(scores: &[(f32, f32)]) -> Events {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn constant_grid_requires_sustained_beat_and_bar_agreement() {
+        let mut e = super::Events {
+            beats_ms: (0..96).map(|i| 300 + i * 500).collect(),
+            downbeats_ms: (0..24).map(|i| 1300 + i * 2000).collect(),
+        };
+        assert_eq!(e.stable_grid(48_000), Some((120., 1300)));
+        assert_eq!(e.stable_grid(96_000), None);
+        e.downbeats_ms.truncate(8);
+        assert_eq!(e.stable_grid(48_000), None);
+        e.downbeats_ms = e.beats_ms.iter().step_by(4).copied().collect();
+        for t in &mut e.beats_ms[32..48] {
+            *t += 150;
+        }
+        assert_eq!(e.stable_grid(48_000), None);
+    }
+
     use super::*;
     #[test]
     fn plateaus_align_once_and_silence_has_no_downbeats() {

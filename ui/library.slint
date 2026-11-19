@@ -100,6 +100,10 @@ export component TrackLibrary inherits Rectangle {
     property <bool> columns-open;
     callback change-column(int, int);
     callback analyze();
+    callback add-phrase-cues();
+    callback suggest-track(bool);
+    in property <bool> assistant-enabled;
+    in property <bool> assistant-running;
     in property <string> analysis-title;
     in property <string> analysis-summary;
     in property <[float]> analysis-waveform;
@@ -171,7 +175,13 @@ export component TrackLibrary inherits Rectangle {
         if tab == 4 : VerticalLayout {
             spacing: 2px;
             if root.analysis-progress != "" : Text { height: 14px; text: root.analysis-progress; accessible-role: text; accessible-label: "Library analysis progress"; accessible-description: root.analysis-progress; font-size: 11px; color: #cccccc; overflow: elide; }
-            Text { height: 14px; text: root.analysis-title; font-size: 11px; color: #eeeeee; overflow: elide; }
+            HorizontalLayout {
+                spacing: 3px;
+                if root.assistant-enabled : LibraryButton { text: "Similar"; accessible-label: "Suggest a similar track"; enabled: !root.busy && !root.assistant-running && root.selection > 0; clicked => { root.suggest-track(false); } }
+                if root.assistant-enabled : LibraryButton { text: "Transition"; accessible-label: "Suggest next track and transition"; enabled: !root.busy && !root.assistant-running && root.selection > 0; clicked => { root.suggest-track(true); } }
+                LibraryButton { text: "Add phrase cues"; accessible-label: "Add suggested phrase cues to empty slots"; enabled: !root.busy && root.selection > 0 && root.analysis-waveform.length > 0; clicked => { root.add-phrase-cues(); } }
+                Text { horizontal-stretch: 1; vertical-alignment: center; text: root.analysis-title; font-size: 11px; color: #eeeeee; overflow: elide; }
+            }
             Text { height: 14px; text: root.analysis-summary; accessible-role: text; accessible-label: "Prepare analysis results"; accessible-description: root.analysis-summary; font-size: 11px; color: #cccccc; overflow: elide; }
             if root.analysis-waveform.length > 0 : Rectangle {
                 height: 20px; background: #0a0a0a;

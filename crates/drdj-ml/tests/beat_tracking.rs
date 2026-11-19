@@ -12,35 +12,38 @@ fn rejects_unverified_frontend_before_runtime_initialization() {
     ));
 }
 
-/// Use the externally supplied test assets. The first 36 s span a window seam.
+/// Stream the complete annotated recording across multiple inference windows.
 #[test]
 #[ignore = "requires pinned small0 models, ORT and Candombe 46 audio and beat annotations"]
-fn annotated_performance_tracks_across_window_boundary() {
+fn complete_annotated_performance_tracks_across_window_boundaries() {
     let root = PathBuf::from(env::var_os("DRDJ_BEAT_TEST_DIR").unwrap());
     let mut model = Tracker::load(
         &root,
         &PathBuf::from(env::var_os("DRDJ_ORT_LIBRARY").unwrap()),
     )
     .unwrap();
-    let output = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-i"])
+    let mut decoder = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-xerror", "-i"])
         .arg(root.join("46.flac"))
-        .args(["-t", "36", "-ac", "1", "-ar", "22050", "-f", "f32le", "-"])
-        .output()
+        .args(["-ac", "1", "-ar", "22050", "-f", "f32le", "-"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
-    assert!(output.status.success());
-    let e = model.track(output.stdout.as_slice()).unwrap();
+    let result = model.track(decoder.stdout.take().unwrap());
+    assert!(decoder.wait().unwrap().success());
+    let e = result.unwrap();
     let annotations = fs::read_to_string(root.join("46.beats")).unwrap();
     for (predictions, downbeats) in [(&e.beats_ms, false), (&e.downbeats_ms, true)] {
         let mut times = Vec::new();
         for line in annotations.lines() {
             let (time, beat) = line.split_once('\t').unwrap();
             let t = time.parse::<f64>().unwrap();
-            if t < 36.0 && (!downbeats || beat == "1") {
+            if !downbeats || beat == "1" {
                 times.push(t * 1000.0);
             }
         }
-        assert!(times.last().unwrap() > &30000.0);
+        assert!(times.last().unwrap() > &110_000.0);
+        assert!(predictions.last().unwrap() > &110_000);
         let mut it = predictions.iter().copied().peekable();
         let mut matches = 0;
         for t in &times {

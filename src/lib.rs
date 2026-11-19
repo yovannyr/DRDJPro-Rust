@@ -166,6 +166,8 @@ mod video_recording;
 
 #[path = "features/media.rs"]
 pub mod media;
+#[cfg(feature = "ml-import")]
+pub mod prepared_stems;
 
 mod command_scheduler;
 

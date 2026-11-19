@@ -5296,18 +5296,53 @@ mod tests {
     #[test]
     #[ignore = "opt-in timed A1 headless soak with the external ORT load example"]
     fn a1_headless_render_with_inference_load() {
-        use std::process::{Child, Command};
+        let binary = std::env::var_os("DRDJ_A1_LOAD_BIN").expect("set DRDJ_A1_LOAD_BIN");
+        compare_render_load(
+            std::process::Command::new(binary),
+            "cache-miss jobs of 256 chunks",
+        );
+    }
+
+    #[test]
+    #[ignore = "opt-in full-track Slice B headless playback qualification"]
+    fn b_headless_render_with_full_track_load() {
+        let mut command = std::process::Command::new("python");
+        command.arg("-B").arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tools/beat_full_load.py"
+        ));
+        compare_render_load(command, "complete track analyses");
+    }
+
+    fn compare_render_load(mut command: std::process::Command, unit: &str) {
+        use std::process::Child;
         use std::time::Instant;
 
-        struct Worker(Child);
+        struct Worker(Child, std::path::PathBuf);
         impl Drop for Worker {
             fn drop(&mut self) {
+                // On early exit let the supervisor reap the decoder and tracker.
+                if self.0.try_wait().is_ok_and(|status| status.is_none()) {
+                    let _ = std::fs::write(self.1.join("stop"), []);
+                    let deadline = Instant::now() + Duration::from_secs(8);
+                    while Instant::now() < deadline {
+                        if self.0.try_wait().is_ok_and(|status| status.is_some()) {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    #[cfg(windows)]
+                    if self.0.try_wait().is_ok_and(|status| status.is_none()) {
+                        let _ = std::process::Command::new("taskkill.exe")
+                            .args(["/PID", &self.0.id().to_string(), "/T", "/F"])
+                            .output();
+                    }
+                }
                 let _ = self.0.kill();
                 let _ = self.0.wait();
             }
         }
 
-        let binary = std::env::var_os("DRDJ_A1_LOAD_BIN").expect("set DRDJ_A1_LOAD_BIN");
         let seconds = std::env::var("DRDJ_A1_SOAK_SECONDS")
             .map_or(600, |value| value.parse::<u64>().unwrap());
         assert!((1..=600).contains(&seconds));
@@ -5403,14 +5438,13 @@ mod tests {
         };
         let baseline = phase(None);
         let dir = tempfile::tempdir().unwrap();
-        let mut command = Command::new(binary);
         command.arg(dir.path());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let mut worker = Worker(command.spawn().unwrap());
+        let mut worker = Worker(command.spawn().unwrap(), dir.path().to_owned());
         let deadline = Instant::now() + Duration::from_secs(20);
         while !dir.path().join("ready").exists() {
             assert!(worker.0.try_wait().unwrap().is_none() && Instant::now() < deadline);
@@ -5432,7 +5466,7 @@ mod tests {
             .parse::<u64>()
             .unwrap();
         assert!(jobs > 1);
-        eprintln!("ORT completed {jobs} cache-miss jobs of 256 chunks");
+        eprintln!("ORT completed {jobs} {unit}");
         assert_eq!(baseline, (0, 0, 0, 0), "baseline timing and output");
         assert_eq!(loaded, (0, 0, 0, 0), "timing and output under ORT load");
     }

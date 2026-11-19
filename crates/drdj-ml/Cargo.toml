@@ -8,10 +8,11 @@ description = "Isolated CPU inference backend experiment; no application integra
 
 [features]
 default = []
-ort = ["dep:ort", "dep:sha2", "dep:tempfile", "dep:windows"]
+ort = ["dep:ort", "dep:sha2", "dep:tempfile", "dep:windows", "dep:rustfft"]
 tract = ["dep:tract-onnx", "dep:tract-linalg", "dep:rayon"]
 
 [dependencies]
+rustfft = { version = "6", optional = true }
 ort = { version = "=2.0.0-rc.15", optional = true, default-features = false, features = ["std", "load-dynamic", "api-31"] }
 tract-onnx = { version = "=0.23.8", optional = true, default-features = false }
 tract-linalg = { version = "=0.23.8", optional = true, features = ["multithread-mm"] }

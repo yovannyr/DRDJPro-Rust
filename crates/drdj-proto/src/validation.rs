@@ -199,6 +199,12 @@ contract!(LoopMessage, self, {
 });
 
 contract!(AnalysisMessage, self, {
+    if self
+        .analyzed_ms
+        .is_some_and(|ms| ms > 3_600_000 || self.beat_anchor_ms.is_some_and(|anchor| anchor > ms))
+    {
+        return Err(invalid("analyzed_ms", "invalid decoded duration"));
+    }
     finite(f64::from(self.bpm), "bpm")?;
     finite(f64::from(self.gain), "gain")?;
     if !(0.0..=240.0).contains(&self.bpm) {
@@ -217,6 +223,12 @@ contract!(AnalysisMessage, self, {
     }
     if self.file_path.chars().count() > 32768 {
         return Err(invalid("file_path", "native analysis path too long"));
+    }
+    if self
+        .beat_anchor_ms
+        .is_some_and(|ms| ms > 3_600_000 || self.bpm < 40. || self.is_corrupt)
+    {
+        return Err(invalid("beat_anchor_ms", "invalid neural grid proposal"));
     }
     if self.waveform_overview.len() > 4096 {
         return Err(invalid(

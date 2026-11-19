@@ -178,6 +178,8 @@ impl From<&Track> for NativeTrackMessage {
                 scanned: metadata.scanned,
                 error: metadata.error.clone(),
                 analysis: metadata.analysis.as_ref().map(|a| AnalysisMessage {
+                    beat_anchor_ms: a.beat_anchor_ms,
+                    analyzed_ms: a.analyzed_ms,
                     file_path: a.file_path.clone(),
                     bpm: a.bpm,
                     musical_key: a.musical_key.clone(),
@@ -221,6 +223,8 @@ impl From<Track> for NativeTrackMessage {
                 scanned: m.scanned,
                 error: m.error,
                 analysis: m.analysis.map(|a| AnalysisMessage {
+                    beat_anchor_ms: a.beat_anchor_ms,
+                    analyzed_ms: a.analyzed_ms,
                     file_path: a.file_path,
                     bpm: a.bpm,
                     musical_key: a.musical_key,
@@ -257,6 +261,8 @@ impl TryFrom<NativeTrackMessage> for Track {
             analysis: m
                 .analysis
                 .map(|a| crate::audio_analyzer::TrackAnalysisResult {
+                    beat_anchor_ms: a.beat_anchor_ms,
+                    analyzed_ms: a.analyzed_ms,
                     file_path: a.file_path,
                     bpm: a.bpm,
                     musical_key: a.musical_key,
@@ -344,12 +350,14 @@ mod tests {
         track.metadata.scanned = true;
         track.metadata.prefer_imported_tags = true;
         track.metadata.analysis = Some(crate::audio_analyzer::TrackAnalysisResult {
+            beat_anchor_ms: Some(0),
+            analyzed_ms: None,
             file_path: "analysis-source".into(),
             bpm: 128.125,
             musical_key: "8A".into(),
             gain: 0.75,
             waveform_overview: vec![0, 255, 1],
-            is_corrupt: true,
+            is_corrupt: false,
         });
         track.grid = Some(
             BeatGrid::new(128.123456789, Duration::from_nanos(123))

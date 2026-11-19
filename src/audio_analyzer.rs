@@ -62,6 +62,12 @@ pub struct TrackAnalysisResult {
     pub file_path: String,
     /// Geschätztes Tempo in BPM. `0.0` bedeutet "nicht bestimmbar" (zu kurz, Stille, kein Beat).
     pub bpm: f32,
+    /// First model-supported downbeat of a stable 4/4 grid, in source milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beat_anchor_ms: Option<u32>,
+    /// Decoded time span of the waveform overview; absent in older libraries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzed_ms: Option<u32>,
     /// Tonart in Camelot-Notation (z. B. "8A", "11B"). Leer bedeutet "nicht bestimmbar".
     pub musical_key: String,
     pub gain: f32,
@@ -70,8 +76,13 @@ pub struct TrackAnalysisResult {
 }
 impl TrackAnalysisResult {
     pub(crate) fn validate(&self) -> bool {
-        self.bpm.is_finite()
+        self.analyzed_ms.is_none_or(|ms| {
+            ms <= 3_600_000 && self.beat_anchor_ms.is_none_or(|anchor| anchor <= ms)
+        }) && self.bpm.is_finite()
             && (0.0..=240.0).contains(&self.bpm)
+            && self
+                .beat_anchor_ms
+                .is_none_or(|ms| ms <= 3_600_000 && self.bpm >= 40. && !self.is_corrupt)
             && self.gain.is_finite()
             && (MIN_GAIN as f32..=MAX_GAIN as f32).contains(&self.gain)
             && (self.musical_key.is_empty()
@@ -688,9 +699,37 @@ impl AudioAnalyzer {
         if cancel.is_cancelled() {
             return Err(AnalyzerError::Cancelled);
         }
+        let analyzed_ms = first_spec.and_then(|s| {
+            u32::try_from(sample_count * 1000 / (u64::from(s.rate) * s.channels.count() as u64))
+                .ok()
+        });
+        #[cfg(feature = "ml-import")]
+        let proposal = analyzed_ms
+            .filter(|_| !is_corrupt)
+            .and_then(|ms| crate::import_inference::beat_proposal(path_ref, ms, cancel));
+        #[cfg(not(feature = "ml-import"))]
+        let proposal: Option<(f32, u32)> = None;
+        if cancel.is_cancelled() {
+            return Err(AnalyzerError::Cancelled);
+        }
+        #[cfg(feature = "ml-import")]
+        if !is_corrupt && std::env::var_os("DRDJ_STEM_MODELS").is_some() {
+            if let Err(error) =
+                drdjpro_ui_spike::prepared_stems::PreparedStems::configured(path_ref, || {
+                    cancel.is_cancelled()
+                })
+            {
+                log::warn!("Optional stem preparation skipped: {error}");
+            }
+            if cancel.is_cancelled() {
+                return Err(AnalyzerError::Cancelled);
+            }
+        }
         Ok(TrackAnalysisResult {
             file_path: path_str,
-            bpm,
+            bpm: proposal.map_or(bpm, |p| p.0),
+            beat_anchor_ms: proposal.map(|p| p.1),
+            analyzed_ms,
             musical_key,
             gain: calculated_gain.clamp(MIN_GAIN, MAX_GAIN) as f32,
             waveform_overview: peaks,
@@ -702,6 +741,55 @@ impl AudioAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Compare chronological internal boundaries with annotator 1's SALAMI
+    /// uppercase segments, matching each boundary at most once within 3 s.
+    #[test]
+    #[ignore = "requires DRDJ_PHRASE_FILES audio path list and adjacent SALAMI .txt references"]
+    fn score_recorded_phrase_boundaries() {
+        let files = std::env::var_os("DRDJ_PHRASE_FILES").unwrap();
+        for path in std::env::split_paths(&files) {
+            let a = AudioAnalyzer::analyze_file(&path).unwrap();
+            assert!(a.validate() && !a.is_corrupt);
+            let duration = a.analyzed_ms.unwrap();
+            let internal = |ms: &u64| *ms > 3000 && *ms + 3000 < u64::from(duration);
+            let cues = drdjpro_ui_spike::preparation::phrases::detect(
+                &a.waveform_overview,
+                duration.into(),
+                a.bpm,
+                a.beat_anchor_ms,
+            );
+            let predicted: Vec<_> = cues.into_iter().map(|v| v.0).filter(internal).collect();
+            let text = std::fs::read_to_string(path.with_extension("txt")).unwrap();
+            let mut reference: Vec<_> = text
+                .lines()
+                .map(|line| {
+                    (line
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                        .parse::<f64>()
+                        .unwrap()
+                        * 1000.)
+                        .round() as u64
+                })
+                .filter(internal)
+                .collect();
+            reference.dedup();
+            assert!(!reference.is_empty());
+            let mut remaining = predicted.iter().copied().peekable();
+            let mut hits = 0;
+            for &ms in &reference {
+                while remaining.next_if(|p| *p + 3000 < ms).is_some() {}
+                hits += usize::from(remaining.next_if(|p| *p <= ms + 3000).is_some());
+            }
+            eprintln!(
+                "{:?}: hits={hits} proposed={} reference={}",
+                path.file_stem().unwrap(),
+                predicted.len(),
+                reference.len()
+            );
+        }
+    }
     /// Use exactly the same decoded excerpt for the classical and neural comparison.
     #[test]
     #[ignore = "requires DRDJ_BEAT_EVAL_FILES path list of annotated audio excerpts"]

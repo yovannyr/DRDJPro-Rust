@@ -681,6 +681,10 @@ export component AppWindow inherits Window {
     in property <[LibraryRow]> library-rows;
     in-out property <int> library-tab;
     callback analyze-library();
+    callback add-phrase-cues();
+    callback suggest-track(bool);
+    in property <bool> assistant-enabled;
+    in property <bool> assistant-running;
     in property <string> analysis-title;
     in property <string> analysis-summary;
     in property <string> analysis-progress;
@@ -1215,6 +1219,10 @@ Rectangle {
             analysis-running: root.analysis-running;
             can-analyze: root.library-has-analysis-targets && !root.loading && !root.library-busy;
             analyze => { root.analyze-library(); }
+            assistant-enabled: root.assistant-enabled;
+            assistant-running: root.assistant-running;
+            suggest-track(transition) => { root.suggest-track(transition); }
+            add-phrase-cues => { root.add-phrase-cues(); }
             tab <=> root.library-tab;
             prep-action(action) => { root.prep-action(action); }
             prep-queue-count: root.prep-queue-count;

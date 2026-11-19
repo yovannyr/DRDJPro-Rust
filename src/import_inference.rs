@@ -8,6 +8,61 @@ use sha2::{Digest, Sha256};
 use std::{env, path::PathBuf, sync::LazyLock, time::Duration};
 use symphonia::core::audio::SignalSpec;
 
+/// Optional second decode on the analysis worker. FFmpeg resamples to the
+/// model's training rate. A cancelled or failed decode publishes no proposal.
+pub(crate) fn beat_proposal(
+    path: &std::path::Path,
+    duration_ms: u32,
+    cancel: &Cancellation,
+) -> Option<(f32, u32)> {
+    use std::io::{self, Read};
+    use std::process::{Command, Stdio};
+    struct Source<'a>(std::process::ChildStdout, &'a Cancellation);
+    impl Read for Source<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            if self.1.is_cancelled() {
+                return Err(io::Error::other("analysis cancelled"));
+            }
+            self.0.read(bytes)
+        }
+    }
+    let directory = PathBuf::from(env::var_os("DRDJ_BEAT_MODELS")?);
+    let inspect = || -> Result<_, Box<dyn std::error::Error>> {
+        let runtime = PathBuf::from(env::var_os("DRDJ_ORT_LIBRARY").ok_or("missing ORT runtime")?);
+        let mut tracker = drdj_ml::beat_tracking::Tracker::load(&directory, &runtime)?;
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-nostdin",
+                "-v",
+                "error",
+                "-xerror",
+                "-protocol_whitelist",
+                "file,pipe",
+                "-threads",
+                "1",
+                "-i",
+            ])
+            .arg(path)
+            .args([
+                "-map", "0:a:0", "-ac", "1", "-ar", "22050", "-f", "f32le", "-",
+            ])
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let result = tracker.track(Source(child.stdout.take().expect("piped stdout"), cancel));
+        if result.is_err() {
+            let _ = child.kill();
+        }
+        if !child.wait()?.success() {
+            return Err("incomplete beat analysis".into());
+        }
+        Ok(result?.stable_grid(duration_ms))
+    };
+    inspect()
+        .inspect_err(|e| log::warn!("Beat grid unavailable: {e}"))
+        .ok()
+        .flatten()
+}
+
 fn model_id() -> ModelId {
     ModelId {
         name: "conv-gru".into(),
@@ -104,6 +159,18 @@ impl<'a> Pass<'a> {
 mod tests {
     use crate::{audio_analyzer::AudioAnalyzer, cancellation::Cancellation, library};
     use std::{env, fs, path::PathBuf, process::Command};
+
+    #[test]
+    #[ignore = "requires offline Beat This models and complete GMD drummer8/session1/8 recording"]
+    fn complete_funk_recording_proposes_the_reference_grid_on_import() {
+        let path = PathBuf::from(env::var_os("DRDJ_BEAT_REFERENCE_FUNK").unwrap());
+        let batch =
+            library::inspect_paths_cancellable(vec![path], &Cancellation::default()).unwrap();
+        let analysis = batch.metadata[0].1.analysis.as_ref().unwrap();
+        assert!(analysis.beat_anchor_ms.is_some_and(|ms| ms < 100));
+        assert!((analysis.bpm - 96.).abs() < 0.1);
+        assert!(analysis.validate());
+    }
 
     #[test]
     #[ignore = "requires generated DRDJ_ML_FIXTURE and DRDJ_ORT_LIBRARY"]
