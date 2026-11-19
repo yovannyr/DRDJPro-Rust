@@ -3,6 +3,32 @@ use prost::Message;
 mod common;
 
 #[test]
+fn checked_phrase_boundaries_accept_packed_unpacked_and_mixed_wire() {
+    let base = encode_checked(&AnalysisMessage {
+        gain: 1.0,
+        analyzed_ms: Some(1000),
+        ..Default::default()
+    })
+    .unwrap();
+    for fields in [
+        vec![0x4a, 3, 10, 20, 30],
+        vec![0x48, 10, 0x48, 20, 0x48, 30],
+        vec![0x48, 10, 0x4a, 2, 20, 30],
+    ] {
+        let bytes = [base.as_slice(), &fields].concat();
+        assert_eq!(
+            decode_checked::<AnalysisMessage>(&bytes)
+                .unwrap()
+                .phrase_boundaries_ms,
+            [10, 20, 30]
+        );
+    }
+    for fields in [vec![0x4a, 1, 0x80], vec![0x4a, 2, 20, 10]] {
+        assert!(decode_checked::<AnalysisMessage>(&[base.as_slice(), &fields].concat()).is_err());
+    }
+}
+
+#[test]
 fn checked_codecs_roundtrip_and_reject_absent_required_fields() {
     let track = common::track();
     assert_eq!(

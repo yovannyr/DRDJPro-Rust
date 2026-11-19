@@ -1,3 +1,6 @@
+mod phrase_spectrum;
+use phrase_spectrum::PhraseSpectrum;
+
 use ebur128::{EbuR128, Mode};
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::fmt;
@@ -68,6 +71,9 @@ pub struct TrackAnalysisResult {
     /// Decoded time span of the waveform overview; absent in older libraries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analyzed_ms: Option<u32>,
+    /// Up to seven internal spectral changes, in source milliseconds before grid alignment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phrase_boundaries_ms: Vec<u32>,
     /// Tonart in Camelot-Notation (z. B. "8A", "11B"). Leer bedeutet "nicht bestimmbar".
     pub musical_key: String,
     pub gain: f32,
@@ -76,9 +82,11 @@ pub struct TrackAnalysisResult {
 }
 impl TrackAnalysisResult {
     pub(crate) fn validate(&self) -> bool {
-        self.analyzed_ms.is_none_or(|ms| {
-            ms <= 3_600_000 && self.beat_anchor_ms.is_none_or(|anchor| anchor <= ms)
-        }) && self.bpm.is_finite()
+        drdj_proto::valid_phrase_boundaries(&self.phrase_boundaries_ms, self.analyzed_ms)
+            && self.analyzed_ms.is_none_or(|ms| {
+                ms <= 3_600_000 && self.beat_anchor_ms.is_none_or(|anchor| anchor <= ms)
+            })
+            && self.bpm.is_finite()
             && (0.0..=240.0).contains(&self.bpm)
             && self
                 .beat_anchor_ms
@@ -158,6 +166,7 @@ struct ChromaBuilder {
     bin_pitch_class: Vec<Option<usize>>,
     buffer: Vec<f32>,
     chroma: [f64; 12],
+    phrases: PhraseSpectrum,
 }
 
 impl ChromaBuilder {
@@ -191,6 +200,7 @@ impl ChromaBuilder {
             bin_pitch_class,
             buffer: Vec::with_capacity(CHROMA_FFT_SIZE + CHROMA_HOP),
             chroma: [0.0; 12],
+            phrases: PhraseSpectrum::new(sample_rate),
         }
     }
 
@@ -207,6 +217,7 @@ impl ChromaBuilder {
 
         let rms = (block.iter().map(|s| s * s).sum::<f32>() / CHROMA_FFT_SIZE as f32).sqrt();
         if rms < CHROMA_SILENCE_RMS {
+            self.phrases.push(None);
             return;
         }
 
@@ -216,6 +227,7 @@ impl ChromaBuilder {
             .map(|(&s, &w)| Complex::new(s * w, 0.0))
             .collect();
         self.fft.process(&mut data);
+        self.phrases.push(Some(&data));
 
         // Wurzel-komprimierte Magnituden: verhindert, dass einzelne laute Bass-Peaks dominieren.
         let mut frame = [0.0_f64; 12];
@@ -730,6 +742,9 @@ impl AudioAnalyzer {
             bpm: proposal.map_or(bpm, |p| p.0),
             beat_anchor_ms: proposal.map(|p| p.1),
             analyzed_ms,
+            phrase_boundaries_ms: chroma
+                .filter(|_| !is_corrupt)
+                .map_or_else(Vec::new, |c| c.phrases.boundaries()),
             musical_key,
             gain: calculated_gain.clamp(MIN_GAIN, MAX_GAIN) as f32,
             waveform_overview: peaks,
@@ -741,6 +756,18 @@ impl AudioAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_analysis_and_bounded_phrase_times_validate() {
+        let mut analysis: TrackAnalysisResult = serde_json::from_str(r#"{"file_path":"old","bpm":120,"gain":1,"musical_key":"","waveform_overview":[],"is_corrupt":false}"#).unwrap();
+        assert!(analysis.validate() && analysis.phrase_boundaries_ms.is_empty());
+        analysis.analyzed_ms = Some(20_000);
+        analysis.phrase_boundaries_ms = vec![2000, 9000];
+        assert!(analysis.validate());
+        for invalid in [vec![0], vec![2000, 2000], vec![20_000], (1..=8).collect()] {
+            analysis.phrase_boundaries_ms = invalid;
+            assert!(!analysis.validate());
+        }
+    }
     /// Compare chronological internal boundaries with annotator 1's SALAMI
     /// uppercase segments, matching each boundary at most once within 3 s.
     #[test]
@@ -752,13 +779,6 @@ mod tests {
             assert!(a.validate() && !a.is_corrupt);
             let duration = a.analyzed_ms.unwrap();
             let internal = |ms: &u64| *ms > 3000 && *ms + 3000 < u64::from(duration);
-            let cues = drdjpro_ui_spike::preparation::phrases::detect(
-                &a.waveform_overview,
-                duration.into(),
-                a.bpm,
-                a.beat_anchor_ms,
-            );
-            let predicted: Vec<_> = cues.into_iter().map(|v| v.0).filter(internal).collect();
             let text = std::fs::read_to_string(path.with_extension("txt")).unwrap();
             let mut reference: Vec<_> = text
                 .lines()
@@ -776,18 +796,35 @@ mod tests {
                 .collect();
             reference.dedup();
             assert!(!reference.is_empty());
-            let mut remaining = predicted.iter().copied().peekable();
-            let mut hits = 0;
-            for &ms in &reference {
-                while remaining.next_if(|p| *p + 3000 < ms).is_some() {}
-                hits += usize::from(remaining.next_if(|p| *p <= ms + 3000).is_some());
+            for (method, boundaries) in [
+                ("amplitude", &[][..]),
+                ("spectral", a.phrase_boundaries_ms.as_slice()),
+            ] {
+                let predicted: Vec<_> =
+                    drdjpro_ui_spike::preparation::phrases::detect_with_boundaries(
+                        &a.waveform_overview,
+                        duration.into(),
+                        a.bpm,
+                        a.beat_anchor_ms,
+                        boundaries,
+                    )
+                    .into_iter()
+                    .map(|v| v.0)
+                    .filter(internal)
+                    .collect();
+                let mut remaining = predicted.iter().copied().peekable();
+                let mut hits = 0;
+                for &ms in &reference {
+                    while remaining.next_if(|p| *p + 3000 < ms).is_some() {}
+                    hits += usize::from(remaining.next_if(|p| *p <= ms + 3000).is_some());
+                }
+                eprintln!(
+                    "{:?} {method}: hits={hits} proposed={} reference={}",
+                    path.file_stem().unwrap(),
+                    predicted.len(),
+                    reference.len()
+                );
             }
-            eprintln!(
-                "{:?}: hits={hits} proposed={} reference={}",
-                path.file_stem().unwrap(),
-                predicted.len(),
-                reference.len()
-            );
         }
     }
     /// Use exactly the same decoded excerpt for the classical and neural comparison.

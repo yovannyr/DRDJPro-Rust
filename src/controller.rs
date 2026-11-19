@@ -18967,6 +18967,7 @@ mod tests {
             analysis: Some(crate::audio_analyzer::TrackAnalysisResult {
                 beat_anchor_ms: None,
                 analyzed_ms: None,
+                phrase_boundaries_ms: vec![],
                 file_path: path.to_string_lossy().into_owned(),
                 bpm: 127.,
                 musical_key: "10A".into(),
@@ -19657,6 +19658,7 @@ mod tests {
                         bpm: 120.,
                         beat_anchor_ms: Some(250),
                         analyzed_ms: Some(20_000),
+                        phrase_boundaries_ms: vec![8000],
                         musical_key: String::new(),
                         gain: 1.,
                         is_corrupt: false,

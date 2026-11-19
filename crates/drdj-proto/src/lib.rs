@@ -22,6 +22,15 @@ include!(concat!(env!("OUT_DIR"), "/drdj.v1.serde.rs"));
 
 /// Explicit application limit, checked before allocating an encoded message.
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+/// Check the compact, chronologically ordered source-time phrase proposals
+/// shared by native library analysis and snapshot import.
+pub fn valid_phrase_boundaries(boundaries: &[u32], duration_ms: Option<u32>) -> bool {
+    boundaries.len() <= 7
+        && boundaries.windows(2).all(|w| w[0] < w[1])
+        && boundaries
+            .iter()
+            .all(|&ms| ms > 0 && duration_ms.is_some_and(|d| ms < d))
+}
 /// Binary descriptors compiled from the checked-in schema.
 pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.bin"));
 
