@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use slint::{ModelRc, Timer, TimerMode, VecModel};
 use std::{rc::Rc, time::Duration};
 

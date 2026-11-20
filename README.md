@@ -1,4 +1,18 @@
-# DRDJPro-Rust
+# Dr. DJ Pro
+
+## Installation
+
+Die [Testversionen auf GitHub](https://github.com/yovannyr/DRDJPro-Rust/releases) enthalten Installationspakete für vier Systeme:
+
+| System | Installation |
+| --- | --- |
+| Windows x64 | Die MSI-Datei öffnen. Danach **Dr. DJ Pro** im Startmenü wählen. Die Installation gilt für das aktuelle Benutzerkonto. |
+| macOS ab 14, Intel oder Apple Silicon | Das passende DMG öffnen und **Dr. DJ Pro** nach **Programme** ziehen. Auf einem Intel-Mac mit Sequoia 15.2 das Intel-Paket wählen. |
+| Ubuntu 24.04 amd64 | Das DEB-Paket mit der Paketverwaltung installieren und **Dr. DJ Pro** im Anwendungsmenü öffnen. |
+
+Die Testpakete für Windows haben keine Herausgebersignatur. Die Mac-Pakete sind lokal signiert (Ad-hoc-Signatur) und nicht von Apple notarisiert. Bibliotheken und Musiksammlungen sind vom Installationsverzeichnis getrennt.
+
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/)
 
 ## Bibliotheks-Leistungsmessung
 

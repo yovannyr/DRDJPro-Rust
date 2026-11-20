@@ -1,0 +1,99 @@
+name: Desktop installers
+
+on:
+  push:
+    tags: ['desktop-preview-*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - '.github/workflows/desktop-installers.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build and package tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev desktop-file-utils pkg-config libudev-dev libssl-dev libasound2-dev libfontconfig1-dev libfreetype-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev
+      - name: Install Windows packaging tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP "drdj-wix"
+          dotnet tool install wix --tool-path $tools --version 5.0.2
+          $tools >> $env:GITHUB_PATH
+      - name: Build release
+        run: cargo build --release --locked --bin drdjpro-ui-spike --target ${{ matrix.target }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '14.0'
+      - name: Build and verify installer
+        shell: bash
+        run: |
+          python packaging/desktop.py "target/${{ matrix.target }}/release/drdjpro-ui-spike${{ matrix.suffix }}" dist
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            python packaging/desktop.py "target/${{ matrix.target }}/release/drdjpro-ui-spike.exe" upgrade
+            python packaging/verify.py dist/*.msi --upgrade upgrade/*.msi
+          else
+            python packaging/verify.py dist/*
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/desktop-preview-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: dist
+          merge-multiple: true
+      - name: Publish verified preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum *.msi *.dmg *.deb > SHA256SUMS.txt
+          cat > "$RUNNER_TEMP/desktop-notes.md" <<'EOF'
+          Testversion für Windows x64, macOS ab 14 (Intel und Apple Silicon) und Ubuntu 24.04 amd64. Das Windows-Paket ist ohne Herausgebersignatur, die Mac-Pakete sind ad hoc signiert und nicht notarisiert. Die automatisierten Paket- und Decodertests liefen auf allen vier Zielsystemen. Hör-, Hardware- und manuelle Tests stehen aus.
+
+          [![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/)
+          EOF
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease --title "Dr. DJ Pro · ${RELEASE_TAG#desktop-preview-}" \
+            --notes-file "$RUNNER_TEMP/desktop-notes.md" \
+            *.msi *.dmg *.deb SHA256SUMS.txt

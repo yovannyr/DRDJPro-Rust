@@ -1,0 +1,31 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Dr. DJ Pro" Manufacturer="Dr. DJ Pro" Version="$(Version)"
+           UpgradeCode="A4F7F5A0-C0B8-49B2-8236-4A6D3FD0BEA2" Scope="perUser">
+    <!-- Preview builds can share the Cargo version. Replace the older MSI in-place. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Dr. DJ Pro is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="AppIcon.ico" SourceFile="$(Source)/res/branding/dr-dj-pro.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="Dr. DJ Pro">
+        <Component Id="Application" Guid="159F45FE-14DA-4034-861F-D761DB9B4729">
+          <File Id="AppExe" Source="$(Binary)" Name="Dr. DJ Pro.exe" />
+          <File Source="$(Notices)" Name="Licenses.txt" />
+          <?foreach Library in $(var.RuntimeFiles) ?>
+            <File Source="$(RuntimeDir)/$(var.Library)" />
+          <?endforeach?>
+          <Shortcut Id="StartMenu" Name="Dr. DJ Pro" Directory="ProgramMenuFolder"
+                    Target="[#AppExe]" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon.ico" />
+          <RemoveFolder Id="RemoveAppFolder" On="uninstall" />
+          <RegistryValue Root="HKCU" Key="Software\Dr. DJ Pro\Installer" Name="Version"
+                         Type="string" Value="[ProductVersion]" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Product" Title="Dr. DJ Pro" Level="1">
+      <ComponentRef Id="Application" />
+    </Feature>
+  </Package>
+</Wix>
