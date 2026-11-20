@@ -277,6 +277,7 @@ export component AppWindow inherits Window {
     pure callback accepts-track-drop(int, data-transfer) -> bool;
     callback drop-track(int, data-transfer) -> bool;
     in property <int> external-drop-deck: -1;
+    private property <int> modern-hover-deck: -1;
     in-out property <string> library-performance;
     pure callback external-drop-target(float, float) -> int;
     external-drop-target(px, py) => {
@@ -956,7 +957,7 @@ export component AppWindow inherits Window {
             library-open: root.modern-library-open;
             active-view: true;
             crossfader: root.crossfader;
-            external-drop-deck: root.external-drop-deck;
+            external-drop-deck: modern-drop.has-drag ? root.modern-hover-deck : root.external-drop-deck;
             deck-a-title: root.left-title;
             deck-a-artist: root.left-artist;
             deck-a-musical-key: root.left-musical-key;
@@ -1259,6 +1260,27 @@ Rectangle {
             Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
             Button { text: "USB / HID"; accessible-label: "Show USB device finder"; clicked => { root.usb-finder-open = !root.usb-finder-open; if root.usb-finder-open { root.audio-device-open=false; root.monitor-open=false; root.fx-open=false; root.eq-open=false; root.sampler-open=false; if root.hid-page {root.hid-refresh();} else if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();} } } }
             Text { accessible-role: text; accessible-label: "Application status"; accessible-description: (root.library-performance == "" ? "" : root.library-performance + " | ") + root.controller-status + " | " + root.status; text: (root.library-performance == "" ? "" : root.library-performance + " | ") + (root.controller-status == "" ? root.status : root.controller-status + " | " + root.status); color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+        }
+    }
+    // Library drags and native file drops share the same window-coordinate hit test.
+    modern-drop := DropArea {
+        x: modern-view.absolute-position.x - root.absolute-position.x;
+        y: modern-view.absolute-position.y - root.absolute-position.y;
+        width: modern-view.width;
+        height: modern-view.height;
+        enabled: root.view-mode == LayoutMode.Modern;
+        pure function deck-at(position: Point) -> int {
+            return root.external-drop-target((self.absolute-position.x + position.x) / 1px,
+                (self.absolute-position.y + position.y) / 1px);
+        }
+        can-drop(event) => {
+            let deck = self.deck-at(event.position);
+            root.modern-hover-deck = deck >= 0 && root.accepts-track-drop(deck, event.data) ? deck : -1;
+            return root.modern-hover-deck >= 0 ? DragAction.copy : DragAction.none;
+        }
+        dropped(event) => {
+            let deck = self.deck-at(event.position);
+            return deck >= 0 && root.drop-track(deck, event.data) ? DragAction.copy : DragAction.none;
         }
     }
     if root.audio-device-open && !root.usb-finder-open : Rectangle {

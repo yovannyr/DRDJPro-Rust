@@ -16179,10 +16179,11 @@ mod tests {
     #[test]
     fn external_drop_ingress_loads_both_decks_and_preserves_guards() {
         use crate::external_drop::{drop_file, refresh_hover, FileGesture};
+        use crate::LayoutMode::{Classic, Modern};
         i_slint_backend_testing::init_no_event_loop();
-        for (width, height) in [(850., 860.), (1280., 860.)] {
+        for (mode, width) in [(Classic, 850.), (Classic, 1280.), (Modern, 1280.)] {
             let ui = AppWindow::new().unwrap();
-            ui.window().set_size(slint::LogicalSize::new(width, height));
+            ui.window().set_size(slint::LogicalSize::new(width, 860.));
             let (mixer, _output) = rodio::mixer::mixer(2, 48000);
             let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
             let c = AudioController::wire(
@@ -16193,13 +16194,17 @@ mod tests {
             );
             let wav = wav_file(8192, 192000);
             let original = std::fs::read(wav.path()).unwrap();
+            ui.set_view_mode(mode);
             ui.show().unwrap();
             let point = |label| {
                 let origin = control(&ui, label).absolute_position();
                 slint::LogicalPosition::new(origin.x + 5., origin.y + 5.)
             };
-            let a = point("DECK A load track");
-            let b = point("DECK B load track");
+            let (a, b) = if mode == Modern {
+                (point("Deck A cover art"), point("Deck B modern platter"))
+            } else {
+                (point("DECK A load track"), point("DECK B load track"))
+            };
             let mut gesture = FileGesture::default();
             for position in [a, b] {
                 gesture.hover(wav.path().to_owned());
@@ -16249,11 +16254,17 @@ mod tests {
 
     #[test]
     fn library_pointer_drag_loads_both_decks_at_supported_sizes() {
+        use crate::LayoutMode::{Classic, Modern};
         use slint::platform::{PointerEventButton, WindowEvent};
         i_slint_backend_testing::init_no_event_loop();
-        for (width, height) in [(850., 860.), (1280., 860.)] {
+        for (mode, width) in [
+            (Classic, 850.),
+            (Classic, 1280.),
+            (Modern, 850.),
+            (Modern, 1280.),
+        ] {
             let ui = AppWindow::new().unwrap();
-            ui.window().set_size(slint::LogicalSize::new(width, height));
+            ui.window().set_size(slint::LogicalSize::new(width, 860.));
             let (mixer, _output) = rodio::mixer::mixer(2, 48000);
             let engine = Rc::new(DualDeckEngine::from_mixer(mixer, 2, 48000));
             let c = AudioController::wire(
@@ -16266,18 +16277,21 @@ mod tests {
             c.library.borrow_mut().insert([wav.path().to_owned()]);
             c.publish_library();
             finish_search(&c);
+            ui.set_view_mode(mode);
             ui.show().unwrap();
-            for (id, label) in [
-                (DeckId::A, "DECK A load track"),
-                (DeckId::B, "DECK B load track"),
-            ] {
+            let labels = match (mode, width < 1000.) {
+                (Modern, true) => ["Deck A cover art", "Deck B modern platter"],
+                (Modern, false) => ["Deck A modern platter", "Deck B cover art"],
+                _ => ["DECK A load track", "DECK B load track"],
+            };
+            for (id, label) in [DeckId::A, DeckId::B].into_iter().zip(labels) {
                 let row = control(&ui, "Library track 1");
                 let source = row.absolute_position();
                 let button = control(&ui, label);
                 let dest = button.absolute_position();
                 let from = slint::LogicalPosition::new(source.x + 20., source.y + 15.);
                 let target =
-                    slint::LogicalPosition::new(dest.x + 20., dest.y + button.size().height + 8.);
+                    slint::LogicalPosition::new(dest.x + 20., dest.y + button.size().height / 2.);
                 ui.window().dispatch_event(WindowEvent::PointerPressed {
                     position: from,
                     button: PointerEventButton::Left,
@@ -16293,10 +16307,13 @@ mod tests {
                 });
                 assert!(
                     c.pending.borrow().is_some(),
-                    "drag did not reach {id:?} at {width}"
+                    "drag did not reach {id:?} in {mode:?} at {width}"
                 );
                 finish(&c);
-                assert!(engine.snapshot(id).path.is_some());
+                assert_eq!(
+                    engine.snapshot(id).path.unwrap().canonicalize().unwrap(),
+                    wav.path().canonicalize().unwrap()
+                );
                 assert!(!engine.snapshot(id).playing);
             }
             ui.hide().unwrap();
