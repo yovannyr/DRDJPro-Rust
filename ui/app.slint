@@ -8,6 +8,7 @@ export { RemoteDisplayWindow } from "remote-display.slint";
 export { WebBrowserWindow } from "web_view.slint";
 export { ItunesWindow,ItunesRow } from "itunes.slint";
 export { CrashReportsWindow,CrashReportRow } from "crash-reports.slint";
+import { SettingsFrame, SettingsTab, QuantizeGridRow } from "settings.slint";
 import { LayoutMode } from "layout-modes.slint";
 import { DeckAction, HoldAction, ControlKind, JogPhase } from "modern-state.slint";
 import { ModernView } from "modern-view.slint";
@@ -64,6 +65,38 @@ export component DvsLicenseWindow inherits Window {
     }
 }
 export component AppWindow inherits Window {
+    private property <bool> settings-open;
+    private property <bool> more-open;
+    private property <SettingsTab> settings-tab: SettingsTab.decks;
+    private property <bool> controller-seen;
+    function select-settings(tab: SettingsTab) {
+        root.settings-tab = tab;
+        root.audio-device-open = tab == SettingsTab.audio && root.audio-enabled;
+        root.monitor-open = tab == SettingsTab.mixer && root.audio-enabled;
+        root.usb-finder-open = tab == SettingsTab.controller;
+        if root.audio-device-open { root.audio-device-scan(); }
+        if root.usb-finder-open {
+            if root.hid-page { root.hid-refresh(); } else if root.dvs-page { root.dvs-refresh(); } else { root.usb-refresh(); }
+        }
+    }
+    function open-settings() {
+        root.release-active-hot-cue-key();
+        root.layout-changed();
+        if root.fx-open { root.fx-tap-cancel(0); root.fx-tap-cancel(1); }
+        root.fx-open = false;
+        root.sampler-open = false;
+        root.more-open = false;
+        root.settings-open = true;
+        root.select-settings(root.settings-tab);
+        settings-frame.focus-back();
+    }
+    function close-settings() {
+        root.settings-open = false;
+        root.audio-device-open = false;
+        root.monitor-open = false;
+        root.usb-finder-open = false;
+        settings-button.focus();
+    }
     callback show-remote-display();
     callback show-browser(bool);
     callback close-web-browsers();
@@ -281,7 +314,7 @@ export component AppWindow inherits Window {
     in-out property <string> library-performance;
     pure callback external-drop-target(float, float) -> int;
     external-drop-target(px, py) => {
-        if !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open || root.usb-finder-open {
+        if root.settings-open || !root.audio-enabled || root.audio-device-open || root.monitor-open || root.fx-open || root.sampler-open || root.usb-finder-open {
             return -1;
         }
         if root.view-mode == LayoutMode.Modern {
@@ -426,7 +459,7 @@ export component AppWindow inherits Window {
     in-out property <int> deck-view-index: 0;
     out property <DeckView> deck-view: root.deck-view-index == 1 ? DeckView.virtual : DeckView.training;
     out property <bool> virtual-decks-visible: root.mc4000-connected && root.deck-view == DeckView.virtual;
-    changed mc4000-connected => { root.deck-view-index = root.mc4000-connected ? 1 : 0; }
+    changed mc4000-connected => { if root.mc4000-connected { root.controller-seen = true; } root.deck-view-index = root.mc4000-connected ? 1 : 0; }
     in-out property <string> left-platter-bpm: "—";
     in-out property <string> right-platter-bpm: "—";
     in-out property <string> left-platter-time: "—";
@@ -733,6 +766,11 @@ export component AppWindow inherits Window {
         width: 100%; height: 100%;
         focus-lost(reason) => { root.release-active-hot-cue-key(); }
         key-pressed(event) => {
+            if root.settings-open {
+                if event.text == Key.Escape { root.close-settings(); return accept; }
+                return reject;
+            }
+            if root.more-open && event.text == Key.Escape { root.more-open = false; more-button.focus(); return accept; }
             if !event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta && event.modifiers.shift {
                 if event.text == Key.LeftArrow {
                     if !event.repeat { root.load-library-left(); }
@@ -773,8 +811,11 @@ export component AppWindow inherits Window {
             return accept;
         }
     VerticalLayout {
+        visible: !root.settings-open;
+        padding: 8px; spacing: 4px;
         HorizontalLayout {
-            height: 24px; spacing: 4px;
+            height: 32px; spacing: 8px;
+            Text { text: "DRDJ PRO"; color: #f1f4fa; font-size: 21px; font-weight: 800; vertical-alignment: center; }
             LibraryButton {
                 text: "2 DECKS"; active: !root.four-decks;
                 clicked => {
@@ -793,37 +834,18 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            ComboBox {
-                width: 130px; model: ["Classic", "Modern"];
-                current-index: root.layout-index;
-                accessible-label: "Performance layout";
-                selected => {
-                    let selected-mode = self.current-index == 1 ? LayoutMode.Modern : LayoutMode.Classic;
-                    if root.view-mode != selected-mode {
-                        root.view-mode = selected-mode;
-                        root.layout-changed();
-                    }
-                }
-            }
-            Text { text: root.four-decks ? "A/B APP • C/D DATA PLACEHOLDERS" : "A/B APP • TWO-DECK VIEW"; color: DjTheme.text-secondary; font-size: 10px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            CheckBox { text: "QUANTIZE"; accessible-label: "Global Quantize"; accessible-description: "Enable selected cue and auto-loop quantization on both decks; disabling cancels queued cue triggers and retains deck preferences"; checked <=> root.quantize-enabled; enabled: root.quantize-preferences-ready; toggled => { root.quantize-mode-changed(); } }
+            Rectangle { horizontal-stretch: 1; }
+            more-button := Button { text: "Mehr"; accessible-label: "More actions"; clicked => { root.more-open = !root.more-open; } }
+            settings-button := Button { text: "⚙ Einstellungen"; accessible-label: "Open settings"; clicked => { root.open-settings(); } }
         }
 
-        padding: 8px; spacing: 4px;
-        HorizontalLayout {
-            height: 32px;
-            Text { text: "DRDJ PRO"; color: #f1f4fa; font-size: 21px; font-weight: 800; vertical-alignment: center; }
-            ComboBox { width:110px; model:root.output-pair-options; current-index <=> root.output-pair-index; accessible-label:"Audio output pair"; accessible-description:"Stereo mix output pair on the current audio device"; enabled:root.quantize-preferences-ready && root.audio-enabled && root.output-pair-options.length>1; selected => { root.output-pair-changed(); } }
-            Text { width:100px; text:root.output-profile-status; accessible-label:"Audio output profile"; color:#9cacc1; font-size:10px; vertical-alignment:center; overflow:elide; }
-            CheckBox { text: "QUANTIZE"; accessible-label: "Global Quantize"; accessible-description: "Enable selected cue and auto-loop quantization on both decks; disabling cancels queued cue triggers and retains deck preferences"; checked <=> root.quantize-enabled; enabled: root.quantize-preferences-ready; toggled => { root.quantize-mode-changed(); } }
-            Text { text: "Ansicht"; color: #d3dce8; font-size: 11px; vertical-alignment: center; }
-            deck-view-selector := ComboBox {
-                width: 150px;
-                model: ["Training", "Virtuelle Decks"];
-                current-index <=> root.deck-view-index;
-                enabled: root.mc4000-connected;
-                accessible-label: "Deck view";
-                accessible-description: "Choose training or round virtual decks";
-            }
+        if root.more-open : HorizontalLayout {
+            height: 28px; spacing: 6px;
+            Button {text:"WEB";accessible-label:"Open web browser";clicked=>{root.more-open=false;root.show-browser(false);}}
+            Button {text:"HELP";accessible-label:"Open bundled help";clicked=>{root.more-open=false;root.show-browser(true);}}
+            Button {text:"REPORTS";accessible-label:"Open crash report manager";clicked=>{root.more-open=false;root.show-crash-reports();}}
+            Rectangle { horizontal-stretch: 1; }
         }
         if root.audio-startup-warning != "" : Rectangle {
             height:28px;background:#6a2e20;
@@ -955,7 +977,7 @@ export component AppWindow inherits Window {
             preferred-height: root.view-mode == LayoutMode.Modern ? (root.four-decks ? 500px : 420px) : 0px;
             four-slots: root.four-decks;
             library-open: root.modern-library-open;
-            active-view: true;
+            active-view: !root.settings-open;
             crossfader: root.crossfader;
             external-drop-deck: modern-drop.has-drag ? root.modern-hover-deck : root.external-drop-deck;
             deck-a-title: root.left-title;
@@ -1141,7 +1163,6 @@ Rectangle {
                 Button {text:"SAMPLER";accessible-label:"Show sampler";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.sampler-open=!root.sampler-open;root.fx-open=false;root.monitor-open=false;root.audio-device-open=false;}}
                 Button {text:"FX";accessible-label:"Show delay effects";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;if root.fx-open {root.fx-tap-cancel(0);root.fx-tap-cancel(1);}root.fx-open=!root.fx-open;root.audio-device-open=false;root.sampler-open=false;}}
                 Button {text:"MON";accessible-label:"Show headphone monitor";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.monitor-open=!root.monitor-open;root.audio-device-open=false;root.sampler-open=false;}}
-                Button {text:"AUDIO";accessible-label:"Show audio device settings";enabled:root.audio-enabled;clicked=>{root.usb-finder-open=false;root.audio-device-open=!root.audio-device-open;if root.audio-device-open {root.sampler-open=false;root.monitor-open=false;root.fx-open=false;root.eq-open=false;root.audio-device-scan();}}}
                 Slider { accessible-label: "Channel A fader"; minimum: 0; maximum: 1; value <=> root.channel-a; changed => { root.mixer-changed(); } }
                 Text { text: "CROSSFADER"; color: #a6b4c8; font-size: 11px; vertical-alignment: center; }
                 Slider { accessible-label: "Crossfader"; minimum: 0; maximum: 1; value <=> root.crossfader; changed => { root.mixer-changed(); } }
@@ -1211,6 +1232,7 @@ Rectangle {
                     add-track => { root.add-to-crate(); } remove-track => { root.remove-from-crate(); }
                 }
         track-library := TrackLibrary {
+            import-itunes => { root.show-itunes(); }
             columns: root.table-columns; all-columns: root.all-table-columns; table-width: root.table-width;
             table-scroll-x <=> root.table-scroll-x;
             sort-field: root.table-sort-field; sort-descending: root.table-sort-descending; columns-enabled: root.table-columns-enabled;
@@ -1251,14 +1273,8 @@ Rectangle {
             }
         }
         HorizontalLayout { height: 24px; spacing: 6px;
-            Button {text:"REMOTE";accessible-label:"Open generic remote display";clicked=>{root.show-remote-display();}}
-            Button {text:"WEB";accessible-label:"Open web browser";clicked=>{root.show-browser(false);}}
-            Button {text:"HELP";accessible-label:"Open bundled help";clicked=>{root.show-browser(true);}}
-            Button {text:"iTunes";accessible-label:"Open iTunes Music XML library";clicked=>{root.show-itunes();}}
-            Button {text:"REPORTS";accessible-label:"Open crash report manager";clicked=>{root.show-crash-reports();}}
             if root.crash-notice!="":Text {text:root.crash-notice;color:#ffcc88;max-width:240px;overflow:elide;accessible-label:"Crash reporting notice";}
-            Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
-            Button { text: "USB / HID"; accessible-label: "Show USB device finder"; clicked => { root.usb-finder-open = !root.usb-finder-open; if root.usb-finder-open { root.audio-device-open=false; root.monitor-open=false; root.fx-open=false; root.eq-open=false; root.sampler-open=false; if root.hid-page {root.hid-refresh();} else if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();} } } }
+            if root.controller-seen && !root.mc4000-connected : Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect disconnected controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
             Text { accessible-role: text; accessible-label: "Application status"; accessible-description: (root.library-performance == "" ? "" : root.library-performance + " | ") + root.controller-status + " | " + root.status; text: (root.library-performance == "" ? "" : root.library-performance + " | ") + (root.controller-status == "" ? root.status : root.controller-status + " | " + root.status); color: #a5b5ca; font-size: 12px; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
         }
     }
@@ -1268,7 +1284,7 @@ Rectangle {
         y: modern-view.absolute-position.y - root.absolute-position.y;
         width: modern-view.width;
         height: modern-view.height;
-        enabled: root.view-mode == LayoutMode.Modern;
+        enabled: !root.settings-open && root.view-mode == LayoutMode.Modern;
         pure function deck-at(position: Point) -> int {
             return root.external-drop-target((self.absolute-position.x + position.x) / 1px,
                 (self.absolute-position.y + position.y) / 1px);
@@ -1283,12 +1299,87 @@ Rectangle {
             return deck >= 0 && root.drop-track(deck, event.data) ? DragAction.copy : DragAction.none;
         }
     }
+    settings-frame := SettingsFrame {
+        width: parent.width; height: parent.height; visible: root.settings-open;
+        tab: root.settings-tab;
+        select(tab) => { if tab != root.settings-tab { root.select-settings(tab); } }
+        close => { root.close-settings(); }
+        if root.settings-open && root.settings-tab == SettingsTab.decks : VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout { height: 32px; spacing: 10px;
+                Text { text: "Ansicht"; color: #d3dce8; font-size: 11px; vertical-alignment: center; }
+                ComboBox {
+                    width: 150px;
+                    model: ["Training", "Virtuelle Decks"];
+                    current-index <=> root.deck-view-index;
+                    enabled: root.mc4000-connected;
+                    accessible-label: "Deck view";
+                    accessible-description: "Choose training or round virtual decks";
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            QuantizeGridRow {
+                deck: "A"; ready: root.quantize-preferences-ready && root.quantize-enabled;
+                available: root.left-loaded && !root.left-busy; grid-active: root.left-grid-active;
+                step <=> root.left-quantize-step; snap-cues <=> root.left-quantize-cues;
+                next-grid <=> root.left-quantize-triggers; snap-loops <=> root.left-auto-loop-snap;
+                cancel-trigger => { root.cancel-trigger-left(); }
+            }
+            QuantizeGridRow {
+                deck: "B"; ready: root.quantize-preferences-ready && root.quantize-enabled;
+                available: root.right-loaded && !root.right-busy; grid-active: root.right-grid-active;
+                step <=> root.right-quantize-step; snap-cues <=> root.right-quantize-cues;
+                next-grid <=> root.right-quantize-triggers; snap-loops <=> root.right-auto-loop-snap;
+                cancel-trigger => { root.cancel-trigger-right(); }
+            }
+        }
+        if root.settings-open && root.settings-tab == SettingsTab.audio : HorizontalLayout {
+            height: 32px; spacing: 8px;
+            Text { text: "Master-Ausgang"; color: DjTheme.text-primary; vertical-alignment: center; }
+            ComboBox { width:110px; model:root.output-pair-options; current-index <=> root.output-pair-index; accessible-label:"Audio output pair"; accessible-description:"Stereo mix output pair on the current audio device"; enabled:root.quantize-preferences-ready && root.audio-enabled && root.output-pair-options.length>1; selected => { root.output-pair-changed(); } }
+            Text { width:100px; text:root.output-profile-status; accessible-label:"Audio output profile"; color:#9cacc1; font-size:10px; vertical-alignment:center; overflow:elide; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.settings-open && root.settings-tab == SettingsTab.mixer && !root.audio-enabled : Text {
+            text: "Vorhören benötigt eine aktive Audioausgabe."; color: DjTheme.text-primary;
+        }
+        if root.settings-open && root.settings-tab == SettingsTab.library : VerticalLayout {
+            spacing: 10px;
+            HorizontalLayout { height: 32px; spacing: 8px;
+                Text { text: "Layout"; color: DjTheme.text-primary; vertical-alignment: center; }
+                ComboBox {
+                    width: 130px; model: ["Classic", "Modern"];
+                    current-index: root.layout-index;
+                    accessible-label: "Performance layout";
+                    selected => {
+                        let selected-mode = self.current-index == 1 ? LayoutMode.Modern : LayoutMode.Classic;
+                        if root.view-mode != selected-mode {
+                            root.view-mode = selected-mode;
+                            root.layout-changed();
+                        }
+                    }
+                }
+                Button {text:"REMOTE";accessible-label:"Open generic remote display";clicked=>{root.show-remote-display();}}
+                Rectangle { horizontal-stretch: 1; }
+            }
+            for column in root.all-table-columns : CheckBox {
+                text: column.title; accessible-label: "Settings column " + column.sort-label;
+                checked: column.visible; enabled: root.table-columns-enabled;
+                toggled => { root.change-table-column(column.id, 0); }
+            }
+        }
+        if root.settings-open && root.settings-tab == SettingsTab.controller : HorizontalLayout {
+            height: 32px; spacing: 8px;
+            Button { text: "RECONNECT MIDI"; accessible-label: "Reconnect MC4000 controller"; enabled: root.audio-enabled; clicked => { root.controller-reconnect-requested = true; } }
+            Text { text: root.controller-status; color: DjTheme.text-primary; horizontal-stretch: 1; vertical-alignment: center; }
+        }
+    }
     if root.audio-device-open && !root.usb-finder-open : Rectangle {
-        x:16px;y:60px;width:parent.width - 32px;height:250px;background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
+        x:16px;y:root.settings-open ? 160px : 60px;width:parent.width - 32px;height:250px;background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Audio device settings panel";
         VerticalLayout {
             padding:10px;spacing:8px;
-            HorizontalLayout {Text {text:"CURRENT: " + root.audio-device-current;color:DjTheme.text-primary;} Button {text:"CLOSE AUDIO";accessible-label:"Close audio device settings";clicked=>{root.audio-device-open=false;}}}
+            HorizontalLayout {Text {text:"CURRENT: " + root.audio-device-current;color:DjTheme.text-primary;} Button {text:"CLOSE AUDIO";accessible-label:"Close audio device settings";clicked=>{if root.settings-open { root.close-settings(); } else { root.audio-device-open=false; }}}}
             Text {text:root.audio-startup-warning;color:#ffb86c;wrap:word-wrap;}
             Text {text:"OUTPUT DEVICE — apply now with paused decks, or save for next start";color:DjTheme.text-primary;}
             ComboBox {accessible-label:"Audio output device selection";model:root.audio-device-names;current-index <=> root.audio-device-choice;enabled:root.audio-device-ready && !root.audio-device-scanning && !root.audio-device-saving && !root.audio-device-switching;}
@@ -1302,7 +1393,7 @@ Rectangle {
         }
     }
     if root.usb-finder-open : Rectangle {
-        x:16px; y:60px; width:parent.width - 32px; height:min(360px, parent.height - 90px);
+        x:16px; y:root.settings-open ? 160px : 60px; width:parent.width - 32px; height:min(360px, parent.height - 90px);
         background:DjTheme.panel-dark; border-width:1px; border-color:#53657d;
         accessible-role:groupbox; accessible-label:"USB device finder panel";
         TouchArea { }
@@ -1314,7 +1405,7 @@ Rectangle {
                 Button {text:root.hid-page ? "USB LIST" : "HID";accessible-label:"Switch USB HID setup page";clicked=>{root.hid-page=!root.hid-page;root.dvs-page=false;if root.hid-page {root.hid-refresh();} else {root.usb-refresh();}}}
                 if root.dvs-available : Button { text:root.dvs-page ? "USB LIST" : "DVS AUDIO";
                     accessible-label:"Switch USB DVS setup page"; clicked=>{root.dvs-page=!root.dvs-page;root.hid-page=false;if root.dvs-page {root.dvs-refresh();} else {root.usb-refresh();}} }
-                Button { text:"CLOSE"; accessible-label:"Close USB device finder"; clicked=>{root.usb-finder-open=false;} }
+                Button { text:"CLOSE"; accessible-label:"Close USB device finder"; clicked=>{if root.settings-open { root.close-settings(); } else { root.usb-finder-open=false; }} }
             }
             Text { text:root.hid-page ? root.hid-status : root.dvs-page ? root.dvs-status : root.usb-finder-status; color:DjTheme.text-primary; wrap:word-wrap; }
             if !root.dvs-page && !root.hid-page : ComboBox {
@@ -1367,14 +1458,14 @@ Rectangle {
         }
     }
     if root.monitor-open : Rectangle {
-        x:16px;y:60px;width:parent.width - 32px;height:270px;
+        x:16px;y:root.settings-open ? 160px : 60px;width:parent.width - 32px;height:270px;
         background:DjTheme.panel-dark;border-width:1px;border-color:#53657d;
         accessible-role:groupbox;accessible-label:"Headphone monitor panel";
         VerticalLayout {
             padding:10px;spacing:8px;
             HorizontalLayout {
                 Text {text:"HEADPHONE CUE — OUT 3/4";color:DjTheme.text-primary;}
-                Button {text:"CLOSE MON";accessible-label:"Close headphone monitor";clicked=>{root.monitor-open=false;}}
+                Button {text:"CLOSE MON";accessible-label:"Close headphone monitor";clicked=>{if root.settings-open { root.close-settings(); } else { root.monitor-open=false; }}}
             }
             Text {text:root.monitor-status;color:DjTheme.text-primary;}
             HorizontalLayout {

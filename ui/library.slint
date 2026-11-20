@@ -135,6 +135,7 @@ export component TrackLibrary inherits Rectangle {
     in property <bool> can-load-right;
     in property <int> selection: -1;
     in-out property <string> query;
+    callback import-itunes();
     callback import-files(); callback import-folder(); callback search(); callback select-track(int); callback move-selection(int); callback relocate-track();
     callback sort-column(int); callback load-left(); callback load-right();
     callback retry-save();
@@ -166,6 +167,7 @@ export component TrackLibrary inherits Rectangle {
             spacing: 3px;
             LibraryButton { text: busy ? "Working..." : "Add files"; enabled: !busy; accessible-label: "Import library files"; clicked => { root.import-files(); } }
             LibraryButton { text: "Add folder"; enabled: !busy; accessible-label: "Import library folder"; clicked => { root.import-folder(); } }
+            LibraryButton { text: "iTunes…"; accessible-label: "Open iTunes Music XML library"; clicked => { root.import-itunes(); } }
             Text { text: "Import into the target crate on the left. Files stay in their original location."; color: #bbbbbb; font-size: 11px; wrap: word-wrap; }
         }
         if tab == 2 : Text {

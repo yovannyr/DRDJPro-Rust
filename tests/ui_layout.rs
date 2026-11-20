@@ -16,6 +16,81 @@ fn click(ui: &AppWindow, label: &str) {
 }
 
 #[test]
+fn settings_routes_preserve_playback_and_keep_live_shortcuts_out_of_setup() {
+    use slint::platform::{Key, WindowEvent};
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = AppWindow::new().unwrap();
+    ui.set_audio_enabled(true);
+    ui.window().set_size(slint::LogicalSize::new(850., 860.));
+    ui.set_left_loaded(true);
+    ui.set_left_grid_active(true);
+    ui.set_left_playing(true);
+    ui.set_selected_track(9);
+    let imported = Rc::new(Cell::new(false));
+    let observed = imported.clone();
+    ui.on_show_itunes(move || observed.set(true));
+    let cues = Rc::new(Cell::new(0));
+    let observed = cues.clone();
+    ui.on_hold_hot_cue_left(move |_, _, _| observed.set(observed.get() + 1));
+    ui.show().unwrap();
+    for mode in [LayoutMode::Classic, LayoutMode::Modern] {
+        ui.set_view_mode(mode);
+        let dest = ElementHandle::find_by_accessible_label(&ui, "DECK B load track")
+            .next()
+            .unwrap()
+            .absolute_position();
+        assert_eq!(ui.invoke_external_drop_target(dest.x + 2., dest.y + 2.), 1);
+        click(&ui, "Open settings");
+        click(&ui, "Settings: Decks");
+        let loops = ElementHandle::find_by_accessible_label(&ui, "Deck A snap loops in settings")
+            .next()
+            .unwrap();
+        assert!(loops.absolute_position().x + loops.size().width <= 850.);
+        let before = ui.get_left_auto_loop_snap();
+        loops.invoke_accessible_default_action();
+        assert_eq!(ui.get_left_auto_loop_snap(), !before);
+        assert_eq!(ui.invoke_external_drop_target(dest.x + 2., dest.y + 2.), -1);
+        ui.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: "1".into() });
+        ui.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: "1".into() });
+        assert_eq!(cues.get(), 0);
+        click(&ui, "Settings: Audio");
+        assert!(ui.get_audio_device_open());
+        let audio_tab = ElementHandle::find_by_accessible_label(&ui, "Settings: Audio")
+            .next()
+            .unwrap();
+        assert_eq!(
+            audio_tab.accessible_description().as_deref(),
+            Some("Ausgewählter Einstellungsbereich")
+        );
+        click(&ui, "Settings: Mixer");
+        assert!(ui.get_monitor_open() && !ui.get_audio_device_open());
+        click(&ui, "Settings: Controller");
+        assert!(ui.get_usb_finder_open() && !ui.get_monitor_open());
+        click(&ui, "Settings: Library & Ansicht");
+        assert!(!ui.get_usb_finder_open());
+        assert!(
+            ElementHandle::find_by_accessible_label(&ui, "Performance layout")
+                .next()
+                .is_some()
+        );
+        ui.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Escape.into(),
+        });
+        assert_eq!(ui.invoke_external_drop_target(dest.x + 2., dest.y + 2.), 1);
+        assert!(ui.get_left_playing());
+        assert_eq!(ui.get_selected_track(), 9);
+    }
+    click(&ui, "More actions");
+    click(&ui, "Open bundled help");
+    ui.set_library_tab(1);
+    click(&ui, "Open iTunes Music XML library");
+    assert!(imported.get());
+    ui.hide().unwrap();
+}
+
+#[test]
 fn layout_modes_preserve_deck_and_library_state_and_route_independently() {
     i_slint_backend_testing::init_no_event_loop();
     let ui = AppWindow::new().unwrap();

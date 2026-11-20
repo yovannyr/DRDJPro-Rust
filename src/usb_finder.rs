@@ -370,43 +370,36 @@ mod tests {
         let observed = Rc::clone(&count);
         ui.on_usb_refresh(move || observed.set(observed.get() + 1));
         ui.show().unwrap();
-        let button = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-            &ui,
-            "Show USB device finder",
-        )
-        .next()
-        .unwrap();
-        button.invoke_accessible_default_action();
+        let click = |label: &str| {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&ui, label)
+                .next()
+                .unwrap_or_else(|| panic!("missing button {label}"))
+                .invoke_accessible_default_action();
+        };
+        click("Open settings");
+        click("Settings: Controller");
         assert!(ui.get_usb_finder_open());
         assert_eq!(count.get(), 1);
-        assert_eq!(ui.get_left_position(), 42.0);
-        assert!(ui.get_left_playing());
-        assert_eq!(ui.get_left_title(), "Keep this track");
+        click("Settings: Audio");
+        assert!(!ui.get_usb_finder_open());
+        assert!(ui.get_audio_device_open());
+        click("Settings: Controller");
+        assert_eq!(count.get(), 2);
+        assert!(!ui.get_audio_device_open());
+        click("Close USB device finder");
+        assert!(!ui.get_usb_finder_open());
         for label in [
-            "Show audio device settings",
             "Show headphone monitor",
             "Show sampler",
             "Show delay effects",
             "Show mixer EQ",
         ] {
-            if !ui.get_usb_finder_open() {
-                button.invoke_accessible_default_action();
-            }
-            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&ui, label)
-                .next()
-                .unwrap()
-                .invoke_accessible_default_action();
-            assert!(!ui.get_usb_finder_open(), "{label} must close USB finder");
+            click(label);
+            assert!(!ui.get_usb_finder_open());
         }
-        button.invoke_accessible_default_action();
-        i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-            &ui,
-            "Close USB device finder",
-        )
-        .next()
-        .unwrap()
-        .invoke_accessible_default_action();
-        assert!(!ui.get_usb_finder_open());
+        assert_eq!(ui.get_left_position(), 42.0);
+        assert!(ui.get_left_playing());
+        assert_eq!(ui.get_left_title(), "Keep this track");
         ui.hide().unwrap();
     }
 }

@@ -1,5 +1,7 @@
 # GUI component inventory and reference baseline
 
+The [settings navigation plan and verification record](SETTINGS_PLAN.md) maps the live controls, setup tabs and library actions in Classic and Modern.
+
 ## Track preparation
 
 The Prepare tab can add phrase cues to free slots of the selected analyzed track.
