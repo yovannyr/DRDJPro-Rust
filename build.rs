@@ -1,4 +1,14 @@
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        const ICON: &str = "res/branding/dr-dj-pro.ico";
+        println!("cargo:rerun-if-changed={ICON}");
+        winresource::WindowsResource::new()
+            .set_icon(ICON)
+            .set("ProductName", "Dr. DJ Pro")
+            .set("FileDescription", "Dr. DJ Pro")
+            .compile_for("drdjpro-ui-spike")
+            .expect("embed Windows application icon");
+    }
     // Track the actual checkout (including worktree ref paths), not a build-time
     // timestamp. Source archives without Git explicitly identify an unknown commit.
     let git = |args: &[&str]| {
