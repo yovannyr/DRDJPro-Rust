@@ -182,15 +182,7 @@ export component ModernView inherits Rectangle {
     callback toggle-library();
     pure callback external-drop-target(float, float) -> int;
     external-drop-target(px, py) => {
-        if px >= primary-pair.left-drop-x && px < primary-pair.left-drop-x + primary-pair.left-drop-width
-            && py >= primary-pair.left-drop-y && py < primary-pair.left-drop-y + primary-pair.left-drop-height {
-            return 0;
-        }
-        if px >= primary-pair.right-drop-x && px < primary-pair.right-drop-x + primary-pair.right-drop-width
-            && py >= primary-pair.right-drop-y && py < primary-pair.right-drop-y + primary-pair.right-drop-height {
-            return 1;
-        }
-        return -1;
+        return primary-pair.deck-at(px * 1px, py * 1px);
     }
     background: ModernTheme.background;
 

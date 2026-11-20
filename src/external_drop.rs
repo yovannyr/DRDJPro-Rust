@@ -312,7 +312,13 @@ mod tests {
         ui.set_audio_enabled(true);
         ui.set_view_mode(crate::LayoutMode::Modern);
         ui.show().unwrap();
-        for (expected_deck, label) in [(0, "DECK A load track"), (1, "DECK B load track")] {
+        for (expected_deck, label) in [
+            (0, "DECK A load track"),
+            (1, "DECK B load track"),
+            (0, "Deck A cover art"),
+            (1, "Deck B cover art"),
+            (-1, "SYNC"),
+        ] {
             let button =
                 i_slint_backend_testing::ElementHandle::find_by_accessible_label(&ui, label)
                     .next()
@@ -321,7 +327,7 @@ mod tests {
             let actual_deck = ui.invoke_external_drop_target(origin.x + 5., origin.y + 5.);
             assert_eq!(
                 actual_deck, expected_deck,
-                "LOAD button at ({}, {})",
+                "{label} at ({}, {})",
                 origin.x, origin.y
             );
         }

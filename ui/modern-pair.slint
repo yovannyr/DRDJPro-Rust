@@ -121,21 +121,27 @@ export component ModernPair inherits Rectangle {
     callback jog(int, JogPhase, float, float);
     callback seek-requested(int, float);
     callback detail-zoom(int, int);
-    out property <float> left-drop-x: left-performance-deck.absolute-position.x / 1px;
-    out property <float> left-drop-y: left-performance-deck.absolute-position.y / 1px;
-    out property <float> left-drop-width: left-performance-deck.width / 1px;
-    out property <float> left-drop-height: left-performance-deck.height / 1px;
-    out property <float> right-drop-x: right-performance-deck.absolute-position.x / 1px;
-    out property <float> right-drop-y: right-performance-deck.absolute-position.y / 1px;
-    out property <float> right-drop-width: right-performance-deck.width / 1px;
-    out property <float> right-drop-height: right-performance-deck.height / 1px;
+    pure function contains-point(px: length, py: length, origin: Point, w: length, h: length) -> bool {
+        return px >= origin.x && px < origin.x + w && py >= origin.y && py < origin.y + h;
+    }
+    public pure function deck-at(px: length, py: length) -> int {
+        if contains-point(px, py, left-header.absolute-position, left-header.width, left-header.height)
+            || contains-point(px, py, left-performance-deck.absolute-position, left-performance-deck.width, left-performance-deck.height) {
+            return root.first-index;
+        }
+        if contains-point(px, py, right-header.absolute-position, right-header.width, right-header.height)
+            || contains-point(px, py, right-performance-deck.absolute-position, right-performance-deck.width, right-performance-deck.height) {
+            return root.first-index + 1;
+        }
+        return -1;
+    }
 
     VerticalLayout {
         spacing: 2px;
         // Track header row
         HorizontalLayout {
             spacing: 2px;
-            ModernTrackHeader {
+            left-header := ModernTrackHeader {
                 cover-image: root.left-cover-image; cover: root.left-cover; title: root.left-title; artist: root.left-artist;
                 musical-key: root.left-musical-key; time-text: root.left-time-text;
                 loaded: root.left-loaded; label: root.first-index == 0 ? "A" : "C";
@@ -144,7 +150,7 @@ export component ModernPair inherits Rectangle {
                 loop-start: root.left-overview-loop-start; loop-end: root.left-overview-loop-end;
                 seek(position) => { root.seek-requested(root.first-index, position); }
             }
-            ModernTrackHeader {
+            right-header := ModernTrackHeader {
                 cover-image: root.right-cover-image; cover: root.right-cover; title: root.right-title; artist: root.right-artist;
                 musical-key: root.right-musical-key; time-text: root.right-time-text;
                 loaded: root.right-loaded; label: root.first-index == 0 ? "B" : "D";
