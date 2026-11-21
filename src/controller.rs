@@ -16071,7 +16071,8 @@ mod tests {
         engine.load_a(track.path()).unwrap();
         engine.play(DeckId::A);
         ui.show().unwrap();
-        control(&ui, "Show audio device settings").invoke_accessible_default_action();
+        control(&ui, "Open settings").invoke_accessible_default_action();
+        control(&ui, "Settings: Audio").invoke_accessible_default_action();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while c.device_scan.borrow().is_some() {
             assert!(std::time::Instant::now() < deadline);
@@ -16694,9 +16695,18 @@ mod tests {
                     });
             }
             let engine = Rc::new(engine);
-            let c =
-                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            // Opening Audio starts a device scan even while saved routes are loading.
+            let c = AudioController::wire_with_device_catalog(
+                &ui,
+                engine.clone(),
+                Arc::new(|| None),
+                Arc::new(|| None),
+                Arc::new(|| Ok(vec![])),
+            );
             c.restore_library(Ok(db.clone()), vec![]);
+            control(&ui, "Open settings").invoke_accessible_default_action();
+            control(&ui, "Settings: Audio").invoke_accessible_default_action();
+            assert!(ui.get_audio_device_scanning());
             assert_eq!(
                 control(&ui, "Audio output pair").accessible_enabled(),
                 Some(false)
@@ -20322,11 +20332,12 @@ mod tests {
             ]),
             None,
         ])));
-        let c = AudioController::wire(
+        let c = AudioController::wire_with_device_catalog(
             &ui,
             Rc::clone(&engine),
             Arc::new(|| None),
             Arc::new(move || batches.lock().unwrap().pop_front().unwrap()),
+            Arc::new(|| Ok(vec![])),
         );
         ui.show().unwrap();
         assert_eq!(ui.get_library_rows().row_count(), 0);
@@ -20402,11 +20413,14 @@ mod tests {
         assert_eq!(ui.get_status(), "Library import cancelled");
         for (width, height) in [(850.0, 860.0), (1280.0, 860.0)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
-            let quantize = control(&ui, "Global Quantize");
+            control(&ui, "Open settings").invoke_accessible_default_action();
+            control(&ui, "Settings: Audio").invoke_accessible_default_action();
             let output_pair = control(&ui, "Audio output pair");
             assert!(output_pair.size().width > 0. && output_pair.size().height > 0.);
             assert!(output_pair.absolute_position().x >= 0.);
             assert!(output_pair.absolute_position().x + output_pair.size().width <= width + 0.1);
+            control(&ui, "Back to decks").invoke_accessible_default_action();
+            let quantize = control(&ui, "Global Quantize");
             assert!(quantize.size().width > 0. && quantize.size().height > 0.);
             assert!(quantize.absolute_position().x >= 0. && quantize.absolute_position().y >= 0.);
             assert!(quantize.absolute_position().x + quantize.size().width <= width + 0.1);
@@ -22043,6 +22057,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = AppWindow::new().unwrap();
         ui.show().unwrap();
+        control(&ui, "Open settings").invoke_accessible_default_action();
         assert!(!ui.get_virtual_decks_visible());
         assert_eq!(control(&ui, "Deck view").accessible_enabled(), Some(false));
         ui.set_mc4000_connected(true);
@@ -22055,6 +22070,7 @@ mod tests {
                 .as_str(),
             "Virtuelle Decks"
         );
+        control(&ui, "Back to decks").invoke_accessible_default_action();
         for (width, height) in [(850., 860.), (1250., 860.), (1280., 860.)] {
             ui.window().set_size(slint::LogicalSize::new(width, height));
             for deck in ["DECK A", "DECK B"] {
@@ -22071,6 +22087,7 @@ mod tests {
             let status = control(&ui, "Application status");
             assert!(status.absolute_position().y + status.size().height <= height + 1.);
         }
+        control(&ui, "Open settings").invoke_accessible_default_action();
         control(&ui, "Deck view").mock_single_click(slint::platform::PointerEventButton::Left);
         ui.window()
             .dispatch_event(slint::platform::WindowEvent::KeyPressed {
@@ -22088,11 +22105,13 @@ mod tests {
                 .as_str(),
             "Training"
         );
+        control(&ui, "Back to decks").invoke_accessible_default_action();
         assert_eq!(
             ElementHandle::find_by_accessible_label(&ui, "DECK A round virtual platter").count(),
             0
         );
         control(&ui, "DECK A waveform overview");
+        control(&ui, "Open settings").invoke_accessible_default_action();
         control(&ui, "Deck view").mock_single_click(slint::platform::PointerEventButton::Left);
         ui.window()
             .dispatch_event(slint::platform::WindowEvent::KeyPressed {

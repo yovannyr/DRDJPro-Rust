@@ -1,0 +1,66 @@
+import { Button, CheckBox, ComboBox } from "std-widgets.slint";
+import { DjTheme } from "theme.slint";
+import { LibraryButton } from "controls.slint";
+
+export enum SettingsTab { decks, audio, mixer, library, controller }
+
+export component SettingsFrame inherits Rectangle {
+    in property <SettingsTab> tab;
+    callback select(SettingsTab);
+    callback close();
+    public function focus-back() { close-button.focus(); }
+    background: DjTheme.panel-dark;
+    accessible-role: groupbox;
+    accessible-label: "Application settings";
+    VerticalLayout {
+        padding: 16px; spacing: 12px;
+        HorizontalLayout {
+            height: 36px;
+            Text { text: "Einstellungen"; color: DjTheme.text-primary; font-size: 21px; horizontal-stretch: 1; }
+            close-button := Button { text: "Zurück zu den Decks"; accessible-label: "Back to decks"; clicked => { root.close(); } }
+        }
+        HorizontalLayout {
+            height: 32px; spacing: 6px;
+            for item in [
+                { title: "Decks", tab: SettingsTab.decks },
+                { title: "Audio", tab: SettingsTab.audio },
+                { title: "Mixer", tab: SettingsTab.mixer },
+                { title: "Library & Ansicht", tab: SettingsTab.library },
+                { title: "Controller", tab: SettingsTab.controller }
+            ]: LibraryButton {
+                text: item.title; accessible-label: "Settings: " + item.title;
+                accessible-description: root.tab == item.tab ? "Ausgewählter Einstellungsbereich" : "";
+                active: root.tab == item.tab; height: 32px; horizontal-stretch: 1;
+                clicked => { root.select(item.tab); }
+            }
+        }
+        Rectangle { height: 1px; background: DjTheme.text-secondary; }
+        VerticalLayout { spacing: 8px; @children }
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
+export component QuantizeGridRow inherits HorizontalLayout {
+    in property <string> deck;
+    in property <bool> ready;
+    in property <bool> available;
+    in property <bool> grid-active;
+    in-out property <int> step;
+    in-out property <bool> snap-cues;
+    in-out property <bool> next-grid;
+    in-out property <bool> snap-loops;
+    callback cancel-trigger();
+    height: 32px; spacing: 12px;
+    Text { width: 160px; text: "Quantisierungsraster " + root.deck; color: DjTheme.text-primary; vertical-alignment: center; }
+    ComboBox {
+        width: 130px; accessible-label: root.deck + " settings grid step"; enabled: root.ready && root.available;
+        model: ["1/8 beat", "1/4 beat", "1/2 beat", "1 beat", "2 beats", "4 beats"];
+        current-index <=> root.step;
+    }
+    CheckBox { text: "Cues einrasten"; accessible-label: "Deck " + root.deck + " snap cues in settings"; checked <=> root.snap-cues;
+        enabled: root.ready && (root.snap-cues || (root.available && root.grid-active)); }
+    CheckBox { text: "Cue am Raster starten"; accessible-label: "Deck " + root.deck + " trigger on grid in settings"; checked <=> root.next-grid;
+        enabled: root.ready && root.available; toggled => { root.cancel-trigger(); } }
+    CheckBox { text: "Loops einrasten"; accessible-label: "Deck " + root.deck + " snap loops in settings"; checked <=> root.snap-loops;
+        enabled: root.ready && root.available && root.grid-active; }
+}
