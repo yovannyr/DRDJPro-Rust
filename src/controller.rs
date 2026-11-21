@@ -16695,11 +16695,18 @@ mod tests {
                     });
             }
             let engine = Rc::new(engine);
-            let c =
-                AudioController::wire(&ui, engine.clone(), Arc::new(|| None), Arc::new(|| None));
+            // Opening Audio starts a device scan even while saved routes are loading.
+            let c = AudioController::wire_with_device_catalog(
+                &ui,
+                engine.clone(),
+                Arc::new(|| None),
+                Arc::new(|| None),
+                Arc::new(|| Ok(vec![])),
+            );
             c.restore_library(Ok(db.clone()), vec![]);
             control(&ui, "Open settings").invoke_accessible_default_action();
             control(&ui, "Settings: Audio").invoke_accessible_default_action();
+            assert!(ui.get_audio_device_scanning());
             assert_eq!(
                 control(&ui, "Audio output pair").accessible_enabled(),
                 Some(false)
@@ -20325,11 +20332,12 @@ mod tests {
             ]),
             None,
         ])));
-        let c = AudioController::wire(
+        let c = AudioController::wire_with_device_catalog(
             &ui,
             Rc::clone(&engine),
             Arc::new(|| None),
             Arc::new(move || batches.lock().unwrap().pop_front().unwrap()),
+            Arc::new(|| Ok(vec![])),
         );
         ui.show().unwrap();
         assert_eq!(ui.get_library_rows().row_count(), 0);
