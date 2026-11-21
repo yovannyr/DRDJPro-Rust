@@ -299,7 +299,8 @@ export component AppWindow inherits Window {
         }
         return -1;
     }
-    title: "DrDJ Pro"; preferred-width: 1280px; preferred-height: 860px;
+    title: "Dr. DJ Pro"; preferred-width: 1280px; preferred-height: 860px;
+    icon: @image-url("../res/branding/dr-dj-pro.png");
     min-width: 850px; min-height: (root.four-decks ? 1020px : 860px) + (root.eq-open ? 120px : 0px) + (root.left-grid-editing ? 110px : 0px) + (root.right-grid-editing ? 110px : 0px); background: DjTheme.app-bg;
     in-out property <int> active-hot-cue-key: -1;
     function hot-cue-key-index(key: string) -> int {
